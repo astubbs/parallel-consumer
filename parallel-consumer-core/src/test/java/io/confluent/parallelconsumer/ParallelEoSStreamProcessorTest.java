@@ -165,7 +165,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertCommits(of(2), "Only one of the two offsets committed, as they were coalesced for efficiency");
     }
 
-    @Disabled
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
     public void offsetsAreNeverCommittedForMessagesStillInFlightLong(CommitMode commitMode) {
@@ -421,7 +420,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
     @SneakyThrows
-    @Disabled
     public void processInKeyOrder(CommitMode commitMode) {
         setupParallelConsumerInstance(ParallelConsumerOptions.builder()
                 .commitMode(commitMode)
