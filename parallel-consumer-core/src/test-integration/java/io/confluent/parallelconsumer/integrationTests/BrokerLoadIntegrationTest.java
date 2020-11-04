@@ -39,7 +39,7 @@ import static org.awaitility.Awaitility.await;
 
 @Testcontainers
 @Slf4j
-public class LoadTest extends DbTest {
+public class BrokerLoadIntegrationTest extends DbTest {
 
     //    static int total = 8_000_0;
 //    static int total = 4_000_00;
