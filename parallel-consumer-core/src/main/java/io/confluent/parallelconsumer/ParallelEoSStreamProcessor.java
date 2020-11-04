@@ -4,6 +4,10 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
+import com.netflix.concurrency.limits.Limit;
+import com.netflix.concurrency.limits.executors.BlockingAdaptiveExecutor;
+import com.netflix.concurrency.limits.limit.Gradient2Limit;
+import com.netflix.concurrency.limits.limiter.SimpleLimiter;
 import io.confluent.csid.utils.WallClock;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
@@ -63,7 +67,9 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
     /**
      * The pool which is used for running the users's supplied function
      */
-    private final ExecutorService workerPool;
+    private final Executor workerPool;
+    private final SimpleLimiter<Void> executionLimitor;
+    private final BlockingAdaptiveExecutor congestionControlledExecutor;
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
@@ -155,7 +161,10 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         checkNotSubscribed(consumer);
         checkAutoCommitIsDisabled(consumer);
 
-        this.workerPool = Executors.newFixedThreadPool(newOptions.getNumberOfThreads());
+        workerPool = Executors.newFixedThreadPool(options.getNumberOfThreads());
+//        executionLimitor = SimpleLimiter.newBuilder().build();
+        executionLimitor = SimpleLimiter.newBuilder().limit(Gradient2Limit.newDefault()).build();
+        congestionControlledExecutor = BlockingAdaptiveExecutor.newBuilder().limiter(executionLimitor).build();
 
         this.wm = new WorkManager<>(newOptions, consumer);
 
@@ -423,29 +432,29 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
 
         producerManager.ifPresent(x -> x.close(timeout));
 
-        log.debug("Shutting down execution pool...");
-        List<Runnable> unfinished = workerPool.shutdownNow();
-        if (!unfinished.isEmpty()) {
-            log.warn("Threads not done: {}", unfinished);
-        }
+//        log.debug("Shutting down execution pool...");
+//        List<Runnable> unfinished = workerPool.shutdownNow();
+//        if (!unfinished.isEmpty()) {
+//            log.warn("Threads not done: {}", unfinished);
+//        }
 
-        log.trace("Awaiting worker pool termination...");
-        boolean interrupted = true;
-        while (interrupted) {
-            log.debug("Still interrupted");
-            try {
-                boolean terminationFinishedWithoutTimeout = workerPool.awaitTermination(toSeconds(DrainingCloseable.DEFAULT_TIMEOUT), SECONDS);
-                interrupted = false;
-                if (!terminationFinishedWithoutTimeout) {
-                    log.warn("workerPool await timeout!");
-                    boolean shutdown = workerPool.isShutdown();
-                    boolean terminated = workerPool.isTerminated();
-                }
-            } catch (InterruptedException e) {
-                log.error("InterruptedException", e);
-                interrupted = true;
-            }
-        }
+//        log.trace("Awaiting worker pool termination...");
+//        boolean interrupted = true;
+//        while (interrupted) {
+//            log.debug("Still interrupted");
+//            try {
+//                boolean terminationFinishedWithoutTimeout = workerPool.awaitTermination(toSeconds(DrainingCloseable.DEFAULT_TIMEOUT), SECONDS);
+//                interrupted = false;
+//                if (!terminationFinishedWithoutTimeout) {
+//                    log.warn("workerPool await timeout!");
+//                    boolean shutdown = workerPool.isShutdown();
+//                    boolean terminated = workerPool.isTerminated();
+//                }
+//            } catch (InterruptedException e) {
+//                log.error("InterruptedException", e);
+//                interrupted = true;
+//            }
+//        }
 
         log.debug("Close complete.");
         this.state = closed;
@@ -566,10 +575,13 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
                                  Consumer<R> callback) throws TimeoutException, ExecutionException, InterruptedException {
         if (state == running || state == draining) {
             log.trace("Loop: Get work");
-            var records = wm.<R>maybeGetWork();
-
-            log.trace("Loop: Submit to pool");
-            submitWorkToPool(userFunction, callback, records);
+            int capacity = executionLimitor.getLimit() - executionLimitor.getInflight();
+            boolean spareCapacity = capacity > 0;
+            if (spareCapacity) {
+                var records = wm.<R>maybeGetWork(capacity);
+                log.trace("Loop: Submit to pool");
+                submitWorkToPool(userFunction, callback, records);
+            }
         }
 
         if (state == running) {
@@ -768,10 +780,18 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
             for (var work : workToProcess) {
                 // for each record, construct dispatch to the executor and capture a Future
                 log.trace("Sending work ({}) to pool", work);
-                Future outputRecordFuture = workerPool.submit(() -> {
-                    return userFunctionRunner(usersFunction, callback, work);
-                });
-                work.setFuture(outputRecordFuture);
+//            Callable<List<Tuple<ConsumerRecord<K, V>, R>>> job = () -> {
+//                return runUserFunction(usersFunction, callback, work);
+//            };
+                Runnable job = () -> {
+                    runUserFunction(usersFunction, callback, work);
+                };
+
+//            Future outputRecordFuture = workerPool.submit(job);
+//            workerPool.execute(job);
+                congestionControlledExecutor.execute(job);
+
+//            work.setFuture(outputRecordFuture);
             }
         }
     }
@@ -779,9 +799,9 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
     /**
      * Run the supplied function.
      */
-    protected <R> List<Tuple<ConsumerRecord<K, V>, R>> userFunctionRunner(Function<ConsumerRecord<K, V>, List<R>> usersFunction,
-                                                                          Consumer<R> callback,
-                                                                          WorkContainer<K, V> wc) {
+    protected <R> List<Tuple<ConsumerRecord<K, V>, R>> runUserFunction(Function<ConsumerRecord<K, V>, List<R>> usersFunction,
+                                                                       Consumer<R> callback,
+                                                                       WorkContainer<K, V> wc) {
         // call the user's function
         List<R> resultsFromUserFunction;
         try {
