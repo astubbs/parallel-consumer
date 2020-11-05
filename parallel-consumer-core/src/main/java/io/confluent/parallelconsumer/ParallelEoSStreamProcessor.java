@@ -67,9 +67,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
     /**
      * The pool which is used for running the users's supplied function
      */
-    private final Executor workerPool;
-    private final SimpleLimiter<Void> executionLimitor;
-    private final BlockingAdaptiveExecutor congestionControlledExecutor;
+    protected Executor workerPool;
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
@@ -161,12 +159,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         checkNotSubscribed(consumer);
         checkAutoCommitIsDisabled(consumer);
 
-        workerPool = Executors.newFixedThreadPool(options.getNumberOfThreads());
-//        executionLimitor = SimpleLimiter.newBuilder().build();
-        executionLimitor = SimpleLimiter.newBuilder().limit(Gradient2Limit.newDefault()).build();
-        congestionControlledExecutor = BlockingAdaptiveExecutor.newBuilder().limiter(executionLimitor).build();
-
-        this.wm = new WorkManager<>(newOptions, consumer);
+        constructExecutor(options);
 
         ConsumerManager<K, V> consumerMgr = new ConsumerManager<>(consumer);
 
@@ -182,6 +175,10 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
             this.producerManager = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
+    }
+
+    protected void constructExecutor(final ParallelConsumerOptions options) {
+        workerPool = Executors.newFixedThreadPool(options.getNumberOfThreads());
     }
 
     private void checkNotSubscribed(org.apache.kafka.clients.consumer.Consumer<K, V> consumerToCheck) {
@@ -575,13 +572,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
                                  Consumer<R> callback) throws TimeoutException, ExecutionException, InterruptedException {
         if (state == running || state == draining) {
             log.trace("Loop: Get work");
-            int capacity = executionLimitor.getLimit() - executionLimitor.getInflight();
-            boolean spareCapacity = capacity > 0;
-            if (spareCapacity) {
-                var records = wm.<R>maybeGetWork(capacity);
-                log.trace("Loop: Submit to pool");
-                submitWorkToPool(userFunction, callback, records);
-            }
+            getWorkAndRegister(userFunction, callback);
         }
 
         if (state == running) {
@@ -619,6 +610,12 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
 
         // end of loop
         log.trace("End of control loop, {} remaining in work manager. In state: {}", wm.getPartitionWorkRemainingCount(), state);
+    }
+
+    protected <R> void getWorkAndRegister(final Function<ConsumerRecord<K, V>, List<R>> userFunction, final Consumer<R> callback) {
+        var records = wm.<R>maybeGetWork();
+        log.trace("Loop: Submit to pool");
+        submitWorkToPool(userFunction, callback, records);
     }
 
     private void drain() {
@@ -772,26 +769,20 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
      *
      * @param workToProcess the polled records to process
      */
-    private <R> void submitWorkToPool(Function<ConsumerRecord<K, V>, List<R>> usersFunction,
-                                      Consumer<R> callback,
-                                      List<WorkContainer<K, V>> workToProcess) {
+    protected <R> void submitWorkToPool(Function<ConsumerRecord<K, V>, List<R>> usersFunction,
+                                        Consumer<R> callback,
+                                        List<WorkContainer<K, V>> workToProcess) {
+
         if (!workToProcess.isEmpty()) {
             log.debug("New work incoming: {}, Pool stats: {}", workToProcess.size(), workerPool);
             for (var work : workToProcess) {
                 // for each record, construct dispatch to the executor and capture a Future
                 log.trace("Sending work ({}) to pool", work);
-//            Callable<List<Tuple<ConsumerRecord<K, V>, R>>> job = () -> {
-//                return runUserFunction(usersFunction, callback, work);
-//            };
                 Runnable job = () -> {
                     runUserFunction(usersFunction, callback, work);
                 };
 
-//            Future outputRecordFuture = workerPool.submit(job);
-//            workerPool.execute(job);
-                congestionControlledExecutor.execute(job);
-
-//            work.setFuture(outputRecordFuture);
+                workerPool.execute(job);
             }
         }
     }
