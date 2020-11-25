@@ -260,7 +260,6 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      *
      * @see CommitMode
      */
-    @SneakyThrows
     @Override
     public void retrieveOffsetsAndCommit() {
         // {@link Optional#ifPresentOrElse} only @since 9
@@ -268,7 +267,15 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             // shouldn't be here
             throw new IllegalStateException("No committer configured");
         });
-        committer.commit();
+        while(true) {
+            try {
+                committer.commit();
+                return;
+            } catch (TimeoutException e) {
+                log.debug("Timeout waiting for commit");
+                supervise();
+            }
+        }
     }
 
     /**
