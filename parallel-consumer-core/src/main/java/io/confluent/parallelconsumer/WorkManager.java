@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
+import io.confluent.csid.utils.BackportUtils;
 import io.confluent.csid.utils.LoopingResumingIterator;
 import io.confluent.csid.utils.WallClock;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -28,6 +29,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.csid.utils.KafkaUtils.toTP;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
@@ -224,6 +226,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * Take our inbound messages from the {@link BrokerPollSystem} and add them to our registry.
      */
     private void processInbox() {
+        log.debug("Processing inbox from broker poller");
         ArrayList<ConsumerRecords<K, V>> mail = new ArrayList<>();
         workInbox.drainTo(mail);
         for (final ConsumerRecords<K, V> records : mail) {
@@ -301,6 +304,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public List<WorkContainer<K, V>> maybeGetWork(int requestedMaxWorkToRetrieve) {
         processInbox();
 
+        log.debug("Starting scan for work...");
+
         int minWorkToGetSetting = min(min(requestedMaxWorkToRetrieve, options.getMaxMessagesToQueue()), options.getMaxNumberMessagesBeyondBaseCommitOffset());
         int workToGetDelta = minWorkToGetSetting - getInFlightCount();
 
@@ -332,16 +337,19 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             for (var queueEntry : shardQueueEntries) {
                 int taken = work.size() + shardWork.size();
                 if (taken >= workToGetDelta) {
-                    log.trace("Work taken ({}) exceeds max ({})", taken, workToGetDelta);
+                    log.debug("Work taken ({}) exceeds max ({})", taken, workToGetDelta);
                     break;
                 }
 
                 var wc = queueEntry.getValue();
-                boolean alreadySucceeded = !wc.isUserFunctionSucceeded();
-                if (wc.hasDelayPassed(clock) && wc.isNotInFlight() && alreadySucceeded) {
+                boolean incomplete = !wc.isUserFunctionSucceeded();
+                boolean delayPassed = wc.hasDelayPassed(clock);
+                boolean waitingProcessing = wc.isNotInFlight();
+                if (delayPassed && waitingProcessing && incomplete) {
                     log.trace("Taking {} as work", wc);
                     wc.takingAsWork();
                     shardWork.add(wc);
+                    processingLimbo.put(wc.getKey(), wc);
                 } else {
                     log.trace("Work ({}) still delayed or is in flight, can't take...", wc);
                 }
@@ -353,15 +361,33 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 } else {
                     // can't take any more from this partition until this work is finished
                     // processing blocked on this partition, continue to next partition
-                    log.trace("Processing by {}, so have cannot get more messages on this ({}) shard.", this.options.getOrdering(), shard.getKey());
+                    log.debug("Processing by {}, so have cannot get more messages on this ({}) shard.", this.options.getOrdering(), shard.getKey());
                     break;
                 }
             }
+            log.debug("Processing shard scan finished (shard size: {}).", shardQueue.size());
             work.addAll(shardWork);
         }
 
-
-        log.debug("Got {} records of work", work.size());
+        if (work.isEmpty() && !processingLimbo.isEmpty()) {
+            log.trace("Got no work, but there is work in processing limbo");
+            WorkContainer<?, ?> slowest = null;
+            for (final WorkContainer<?, ?> workContainer : processingLimbo.values()) {
+                if (slowest == null) {
+                    slowest = workContainer;
+                } else if (toSeconds(workContainer.timeSinceFirstAttempt()) > toSeconds(slowest.timeSinceFirstAttempt())) {
+                    slowest = workContainer;
+                }
+            }
+            int retryMultiplier = 3;
+            long threshold = toSeconds(WorkContainer.getRetryDelay()) * retryMultiplier;
+            boolean waitedTooLong = toSeconds(slowest.timeSinceFirstAttempt()) > threshold;
+            if (waitedTooLong) {
+                log.warn("Longest waiting ({} - {} more than retry delay) work: {}", slowest.timeSinceFirstAttempt(), retryMultiplier, slowest);
+            }
+        } else {
+            log.debug("Got {} records of work", work.size());
+        }
         inFlightCount += work.size();
 
         return work;
@@ -375,7 +401,40 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         Object key = computeShardKey(cr);
         // remove from processing queues
         NavigableMap<Long, WorkContainer<K, V>> shard = processingShards.get(key);
-        shard.remove(cr.offset());
+        if (shard.containsKey(cr.offset())) {
+            shard.remove(cr.offset());
+        } else {
+            log.info("gone already");
+        }
+
+        // remove from limbo
+        if (processingLimbo.containsKey(wc.getKey())) {
+            processingLimbo.remove(wc.getKey());
+        } else {
+            log.warn("Not registered in limbo?");
+            for (final WorkContainer<K, V> kvWorkContainer : processingLimbo.values()) {
+                if (kvWorkContainer.getCr().offset() == wc.getCr().offset()) {
+                    log.info("Found");
+                    int i = kvWorkContainer.hashCode();
+                    int i1 = wc.hashCode();
+                    boolean contains = processingLimbo.containsKey(wc.getKey());
+                    log.info("contains {}", contains);
+                    log.info("contains {}", contains);
+                }
+            }
+            processingLimbo.remove(wc);
+            for (final WorkContainer<K, V> kvWorkContainer : processingLimbo.values()) {
+                if (kvWorkContainer.getCr().offset() == wc.getCr().offset()) {
+                    log.info("Found");
+                    int i = kvWorkContainer.hashCode();
+                    int i1 = wc.hashCode();
+                    boolean contains = processingLimbo.containsKey(wc.getKey());
+                    log.info("contains {}", contains);
+                    log.info("contains {}", contains);
+                }
+            }
+        }
+
         // If using KEY ordering, where the shard key is a message key, garbage collect old shard keys (i.e. KEY ordering we may never see a message for this key again)
         boolean keyOrdering = options.getOrdering().equals(KEY);
         if (keyOrdering && shard.isEmpty()) {
@@ -551,6 +610,17 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 count, removed, offsetsToSend.size(), offsetsToSend);
         return offsetsToSend;
     }
+
+    /**
+     * Used for progress monitoring view of work currently being processed. Faster than scanning the processing shards
+     * for incomplete work.
+     */
+    private final Map<ConsumerRecord<K, V>, WorkContainer<K, V>> processingLimbo = new HashMap<>();
+
+    /**
+     * Work taken to commit, which has not yet been committed.
+     */
+    private final Set<WorkContainer<K, V>> committingLimbo = new HashSet<>();
 
     /**
      * Once all the offset maps have been calculated, check if they're too big, and if so, remove all of them.

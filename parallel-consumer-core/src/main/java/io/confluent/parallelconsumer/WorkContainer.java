@@ -40,6 +40,21 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     private Optional<Instant> failedAt = Optional.empty();
     private boolean inFlight = false;
 
+//    public Optional<Instant> getFirstAttemptAt() {
+//        return firstAttemptAt;
+//    }
+
+    @Getter
+    @EqualsAndHashCode.Exclude
+    private Optional<Instant> firstAttemptAt = Optional.empty();
+
+    public Duration timeSinceFirstAttempt() {
+        Optional<Instant> firstAttemptAt = getFirstAttemptAt();
+        Instant first = firstAttemptAt.get();
+        Duration between = Duration.between(first, Instant.now());
+        return between;
+    }
+
     @Getter
     private Optional<Boolean> userFunctionSucceeded = Optional.empty();
 
@@ -62,6 +77,13 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
         this.cr = cr;
         Objects.requireNonNull(workType);
         this.workType = workType;
+    }
+
+    /**
+     * ConsumerRecord is immutable and uniquely identifies this
+     */
+    public ConsumerRecord<K, V> getKey(){
+        return getCr();
     }
 
     public void fail(WallClock clock) {
@@ -111,6 +133,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     public void takingAsWork() {
         log.trace("Being taken as work: {}", this);
         inFlight = true;
+        firstAttemptAt = Optional.of(Instant.now());
     }
 
     public TopicPartition getTopicPartition() {
