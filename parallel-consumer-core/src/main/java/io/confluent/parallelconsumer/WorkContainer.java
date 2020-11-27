@@ -62,7 +62,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
      * Wait this long before trying again
      */
     @Getter
-    private static Duration retryDelay = Duration.ofSeconds(10);
+    private static Duration retryDelay = Duration.ofSeconds(1);
 
     @Getter
     @Setter(AccessLevel.PACKAGE)
