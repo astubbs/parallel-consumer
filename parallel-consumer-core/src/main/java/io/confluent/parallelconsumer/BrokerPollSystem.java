@@ -111,6 +111,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
                 maybeDoCommit();
 
+                // supervise the control thread
+                pc.supervise();
+
                 switch (state) {
                     case draining -> {
                         doPause();

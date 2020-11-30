@@ -112,6 +112,15 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         return closed || doneOrCancelled;
     }
 
+    public void supervise() {
+        if(controlThreadFuture.isPresent()){
+            Future<Boolean> booleanFuture = controlThreadFuture.get();
+            if(booleanFuture.isDone()||booleanFuture.isCancelled()){
+                throw new 
+            }
+        }
+    }
+
     /**
      * The run state of the controller.
      *
