@@ -38,7 +38,7 @@
     <!--            <logger name="io.confluent.parallelconsumer" level="trace" />-->
 
     <!-- notable specifics -->
-    <logger name="io.confluent.parallelconsumer.integrationTests" level="debug"/>
+<!--    <logger name="io.confluent.parallelconsumer.integrationTests" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer.integrationTests.LargeVolumeInMemoryTests" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer.ParallelConsumerTestBase" level="trace"/>-->
 <!--    -->
@@ -47,7 +47,7 @@
 <!--    <logger name="io.confluent.parallelconsumer.BrokerPollSystem" level="debug"/>-->
 <!--    <logger name="io.confluent.parallelconsumer.ConsumerManager" level="debug"/>-->
     <logger name="io.confluent.parallelconsumer.RingBufferManager" level="info"/>
-    <logger name="io.confluent.parallelconsumer.RingBufferManager" level="trace"/>
+<!--    <logger name="io.confluent.parallelconsumer.RingBufferManager" level="trace"/>-->
 <!--    -->
     <!--    <logger name="io.confluent.parallelconsumer.OffsetMapCodecManager" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer.WorkManagerOffsetMapCodecManagerTest" level="debug"/>-->

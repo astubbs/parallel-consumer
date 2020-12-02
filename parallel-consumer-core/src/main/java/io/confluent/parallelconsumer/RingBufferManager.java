@@ -141,9 +141,9 @@ public class RingBufferManager<K, V> {
             toQueue = availablePermits;
         }
 
-        if (availablePermits != batchBufferQueue.size()) {
-            log.info("youre not crazy");
-        }
+//        if (availablePermits != batchBufferQueue.size()) {
+//            log.info("youre not crazy");
+//        }
 
         submitBatches(toQueue, usersFunction, callback);
     }

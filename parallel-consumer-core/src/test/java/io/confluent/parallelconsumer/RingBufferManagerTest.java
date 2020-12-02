@@ -1,5 +1,6 @@
 package io.confluent.parallelconsumer;
 
+import io.confluent.csid.utils.KafkaTestUtils;
 import io.confluent.csid.utils.ProgressBarUtils;
 import io.confluent.csid.utils.TrimListRepresentation;
 import lombok.extern.slf4j.Slf4j;
@@ -84,7 +85,7 @@ class RingBufferManagerTest extends ParallelEoSStreamProcessorTestBase {
     @Test
     void testFullCycle() {
         var options = ParallelConsumerOptions.<String, String>builder()
-                .numberOfThreads(10)
+                .numberOfThreads(10000)
                 .ordering(UNORDERED)
 //                .numberOfThreads(1000)
                 .build();
@@ -94,8 +95,8 @@ class RingBufferManagerTest extends ParallelEoSStreamProcessorTestBase {
 
         BrokerPollSystem.setLongPollTimeout(Duration.ofSeconds(2));
 
-//        int expected = 1_000_000;
-        int expected = 1_000;
+        int expected = 1_000_000;
+//        int expected = 1_000;
 
         List<ConsumerRecord<String, String>> consumerRecords = ktu.generateRecordsForKey(1, expected);
         ktu.send(consumerSpy, consumerRecords);
@@ -117,9 +118,9 @@ class RingBufferManagerTest extends ParallelEoSStreamProcessorTestBase {
             try {
 //                Thread.sleep(RandomUtils.nextInt(20, 200));
 //                Thread.sleep(RandomUtils.nextInt(500, 2000));
-//                Thread.sleep(0);
+                Thread.sleep(0);
 //                Thread.sleep(2);
-                Thread.sleep(500);
+//                Thread.sleep(500);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -133,6 +134,7 @@ class RingBufferManagerTest extends ParallelEoSStreamProcessorTestBase {
 
 //        var rb = new RingBufferManager<String, String>(options, wm, pc, threadPoolExecutor);
         log.info("Starting");
+
         parallelConsumer.poll(usersFunction);
 
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expected);
