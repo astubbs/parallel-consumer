@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.of;
@@ -83,7 +84,9 @@ class RingBufferManagerTest extends ParallelEoSStreamProcessorTestBase {
     @Test
     void testFullCycle() {
         var options = ParallelConsumerOptions.<String, String>builder()
-                .numberOfThreads(1000)
+                .numberOfThreads(10)
+                .ordering(UNORDERED)
+//                .numberOfThreads(1000)
                 .build();
 //        var pc = new ParallelEoSStreamProcessor<String, String>(options);
 //        var wm = new WorkManager<>(options, consumerSpy);
@@ -91,7 +94,8 @@ class RingBufferManagerTest extends ParallelEoSStreamProcessorTestBase {
 
         BrokerPollSystem.setLongPollTimeout(Duration.ofSeconds(2));
 
-        int expected = 1_000_000;
+//        int expected = 1_000_000;
+        int expected = 1_000;
 
         List<ConsumerRecord<String, String>> consumerRecords = ktu.generateRecordsForKey(1, expected);
         ktu.send(consumerSpy, consumerRecords);
@@ -112,8 +116,10 @@ class RingBufferManagerTest extends ParallelEoSStreamProcessorTestBase {
 //            log.info("user func sleep {}", rec.offset());
             try {
 //                Thread.sleep(RandomUtils.nextInt(20, 200));
-                Thread.sleep(0);
+//                Thread.sleep(RandomUtils.nextInt(500, 2000));
+//                Thread.sleep(0);
 //                Thread.sleep(2);
+                Thread.sleep(500);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }

@@ -45,14 +45,13 @@ public class RingBufferManager<K, V> {
             boolean lastRunDirty = true;
             while (supervisorThread.isAlive()) {
                 try {
-                    manageBatchBuffer();
+                    refillBatchQueueIfEmpty();
 
                     enqueueFromBatchBuffer(usersFunction, callback);
 
-                    List<WorkContainer<K, V>> workContainers = getWorkContainers();
-
-
-                    submitSingles(usersFunction, callback, workContainers);
+// old singles technique
+//                    List<WorkContainer<K, V>> workContainers = getWorkContainers();
+//                    submitSingles(usersFunction, callback, workContainers);
 
 //                        log.info("Loop, yield");
                     Thread.sleep(1); // for testing - remove
@@ -67,19 +66,24 @@ public class RingBufferManager<K, V> {
         Executors.newSingleThreadExecutor().submit(runnable);
     }
 
-    private void manageBatchBuffer() throws InterruptedException {
+    /**
+     * Only query {@link WorkManager} in batches, if our batch buffer is empty (querying {@link WorkManager} can be
+     * expensive).
+     */
+    private void refillBatchQueueIfEmpty() throws InterruptedException {
         if (batchBufferQueue.isEmpty()) {
             List<WorkContainer<K, V>> workContainers = getWorkContainers();
             batchBufferQueue.addAll(workContainers);
         } else {
-            log.trace("Batch not empty, skipping");
+            log.warn("Batch not empty, skipping");
         }
-
     }
 
     private List<WorkContainer<K, V>> getWorkContainers() throws InterruptedException {
-        int toGet = options.getNumberOfThreads() * 2; // ensure we always have more waiting to queue
+        // TOOD includes ones already out for processing?
+        int toGet = options.getNumberOfThreads() * 4; // ensure we always have more waiting to queue
 
+        log.debug("Requesting {} work", toGet);
         // todo make sure work is gotten in large batches, and only when buffer is small enough - not every loop
         List<WorkContainer<K, V>> workContainers = wm.maybeGetWork(toGet);
 //                    boolean clean = wm.isClean();
@@ -89,17 +93,17 @@ public class RingBufferManager<K, V> {
         if (workContainers.isEmpty()) {
             waitForRecordsAvailable();
         }
-        int size = threadPoolExecutor.getQueue().size();
-//                    if (got == 0 && size > 0) {
+        int currentPoolQueueSize = threadPoolExecutor.getQueue().size();
+//                    if (got == 0 && currentPoolQueueSize > 0) {
         if (got == 0) {
             log.info("{}", threadPoolExecutor);
             log.info("got none");
 
-            if (size > 0) {
+            if (currentPoolQueueSize > 0) {
                 var processingShards = wm.getProcessingShards();
                 log.debug("Nothing available to process, waiting on dirty state of shards");
                 synchronized (processingShards) {
-                    processingShards.wait();//refactor
+                    processingShards.wait();//refactor to wm
                 }
             }
         }
@@ -121,9 +125,25 @@ public class RingBufferManager<K, V> {
         }
     }
 
+    /**
+     * Causes the thread to block if no tokens are available, until one becomes so.
+     */
     private <R> void enqueueFromBatchBuffer(final Function<ConsumerRecord<K, V>, List<R>> usersFunction, final Consumer<R> callback) {
-        int target = options.getNumberOfThreads() * 2; // ensure we always have more waiting to queue
-        int toQueue = target - threadPoolExecutor.getQueue().size();
+//        int target = options.getNumberOfThreads() * 2; // ensure we always have more waiting to queue
+        int availablePermits = semaphore.availablePermits();
+        int toQueue;
+
+        if (availablePermits == 0) {
+            // if our semaphore is full, make sure we request a single token so that we block until any are available
+            log.debug("Semaphore full, so block until token frees up");
+            toQueue = 1;
+        } else {
+            toQueue = availablePermits;
+        }
+
+        if (availablePermits != batchBufferQueue.size()) {
+            log.info("youre not crazy");
+        }
 
         submitBatches(toQueue, usersFunction, callback);
     }
@@ -156,10 +176,16 @@ public class RingBufferManager<K, V> {
 
 
     private <R> void submitBatches(int toQueue, final Function<ConsumerRecord<K, V>, List<R>> userFunction, final Consumer<R> callback) {
+        if (batchBufferQueue.isEmpty()) {
+            log.debug("Batch empty, nothing to submit (req: {})", toQueue);
+            return;
+        }
+
         if (semaphore.availablePermits() < 1) {
             log.debug("Probably Blocking putting work into ring buffer until there is capacity");
         }
 
+        log.trace("Acquiring {} tokens (remaining: {})", toQueue, semaphore.availablePermits());
         semaphore.acquireUninterruptibly(toQueue);
         int taken = 0;
         while (taken < toQueue && !batchBufferQueue.isEmpty()) {

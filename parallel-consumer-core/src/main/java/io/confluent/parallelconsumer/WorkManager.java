@@ -264,7 +264,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         int taken = 0;
 
 //        log.debug("Will register {} (max configured: {}) records of work ({} already registered)", gap, max, inFlight);
-        log.debug("Will attempt to register {} - {} available in mailbox", requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
+        log.debug("Will attempt to register {} as requested - {} available in mailbox", requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
 
         //
         while (taken < gap && !internalFlattenedMailQueue.isEmpty()) {
@@ -437,7 +437,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             return UniLists.of();
         }
 
-        int extraNeededFromInboxToSatisfy = requestedMaxWorkToRetrieve - getWorkQueuedInShardsCount();
+        // TODO this should be more like "getWorkQueuedInShardsCountAbleToBeTakenAsWork" - as there may be many records in the shards but none may be able to be taken. This may be different for different ordering modes. Could also possibly be cached.
+        int workSupposedlyAlreadyAvailableToTake = getWorkQueuedInShardsCount();
+        int extraNeededFromInboxToSatisfy = requestedMaxWorkToRetrieve - workSupposedlyAlreadyAvailableToTake;
+        log.debug("Requested: {}, supposedlyAvailable: {}, delta to attempt: {}", requestedMaxWorkToRetrieve, workSupposedlyAlreadyAvailableToTake, extraNeededFromInboxToSatisfy);
         processInbox(extraNeededFromInboxToSatisfy);
 
         //
