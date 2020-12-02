@@ -45,49 +45,14 @@ public class RingBufferManager<K, V> {
             boolean lastRunDirty = true;
             while (supervisorThread.isAlive()) {
                 try {
-//                    manageBatchBuffer();
-//                    enqueueFromBatchBuffer();
-                    int toGet = options.getNumberOfThreads() * 2; // ensure we always have more waiting to queue
+                    manageBatchBuffer();
+
+                    enqueueFromBatchBuffer(usersFunction, callback);
+
+                    List<WorkContainer<K, V>> workContainers = getWorkContainers();
 
 
-                    // todo make sure work is gotten in large batches, and only when buffer is small enough - not every loop
-                    List<WorkContainer<K, V>> workContainers = wm.maybeGetWork(toGet);
-//                    boolean clean = wm.isClean();
-//                    if(lastRunDirty )
-                    int got = workContainers.size();
-                    log.debug("Got work: {}, req {}", got, toGet);
-                    if (workContainers.isEmpty()) {
-                        waitForRecordsAvailable();
-                    }
-                    int size = threadPoolExecutor.getQueue().size();
-//                    if (got == 0 && size > 0) {
-                    if (got == 0) {
-                        log.info("{}", threadPoolExecutor);
-                        log.info("got none");
-
-                        if (size > 0) {
-                            var processingShards = wm.getProcessingShards();
-                            log.debug("Nothing available to process, waiting on dirty state of shards");
-                            synchronized (processingShards) {
-                                processingShards.wait();//refactor
-                            }
-                        }
-                    }
-                    for (final WorkContainer<K, V> work : workContainers) {
-                        Runnable run = () -> {
-                            try {
-                                pc.userFunctionRunner(usersFunction, callback, work);
-                                pc.handleFutureResult(work);
-                            } finally {
-                                log.trace("Releasing ticket {}", work);
-                                semaphore.release();
-                            }
-                        };
-//                        while (!ringbuffer.contains(run)) {
-//                                ringbuffer.put(run);
-                        submit(run, work);
-
-                    }
+                    submitSingles(usersFunction, callback, workContainers);
 
 //                        log.info("Loop, yield");
                     Thread.sleep(1); // for testing - remove
@@ -102,11 +67,65 @@ public class RingBufferManager<K, V> {
         Executors.newSingleThreadExecutor().submit(runnable);
     }
 
-    private void enqueueFromBatchBuffer() {
+    private void manageBatchBuffer() throws InterruptedException {
+        if (batchBufferQueue.isEmpty()) {
+            List<WorkContainer<K, V>> workContainers = getWorkContainers();
+            batchBufferQueue.addAll(workContainers);
+        } else {
+            log.trace("Batch not empty, skipping");
+        }
+
+    }
+
+    private List<WorkContainer<K, V>> getWorkContainers() throws InterruptedException {
+        int toGet = options.getNumberOfThreads() * 2; // ensure we always have more waiting to queue
+
+        // todo make sure work is gotten in large batches, and only when buffer is small enough - not every loop
+        List<WorkContainer<K, V>> workContainers = wm.maybeGetWork(toGet);
+//                    boolean clean = wm.isClean();
+//                    if(lastRunDirty )
+        int got = workContainers.size();
+        log.debug("Got work: {}, req {}", got, toGet);
+        if (workContainers.isEmpty()) {
+            waitForRecordsAvailable();
+        }
+        int size = threadPoolExecutor.getQueue().size();
+//                    if (got == 0 && size > 0) {
+        if (got == 0) {
+            log.info("{}", threadPoolExecutor);
+            log.info("got none");
+
+            if (size > 0) {
+                var processingShards = wm.getProcessingShards();
+                log.debug("Nothing available to process, waiting on dirty state of shards");
+                synchronized (processingShards) {
+                    processingShards.wait();//refactor
+                }
+            }
+        }
+        return workContainers;
+    }
+
+    private <R> void submitSingles(final Function<ConsumerRecord<K, V>, List<R>> usersFunction, final Consumer<R> callback, final List<WorkContainer<K, V>> workContainers) {
+        for (final WorkContainer<K, V> work : workContainers) {
+            Runnable run = () -> {
+                try {
+                    pc.userFunctionRunner(usersFunction, callback, work);
+                    pc.handleFutureResult(work);
+                } finally {
+                    log.trace("Releasing ticket {}", work);
+                    semaphore.release();
+                }
+            };
+            submit(run, work);
+        }
+    }
+
+    private <R> void enqueueFromBatchBuffer(final Function<ConsumerRecord<K, V>, List<R>> usersFunction, final Consumer<R> callback) {
         int target = options.getNumberOfThreads() * 2; // ensure we always have more waiting to queue
         int toQueue = target - threadPoolExecutor.getQueue().size();
 
-        submit(toQueue);
+        submitBatches(toQueue, usersFunction, callback);
     }
 
 
@@ -136,7 +155,7 @@ public class RingBufferManager<K, V> {
     }
 
 
-    private void submit(final int toQueue) {
+    private <R> void submitBatches(int toQueue, final Function<ConsumerRecord<K, V>, List<R>> userFunction, final Consumer<R> callback) {
         if (semaphore.availablePermits() < 1) {
             log.debug("Probably Blocking putting work into ring buffer until there is capacity");
         }
@@ -145,54 +164,47 @@ public class RingBufferManager<K, V> {
         int taken = 0;
         while (taken < toQueue && !batchBufferQueue.isEmpty()) {
             WorkContainer work = batchBufferQueue.remove();
+
+            Runnable run = () -> {
+                try {
+                    pc.userFunctionRunner(userFunction, callback, work);
+                    pc.handleFutureResult(work);
+                } finally {
+                    log.debug("Releasing ticket");
+                    semaphore.release();
+                }
+            };
+
+            threadPoolExecutor.submit(run);
+        }
+    }
+
+//    private void submit(final List<WorkContainer<K, V>> workContainers) {
+//        if (semaphore.availablePermits() < 1) {
+//            log.debug("Probably Blocking putting work into ring buffer until there is capacity");
+//        }
+//        int size = workContainers.size();
+//        semaphore.acquireUninterruptibly(size);
+//
 //        for (final WorkContainer<K, V> work : workContainers) {
-            Runnable run = () -> {
-                try {
-//                    pc.userFunctionRunner(userFunction, callback, work);
-                    pc.handleFutureResult(work);
-                } finally {
-                    log.debug("Releasing ticket");
-                    semaphore.release();
-                }
-            };
-//                        while (!ringbuffer.contains(run)) {
-//                                ringbuffer.put(run);
-            submit(run, work);
-
-//                        }
-
-//                        log.info("Loop, yield");
-//            Thread.sleep(1); // for testing - remove
-            log.trace("stats:{}", threadPoolExecutor);
-        }
-    }
-
-    private void submit(final List<WorkContainer<K, V>> workContainers) {
-        if (semaphore.availablePermits() < 1) {
-            log.debug("Probably Blocking putting work into ring buffer until there is capacity");
-        }
-        int size = workContainers.size();
-        semaphore.acquireUninterruptibly(size);
-
-        for (final WorkContainer<K, V> work : workContainers) {
-            Runnable run = () -> {
-                try {
-//                    pc.userFunctionRunner(usersFunction, callback, work);
-                    pc.handleFutureResult(work);
-                } finally {
-                    log.debug("Releasing ticket");
-                    semaphore.release();
-                }
-            };
-//                        while (!ringbuffer.contains(run)) {
-//                                ringbuffer.put(run);
-            submit(run, work);
-
-//                        }
-
-//                        log.info("Loop, yield");
-//            Thread.sleep(1); // for testing - remove
-            log.trace("stats:{}", threadPoolExecutor);
-        }
-    }
+//            Runnable run = () -> {
+//                try {
+////                    pc.userFunctionRunner(usersFunction, callback, work);
+//                    pc.handleFutureResult(work);
+//                } finally {
+//                    log.debug("Releasing ticket");
+//                    semaphore.release();
+//                }
+//            };
+////                        while (!ringbuffer.contains(run)) {
+////                                ringbuffer.put(run);
+//            submit(run, work);
+//
+////                        }
+//
+////                        log.info("Loop, yield");
+////            Thread.sleep(1); // for testing - remove
+//            log.trace("stats:{}", threadPoolExecutor);
+//        }
+//    }
 }
