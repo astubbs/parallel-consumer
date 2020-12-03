@@ -127,7 +127,7 @@ public class OffsetMapCodecManager<K, V> {
     byte[] encodeOffsetsCompressed(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
         Long nextExpectedOffset = wm.partitionOffsetHighestSeen.get(tp) + 1;
         // todo use new encoder for accuracy
-        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, nextExpectedOffset).invoke(incompleteOffsets);
+        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, nextExpectedOffset).invoke(incompleteOffsets, finalOffsetForPartition, );
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
             log.warn("Forcing use of {}, for testing", forcedOffsetEncoding);

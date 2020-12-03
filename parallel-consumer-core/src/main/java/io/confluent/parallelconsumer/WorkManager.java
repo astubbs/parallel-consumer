@@ -32,6 +32,7 @@ import static io.confluent.csid.utils.KafkaUtils.toTP;
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static java.lang.Math.abs;
 import static java.lang.Math.min;
 import static lombok.AccessLevel.PACKAGE;
 
@@ -969,6 +970,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             //
             TopicPartition topicPartitionKey = partitionQueueEntry.getKey();
             log.trace("Starting scan of partition: {}", topicPartitionKey);
+            Long firstIncomplete = null;
             for (final var offsetAndItsWorkContainer : partitionQueue.entrySet()) {
                 // ordered iteration via offset keys thanks to the tree-map
                 WorkContainer<K, V> work = offsetAndItsWorkContainer.getValue();
@@ -992,6 +994,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                         log.trace("Offset {} is complete, but failed processing. Will track in offset map as not complete. Can't do normal offset commit past this point.", work.getCr().offset());
                         iteratedBeyondLowWaterMarkBeingLowestCommittableOffset = true;
                         incompleteOffsets.add(offset);
+                        if (firstIncomplete == null)
+                            firstIncomplete = offset;
                     }
                 } else {
                     // work not complete - either successfully or unsuccessfully
@@ -1001,6 +1005,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                             partitionQueueEntry.getKey(),
                             partitionQueueEntry.getValue().size());
                     incompleteOffsets.add(offset);
+                    if (firstIncomplete == null)
+                        firstIncomplete = offset;
                 }
             }
 
@@ -1008,7 +1014,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 OffsetSimultaneousEncoder precomputed = partitionContinuousOffsetEncoders.get(topicPartitionKey);
                 byte[] bytes = new byte[0];
                 try {
-                    precomputed.invoke(incompleteOffsets);
+                    long baseOffset = partitionOffsetHighestContinuousCompleted.get(topicPartitionKey);
+                    long nextExpected = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
+                    if (baseOffset != firstIncomplete) {
+                        log.warn("inconsistent");
+                    }
+                    if (nextExpected != partitionOffsetHighestSeen.get(topicPartitionKey)) {
+                        log.warn("inconsistent");
+                    }
+                    precomputed.invoke(incompleteOffsets, baseOffset, nextExpected);
                     bytes = precomputed.packSmallest();
                     String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
                     log.debug("comparisonOffsetPayloadString {}", comparisonOffsetPayloadString);

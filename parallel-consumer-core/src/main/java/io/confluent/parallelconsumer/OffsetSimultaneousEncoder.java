@@ -85,7 +85,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      */
     public OffsetSimultaneousEncoder(
             long lowWaterMark
-            , Long nextExpectedOffset
+            ,
+            Long nextExpectedOffset
 
 //            ,
     ) {
@@ -169,7 +170,9 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * <p>
      *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
      */
-    public OffsetSimultaneousEncoder invoke(Set<Long> incompleteOffsets) {
+    public OffsetSimultaneousEncoder invoke(Set<Long> incompleteOffsets, final long currentBaseOffset, final long nextExpectedOffsetFromBroker) {
+        checkConditionsHaventChanged(currentBaseOffset, nextExpectedOffsetFromBroker);
+
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, nextExpectedOffset);
         log.trace("Incompletes are: {}", incompleteOffsets);
 
