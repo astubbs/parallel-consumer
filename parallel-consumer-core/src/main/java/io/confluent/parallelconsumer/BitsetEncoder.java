@@ -104,13 +104,13 @@ class BitsetEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void encodeIncompleteOffset(final int index) {
+    public void encodeIncompleteOffset(final int relativeOffset) {
         // noop - bitset defaults to 0's (`unset`)
     }
 
     @Override
-    public void encodeCompletedOffset(final int index) {
-        bitSet.set(index);
+    public void encodeCompletedOffset(final int relativeOffset) {
+        bitSet.set(relativeOffset);
     }
 
     @Override

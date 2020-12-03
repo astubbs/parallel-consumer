@@ -103,7 +103,7 @@ public class WorkManagerTest {
         assertThat(works).hasSize(1);
         assertOffsets(works, of(0));
 
-        wm.success(works.get(0));
+        wm.onSuccess(works.get(0));
 
         works = wm.maybeGetWork(max);
         assertThat(works).hasSize(1);
@@ -122,13 +122,13 @@ public class WorkManagerTest {
         assertThat(works).hasSize(2);
         assertOffsets(works, of(0, 1));
 
-        wm.success(works.get(0));
-        wm.failed(works.get(1));
+        wm.onSuccess(works.get(0));
+        wm.onFailure(works.get(1));
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of(2));
 
-        wm.success(works.get(0));
+        wm.onSuccess(works.get(0));
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of());
@@ -142,7 +142,7 @@ public class WorkManagerTest {
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of(1));
-        wm.success(works.get(0));
+        wm.onSuccess(works.get(0));
 
         Assertions.assertThat(successfulWork)
                 .extracting(x -> (int) x.getCr().offset())
@@ -173,7 +173,7 @@ public class WorkManagerTest {
         works = wm.maybeGetWork(max);
         assertOffsets(works, of()); // should be blocked by in flight
 
-        wm.success(w);
+        wm.onSuccess(w);
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of(1));
@@ -193,7 +193,7 @@ public class WorkManagerTest {
         var works = wm.maybeGetWork(max);
         assertOffsets(works, of(0));
         var wc = works.get(0);
-        wm.failed(wc);
+        wm.onFailure(wc);
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of());
@@ -204,7 +204,7 @@ public class WorkManagerTest {
         assertOffsets(works, of(0));
 
         wc = works.get(0);
-        wm.failed(wc);
+        wm.onFailure(wc);
 
         advanceClock(getRetryDelay().minus(ofSeconds(1)));
 
@@ -215,17 +215,17 @@ public class WorkManagerTest {
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of(0));
-        wm.success(works.get(0));
+        wm.onSuccess(works.get(0));
 
         assertOffsets(successfulWork, of(0));
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of(1));
-        wm.success(works.get(0));
+        wm.onSuccess(works.get(0));
 
         works = wm.maybeGetWork(max);
         assertOffsets(works, of(2));
-        wm.success(works.get(0));
+        wm.onSuccess(works.get(0));
 
         // check all published in the end
         assertOffsets(successfulWork, of(0, 1, 2));
@@ -290,8 +290,8 @@ public class WorkManagerTest {
         assertOffsets(works, of(0, 1, 2, 6));
 
         // fail some
-        wm.failed(works.get(1));
-        wm.failed(works.get(3));
+        wm.onFailure(works.get(1));
+        wm.onFailure(works.get(3));
 
         //
         works = wm.maybeGetWork(max);
@@ -394,13 +394,13 @@ public class WorkManagerTest {
         assertThat(wm.maybeGetWork()).isEmpty();
 
         // succeed
-        wm.success(work.poll());
+        wm.onSuccess(work.poll());
 
         //
         Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(1);
 
         //
-        wm.failed(work.poll());
+        wm.onFailure(work.poll());
         // bump the clock - we're not testing delayed failure
         advanceClockByDelay();
 
@@ -408,15 +408,15 @@ public class WorkManagerTest {
         Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(1);
 
         //
-        wm.success(work.poll());
-        wm.success(work.poll());
+        wm.onSuccess(work.poll());
+        wm.onSuccess(work.poll());
 
         //
         Assertions.assertThat(work.add(wm.maybeGetWork(100))).hasSize(2);
 
         //
         for (var ignore : work) {
-            wm.success(work.poll());
+            wm.onSuccess(work.poll());
         }
 
         //
@@ -429,13 +429,13 @@ public class WorkManagerTest {
         Assertions.assertThat(successfulWork).hasSize(5);
 
         //
-        wm.success(work.poll());
-        wm.success(work.poll());
+        wm.onSuccess(work.poll());
+        wm.onSuccess(work.poll());
 
         //
         Assertions.assertThat(work.add(wm.maybeGetWork(10))).hasSize(2);
-        wm.success(work.poll());
-        wm.success(work.poll());
+        wm.onSuccess(work.poll());
+        wm.onSuccess(work.poll());
 
         //
         assertThat(work.size()).isEqualTo(0);
@@ -497,7 +497,7 @@ public class WorkManagerTest {
 
     private void successAll(List<WorkContainer<String, String>> works) {
         for (WorkContainer<String, String> work : works) {
-            wm.success(work);
+            wm.onSuccess(work);
         }
     }
 
@@ -623,7 +623,7 @@ public class WorkManagerTest {
         //
         for (var w : work) {
             w.onUserFunctionSuccess();
-            wm.success(w);
+            wm.onSuccess(w);
         }
 
         //

@@ -47,12 +47,12 @@ class RunLengthEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void encodeIncompleteOffset(final int rangeIndex) {
+    public void encodeIncompleteOffset(final int relativeOffset) {
         encodeRunLength(false);
     }
 
     @Override
-    public void encodeCompletedOffset(final int rangeIndex) {
+    public void encodeCompletedOffset(final int relativeOffset) {
         encodeRunLength(true);
     }
 

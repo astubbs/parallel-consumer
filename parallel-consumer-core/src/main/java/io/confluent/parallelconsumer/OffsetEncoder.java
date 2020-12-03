@@ -10,7 +10,7 @@ import java.nio.ByteBuffer;
  * Base OffsetEncoder
  */
 @Slf4j
-abstract class OffsetEncoder {
+abstract class OffsetEncoder implements OffsetEncoderContract {
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
 
@@ -22,13 +22,13 @@ abstract class OffsetEncoder {
 
     protected abstract OffsetEncoding getEncodingTypeCompressed();
 
-    abstract void encodeIncompleteOffset(final int rangeIndex);
+    public abstract void encodeIncompleteOffset(final int relativeOffset);
 
-    abstract void encodeCompletedOffset(final int rangeIndex);
+    public abstract void encodeCompletedOffset(final int relativeOffset);
 
     abstract byte[] serialise() throws EncodingNotSupportedException;
 
-    abstract int getEncodedSize();
+    public abstract int getEncodedSize();
 
     boolean quiteSmall() {
         return this.getEncodedSize() < OffsetSimultaneousEncoder.LARGE_INPUT_MAP_SIZE_THRESHOLD;
@@ -57,5 +57,5 @@ abstract class OffsetEncoder {
         this.register(encodingType, compressed);
     }
 
-    protected abstract byte[] getEncodedBytes();
+    public abstract byte[] getEncodedBytes();
 }

@@ -22,7 +22,7 @@ import static io.confluent.parallelconsumer.OffsetEncoding.Version.v2;
  * @see #invoke()
  */
 @Slf4j
-class OffsetSimultaneousEncoder {
+class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     /**
      * Size threshold in bytes after which compressing the encodings will be compared, as it seems to be typically worth
@@ -226,4 +226,23 @@ class OffsetSimultaneousEncoder {
         return result.array();
     }
 
+    @Override
+    public void encodeIncompleteOffset(final int relativeOffset) {
+
+    }
+
+    @Override
+    public void encodeCompletedOffset(final int relativeOffset) {
+
+    }
+
+    @Override
+    public int getEncodedSize() {
+        return 0;
+    }
+
+    @Override
+    public byte[] getEncodedBytes() {
+        return new byte[0];
+    }
 }

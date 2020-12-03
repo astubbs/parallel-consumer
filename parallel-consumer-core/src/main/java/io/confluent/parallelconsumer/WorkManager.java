@@ -71,6 +71,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private final Map<TopicPartition, NavigableMap<Long, WorkContainer<K, V>>> partitionCommitQueues = new ConcurrentHashMap<>();
     //    private final Map<TopicPartition, NavigableMap<Long, WorkContainer<K, V>>> partitionCommitQueues = new HashMap<>();
 
+    /**
+     * Continuous offset encodings
+     */
+    private final Map<TopicPartition, OffsetSimultaneousEncoder> continuousOffsetEncodings = new ConcurrentHashMap<>();
+
     private final BackoffAnalyser backoffer;
 
     /**
@@ -82,9 +87,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private int recordsOutForProcessing = 0;
 
     /**
-     * todo docs
-     * The multiple that should be pre-loaded awaiting processing. Consumer already pipelines, so we shouldn't need to
-     * pipeline ourselves too much.
+     * todo docs The multiple that should be pre-loaded awaiting processing. Consumer already pipelines, so we shouldn't
+     * need to pipeline ourselves too much.
      * <p>
      * Note how this relates to {@link BrokerPollSystem#getLongPollTimeout()} - if longPollTimeout is high and loading
      * factor is low, there may not be enough messages queued up to satisfy demand.
@@ -219,7 +223,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * <p>
      * Thread safe for use by control and broker poller thread.
      *
-     * @see #success
+     * @see #onSuccess
      * @see #raisePartitionHighWaterMark
      */
     public void registerWork(ConsumerRecords<K, V> records) {
@@ -501,31 +505,57 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private final WindowedEventRate successRatePer5Seconds = new WindowedEventRate(5);
     private final ExponentialMovingAverage successRatePer5SecondsEMA = new ExponentialMovingAverage(0.5);
 
-    public void success(WorkContainer<K, V> wc) {
+    public void onSuccess(WorkContainer<K, V> wc) {
+        //
         successRatePer5Seconds.newEvent();
 //        successRatePer5SecondsEMA.
         workStateIsDirtyNeedsCommitting.set(true);
+
+        //
         ConsumerRecord<K, V> cr = wc.getCr();
         log.trace("Work success ({}), removing from processing shard queue", wc);
         wc.succeed();
         Object key = computeShardKey(cr);
+
         // remove from processing queues
         NavigableMap<Long, WorkContainer<K, V>> shard = processingShards.get(key);
         long offset = cr.offset();
         shard.remove(offset);
+
         // If using KEY ordering, where the shard key is a message key, garbage collect old shard keys (i.e. KEY ordering we may never see a message for this key again)
         boolean keyOrdering = options.getOrdering().equals(KEY);
         if (keyOrdering && shard.isEmpty()) {
             log.trace("Removing empty shard (key: {})", key);
             processingShards.remove(key);
         }
+
+        //
         successfulWorkListeners.forEach((c) -> c.accept(wc)); // notify listeners
+
+        //
         recordsOutForProcessing--;
+
+        // todo refactor to offset manager?
+        continuousOffsetEncodings
+                .computeIfAbsent(wc.getTopicPartition(), (ignore) ->
+                        new OffsetSimultaneousEncoder(0, 0l, new HashSet<>())
+                )
+                .encodeCompletedOffset();
     }
 
-    public void failed(WorkContainer<K, V> wc) {
+    public void onFailure(WorkContainer<K, V> wc) {
+        //
         wc.fail(clock);
+
+        //
         putBack(wc);
+
+        //
+        continuousOffsetEncodings
+                .computeIfAbsent(wc.getTopicPartition(), (ignore) ->
+                        new OffsetSimultaneousEncoder(0, 0l, new HashSet<>())
+                )
+                .encodeIncompleteOffset();
     }
 
     /**

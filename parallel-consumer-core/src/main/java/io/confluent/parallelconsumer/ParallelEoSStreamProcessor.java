@@ -865,12 +865,12 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
     private void onFailure(WorkContainer<K, V> wc) {
         // error occurred, put it back in the queue if it can be retried
         // if not explicitly retriable, put it back in with an try counter so it can be later given up on
-        wm.failed(wc);
+        wm.onFailure(wc);
     }
 
     protected void onSuccess(WorkContainer<K, V> wc) {
         log.trace("Processing success...");
-        wm.success(wc);
+        wm.onSuccess(wc);
     }
 
     /**
