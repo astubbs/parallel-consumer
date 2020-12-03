@@ -37,7 +37,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     private final Set<Long> incompleteOffsets;
 
     /**
-     * The lowest committable offset
+     * The highest committable offset
      */
     private final long lowWaterMark;
 
@@ -78,6 +78,9 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      */
     private final Set<OffsetEncoder> encoders = new HashSet<>();
 
+    /**
+     * @param lowWaterMark The highest committable offset
+     */
     public OffsetSimultaneousEncoder(long lowWaterMark, Long nextExpectedOffset, Set<Long> incompleteOffsets) {
         this.lowWaterMark = lowWaterMark;
         this.nextExpectedOffset = nextExpectedOffset;
@@ -226,13 +229,14 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         return result.array();
     }
 
+
     @Override
-    public void encodeIncompleteOffset(final int relativeOffset) {
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
 
     }
 
     @Override
-    public void encodeCompletedOffset(final int relativeOffset) {
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
 
     }
 

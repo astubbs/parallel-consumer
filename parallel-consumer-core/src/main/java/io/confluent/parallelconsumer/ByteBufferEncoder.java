@@ -40,12 +40,22 @@ class ByteBufferEncoder extends OffsetEncoder {
     }
 
     @Override
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+
+    }
+
+    @Override
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
+
+    }
+
+    @Override
     public int getEncodedSize() {
         return this.bytesBuffer.capacity();
     }
 
     @Override
-    protected byte[] getEncodedBytes() {
+    public byte[] getEncodedBytes() {
         return this.bytesBuffer.array();
     }
 

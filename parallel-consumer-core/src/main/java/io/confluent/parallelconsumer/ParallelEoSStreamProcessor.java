@@ -252,7 +252,6 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
-        numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
         try {
             log.debug("Partitions revoked (onPartitionsRevoked), state: {}", state);
             commitOffsetsThatAreReady();
@@ -270,14 +269,9 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
      */
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
-        numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         wm.onPartitionsAssigned(partitions);
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
-        log.info("Assigned {} partitions - that's {} bytes per partition for encoding offset overruns", numberOfAssignedPartitions, OffsetMapCodecManager.DefaultMaxMetadataSize / numberOfAssignedPartitions);
     }
-
-    @Getter
-    private int numberOfAssignedPartitions;
 
     /**
      * Delegate to {@link WorkManager}
@@ -286,7 +280,6 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
      */
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
-        numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
         wm.onPartitionsLost(partitions);
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsLost(partitions));
     }

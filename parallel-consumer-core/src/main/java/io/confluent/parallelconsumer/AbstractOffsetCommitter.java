@@ -50,8 +50,8 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
         // default noop
     }
 
-    private void onOffsetCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> offsetsToSend) {
-        wm.onOffsetCommitSuccess(offsetsToSend);
+    private void onOffsetCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> offsetsCommitted) {
+        wm.onOffsetCommitSuccess(offsetsCommitted);
     }
 
     protected abstract void commitOffsets(final Map<TopicPartition, OffsetAndMetadata> offsetsToSend, final ConsumerGroupMetadata groupMetadata);

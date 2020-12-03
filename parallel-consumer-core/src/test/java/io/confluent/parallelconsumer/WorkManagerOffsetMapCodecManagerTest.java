@@ -73,7 +73,7 @@ class WorkManagerOffsetMapCodecManagerTest {
         MockConsumer<String, String> consumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
         wm = new WorkManager<>(ParallelConsumerOptions.builder().build(), consumer);
         om = new OffsetMapCodecManager(wm, consumer);
-        wm.partitionOffsetHighWaterMarks.put(tp, partitionHighWaterMark);
+        wm.partitionOffsetHighestSeen.put(tp, partitionHighWaterMark);
     }
 
     @BeforeAll
@@ -232,7 +232,7 @@ class WorkManagerOffsetMapCodecManagerTest {
 
     @Test
     void binaryArrayConstruction() {
-        wm.raisePartitionHighWaterMark(6L, tp);
+        wm.raisePartitionHighestSeen(6L, tp);
         String s = om.incompletesToBitmapString(1L, tp, incomplete); //2,3
         assertThat(s).isEqualTo("xooxx");
     }
@@ -269,7 +269,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @SneakyThrows
     @Test
     void largeOffsetMap() {
-        wm.raisePartitionHighWaterMark(200L, tp);
+        wm.raisePartitionHighestSeen(200L, tp);
         byte[] bytes = om.encodeOffsetsCompressed(0L, tp, incomplete);
         assertThat(bytes.length).as("very small").isLessThan(30);
     }
@@ -303,7 +303,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     void deserialiseBitset() {
         var input = "oxxooooooo";
         long highWater = input.length();
-        wm.raisePartitionHighWaterMark(highWater, tp);
+        wm.raisePartitionHighestSeen(highWater, tp);
 
         Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, input);
         OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater, longs);
@@ -340,9 +340,9 @@ class WorkManagerOffsetMapCodecManagerTest {
         for (final String input : inputs) {
             // override high water mark setup, as the test sets it manually
             setup();
-            wm.partitionOffsetHighWaterMarks.put(tp, 0L); // hard reset to zero
+            wm.partitionOffsetHighestSeen.put(tp, 0L); // hard reset to zero
             long highWater = input.length();
-            wm.raisePartitionHighWaterMark(highWater, tp);
+            wm.raisePartitionHighestSeen(highWater, tp);
 
             //
             log.debug("Testing round - size: {} input: '{}'", input.length(), input);

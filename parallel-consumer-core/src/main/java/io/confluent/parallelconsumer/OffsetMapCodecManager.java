@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
@@ -12,7 +11,6 @@ import pl.tlinkowski.unij.api.UniSets;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 import static io.confluent.csid.utils.Range.range;
@@ -102,8 +100,8 @@ public class OffsetMapCodecManager<K, V> {
 
     void loadOffsetMetadataPayload(long startOffset, TopicPartition tp, String offsetMetadataPayload) throws OffsetDecodingError {
         ParallelConsumer.Tuple<Long, TreeSet<Long>> incompletes = deserialiseIncompleteOffsetMapFromBase64(startOffset, offsetMetadataPayload);
-        wm.raisePartitionHighWaterMark(incompletes.getLeft(), tp);
-        wm.partitionIncompleteOffsets.put(tp, incompletes.getRight());
+        wm.raisePartitionHighestSeen(incompletes.getLeft(), tp);
+        wm.partitionOffsetsIncompleteMetadataPayloads.put(tp, incompletes.getRight());
     }
 
     String makeOffsetMetadataPayload(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
@@ -126,7 +124,7 @@ public class OffsetMapCodecManager<K, V> {
      * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
      */
     byte[] encodeOffsetsCompressed(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
-        Long nextExpectedOffset = wm.partitionOffsetHighWaterMarks.get(tp) + 1;
+        Long nextExpectedOffset = wm.partitionOffsetHighestSeen.get(tp) + 1;
         OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, nextExpectedOffset, incompleteOffsets).invoke();
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
@@ -167,7 +165,7 @@ public class OffsetMapCodecManager<K, V> {
     String incompletesToBitmapString(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) {
         StringBuilder runLengthString = new StringBuilder();
         Long lowWaterMark = finalOffsetForPartition;
-        Long highWaterMark = wm.partitionOffsetHighWaterMarks.get(tp);
+        Long highWaterMark = wm.partitionOffsetHighestSeen.get(tp);
         long end = highWaterMark - lowWaterMark;
         for (final var relativeOffset : range(end)) {
             long offset = lowWaterMark + relativeOffset;

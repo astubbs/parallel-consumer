@@ -123,12 +123,22 @@ class BitsetEncoder extends OffsetEncoder {
     }
 
     @Override
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+
+    }
+
+    @Override
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
+
+    }
+
+    @Override
     public int getEncodedSize() {
         return this.encodedBytes.get().length;
     }
 
     @Override
-    protected byte[] getEncodedBytes() {
+    public byte[] getEncodedBytes() {
         return this.encodedBytes.get();
     }
 

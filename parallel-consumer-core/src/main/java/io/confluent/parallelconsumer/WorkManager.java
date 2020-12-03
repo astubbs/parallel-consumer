@@ -108,18 +108,45 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     // visible for testing
     /**
-     * Offsets, which have been seen, beyond the highest committable offset, which haven't been totally completed
+     * A subset of Offsets, beyond the highest committable offset, which haven't been totally completed.
+     * <p>
+     * We only need to know the full incompletes when we do the {@link #findCompletedEligibleOffsetsAndRemove} scan, so
+     * find the full sent only then, and discard. Otherwise, for continuous encoding, the encoders track it them
+     * selves.
+     *
+     * @see #findCompletedEligibleOffsetsAndRemove(boolean)
+     * @see #manageEncoding(boolean, WorkContainer)
+     * @see #onSuccess(WorkContainer)
+     * @see #onFailure(WorkContainer)
      */
-    Map<TopicPartition, TreeSet<Long>> partitionIncompleteOffsets = new HashMap<>();
+    Map<TopicPartition, TreeSet<Long>> partitionOffsetsIncompleteMetadataPayloads = new HashMap<>();
 
     // visible for testing
     /**
      * The highest seen offset for a partition
      */
-    Map<TopicPartition, Long> partitionOffsetHighWaterMarks = new HashMap<>();
+    Map<TopicPartition, Long> partitionOffsetHighestSeen = new HashMap<>();
+
+    /**
+     * Highest offset which has completed
+     */
+    Map<TopicPartition, Long> partitionOffsetHighestCompleted = new HashMap<>();
+
+    /**
+     * todo partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething
+     * <p>
+     * if true, more messages are allowed
+     */
+    Map<TopicPartition, Boolean> partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething = new HashMap<>();
+
+    /**
+     * Highest committable offset - the end offset of the highest (from the lowest seen) continuous set of completed
+     * offsets. AKA low water mark.
+     */
+    Map<TopicPartition, Long> partitionOffsetHighestContinuousCompleted = new HashMap<>();
 
     // visible for testing
-    long MISSING_HIGH_WATER_MARK = -1L;
+    long MISSING_HIGHEST_SEEN = -1L;
 
     /**
      * Get's set to true whenever work is returned completed, so that we know when a commit needs to be made.
@@ -128,6 +155,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * chances no work has completed in the last second.
      */
     private AtomicBoolean workStateIsDirtyNeedsCommitting = new AtomicBoolean(false);
+
+    private int numberOfAssignedPartitions;
 
     public WorkManager(ParallelConsumerOptions options, org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
         this.options = options;
@@ -141,6 +170,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+        numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
+        log.info("Assigned {} partitions - that's {} bytes per partition for encoding offset overruns",
+                numberOfAssignedPartitions, OffsetMapCodecManager.DefaultMaxMetadataSize / numberOfAssignedPartitions);
+
         try {
             log.debug("onPartitionsAssigned: {}", partitions);
             Set<TopicPartition> partitionsSet = UniSets.copyOf(partitions);
@@ -161,9 +194,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+        numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
+
         try {
             log.debug("Partitions revoked: {}", partitions);
-            resetOffsetMapAndRemoveWork(partitions);
+            removePartitionFromRecordsAndShardWork(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsRevoked", e);
             throw e;
@@ -175,25 +210,32 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
+        numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
+
         try {
             log.warn("Partitions have been lost");
             log.debug("Lost partitions: {}", partitions);
-            resetOffsetMapAndRemoveWork(partitions);
+            removePartitionFromRecordsAndShardWork(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsLost", e);
             throw e;
         }
     }
 
-    private void resetOffsetMapAndRemoveWork(Collection<TopicPartition> partitions) {
+    private void removePartitionFromRecordsAndShardWork(Collection<TopicPartition> partitions) {
         for (TopicPartition partition : partitions) {
-            partitionIncompleteOffsets.remove(partition);
-            partitionOffsetHighWaterMarks.remove(partition);
-            NavigableMap<Long, WorkContainer<K, V>> oldWorkPartitionQueue = partitionCommitQueues.remove(partition);
-            if (oldWorkPartitionQueue != null) {
-                removeShardsFoundIn(oldWorkPartitionQueue);
+            log.debug("Removing records for partition {}", partition);
+            partitionOffsetHighestSeen.remove(partition);
+            partitionOffsetHighestCompleted.remove(partition);
+            partitionOffsetHighestContinuousCompleted.remove(partition);
+            partitionOffsetsIncompleteMetadataPayloads.remove(partition);
+            partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.remove(partition);
+
+            NavigableMap<Long, WorkContainer<K, V>> oldWorkPartitionCommitQueue = partitionCommitQueues.remove(partition);
+            if (oldWorkPartitionCommitQueue != null) {
+                removeShardsFoundIn(oldWorkPartitionCommitQueue);
             } else {
-                log.trace("Removing empty commit queue");
+                log.trace("Removed empty commit queue");
             }
         }
     }
@@ -204,6 +246,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * @param oldWorkPartitionQueue partition set to scan for unique keys to be removed from our shard queue
      */
     private void removeShardsFoundIn(NavigableMap<Long, WorkContainer<K, V>> oldWorkPartitionQueue) {
+        log.trace("Searching for and removing work found in shard queue");
         // this all scanning loop could be avoided if we also store a map of unique keys found referenced when a
         // partition is assigned, but that could worst case grow forever
         for (WorkContainer<K, V> work : oldWorkPartitionQueue.values()) {
@@ -224,7 +267,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * Thread safe for use by control and broker poller thread.
      *
      * @see #onSuccess
-     * @see #raisePartitionHighWaterMark
+     * @see #raisePartitionHighestSeen
      */
     public void registerWork(ConsumerRecords<K, V> records) {
         workInbox.add(records);
@@ -345,7 +388,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                             long width = newEnd - start;
 
                             if (width >= BitsetEncoder.MAX_LENGTH_ENCODABLE) {
-                                long oldWidth = partitionOffsetHighWaterMarks.get(tp) - start;
+                                long oldWidth = partitionOffsetHighestSeen.get(tp) - start;
                                 // can't be more accurate unless we break up the inbound records and count them per queue
                                 log.debug("Incoming outstanding offset difference too large for BitSet encoder (incoming width: {}, old width: {}), will wait before adding these records until the width shrinks (below {})",
                                         width, oldWidth, BitsetEncoder.MAX_LENGTH_ENCODABLE);
@@ -363,7 +406,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     private void processInbox(final ConsumerRecord<K, V> rec) {
-        if (isRecordPreviouslyProcessed(rec)) {
+        if (isRecordPreviouslyProcessedSuccessfully(rec)) {
             log.trace("Record previously processed, skipping. offset: {}", rec.offset());
         } else {
             Object shardKey = computeShardKey(rec);
@@ -371,7 +414,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             var wc = new WorkContainer<>(rec);
 
             TopicPartition tp = toTP(rec);
-            raisePartitionHighWaterMark(offset, tp);
+            raisePartitionHighestSeen(offset, tp);
 
             processingShards.computeIfAbsent(shardKey, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
 
@@ -379,28 +422,28 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
     }
 
-    void raisePartitionHighWaterMark(long highWater, TopicPartition tp) {
+    void raisePartitionHighestSeen(long seenOffset, TopicPartition tp) {
         // rise the high water mark
-        Long oldHighWaterMark = partitionOffsetHighWaterMarks.getOrDefault(tp, MISSING_HIGH_WATER_MARK);
-        if (highWater >= oldHighWaterMark || highWater == MISSING_HIGH_WATER_MARK) {
-            partitionOffsetHighWaterMarks.put(tp, highWater);
+        Long oldHighestSeen = partitionOffsetHighestSeen.getOrDefault(tp, MISSING_HIGHEST_SEEN);
+        if (seenOffset >= oldHighestSeen || seenOffset == MISSING_HIGHEST_SEEN) {
+            partitionOffsetHighestSeen.put(tp, seenOffset);
         }
     }
 
-    private boolean isRecordPreviouslyProcessed(ConsumerRecord<K, V> rec) {
-        long offset = rec.offset();
+    private boolean isRecordPreviouslyProcessedSuccessfully(ConsumerRecord<K, V> rec) {
+        long thisRecordsOffset = rec.offset();
         TopicPartition tp = new TopicPartition(rec.topic(), rec.partition());
-        TreeSet<Long> incompleteOffsets = this.partitionIncompleteOffsets.getOrDefault(tp, new TreeSet<>());
-        if (incompleteOffsets.contains(offset)) {
-            // record previously saved as having not been processed
+        TreeSet<Long> incompleteOffsets = this.partitionOffsetsIncompleteMetadataPayloads.getOrDefault(tp, new TreeSet<>());
+        if (incompleteOffsets.contains(thisRecordsOffset)) {
+            // record previously saved into incompletes as having not been processed successfully yet
             return false;
         } else {
-            Long offsetHighWaterMarks = partitionOffsetHighWaterMarks.getOrDefault(tp, MISSING_HIGH_WATER_MARK);
-            if (offset < offsetHighWaterMarks) {
-                // within the range of tracked offsets, so must have been previously completed
+            Long offsetHighWaterMarks = partitionOffsetHighestSeen.getOrDefault(tp, MISSING_HIGHEST_SEEN);
+            if (thisRecordsOffset < offsetHighWaterMarks) {
+                // within the range of tracked offsets, but not in incompletes, so must have been previously completed
                 return true;
             } else {
-                // we haven't recorded this far up, so must not have been processed yet
+                // not in incompletes, and is a higher offset than we've ever seen, as we haven't recorded this far up, so must not have been processed yet
                 return false;
             }
         }
@@ -515,6 +558,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         ConsumerRecord<K, V> cr = wc.getCr();
         log.trace("Work success ({}), removing from processing shard queue", wc);
         wc.succeed();
+
+        //
         Object key = computeShardKey(cr);
 
         // remove from processing queues
@@ -535,12 +580,102 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         //
         recordsOutForProcessing--;
 
-        // todo refactor to offset manager?
-        continuousOffsetEncodings
-                .computeIfAbsent(wc.getTopicPartition(), (ignore) ->
-                        new OffsetSimultaneousEncoder(0, 0l, new HashSet<>())
-                )
-                .encodeCompletedOffset();
+        //
+        onResultUpdatePartitionRecords(true, wc);
+
+        manageEncoding(true, wc);
+    }
+
+    private void onResultUpdatePartitionRecords(final boolean complete, final WorkContainer<K, V> wc) {
+        TopicPartition tp = wc.getTopicPartition();
+
+        if (complete) {
+            //
+            onResultUpdateHighestContinuous(wc);
+
+            //
+            Long highestCompleted = partitionOffsetHighestCompleted.get(tp);
+            long thisOffset = wc.getCr().offset();
+            if (thisOffset > highestCompleted) {
+                log.debug("Updaing highest completed - was: {} now: {}", highestCompleted, thisOffset);
+                partitionOffsetHighestCompleted.put(tp, thisOffset);
+            }
+
+        } else {
+            // no op?
+
+            // this is only recorded in the encoders
+            // partitionOffsetsIncompleteMetadataPayloads;
+        }
+    }
+
+    /**
+     * AKA highest committable or low water mark
+     *
+     * @param wc
+     */
+    private void onResultUpdateHighestContinuous(final WorkContainer<K, V> wc) {
+        long thisOffset = wc.getCr().offset();
+        TopicPartition tp = wc.getTopicPartition();
+
+        Long previousHighestContinuous = partitionOffsetHighestContinuousCompleted.get(wc.getTopicPartition());
+
+        if (thisOffset > previousHighestContinuous) {
+            // sanity? by definition it must be higher
+
+            // does it form a new continuous block?
+            NavigableMap<Long, WorkContainer<K, V>> commitQueue = partitionCommitQueues.get(tp);
+            boolean continuousBlock = true;
+            for (final Map.Entry<Long, WorkContainer<K, V>> entry : commitQueue.entrySet()) {
+
+            }
+        } else {
+            throw new InternalRuntimeError("Unexpected new offset lower than low water mark");
+        }
+    }
+
+    /**
+     * todo refactor to offset manager?
+     */
+    private void manageEncoding(final boolean offsetComplete, final WorkContainer<K, V> wc) {
+        TopicPartition tp = wc.getTopicPartition();
+        long baseOffset = partitionOffsetHighestContinuousCompleted.get(tp);
+        Long highestCompleted = partitionOffsetHighestCompleted.get(tp);
+        long offsetAtEndOfEncodingRange = highestCompleted + 1;
+        long nextExpectedOffset = offsetAtEndOfEncodingRange;
+
+        OffsetSimultaneousEncoder offsetSimultaneousEncoder = continuousOffsetEncodings
+                .computeIfAbsent(tp, (ignore) ->
+                        new OffsetSimultaneousEncoder(baseOffset, nextExpectedOffset, new HashSet<>())
+                );
+
+        long offset = wc.getCr().offset();
+        long relativeOffset = offset - baseOffset;
+
+        if (offsetComplete)
+            offsetSimultaneousEncoder.encodeCompletedOffset(baseOffset, relativeOffset);
+        else
+            offsetSimultaneousEncoder.encodeIncompleteOffset(baseOffset, relativeOffset);
+
+        calculateSpaceRequirements();
+    }
+
+    private void calculateSpaceRequirements() {
+        int available = OffsetMapCodecManager.DefaultMaxMetadataSize;
+        int perPartition = available / numberOfAssignedPartitions;
+        double tolerance = 0.8; //90%
+
+        // for each encoded partition so far, check if we're within tolerance of available space
+        for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> entry : continuousOffsetEncodings.entrySet()) {
+            TopicPartition tp = entry.getKey();
+            OffsetSimultaneousEncoder encoder = entry.getValue();
+            int encodedSize = encoder.getEncodedSize();
+
+            int allowed = (int) (perPartition * tolerance);
+            // tolerance threshold crossed - turn on back pressure - no more for this partition
+            boolean moreMessagesAreAllowed = encodedSize > allowed;
+            partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.put(tp, moreMessagesAreAllowed);
+        }
     }
 
     public void onFailure(WorkContainer<K, V> wc) {
@@ -551,11 +686,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         putBack(wc);
 
         //
-        continuousOffsetEncodings
-                .computeIfAbsent(wc.getTopicPartition(), (ignore) ->
-                        new OffsetSimultaneousEncoder(0, 0l, new HashSet<>())
-                )
-                .encodeIncompleteOffset();
+        onResultUpdatePartitionRecords(false, wc);
+
+        //
+        manageEncoding(false, wc);
     }
 
     /**
@@ -666,7 +800,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             var partitionQueue = partitionQueueEntry.getValue();
             count += partitionQueue.size();
             var workToRemove = new LinkedList<WorkContainer<K, V>>();
-            var incompleteOffsets = new LinkedHashSet<Long>();
+            var incompleteOffsets = new LinkedHashSet<Long>(); // we only need to know the full incompletes when we do this scan, so find them only now, and discard
             // can't commit this offset or beyond, as this is the latest offset that is incomplete
             // i.e. only commit offsets that come before the current one, and stop looking for more
             boolean iteratedBeyondLowWaterMarkBeingLowestCommittableOffset = false;
@@ -704,28 +838,30 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 }
             }
 
-            // offset map building
-            // Get final offset data, build the the offset map, and replace it in our map of offset data to send
-            // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
-            if (!incompleteOffsets.isEmpty()) {
-                long offsetOfNextExpectedMessage;
-                OffsetAndMetadata finalOffsetOnly = offsetsToSend.get(topicPartitionKey);
-                if (finalOffsetOnly == null) {
-                    // no new low water mark to commit, so use the last one again
-                    offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
-                } else {
-                    offsetOfNextExpectedMessage = finalOffsetOnly.offset();
-                }
+            {
+                // offset map building
+                // Get final offset data, build the the offset map, and replace it in our map of offset data to send
+                // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
+                if (!incompleteOffsets.isEmpty()) {
+                    long offsetOfNextExpectedMessage;
+                    OffsetAndMetadata finalOffsetOnly = offsetsToSend.get(topicPartitionKey);
+                    if (finalOffsetOnly == null) {
+                        // no new low water mark to commit, so use the last one again
+                        offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
+                    } else {
+                        offsetOfNextExpectedMessage = finalOffsetOnly.offset();
+                    }
 
-                OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
-                try {
-                    String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
-                    totalOffsetMetaCharacterLength += offsetMapPayload.length();
-                    OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
-                    offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
-                } catch (EncodingNotSupportedException e) {
-                    log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
-                    backoffer.onFailure();
+                    OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
+                    try {
+                        String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
+                        totalOffsetMetaCharacterLength += offsetMapPayload.length();
+                        OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
+                        offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
+                    } catch (EncodingNotSupportedException e) {
+                        log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
+                        backoffer.onFailure();
+                    }
                 }
             }
 
@@ -780,20 +916,27 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
-     * Truncate our tracked offsets as a commit was successful, so the low water mark rises, and we dont' need to track
+     * Called after a successful commit off offsets
+     */
+    public void onOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> offsetsCommitted) {
+        truncateOffsetsIncompleteMetadataPayloads(offsetsCommitted);
+    }
+
+    /**
+     * Truncate our tracked offsets as a commit was successful, so the low water mark rises, and we don't need to track
      * as much anymore.
      * <p>
-     * When commits are made to broker, we can throw away all the individually tracked offsets before the committed
-     * offset.
+     * When commits are made to broker, we can throw away all the individually tracked offsets lower than the base
+     * offset which is in the commit.
      */
-    public void onOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> offsetsToSend) {
+    private void truncateOffsetsIncompleteMetadataPayloads(final Map<TopicPartition, OffsetAndMetadata> offsetsCommitted) {
         // partitionOffsetHighWaterMarks this will get overwritten in due course
-        offsetsToSend.forEach((tp, meta) -> {
-            Set<Long> offsets = partitionIncompleteOffsets.get(tp);
-            boolean trackedOffsetsForThisPartitionExist = offsets != null;
+        offsetsCommitted.forEach((tp, meta) -> {
+            Set<Long> incompleteOffsets = partitionOffsetsIncompleteMetadataPayloads.get(tp);
+            boolean trackedOffsetsForThisPartitionExist = incompleteOffsets != null;
             if (trackedOffsetsForThisPartitionExist) {
                 long newLowWaterMark = meta.offset();
-                offsets.removeIf(offset -> offset < newLowWaterMark);
+                incompleteOffsets.removeIf(offset -> offset < newLowWaterMark);
             }
         });
     }
