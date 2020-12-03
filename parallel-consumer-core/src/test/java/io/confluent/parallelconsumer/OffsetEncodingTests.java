@@ -148,7 +148,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         // write offsets
         Map<TopicPartition, OffsetAndMetadata> completedEligibleOffsetsAndRemove;
         {
-            WorkManager<String, String> wmm = new WorkManager<>(options, consumerSpy);
+            WorkManager<String, String> wmm = new WorkManager<>(options, consumerManager);
             wmm.registerWork(crs);
 
             List<WorkContainer<String, String>> work = wmm.maybeGetWork();
@@ -162,7 +162,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             completedEligibleOffsetsAndRemove = wmm.findCompletedEligibleOffsetsAndRemove();
 
             // check for graceful fall back to the smallest available encoder
-            OffsetMapCodecManager<String, String> om = new OffsetMapCodecManager<>(wmm, consumerSpy);
+            OffsetMapCodecManager<String, String> om = new OffsetMapCodecManager<>(wmm, consumerManager);
             Set<Long> collect = firstSucceededRecordRemoved.stream().map(x -> x.offset()).collect(Collectors.toSet());
             OffsetMapCodecManager.forcedCodec = Optional.empty(); // turn off forced
             String bestPayload = om.makeOffsetMetadataPayload(1, tp, collect);
@@ -172,7 +172,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
 
         // read offsets
         {
-            WorkManager<String, String> newWm = new WorkManager<>(options, consumerSpy);
+            WorkManager<String, String> newWm = new WorkManager<>(options, consumerManager);
             newWm.onPartitionsAssigned(UniSets.of(tp));
             newWm.registerWork(crs);
             List<WorkContainer<String, String>> workContainers = newWm.maybeGetWork();

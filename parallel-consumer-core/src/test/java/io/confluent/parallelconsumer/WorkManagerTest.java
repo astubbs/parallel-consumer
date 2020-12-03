@@ -66,7 +66,7 @@ public class WorkManagerTest {
     private void setupWorkManager(ParallelConsumerOptions build) {
         offset = 0;
 
-        wm = new WorkManager<>(build, new MockConsumer<>(OffsetResetStrategy.EARLIEST));
+        wm = new WorkManager<>(build, new ConsumerManager(new MockConsumer<>(OffsetResetStrategy.EARLIEST)));
         wm.setClock(clock);
         wm.getSuccessfulWorkListeners().add((work) -> {
             log.debug("Heard some successful work: {}", work);

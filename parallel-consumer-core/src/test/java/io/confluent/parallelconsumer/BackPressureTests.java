@@ -33,7 +33,7 @@ public class BackPressureTests extends ParallelEoSStreamProcessorTestBase {
 //                .softMaxNumberMessagesBeyondBaseCommitOffset(maxInFlight)
 //                .maxMessagesToQueue(maxQueue)
                 .build();
-        WorkManager<String, String> wm = new WorkManager<>(build, consumerSpy);
+        WorkManager<String, String> wm = new WorkManager<>(build, consumerManager);
 
         // add records
         {

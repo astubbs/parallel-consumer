@@ -335,10 +335,17 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             if (sortedEncoders.isEmpty())
                 throw new InternalRuntimeError("No encoders");
             OffsetEncoderBase smallestEncoder = sortedEncoders.get(0);
-            int encodedSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
+            int smallestSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
             log.debug("Currently estimated smallest codec is {}, needing {} bytes",
-                    smallestEncoder.getEncodingType(), smallestEncoder.getEncodedSizeEstimate());
-            return encodedSizeEstimate;
+                    smallestEncoder.getEncodingType(), smallestSizeEstimate);
+            return smallestSizeEstimate;
         }
+    }
+
+    public Object getSmallestCodec() {
+        Collections.sort(sortedEncoders);
+        if (sortedEncoders.isEmpty())
+            throw new InternalRuntimeError("No encoders");
+        return sortedEncoders.get(0);
     }
 }

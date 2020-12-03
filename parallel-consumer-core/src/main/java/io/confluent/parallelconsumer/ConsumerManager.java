@@ -1,31 +1,51 @@
 package io.confluent.parallelconsumer;
 
-import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
+import org.apache.kafka.clients.consumer.internals.ConsumerCoordinator;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.WakeupException;
 import pl.tlinkowski.unij.api.UniMaps;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 /**
  * Delegate for {@link KafkaConsumer}
+ * <p>
+ * Also wrapped for thread saftey.
  */
 @Slf4j
-@RequiredArgsConstructor
-public class ConsumerManager<K, V> {
+//@RequiredArgsConstructor
+public class ConsumerManager<K, V> implements AutoCloseable {
 
     private final Consumer<K, V> consumer;
 
+    private final Semaphore consumerLock = new Semaphore(1);
+
     private final AtomicBoolean pollingBroker = new AtomicBoolean(false);
+//    private final ConsumerOffsetCommitter<K, V> consumerCommitter;
 
     private int erroneousWakups = 0;
     private int correctPollWakeups = 0;
     private int noWakeups = 0;
+
+    public ConsumerManager(final Consumer<K, V> consumer
+//            ,
+//                           final ConsumerOffsetCommitter<K, V> consumerCommitter,
+//                           final ParallelConsumerOptions options
+    ) {
+        this.consumer = consumer;
+//        this.consumerCommitter = consumerCommitter;
+    }
 
     ConsumerRecords<K, V> poll(Duration thisLongPollTimeout) {
         ConsumerRecords<K, V> records;
@@ -54,7 +74,29 @@ public class ConsumerManager<K, V> {
         // if the call to wakeup happens /after/ the check for a wake up state inside #poll, then the next call will through the wake up exception (i.e. #commit)
         if (pollingBroker.get()) {
             log.debug("Waking up consumer");
+            doWithConsumer(consumer::wakeup);
             consumer.wakeup();
+        }
+    }
+
+    private void doWithConsumer(final Runnable o) {
+        try {
+            aquireLock();
+        } catch (InterruptedException e) {
+            throw new InternalRuntimeError("Error locking consumer", e);
+        }
+        try (this) {
+            o.run();
+        } catch (Exception exception) {
+            throw new InternalRuntimeError("Unknown");
+        }
+    }
+
+    private <R> R doWithConsumer(final Callable<R> o) {
+        try (this) {
+            return o.call();
+        } catch (Exception exception) {
+            throw new InternalRuntimeError("Unknown");
         }
     }
 
@@ -64,7 +106,7 @@ public class ConsumerManager<K, V> {
         noWakeups++;
         while (inProgress) {
             try {
-                consumer.commitSync(offsetsToSend);
+                doWithConsumer(() -> consumer.commitSync(offsetsToSend));
                 inProgress = false;
             } catch (WakeupException w) {
                 log.debug("Got woken up, retry. errors: " + erroneousWakups + " none: " + noWakeups + " correct:" + correctPollWakeups, w);
@@ -79,7 +121,7 @@ public class ConsumerManager<K, V> {
         noWakeups++;
         while (inProgress) {
             try {
-                consumer.commitAsync(offsets, callback);
+                doWithConsumer(() -> consumer.commitAsync(offsets, callback));
                 inProgress = false;
             } catch (WakeupException w) {
                 log.debug("Got woken up, retry. errors: " + erroneousWakups + " none: " + noWakeups + " correct:" + correctPollWakeups, w);
@@ -89,27 +131,102 @@ public class ConsumerManager<K, V> {
     }
 
     public ConsumerGroupMetadata groupMetadata() {
-        return consumer.groupMetadata();
+        return doWithConsumer(consumer::groupMetadata);
     }
 
     public void close(final Duration defaultTimeout) {
-        consumer.close(defaultTimeout);
+        doWithConsumer(() -> consumer.close(defaultTimeout));
     }
 
     public Set<TopicPartition> assignment() {
-        return consumer.assignment();
+        return doWithConsumer(consumer::assignment);
     }
 
     public void pause(final Set<TopicPartition> assignment) {
-        consumer.pause(assignment);
+        doWithConsumer(() -> consumer.pause(assignment));
     }
 
     public Set<TopicPartition> paused() {
-        return consumer.paused();
+        return doWithConsumer(consumer::paused);
     }
 
     public void resume(final Set<TopicPartition> pausedTopics) {
-        consumer.resume(pausedTopics);
+        doWithConsumer(() -> consumer.resume(pausedTopics));
     }
 
+
+    /**
+     * Nasty reflection to check if auto commit is disabled.
+     * <p>
+     * Other way would be to politely request the user also include their consumer properties when construction, but
+     * this is more reliable in a correctness sense, but britle in terms of coupling to internal implementation.
+     * Consider requesting ability to inspect configuration at runtime.
+     */
+    @SneakyThrows
+    public void checkAutoCommitIsDisabled() {
+//        doWithConsumer(() -> {
+            if (consumer instanceof KafkaConsumer) {
+                // Commons lang FieldUtils#readField - avoid needing commons lang
+                Field coordinatorField = consumer.getClass().getDeclaredField("coordinator"); //NoSuchFieldException
+                coordinatorField.setAccessible(true);
+                ConsumerCoordinator coordinator = (ConsumerCoordinator) coordinatorField.get(consumer); //IllegalAccessException
+
+                Field autoCommitEnabledField = coordinator.getClass().getDeclaredField("autoCommitEnabled");
+                autoCommitEnabledField.setAccessible(true);
+                Boolean isAutoCommitEnabled = (Boolean) autoCommitEnabledField.get(coordinator);
+
+                if (isAutoCommitEnabled)
+                    throw new IllegalStateException("Consumer auto commit must be disabled, as commits are handled by the library.");
+            } else {
+                // noop - probably MockConsumer being used in testing - which doesn't do auto commits
+            }
+//        });
+    }
+
+    public void checkNotSubscribed() {
+        if (consumer instanceof MockConsumer)
+            // disabled for unit tests which don't test rebalancing
+            return;
+        doWithConsumer(() -> {
+            Set<String> subscription = consumer.subscription();
+            Set<TopicPartition> assignment = consumer.assignment();
+
+            if (!subscription.isEmpty() || !assignment.isEmpty()) {
+                throw new IllegalStateException("Consumer subscription must be managed by this class. Use " + this.getClass().getName() + "#subcribe methods instead.");
+            }
+        });
+    }
+
+    //    @Override
+    public void subscribe(Collection<String> topics, ConsumerRebalanceListener callback) {
+        log.debug("Subscribing to {}", topics);
+        doWithConsumer(() -> consumer.subscribe(topics, callback));
+    }
+
+    //    @Override
+    public void subscribe(Pattern pattern, ConsumerRebalanceListener callback) {
+        log.debug("Subscribing to {}", pattern);
+        doWithConsumer(() -> consumer.subscribe(pattern, callback));
+    }
+
+    public Map<TopicPartition, OffsetAndMetadata> committed(final Set<TopicPartition> assignment) {
+        return consumer.committed(assignment);
+    }
+
+    private void aquireLock() throws InterruptedException {
+        if (consumerLock.availablePermits() > 0) {
+            consumerLock.acquire();
+        } else {
+            throw new InternalRuntimeError("Deadlock");
+        }
+    }
+
+    private void releaseLock() {
+        consumerLock.release();
+    }
+
+    @Override
+    public void close() throws Exception {
+        releaseLock();
+    }
 }

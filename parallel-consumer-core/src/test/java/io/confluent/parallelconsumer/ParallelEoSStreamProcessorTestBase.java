@@ -61,6 +61,7 @@ public class ParallelEoSStreamProcessorTestBase {
      */
     public static final int DEFAULT_COMMIT_INTERVAL_MAX_MS = 100;
 
+    protected ConsumerManager<String, String> consumerManager;
     protected LongPollingMockConsumer<String, String> consumerSpy;
     protected MockProducer<String, String> producerSpy;
 
@@ -121,8 +122,11 @@ public class ParallelEoSStreamProcessorTestBase {
         LongPollingMockConsumer<String, String> consumer = new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
         MockProducer<String, String> producer = new MockProducer<>(true, null, null); // TODO do async testing
 
+        this.consumerManager = new ConsumerManager<>(consumer);
+
         this.producerSpy = spy(producer);
         this.consumerSpy = spy(consumer);
+
         myRecordProcessingAction = mock(ParallelEoSStreamProcessorTest.MyAction.class);
 
         when(consumerSpy.groupMetadata()).thenReturn(DEFAULT_GROUP_METADATA);

@@ -71,8 +71,9 @@ class WorkManagerOffsetMapCodecManagerTest {
     @BeforeEach
     void setup() {
         MockConsumer<String, String> consumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
-        wm = new WorkManager<>(ParallelConsumerOptions.builder().build(), consumer);
-        om = new OffsetMapCodecManager(wm, consumer);
+        ConsumerManager<String, String> consumerManager = new ConsumerManager<>(consumer);
+        wm = new WorkManager<>(ParallelConsumerOptions.builder().build(), consumerManager);
+        om = new OffsetMapCodecManager(wm, consumerManager);
         wm.partitionOffsetHighestSeen.put(tp, partitionHighWaterMark);
     }
 

@@ -115,7 +115,7 @@ class BitsetEncoder extends OffsetEncoderBase {
 
     @Override
     public void encodeCompletedOffset(final int relativeOffset) {
-        log.debug("Relative offset set {}", relativeOffset);
+        log.trace("Relative offset set {}", relativeOffset);
         bitSet.set(relativeOffset);
     }
 

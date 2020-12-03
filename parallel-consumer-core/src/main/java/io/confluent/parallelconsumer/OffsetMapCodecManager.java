@@ -48,14 +48,14 @@ public class OffsetMapCodecManager<K, V> {
 
     private final WorkManager<K, V> wm;
 
-    org.apache.kafka.clients.consumer.Consumer<K, V> consumer;
+    ConsumerManager<K, V> consumer;
 
     /**
      * Forces the use of a specific codec, instead of choosing the most efficient one. Useful for testing.
      */
     static Optional<OffsetEncoding> forcedCodec = Optional.empty();
 
-    public OffsetMapCodecManager(final WorkManager<K, V> wm, final org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
+    public OffsetMapCodecManager(final WorkManager<K, V> wm, final ConsumerManager<K, V> consumer) {
         this.wm = wm;
         this.consumer = consumer;
     }

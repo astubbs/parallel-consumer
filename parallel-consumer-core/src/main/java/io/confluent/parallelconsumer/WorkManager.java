@@ -18,6 +18,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.MDC;
 import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.util.*;
@@ -107,7 +108,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     @Setter(PACKAGE)
     private WallClock clock = new WallClock();
 
-    org.apache.kafka.clients.consumer.Consumer<K, V> consumer;
+    ConsumerManager consumerMgr;
 
     // visible for testing
     /**
@@ -122,7 +123,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * @see #onSuccess(WorkContainer)
      * @see #onFailure(WorkContainer)
      */
-    Map<TopicPartition, TreeSet<Long>> partitionOffsetsIncompleteMetadataPayloads = new HashMap<>();
+    Map<TopicPartition, TreeSet<Long>> partitionOffsetsIncompleteMetadataPayloads = new ConcurrentHashMap<>();
 
     // visible for testing
     /**
@@ -133,7 +134,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * Highest offset which has completed
      */
-    Map<TopicPartition, Long> partitionOffsetHighestCompleted = new HashMap<>();
+    Map<TopicPartition, Long> partitionOffsetHighestSucceeded = new ConcurrentHashMap<>();
 
     /**
      * If true, more messages are allowed to process for this partition.
@@ -147,13 +148,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * @see #manageOffEncoderSpaceRequirements()
      * @see OffsetMapCodecManager#DefaultMaxMetadataSize
      */
-    Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new HashMap<>();
+    Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new ConcurrentHashMap<>();
 
     /**
      * Highest committable offset - the end offset of the highest (from the lowest seen) continuous set of completed
      * offsets. AKA low water mark.
      */
-    Map<TopicPartition, Long> partitionOffsetHighestContinuousCompleted = new HashMap<>();
+    Map<TopicPartition, Long> partitionOffsetHighestContinuousCompleted = new ConcurrentHashMap<>();
 
     // visible for testing
     long MISSING_HIGHEST_SEEN = -1L;
@@ -168,9 +169,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private int numberOfAssignedPartitions;
 
-    public WorkManager(ParallelConsumerOptions options, org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
+    public WorkManager(ParallelConsumerOptions options, ConsumerManager consumer) {
         this.options = options;
-        this.consumer = consumer;
+        this.consumerMgr = consumer;
 
         backoffer = new BackoffAnalyser(options.getNumberOfThreads() * 10);
     }
@@ -187,7 +188,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         try {
             log.debug("onPartitionsAssigned: {}", partitions);
             Set<TopicPartition> partitionsSet = UniSets.copyOf(partitions);
-            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
+            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<K, V>(this, this.consumerMgr);
             om.loadOffsetMapForPartition(partitionsSet);
         } catch (Exception e) {
             log.error("Error in onPartitionsAssigned", e);
@@ -236,7 +237,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         for (TopicPartition partition : partitions) {
             log.debug("Removing records for partition {}", partition);
             partitionOffsetHighestSeen.remove(partition);
-            partitionOffsetHighestCompleted.remove(partition);
+            partitionOffsetHighestSucceeded.remove(partition);
             partitionOffsetHighestContinuousCompleted.remove(partition);
             partitionOffsetsIncompleteMetadataPayloads.remove(partition);
             partitionMoreRecordsAllowedToProcess.remove(partition);
@@ -303,6 +304,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             }
         }
 
+        if (requestedMaxWorkToRetrieve < 1) {
+            // none requested
+            return;
+        }
+
         //
 //        int inFlight = getNumberOfEntriesInPartitionQueues();
 //        int max = getMaxToGoBeyondOffset();
@@ -311,7 +317,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         int taken = 0;
 
 //        log.debug("Will register {} (max configured: {}) records of work ({} already registered)", gap, max, inFlight);
-        log.debug("Will attempt to register {} - {} available", requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
+        log.debug("Will attempt to register {}, {} available", requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
 
         // process individual records
         while (taken < gap && !internalFlattenedMailQueue.isEmpty()) {
@@ -485,7 +491,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
 
         //
-        int extraNeededFromInboxToSatisfy = requestedMaxWorkToRetrieve - getWorkQueuedInShardsCount();
+        int workQueuedInShardsCount = getWorkQueuedInShardsCount();
+        int extraNeededFromInboxToSatisfy = requestedMaxWorkToRetrieve - workQueuedInShardsCount;
         processInbox(extraNeededFromInboxToSatisfy);
 
         //
@@ -686,13 +693,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 partitionNowFormsAContinuousBlock.put(tp, false); // this partitions continuous block
             } else {
                 // update as we go
-                updateHighestCompletedOffsetSoFar(work);
+                updateHighestSucceededOffsetSoFar(work);
 
                 if (thisOffset <= previousHighestContinuous) {
 //                     sanity? by definition it must be higher
 //                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
                     // things can be racey, so this can happen, if so, just continue
-                    log.debug("Completed offset lower than current highest continuous offset - must have been completed while previous continuous blocks were being examined");
+                    log.debug("Completed offset {} lower than current highest continuous offset {} - must have been completed while previous continuous blocks were being examined", thisOffset, previousHighestContinuous);
                     continue;
                 } else {
                     // does it form a new continuous block?
@@ -748,16 +755,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
-     * Update highest Completed seen so far
+     * Update highest Succeeded seen so far
      */
-    private void updateHighestCompletedOffsetSoFar(final WorkContainer<K, V> work) {
+    private void updateHighestSucceededOffsetSoFar(final WorkContainer<K, V> work) {
         //
         TopicPartition tp = work.getTopicPartition();
-        Long highestCompleted = partitionOffsetHighestCompleted.getOrDefault(tp, -1L);
+        Long highestCompleted = partitionOffsetHighestSucceeded.getOrDefault(tp, -1L);
         long thisOffset = work.getCr().offset();
         if (thisOffset > highestCompleted) {
             log.trace("Updating highest completed - was: {} now: {}", highestCompleted, thisOffset);
-            partitionOffsetHighestCompleted.put(tp, thisOffset);
+            partitionOffsetHighestSucceeded.put(tp, thisOffset);
         }
     }
 
@@ -766,8 +773,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private void manageEncoding(final boolean offsetComplete, final WorkContainer<K, V> wc) {
         TopicPartition tp = wc.getTopicPartition();
-        long baseOffset = partitionOffsetHighestContinuousCompleted.get(tp);
-        Long highestCompleted = partitionOffsetHighestCompleted.get(tp);
+        long baseOffset = partitionOffsetHighestContinuousCompleted.getOrDefault(tp, -1L);
+        Long highestCompleted = partitionOffsetHighestSucceeded.getOrDefault(tp, -1L);
         long offsetAtEndOfEncodingRange = highestCompleted + 1;
         long nextExpectedOffset = offsetAtEndOfEncodingRange;
 
@@ -778,7 +785,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         long offset = wc.offset();
         long relativeOffset = offset - baseOffset;
-        long nextExpectedOffsetFromBroker = partitionOffsetHighestCompleted.get(tp) + 1;
+        long nextExpectedOffsetFromBroker = partitionOffsetHighestSucceeded.get(tp) + 1;
 
         if (offsetComplete)
             offsetSimultaneousEncoder.encodeCompletedOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
@@ -794,7 +801,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private void manageOffEncoderSpaceRequirements() {
         int perPartition = getMetadataSpaceAvailablePerPartition();
-        double tolerance = 0.9; //90%
+        double tolerance = 0.7; // 90%
+
+        boolean anyPartitionsHalted = false;
 
         // for each encoded partition so far, check if we're within tolerance of max space
         for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> entry : partitionContinuousOffsetEncoders.entrySet()) {
@@ -808,8 +817,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             // tolerance threshold crossed - turn on back pressure - no more for this partition
             partitionMoreRecordsAllowedToProcess.put(tp, moreMessagesAreAllowed);
             if (!moreMessagesAreAllowed) {
-                log.debug(msg("No more messages allowed for partition {}, best encoder needs {} which is within restricted space of {} (max: {})", tp, encodedSize, allowed, OffsetMapCodecManager.DefaultMaxMetadataSize));
+                anyPartitionsHalted = true;
+                log.debug(msg("No more messages allowed for partition {}, best encoder {} needs {} which is more than calculated restricted space of {} (max: {})",
+                        tp, encoder.getSmallestCodec(), encodedSize, allowed, OffsetMapCodecManager.DefaultMaxMetadataSize));
             }
+        }
+        if (anyPartitionsHalted) {
+            log.debug("Some partitions were halted");
         }
     }
 
@@ -927,11 +941,17 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * todo: refactor into smaller methods?
      */
     <R> Map<TopicPartition, OffsetAndMetadata> findCompletedEligibleOffsetsAndRemove(boolean remove) {
-        Map<TopicPartition, OffsetAndMetadata> perPartitionNextExpectedOffset = new HashMap<>();
+        boolean dirty = isDirty();
+        if (!isDirty()) {
+            // nothing to commit
+            return UniMaps.of();
+        }
+
+        Map<TopicPartition, OffsetAndMetadata> offsetMetadataToCommit = new HashMap<>();
         int totalPartitionQueueSizeForLogging = 0;
         int removed = 0;
         log.trace("Scanning for in order in-flight work that has completed...");
-        int totalOffsetMetaCharacterLength = 0;
+        int totalOffsetMetaCharacterLengthUsed = 0;
         for (final var partitionQueueEntry : partitionCommitQueues.entrySet()) {
             //
             totalPartitionQueueSizeForLogging += partitionQueueEntry.getValue().size();
@@ -962,7 +982,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                         // current offset is the highest successful offset, so commit +1 - offset to be committed is defined as the offset of the next expected message to be read
                         long offsetOfNextExpectedMessageAkaHighestCommittableAkaLowWaterMark = offset + 1;
                         OffsetAndMetadata offsetData = new OffsetAndMetadata(offsetOfNextExpectedMessageAkaHighestCommittableAkaLowWaterMark);
-                        perPartitionNextExpectedOffset.put(topicPartitionKey, offsetData);
+                        offsetMetadataToCommit.put(topicPartitionKey, offsetData);
                     } else if (work.isUserFunctionSucceeded() && iteratedBeyondLowWaterMarkBeingLowestCommittableOffset) {
                         log.trace("Offset {} is complete and succeeded, but we've iterated past the lowest committable offset. Will mark as complete in the offset map.", work.getCr().offset());
                         // no-op - offset map is only for not succeeded or completed offsets
@@ -985,35 +1005,20 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             }
 
             {
-                // offset map building
-                // Get final offset data, build the the offset map, and replace it in our map of offset data to send
-                // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
-                if (!incompleteOffsets.isEmpty()) {
-                    long offsetOfNextExpectedMessage;
-                    OffsetAndMetadata finalOffsetOnly = perPartitionNextExpectedOffset.get(topicPartitionKey);
-                    if (finalOffsetOnly == null) {
-                        // no new low water mark to commit, so use the last one again
-                        offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
-                    } else {
-                        offsetOfNextExpectedMessage = finalOffsetOnly.offset();
-                    }
-
-                    OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
-                    try {
-                        // TODO change from offsetOfNextExpectedMessage to getting the pre computed one from offsetOfNextExpectedMessage
-                        Long highestCompletedOffset = partitionOffsetHighestCompleted.get(topicPartitionKey);
-                        if (highestCompletedOffset == null) {
-                            log.error("What now?");
-                        }
-                        String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
-                        totalOffsetMetaCharacterLength += offsetMapPayload.length();
-                        OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
-                        perPartitionNextExpectedOffset.put(topicPartitionKey, offsetWithExtraMap);
-                    } catch (EncodingNotSupportedException e) {
-                        log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
-                        backoffer.onFailure();
-                    }
+                OffsetSimultaneousEncoder precomputed = partitionContinuousOffsetEncoders.get(topicPartitionKey);
+                byte[] bytes = new byte[0];
+                try {
+                    precomputed.invoke(incompleteOffsets);
+                    bytes = precomputed.packSmallest();
+                    String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
+                    log.debug("comparisonOffsetPayloadString {}", comparisonOffsetPayloadString);
+                } catch (EncodingNotSupportedException e) {
+                    e.printStackTrace();
                 }
+//                OffsetAndMetadata offsetAndMetadata = offsetMetadataToCommit.get(topicPartitionKey);
+
+                int offsetMetaPayloadSpaceUsed = getTotalOffsetMetaCharacterLength(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed, incompleteOffsets, topicPartitionKey);
+                totalOffsetMetaCharacterLengthUsed += offsetMetaPayloadSpaceUsed;
             }
 
             if (remove) {
@@ -1025,11 +1030,45 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             }
         }
 
-        maybeStripOffsetPayload(perPartitionNextExpectedOffset, totalOffsetMetaCharacterLength);
+        maybeStripOffsetPayload(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed);
 
         log.debug("Scan finished, {} were in flight, {} completed offsets removed, coalesced to {} offset(s) ({}) to be committed",
-                totalPartitionQueueSizeForLogging, removed, perPartitionNextExpectedOffset.size(), perPartitionNextExpectedOffset);
-        return perPartitionNextExpectedOffset;
+                totalPartitionQueueSizeForLogging, removed, offsetMetadataToCommit.size(), offsetMetadataToCommit);
+        return offsetMetadataToCommit;
+    }
+
+    private int getTotalOffsetMetaCharacterLength(final Map<TopicPartition, OffsetAndMetadata> perPartitionNextExpectedOffset, int totalOffsetMetaCharacterLength, final LinkedHashSet<Long> incompleteOffsets, final TopicPartition topicPartitionKey) {
+        // offset map building
+        // Get final offset data, build the the offset map, and replace it in our map of offset data to send
+        // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
+        if (!incompleteOffsets.isEmpty()) {
+            long offsetOfNextExpectedMessage;
+            OffsetAndMetadata finalOffsetOnly = perPartitionNextExpectedOffset.get(topicPartitionKey);
+            if (finalOffsetOnly == null) {
+                // no new low water mark to commit, so use the last one again
+                offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
+            } else {
+                offsetOfNextExpectedMessage = finalOffsetOnly.offset();
+            }
+
+            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumerMgr);
+            try {
+                // TODO change from offsetOfNextExpectedMessage to getting the pre computed one from offsetOfNextExpectedMessage
+                Long highestCompletedOffset = partitionOffsetHighestSucceeded.get(topicPartitionKey);
+                if (highestCompletedOffset == null) {
+                    log.error("What now?");
+                }
+                // encode
+                String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
+                totalOffsetMetaCharacterLength += offsetMapPayload.length();
+                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
+                perPartitionNextExpectedOffset.put(topicPartitionKey, offsetWithExtraMap);
+            } catch (EncodingNotSupportedException e) {
+                log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
+                backoffer.onFailure();
+            }
+        }
+        return totalOffsetMetaCharacterLength;
     }
 
     /**
@@ -1054,12 +1093,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     totalOffsetMetaCharacterLength);
             // strip all payloads
             // todo iteratively strip the largest payloads until we're under the limit
+            int totalSizeEstimates = 0;
             for (var entry : offsetsToSend.entrySet()) {
-                TopicPartition key = entry.getKey();
+                TopicPartition tp = entry.getKey();
+                OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders.get(tp);
+                int encodedSizeEstimate = offsetSimultaneousEncoder.getEncodedSizeEstimate();
+                log.debug("Estimate for {} {}", tp, encodedSizeEstimate);
+                totalSizeEstimates += encodedSizeEstimate;
                 OffsetAndMetadata v = entry.getValue();
                 OffsetAndMetadata stripped = new OffsetAndMetadata(v.offset()); // meta data gone
-                offsetsToSend.replace(key, stripped);
+                offsetsToSend.replace(tp, stripped);
             }
+            log.debug("Total estimate for all partitions {}", totalSizeEstimates);
             backoffer.onFailure();
         } else if (totalOffsetMetaCharacterLength != 0) {
             log.debug("Offset map small enough to fit in payload: {} (max: {})", totalOffsetMetaCharacterLength, OffsetMapCodecManager.DefaultMaxMetadataSize);
