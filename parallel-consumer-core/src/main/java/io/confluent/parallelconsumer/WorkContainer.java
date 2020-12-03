@@ -36,7 +36,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 
     @Getter
     private final ConsumerRecord<K, V> cr;
-    private int numberOfAttempts;
+    private int numberOfFailedAttempts;
     private Optional<Instant> failedAt = Optional.empty();
     private boolean inFlight = false;
 
@@ -66,7 +66,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 
     public void fail(WallClock clock) {
         log.trace("Failing {}", this);
-        numberOfAttempts++;
+        numberOfFailedAttempts++;
         failedAt = Optional.of(clock.getNow());
         inFlight = false;
     }
@@ -139,6 +139,6 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     @Override
     public String toString() {
 //        return "WorkContainer(" + toTP(cr) + ":" + cr.offset() + ":" + cr.key() + ":" + cr.value() + ")";
-        return "WorkContainer(" + toTP(cr) + ":" + cr.offset() + ":" + cr.key() + ")";
+        return "WorkContainer(" + getTopicPartition() + ":" + cr.offset() + ":" + cr.key() + ")";
     }
 }

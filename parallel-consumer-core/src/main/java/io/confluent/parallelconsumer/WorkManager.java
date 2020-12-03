@@ -6,7 +6,6 @@ package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.LoopingResumingIterator;
 import io.confluent.csid.utils.Range;
-import io.confluent.csid.utils.StringUtils;
 import io.confluent.csid.utils.WallClock;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import lombok.Getter;
@@ -554,6 +553,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public void onSuccess(WorkContainer<K, V> wc) {
         //
+        updateHighestCompletedOffsetSoFar(wc);
+
+        //
         successRatePer5Seconds.newEvent();
 //        successRatePer5SecondsEMA.
         workStateIsDirtyNeedsCommitting.set(true);
@@ -633,21 +635,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * AKA highest committable or low water mark
      *
-     * @param results must be sorted by offset - partition ordering doesn't matter, as long as we see offsets in order
+     * @param workResults must be sorted by offset - partition ordering doesn't matter, as long as we see offsets in order
      */
-    private void onResultUpdateHighestContinuousBatch(final Set<? extends WorkContainer<K, V>> results) {
-        Map<TopicPartition, Boolean> partitionNowFormsAContiniousBlock = new HashMap<>();
-        for (final WorkContainer<K, V> work : results) {
-
-            long thisOffset = work.getCr().offset();
-
-            boolean thisOffsetIsFailed = !work.isUserFunctionSucceeded();
+    private void onResultUpdateHighestContinuousBatch(final Set<? extends WorkContainer<K, V>> workResults) {
+        HashSet<TopicPartition> partitionsSeenForLogging = new HashSet<>();
+        Map<TopicPartition, Boolean> partitionNowFormsAContinuousBlock = new HashMap<>();
+        for (final WorkContainer<K, V> work : workResults) {
             TopicPartition tp = work.getTopicPartition();
 
-            long missingPreviousHighValue = -1l; // this offset will always be higher
-            long previousHighestContinuous = partitionOffsetHighestContinuousCompleted.getOrDefault(work.getTopicPartition(), missingPreviousHighValue);
-
-            Boolean partitionSoFarIsContinuous = partitionNowFormsAContiniousBlock.get(tp);
+            Boolean partitionSoFarIsContinuous = partitionNowFormsAContinuousBlock.get(tp);
             if (partitionSoFarIsContinuous != null && !partitionSoFarIsContinuous) {
                 // previously we found non continuous block so we can skip
                 continue; // to next record
@@ -655,61 +651,80 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // we can't know, we have to keep digging
             }
 
+            long thisOffset = work.getCr().offset();
+
+            boolean thisOffsetIsFailed = !work.isUserFunctionSucceeded();
+            partitionsSeenForLogging.add(tp);
+
+            long missingPreviousHighValue = -1l; // this offset will always be higher
+            long previousHighestContinuous = partitionOffsetHighestContinuousCompleted.getOrDefault(tp, missingPreviousHighValue);
+
             if (thisOffsetIsFailed) {
                 // simpler path
                 // work isn't successful. Is this the first? Is there a gap previously? Perhaps the gap doesn't exist (skipped offsets in partition)
-                Boolean previouslyContinuous = partitionNowFormsAContiniousBlock.get(tp);
-                partitionNowFormsAContiniousBlock.put(tp, false); // this partitions continuous block
+                Boolean previouslyContinuous = partitionNowFormsAContinuousBlock.get(tp);
+                partitionNowFormsAContinuousBlock.put(tp, false); // this partitions continuous block
             } else {
-                if (thisOffset > previousHighestContinuous) { // sanity? by definition it must be higher
-                    //
-                    updateHighestCompletedOffset(work, tp);
-
+                if (thisOffset <= previousHighestContinuous) {
+                    // sanity? by definition it must be higher
+                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
+                } else {
                     // does it form a new continuous block?
 
                     // queue this offset belongs to
                     NavigableMap<Long, WorkContainer<K, V>> commitQueue = partitionCommitQueues.get(tp);
 
-                    // easy path
-                    if (thisOffset == previousHighestContinuous + 1) {
-                        // easy, yes it's continuous, as there's no gap from previous highest
-                        partitionNowFormsAContiniousBlock.put(tp, true);
-                    } else {
+                    boolean continuous = true;
+                    if (thisOffset != previousHighestContinuous + 1) {
                         // do the entries in the gap exist in our partition queue? or are they skipped in the source log?
-                        Range offSetRangeToCheck = new Range(previousHighestContinuous, thisOffset);
-                        for (var relativeOffset : offSetRangeToCheck) {
-                            long offsetToCheck = previousHighestContinuous + relativeOffset;
-                            WorkContainer<K, V> workToExamine = commitQueue.get(offsetToCheck);
-                            if (workToExamine == null) {
-                                // offset doesnt exist in source partition
-                            } else {
-                                if (workToExamine.isUserFunctionSucceeded()) {
-                                    // counts as continuous, just isn't in this batch - previously successful but there used to be gaps
-                                    partitionNowFormsAContiniousBlock.put(tp, true);
+                        long rangeBase = (previousHighestContinuous < 0) ? 0 : previousHighestContinuous + 1;
+                        Range offSetRangeToCheck = new Range(rangeBase, thisOffset);
+                        for (var offsetToCheck : offSetRangeToCheck) {
+                            WorkContainer<K, V> workToExamine = commitQueue.get((long) offsetToCheck);
+                            if (workToExamine != null) {
+                                if (!workToExamine.isUserFunctionSucceeded()) {
+                                    // record exists but is incomplete - breaks continuity finish early
+                                    partitionNowFormsAContinuousBlock.put(tp, false);
+                                    continuous = false;
+                                    break;
                                 } else {
-                                    // record exists but is incomplete - breaks continuity
-                                    partitionNowFormsAContiniousBlock.put(tp, false);
+                                    // counts as continuous, just isn't in this batch - previously successful but there used to be gaps
                                 }
+                            } else {
+                                // offset doesn't exist in source partition
                             }
                         }
+
                     }
-                } else {
-                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
+                    if (continuous) {
+                        partitionNowFormsAContinuousBlock.put(tp, true);
+                        partitionOffsetHighestContinuousCompleted.put(tp, thisOffset);
+                    } else {
+                        partitionNowFormsAContinuousBlock.put(tp, false);
+                    }
+//                    else {
+//                        // easy, yes it's continuous, as there's no gap from previous highest
+//                        partitionNowFormsAContinuousBlock.put(tp, true);
+//                        partitionOffsetHighestContinuousCompleted.put(tp, thisOffset);
+//                    }
                 }
             }
         }
-
+        for (final TopicPartition topicPartition : partitionsSeenForLogging) {
+            log.debug("Low water mark (highest continuous completed) for partition {} now {}", topicPartition, partitionOffsetHighestContinuousCompleted.get(topicPartition));
+        }
     }
 
     /**
      * Update highest Completed seen so far
      */
-    private void updateHighestCompletedOffset(final WorkContainer<K, V> work, final TopicPartition tp) {
+    private void updateHighestCompletedOffsetSoFar(final WorkContainer<K, V> work) {
         //
-        Long highestCompleted = partitionOffsetHighestCompleted.get(tp);
+        TopicPartition tp = work.getTopicPartition();
+        Long highestCompleted = partitionOffsetHighestCompleted.getOrDefault(tp, -1L);
         long thisOffset = work.getCr().offset();
         if (thisOffset > highestCompleted) {
-            log.debug("Updaing highest completed - was: {} now: {}", highestCompleted, thisOffset);
+            log.debug("Updating highest completed - was: {} now: {}", highestCompleted, thisOffset);
             partitionOffsetHighestCompleted.put(tp, thisOffset);
         }
     }

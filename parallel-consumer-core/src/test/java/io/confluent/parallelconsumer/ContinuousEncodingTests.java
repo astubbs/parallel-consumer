@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.nio.ByteBuffer;
@@ -186,7 +187,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
      * Gaps may exist for certain race results
      */
     @Test
-    void testFullCycleMaybeGaps() {
+    void testFullCycleWithGaps() {
         var options = ParallelConsumerOptions.<String, String>builder()
 //                .numberOfThreads(1000)
                 .numberOfThreads(10)
@@ -201,7 +202,10 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
         int expected = 1000;
 
         List<ConsumerRecord<String, String>> consumerRecords = ktu.generateRecordsForKey(1, expected);
-        ktu.send(consumerSpy, consumerRecords);
+        // remove a few records to create gaps
+        List<Integer> toRemove = of(4, 8, 15);
+        List<ConsumerRecord<String, String>> filtered = consumerRecords.stream().filter(x -> !toRemove.contains((int) x.offset())).collect(Collectors.toList());
+        ktu.send(consumerSpy, filtered);
 
 
 //        BrokerPollSystem<String, String> stringStringBrokerPollSystem = new BrokerPollSystem<>(new ConsumerManager<>(consumerSpy), wm, pc, options);
@@ -254,7 +258,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
     }
 
     @Test
-    void testFullCycleGaps() {
+    void testFullCycleGapsAndFailedRecordsMultiplePartitions() {
         fail();
     }
 

@@ -20,7 +20,21 @@ public class Range implements Iterable<Integer> {
     private int base = 0;
     private int limit;
 
+    /**
+     * @param limit exclusive
+     */
     public Range(long limit) {
+        this.limit = (int) limit;
+        checkIntegerOverflow(this.limit, limit);
+    }
+
+    /**
+     * @param base inclusive
+     * @param limit exclusive
+     */
+    public Range(long base, long limit) {
+        this.base = (int) base;
+        checkIntegerOverflow(this.base, base);
         this.limit = (int) limit;
         checkIntegerOverflow(this.limit, limit);
     }
@@ -28,13 +42,6 @@ public class Range implements Iterable<Integer> {
     private void checkIntegerOverflow(final int actual, final long expected) {
         if (actual != expected)
             throw new InternalRuntimeError(StringUtils.msg("Overflow {} from {}", actual, expected));
-    }
-
-    public Range(long base, long limit) {
-        this.base = (int) base;
-        checkIntegerOverflow(this.base, base);
-        this.limit = (int) limit;
-        checkIntegerOverflow(this.limit, limit);
     }
 
     public static Range range(long max) {
