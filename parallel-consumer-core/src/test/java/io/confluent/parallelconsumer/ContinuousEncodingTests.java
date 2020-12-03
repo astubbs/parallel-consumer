@@ -133,18 +133,18 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
             KafkaTestUtils.completeWork(wm, work, 0);
 
             // test
-            assertThat(wm.partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.get(tp)).isFalse();
+            assertThat(wm.partitionMoreRecordsAllowedToProcess.get(tp)).isFalse();
 
             KafkaTestUtils.completeWork(wm, work, 69);
 
             // test
-            assertThat(wm.partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.get(tp)).isFalse();
+            assertThat(wm.partitionMoreRecordsAllowedToProcess.get(tp)).isFalse();
 
 
             KafkaTestUtils.completeWork(wm, work, 25_000);
 
             // test
-            assertThat(wm.partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.get(tp)).isFalse();
+            assertThat(wm.partitionMoreRecordsAllowedToProcess.get(tp)).isFalse();
 
             completedEligibleOffsetsAndRemove = wm.findCompletedEligibleOffsetsAndRemove();
 

@@ -135,11 +135,11 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
         pc.pollAndProduce(record -> {
-//                    try {
-//                        Thread.sleep(2);
-//                    } catch (InterruptedException e) {
-//                        e.printStackTrace();
-//                    }
+                    try {
+                        Thread.sleep(RandomUtils.nextInt(2, 100));
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
                     bar.stepBy(1);
                     consumedKeys.add(record.key());
                     processedCount.incrementAndGet();

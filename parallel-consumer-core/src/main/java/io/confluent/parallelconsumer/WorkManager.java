@@ -6,7 +6,6 @@ package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.LoopingResumingIterator;
 import io.confluent.csid.utils.Range;
-import io.confluent.csid.utils.StringUtils;
 import io.confluent.csid.utils.WallClock;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import lombok.Getter;
@@ -137,13 +136,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     Map<TopicPartition, Long> partitionOffsetHighestCompleted = new HashMap<>();
 
     /**
-     * todo partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething
+     * If true, more messages are allowed to process for this partition.
      * <p>
-     * if true, more messages are allowed
+     * If false, we have calculated that we can't record any more offsets for this partition, as our best performing
+     * encoder requires nearly as much space is available for this partitions allocation of the maximum offset metadata
+     * size.
      * <p>
-     * Default (missing elements) is true - more messages can be processed
+     * Default (missing elements) is true - more messages can be processed.
+     *
+     * @see #manageOffEncoderSpaceRequirements()
+     * @see OffsetMapCodecManager#DefaultMaxMetadataSize
      */
-    Map<TopicPartition, Boolean> partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething = new HashMap<>();
+    Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new HashMap<>();
 
     /**
      * Highest committable offset - the end offset of the highest (from the lowest seen) continuous set of completed
@@ -235,7 +239,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             partitionOffsetHighestCompleted.remove(partition);
             partitionOffsetHighestContinuousCompleted.remove(partition);
             partitionOffsetsIncompleteMetadataPayloads.remove(partition);
-            partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.remove(partition);
+            partitionMoreRecordsAllowedToProcess.remove(partition);
 
             NavigableMap<Long, WorkContainer<K, V>> oldWorkPartitionCommitQueue = partitionCommitQueues.remove(partition);
             if (oldWorkPartitionCommitQueue != null) {
@@ -309,7 +313,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //        log.debug("Will register {} (max configured: {}) records of work ({} already registered)", gap, max, inFlight);
         log.debug("Will attempt to register {} - {} available", requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
 
-        //
+        // process individual records
         while (taken < gap && !internalFlattenedMailQueue.isEmpty()) {
             ConsumerRecord<K, V> poll = internalFlattenedMailQueue.poll();
             processInbox(poll);
@@ -480,6 +484,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             return UniLists.of();
         }
 
+        //
         int extraNeededFromInboxToSatisfy = requestedMaxWorkToRetrieve - getWorkQueuedInShardsCount();
         processInbox(extraNeededFromInboxToSatisfy);
 
@@ -510,14 +515,27 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     break;
                 }
 
-                var wc = queueEntry.getValue();
-                boolean alreadySucceeded = !wc.isUserFunctionSucceeded();
-                if (wc.hasDelayPassed(clock) && wc.isNotInFlight() && alreadySucceeded) {
-                    log.trace("Taking {} as work", wc);
-                    wc.takingAsWork();
-                    shardWork.add(wc);
+                var workContainer = queueEntry.getValue();
+
+                // check we have capacity in offset storage to process more messages
+                var topicPartitionKey = workContainer.getTopicPartition();
+                Boolean allowedMoreRecords = partitionMoreRecordsAllowedToProcess.get(topicPartitionKey);
+                if (allowedMoreRecords != null && !allowedMoreRecords) {
+                    OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders.get(topicPartitionKey);
+                    int encodedSizeEstimate = offsetSimultaneousEncoder.getEncodedSizeEstimate();
+                    int available = getMetadataSpaceAvailablePerPartition();
+                    log.warn("Not allowed more records for the partition of this work {} continuing on to next container in shard (estimated required: {}, available: {})",
+                            topicPartitionKey, encodedSizeEstimate, available);
+                    continue;
+                }
+
+                boolean alreadySucceeded = !workContainer.isUserFunctionSucceeded();
+                if (workContainer.hasDelayPassed(clock) && workContainer.isNotInFlight() && alreadySucceeded) {
+                    log.trace("Taking {} as work", workContainer);
+                    workContainer.takingAsWork();
+                    shardWork.add(workContainer);
                 } else {
-                    log.trace("Work ({}) still delayed or is in flight, can't take...", wc);
+                    log.trace("Work ({}) still delayed or is in flight, can't take...", workContainer);
                 }
 
                 ProcessingOrder ordering = options.getOrdering();
@@ -775,8 +793,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * partition? As we can't change anything mid flight - only for the next round
      */
     private void manageOffEncoderSpaceRequirements() {
-        int maxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
-        int perPartition = maxMetadataSize / numberOfAssignedPartitions;
+        int perPartition = getMetadataSpaceAvailablePerPartition();
         double tolerance = 0.9; //90%
 
         // for each encoded partition so far, check if we're within tolerance of max space
@@ -789,11 +806,17 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
             boolean moreMessagesAreAllowed = allowed > encodedSize;
             // tolerance threshold crossed - turn on back pressure - no more for this partition
-            partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.put(tp, moreMessagesAreAllowed);
+            partitionMoreRecordsAllowedToProcess.put(tp, moreMessagesAreAllowed);
             if (!moreMessagesAreAllowed) {
-                log.debug(msg("No more messages allowed for partition {}, best encoder needs {} which is within restricted space of {} (max: {})", tp, encodedSize, allowed, maxMetadataSize));
+                log.debug(msg("No more messages allowed for partition {}, best encoder needs {} which is within restricted space of {} (max: {})", tp, encodedSize, allowed, OffsetMapCodecManager.DefaultMaxMetadataSize));
             }
         }
+    }
+
+    private int getMetadataSpaceAvailablePerPartition() {
+        int maxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
+        int perPartition = maxMetadataSize / numberOfAssignedPartitions;
+        return perPartition;
     }
 
     public void onFailure(WorkContainer<K, V> wc) {
@@ -910,6 +933,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         log.trace("Scanning for in order in-flight work that has completed...");
         int totalOffsetMetaCharacterLength = 0;
         for (final var partitionQueueEntry : partitionCommitQueues.entrySet()) {
+            //
             totalPartitionQueueSizeForLogging += partitionQueueEntry.getValue().size();
             var partitionQueue = partitionQueueEntry.getValue();
 
@@ -922,6 +946,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             // i.e. only commit offsets that come before the current one, and stop looking for more
             boolean iteratedBeyondLowWaterMarkBeingLowestCommittableOffset = false;
 
+            //
             TopicPartition topicPartitionKey = partitionQueueEntry.getKey();
             log.trace("Starting scan of partition: {}", topicPartitionKey);
             for (final var offsetAndItsWorkContainer : partitionQueue.entrySet()) {
@@ -975,6 +1000,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
                     OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
                     try {
+                        // TODO change from offsetOfNextExpectedMessage to getting the pre computed one from offsetOfNextExpectedMessage
+                        Long highestCompletedOffset = partitionOffsetHighestCompleted.get(topicPartitionKey);
+                        if (highestCompletedOffset == null) {
+                            log.error("What now?");
+                        }
                         String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
                         totalOffsetMetaCharacterLength += offsetMapPayload.length();
                         OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
