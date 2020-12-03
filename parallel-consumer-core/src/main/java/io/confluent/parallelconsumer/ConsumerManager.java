@@ -11,12 +11,16 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Delegate for {@link KafkaConsumer}
@@ -29,7 +33,8 @@ public class ConsumerManager<K, V> implements AutoCloseable {
 
     private final Consumer<K, V> consumer;
 
-    private final Semaphore consumerLock = new Semaphore(1);
+    //    private final Semaphore consumerLock = new Semaphore(1);
+    private final ReentrantLock consumerLock = new ReentrantLock(true);
 
     private final AtomicBoolean pollingBroker = new AtomicBoolean(false);
 //    private final ConsumerOffsetCommitter<K, V> consumerCommitter;
@@ -48,20 +53,22 @@ public class ConsumerManager<K, V> implements AutoCloseable {
     }
 
     ConsumerRecords<K, V> poll(Duration thisLongPollTimeout) {
-        ConsumerRecords<K, V> records;
-        try {
-            pollingBroker.set(true);
-            records = consumer.poll(thisLongPollTimeout);
-            log.debug("Poll completed normally and returned {}...", records.count());
-        } catch (WakeupException w) {
-            correctPollWakeups++;
-            log.debug("Awoken from broker poll");
-            log.trace("Wakeup caller is:", w);
-            records = new ConsumerRecords<>(UniMaps.of());
-        } finally {
-            pollingBroker.set(false);
-        }
-        return records;
+        return doWithConsumer(() -> {
+            ConsumerRecords<K, V> records;
+            try {
+                pollingBroker.set(true);
+                records = consumer.poll(thisLongPollTimeout);
+                log.debug("Poll completed normally and returned {}...", records.count());
+            } catch (WakeupException w) {
+                correctPollWakeups++;
+                log.debug("Awoken from broker poll");
+                log.trace("Wakeup caller is:", w);
+                records = new ConsumerRecords<>(UniMaps.of());
+            } finally {
+                pollingBroker.set(false);
+            }
+            return records;
+        });
     }
 
     /**
@@ -79,24 +86,35 @@ public class ConsumerManager<K, V> implements AutoCloseable {
         }
     }
 
+//    Thread consumerWrapThread = new Thread();
+
     private void doWithConsumer(final Runnable o) {
         try {
             aquireLock();
         } catch (InterruptedException e) {
             throw new InternalRuntimeError("Error locking consumer", e);
         }
-        try (this) {
+        try {
             o.run();
         } catch (Exception exception) {
-            throw new InternalRuntimeError("Unknown");
+            throw new InternalRuntimeError("Unknown", exception);
+        } finally {
+            releaseLock();
         }
     }
 
     private <R> R doWithConsumer(final Callable<R> o) {
-        try (this) {
+        try {
+            aquireLock();
+        } catch (InterruptedException e) {
+            throw new InternalRuntimeError("Error locking consumer", e);
+        }
+        try {
             return o.call();
         } catch (Exception exception) {
-            throw new InternalRuntimeError("Unknown");
+            throw new InternalRuntimeError("Unknown", exception);
+        } finally {
+            releaseLock();
         }
     }
 
@@ -121,7 +139,11 @@ public class ConsumerManager<K, V> implements AutoCloseable {
         noWakeups++;
         while (inProgress) {
             try {
-                doWithConsumer(() -> consumer.commitAsync(offsets, callback));
+                List<Thread> collect = Thread.getAllStackTraces().keySet().stream().filter(x -> x.getId() == 46L).collect(Collectors.toList());
+                log.info("46:{}, {}", collect.get(0), consumerLock.isHeldByCurrentThread());
+                doWithConsumer(() ->
+                        consumer.commitAsync(offsets, callback)
+                );
                 inProgress = false;
             } catch (WakeupException w) {
                 log.debug("Got woken up, retry. errors: " + erroneousWakups + " none: " + noWakeups + " correct:" + correctPollWakeups, w);
@@ -165,21 +187,21 @@ public class ConsumerManager<K, V> implements AutoCloseable {
     @SneakyThrows
     public void checkAutoCommitIsDisabled() {
 //        doWithConsumer(() -> {
-            if (consumer instanceof KafkaConsumer) {
-                // Commons lang FieldUtils#readField - avoid needing commons lang
-                Field coordinatorField = consumer.getClass().getDeclaredField("coordinator"); //NoSuchFieldException
-                coordinatorField.setAccessible(true);
-                ConsumerCoordinator coordinator = (ConsumerCoordinator) coordinatorField.get(consumer); //IllegalAccessException
+        if (consumer instanceof KafkaConsumer) {
+            // Commons lang FieldUtils#readField - avoid needing commons lang
+            Field coordinatorField = consumer.getClass().getDeclaredField("coordinator"); //NoSuchFieldException
+            coordinatorField.setAccessible(true);
+            ConsumerCoordinator coordinator = (ConsumerCoordinator) coordinatorField.get(consumer); //IllegalAccessException
 
-                Field autoCommitEnabledField = coordinator.getClass().getDeclaredField("autoCommitEnabled");
-                autoCommitEnabledField.setAccessible(true);
-                Boolean isAutoCommitEnabled = (Boolean) autoCommitEnabledField.get(coordinator);
+            Field autoCommitEnabledField = coordinator.getClass().getDeclaredField("autoCommitEnabled");
+            autoCommitEnabledField.setAccessible(true);
+            Boolean isAutoCommitEnabled = (Boolean) autoCommitEnabledField.get(coordinator);
 
-                if (isAutoCommitEnabled)
-                    throw new IllegalStateException("Consumer auto commit must be disabled, as commits are handled by the library.");
-            } else {
-                // noop - probably MockConsumer being used in testing - which doesn't do auto commits
-            }
+            if (isAutoCommitEnabled)
+                throw new IllegalStateException("Consumer auto commit must be disabled, as commits are handled by the library.");
+        } else {
+            // noop - probably MockConsumer being used in testing - which doesn't do auto commits
+        }
 //        });
     }
 
@@ -214,19 +236,20 @@ public class ConsumerManager<K, V> implements AutoCloseable {
     }
 
     private void aquireLock() throws InterruptedException {
-        if (consumerLock.availablePermits() > 0) {
-            consumerLock.acquire();
-        } else {
-            throw new InternalRuntimeError("Deadlock");
-        }
+//        if (consumerLock.tryLock()) {
+        consumerLock.lock();
+//        } else {
+//            throw new InternalRuntimeError("Deadlock");
+//        }
     }
 
     private void releaseLock() {
-        consumerLock.release();
+        consumerLock.unlock();
     }
 
     @Override
     public void close() throws Exception {
-        releaseLock();
+//        releaseLock();
+        consumer.close();
     }
 }

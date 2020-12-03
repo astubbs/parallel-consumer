@@ -122,7 +122,7 @@ class BitsetEncoder extends OffsetEncoderBase {
     @Override
     public byte[] serialise() {
         final byte[] bitSetArray = this.bitSet.toByteArray();
-        if (wrappedBitsetBytesBuffer.capacity() > bitSetArray.length)
+        if (wrappedBitsetBytesBuffer.capacity() < bitSetArray.length)
             throw new InternalRuntimeError("Not enough space in byte array");
         this.wrappedBitsetBytesBuffer.put(bitSetArray);
         final byte[] array = this.wrappedBitsetBytesBuffer.array();

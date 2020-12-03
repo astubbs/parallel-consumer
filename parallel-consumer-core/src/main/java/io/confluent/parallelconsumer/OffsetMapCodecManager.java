@@ -128,7 +128,7 @@ public class OffsetMapCodecManager<K, V> {
         Long currentHighestCompleted = wm.partitionOffsetHighestSeen.get(tp) + 1; // this is a problem - often the highest succeeded is very different from highest seet
         // todo use new encoder for accuracy
         OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, currentHighestCompleted)
-                .invoke(incompleteOffsets, finalOffsetForPartition, currentHighestCompleted);
+                .runOverIncompletes(incompleteOffsets, finalOffsetForPartition, currentHighestCompleted);
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
             log.warn("Forcing use of {}, for testing", forcedOffsetEncoding);

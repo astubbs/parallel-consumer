@@ -174,7 +174,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * @param currentBaseOffset to use now, checked for consistency
      * @param currentHighestCompleted to use now, checked for consistency
      */
-    public OffsetSimultaneousEncoder invoke(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
+    public OffsetSimultaneousEncoder runOverIncompletes(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
         checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
 
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, highestSuceeded);
@@ -202,14 +202,14 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             }
         });
 
-        isToBeCalledRegisterEncodings(encoders);
+        serializeAllEncoders();
 
         log.debug("In order: {}", this.sortedEncodingData);
 
         return this;
     }
 
-    private void isToBeCalledRegisterEncodings(final Set<? extends OffsetEncoderBase> encoders) {
+    public void serializeAllEncoders() {
         List<OffsetEncoderBase> toRemove = new ArrayList<>();
         for (OffsetEncoderBase encoder : encoders) {
             try {

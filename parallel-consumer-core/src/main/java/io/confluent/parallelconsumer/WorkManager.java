@@ -1049,7 +1049,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     if (currentHighestCompleted != highestSeen) {
                         log.warn("inconsistent {} {}", currentHighestCompleted, highestSeen);
                     }
-                    precomputed.invoke(incompleteOffsets, baseOffset, currentHighestCompleted);
+
+//                    precomputed.runOverIncompletes(incompleteOffsets, baseOffset, currentHighestCompleted);
+                    precomputed.serializeAllEncoders();
+
                     bytes = precomputed.packSmallest();
                     String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
                     log.debug("comparisonOffsetPayloadString {}", comparisonOffsetPayloadString);
