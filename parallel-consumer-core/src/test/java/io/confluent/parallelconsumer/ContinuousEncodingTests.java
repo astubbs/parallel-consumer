@@ -244,6 +244,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
 
         Assertions.useRepresentation(new TrimListRepresentation());
         await().atMost(ofSeconds(60))
+                .failFast(() -> parallelConsumer.isClosedOrFailed(), () -> parallelConsumer.getFailureCause())
                 .untilAsserted(() -> {
                     List<Map<TopicPartition, OffsetAndMetadata>> commitHistoryInt = consumerSpy.getCommitHistoryInt();
                     assertThat(commitHistoryInt).isNotEmpty();

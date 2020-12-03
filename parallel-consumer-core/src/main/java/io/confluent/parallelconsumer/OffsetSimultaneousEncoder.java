@@ -5,6 +5,7 @@ package io.confluent.parallelconsumer;
  */
 
 import lombok.Getter;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
@@ -91,28 +92,28 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         // sanity
         if (longLength != length) throw new IllegalArgumentException("Integer overflow");
 
-        initEncoders();
+        initEncoders(lowWaterMark);
     }
 
-    private void initEncoders() {
+    private void initEncoders(final long baseOffset) {
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
-            log.debug("~Large input map size: {} (start: {} end: {})", length, lowWaterMark, nextExpectedOffset);
+            log.debug("~Large input map size: {} (start: {} end: {})", length, this.lowWaterMark, nextExpectedOffset);
         }
 
         try {
-            encoders.add(new BitsetEncoder(length, this, v1));
+            encoders.add(new BitsetEncoder(baseOffset, length, this, v1));
         } catch (BitSetEncodingNotSupportedException a) {
             log.debug("Cannot use {} encoder ({})", BitsetEncoder.class.getSimpleName(), a.getMessage());
         }
 
         try {
-            encoders.add(new BitsetEncoder(length, this, v2));
+            encoders.add(new BitsetEncoder(baseOffset, length, this, v2));
         } catch (BitSetEncodingNotSupportedException a) {
             log.warn("Cannot use {} encoder ({})", BitsetEncoder.class.getSimpleName(), a.getMessage());
         }
 
-        encoders.add(new RunLengthEncoder(this, v1));
-        encoders.add(new RunLengthEncoder(this, v2));
+        encoders.add(new RunLengthEncoder(baseOffset, this, v1));
+        encoders.add(new RunLengthEncoder(baseOffset, this, v2));
     }
 
     /**
@@ -120,8 +121,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * <p>
      * Visible for testing
      */
-    void addByteBufferEncoder() {
-        encoders.add(new ByteBufferEncoder(length, this));
+    void addByteBufferEncoder(long baseOffset) {
+        encoders.add(new ByteBufferEncoder(baseOffset, length, this));
     }
 
     /**
@@ -210,6 +211,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * @see #packEncoding(EncodedOffsetPair)
      */
     public byte[] packSmallest() throws EncodingNotSupportedException {
+        // todo might be called multiple times, should cache?
         if (sortedEncodings.isEmpty()) {
             throw new EncodingNotSupportedException("No encodings could be used");
         }
@@ -229,20 +231,54 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         return result.array();
     }
 
-
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+        if (lowWaterMarkCheck(relativeOffset)) {
+            return;
+        }
 
+        for (final OffsetEncoder encoder : encoders) {
+            encoder.encodeIncompleteOffset(baseOffset, relativeOffset);
+        }
     }
 
     @Override
     public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
-
+        if (lowWaterMarkCheck(relativeOffset)) {
+            return;
+        }
+        for (final OffsetEncoder encoder : encoders) {
+            encoder.encodeIncompleteOffset(baseOffset, relativeOffset);
+        }
     }
 
+    /**
+     * todo docs
+     */
+    private boolean noEncodingRequiredSoFar = true;
+
+    private boolean lowWaterMarkCheck(final long relativeOffset) {
+        // only encode if this work is above the low water mark
+        if (relativeOffset < 0) {
+            noEncodingRequiredSoFar = true;
+        } else {
+            noEncodingRequiredSoFar = false;
+        }
+        return noEncodingRequiredSoFar;
+    }
+
+    /**
+     * @return the packed size of the best encoder, or 0 if no encodings have been performed / needed
+     */
+    @SneakyThrows
     @Override
     public int getEncodedSize() {
-        return 0;
+        if (noEncodingRequiredSoFar) {
+            return 0;
+        } else {
+            byte[] bytes = packSmallest();
+            return bytes.length;
+        }
     }
 
     @Override

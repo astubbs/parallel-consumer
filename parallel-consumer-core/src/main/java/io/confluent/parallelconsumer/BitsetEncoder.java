@@ -41,12 +41,12 @@ class BitsetEncoder extends OffsetEncoder {
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
-    public BitsetEncoder(int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) throws BitSetEncodingNotSupportedException {
-        this(length, offsetSimultaneousEncoder, DEFAULT_VERSION);
+    public BitsetEncoder(long baseOffset, int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) throws BitSetEncodingNotSupportedException {
+        this(baseOffset, length, offsetSimultaneousEncoder, DEFAULT_VERSION);
     }
 
-    public BitsetEncoder(int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) throws BitSetEncodingNotSupportedException {
-        super(offsetSimultaneousEncoder);
+    public BitsetEncoder(long baseOffset, int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) throws BitSetEncodingNotSupportedException {
+        super(baseOffset, offsetSimultaneousEncoder);
 
         this.version = newVersion;
 
@@ -121,16 +121,16 @@ class BitsetEncoder extends OffsetEncoder {
         this.encodedBytes = Optional.of(array);
         return array;
     }
-
-    @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
-
-    }
-
-    @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
-
-    }
+//
+//    @Override
+//    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+//        super(baseOffset, relativeOffset);
+//    }
+//
+//    @Override
+//    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
+//        super(baseOffset, relativeOffset);
+//    }
 
     @Override
     public int getEncodedSize() {

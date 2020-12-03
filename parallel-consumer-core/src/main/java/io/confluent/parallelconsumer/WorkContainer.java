@@ -40,7 +40,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     private Optional<Instant> failedAt = Optional.empty();
     private boolean inFlight = false;
 
-//    @Getter
+    //    @Getter
     private Optional<Boolean> userFunctionSucceeded = Optional.empty();
 
     /**
@@ -134,6 +134,10 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     public boolean isUserFunctionSucceeded() {
         Optional<Boolean> userFunctionSucceeded = this.userFunctionSucceeded;
         return userFunctionSucceeded.orElse(false);
+    }
+
+    public long offset() {
+        return getCr().offset();
     }
 
     @Override

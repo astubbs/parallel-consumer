@@ -4,8 +4,6 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.OffsetEncoding.*;
@@ -23,8 +21,8 @@ class RunLengthEncoder extends OffsetEncoder {
 
     private static final Version DEFAULT_VERSION = Version.v2;
 
-    public RunLengthEncoder(OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) {
-        super(offsetSimultaneousEncoder);
+    public RunLengthEncoder(long baseOffset,OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) {
+        super(baseOffset, offsetSimultaneousEncoder);
         // run length setup
         runLengthEncodingIntegers = new ArrayList<>();
         version = newVersion;
@@ -84,16 +82,16 @@ class RunLengthEncoder extends OffsetEncoder {
         encodedBytes = Optional.of(array);
         return array;
     }
-
-    @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
-
-    }
-
-    @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
-
-    }
+//
+//    @Override
+//    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+//asdf
+//    }
+//
+//    @Override
+//    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
+//asdf
+//    }
 
     @Override
     public int getEncodedSize() {

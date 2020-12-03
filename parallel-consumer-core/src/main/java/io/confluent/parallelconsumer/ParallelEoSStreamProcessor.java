@@ -105,6 +105,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
      */
     private final AtomicBoolean commitCommand = new AtomicBoolean(false);
     private final DynamicLoadFactor dynamicExtraLoadFactor = new DynamicLoadFactor();
+    private RuntimeException failureReason;
 
     public boolean isClosedOrFailed() {
         boolean closed = state == State.closed;
@@ -113,6 +114,10 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
             doneOrCancelled = controlThreadFuture.get().isDone() || controlThreadFuture.get().isCancelled();
         }
         return closed || doneOrCancelled;
+    }
+
+    public Exception getFailureCause() {
+        return this.failureReason;
     }
 
     /**
@@ -578,7 +583,9 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
                 } catch (Exception e) {
                     log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + e.getMessage(), e);
                     doClose(DrainingCloseable.DEFAULT_TIMEOUT); // attempt to close
-                    throw new RuntimeException("Error from poll control thread: " + e.getMessage(), e);
+                    RuntimeException runtimeException = new RuntimeException("Error from poll control thread: " + e.getMessage(), e);
+                    this.failureReason = runtimeException;
+                    throw runtimeException;
                 }
             }
             log.info("Control loop ending clean (state:{})...", state);

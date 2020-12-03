@@ -13,8 +13,10 @@ import java.nio.ByteBuffer;
 abstract class OffsetEncoder implements OffsetEncoderContract {
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
+    private final long baseOffset;
 
-    public OffsetEncoder(OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
+    public OffsetEncoder(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
+        this.baseOffset = baseOffset;
         this.offsetSimultaneousEncoder = offsetSimultaneousEncoder;
     }
 
@@ -58,4 +60,24 @@ abstract class OffsetEncoder implements OffsetEncoderContract {
     }
 
     public abstract byte[] getEncodedBytes();
+
+    @Override
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+        if (baseOffset != this.baseOffset) {
+            throw new InternalRuntimeError("Na");
+        }
+        int castOffset = (int) relativeOffset;
+        if (castOffset != relativeOffset) throw new IllegalArgumentException("Interger overflow");
+        encodeIncompleteOffset(castOffset);
+    }
+
+    @Override
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
+        if (baseOffset != this.baseOffset) {
+            throw new InternalRuntimeError("Na");
+        }
+        int castOffset = (int) relativeOffset;
+        if (castOffset != relativeOffset) throw new IllegalArgumentException("Interger overflow");
+        encodeCompletedOffset(castOffset);
+    }
 }

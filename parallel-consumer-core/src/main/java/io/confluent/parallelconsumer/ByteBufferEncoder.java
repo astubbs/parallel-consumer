@@ -9,8 +9,8 @@ class ByteBufferEncoder extends OffsetEncoder {
 
     private final ByteBuffer bytesBuffer;
 
-    public ByteBufferEncoder(final int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
-        super(offsetSimultaneousEncoder);
+    public ByteBufferEncoder(final long baseOffset, final int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
+        super(baseOffset, offsetSimultaneousEncoder);
         this.bytesBuffer = ByteBuffer.allocate(1 + length);
     }
 
@@ -38,16 +38,16 @@ class ByteBufferEncoder extends OffsetEncoder {
     public byte[] serialise() {
         return this.bytesBuffer.array();
     }
-
-    @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
-
-    }
-
-    @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
-
-    }
+//
+//    @Override
+//    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+//sdf
+//    }
+//
+//    @Override
+//    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
+//sdf
+//    }
 
     @Override
     public int getEncodedSize() {

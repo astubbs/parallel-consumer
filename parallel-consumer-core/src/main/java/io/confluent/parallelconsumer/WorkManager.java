@@ -553,9 +553,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public void onSuccess(WorkContainer<K, V> wc) {
         //
-        updateHighestCompletedOffsetSoFar(wc);
-
-        //
         successRatePer5Seconds.newEvent();
 //        successRatePer5SecondsEMA.
         workStateIsDirtyNeedsCommitting.set(true);
@@ -635,7 +632,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * AKA highest committable or low water mark
      *
-     * @param workResults must be sorted by offset - partition ordering doesn't matter, as long as we see offsets in order
+     * @param workResults must be sorted by offset - partition ordering doesn't matter, as long as we see offsets in
+     *                    order
      */
     private void onResultUpdateHighestContinuousBatch(final Set<? extends WorkContainer<K, V>> workResults) {
         HashSet<TopicPartition> partitionsSeenForLogging = new HashSet<>();
@@ -665,6 +663,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 Boolean previouslyContinuous = partitionNowFormsAContinuousBlock.get(tp);
                 partitionNowFormsAContinuousBlock.put(tp, false); // this partitions continuous block
             } else {
+                // update as we go
+                updateHighestCompletedOffsetSoFar(work);
+
                 if (thisOffset <= previousHighestContinuous) {
                     // sanity? by definition it must be higher
                     throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
@@ -744,7 +745,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                         new OffsetSimultaneousEncoder(baseOffset, nextExpectedOffset, new HashSet<>())
                 );
 
-        long offset = wc.getCr().offset();
+        long offset = wc.offset();
         long relativeOffset = offset - baseOffset;
 
         if (offsetComplete)
@@ -758,7 +759,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private void calculateSpaceRequirements() {
         int available = OffsetMapCodecManager.DefaultMaxMetadataSize;
         int perPartition = available / numberOfAssignedPartitions;
-        double tolerance = 0.8; //90%
+        double tolerance = 0.9; //90%
 
         // for each encoded partition so far, check if we're within tolerance of available space
         for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> entry : continuousOffsetEncodings.entrySet()) {
@@ -768,7 +769,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
             int allowed = (int) (perPartition * tolerance);
             // tolerance threshold crossed - turn on back pressure - no more for this partition
-            boolean moreMessagesAreAllowed = encodedSize > allowed;
+            boolean moreMessagesAreAllowed = allowed > encodedSize;
             partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.put(tp, moreMessagesAreAllowed);
         }
     }
