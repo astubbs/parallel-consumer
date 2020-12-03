@@ -51,11 +51,11 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
         long lowWaterMark = 123L;
         incompletes.addAll(UniSets.of(lowWaterMark, 2345L, 8765L));
 
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset, incompletes);
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset);
         encoder.compressionForced = true;
 
         //
-        encoder.invoke();
+        encoder.invoke(incompletes);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //

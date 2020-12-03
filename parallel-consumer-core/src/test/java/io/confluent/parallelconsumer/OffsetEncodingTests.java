@@ -68,11 +68,11 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         long lowWaterMark = 123L;
         incompletes.addAll(UniSets.of(lowWaterMark, 2345L, 8765L));
 
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset, incompletes);
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset);
         encoder.compressionForced = true;
 
         //
-        encoder.invoke();
+        encoder.invoke(incompletes);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //
@@ -211,11 +211,11 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         long lowWaterMark = 0;
         var incompletes = new HashSet<>(UniSets.of(1L, 4L, 5L, 100L));
 
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset, incompletes);
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset);
         encoder.compressionForced = true;
 
         //
-        encoder.invoke();
+        encoder.invoke(incompletes);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //

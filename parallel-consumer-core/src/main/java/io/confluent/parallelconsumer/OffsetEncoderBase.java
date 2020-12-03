@@ -10,12 +10,12 @@ import java.nio.ByteBuffer;
  * Base OffsetEncoder
  */
 @Slf4j
-abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<OffsetEncoder> {
+abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<OffsetEncoderBase> {
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
     private final long baseOffset;
 
-    public OffsetEncoder(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
+    public OffsetEncoderBase(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
         this.baseOffset = baseOffset;
         this.offsetSimultaneousEncoder = offsetSimultaneousEncoder;
     }
@@ -62,7 +62,7 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
     public abstract byte[] getEncodedBytes();
 
     @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
         if (baseOffset != this.baseOffset) {
             throw new InternalRuntimeError("Na");
         }
@@ -73,7 +73,7 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
     }
 
     @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
         if (baseOffset != this.baseOffset) {
             throw new InternalRuntimeError("Na");
         }
@@ -91,7 +91,7 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
      * @see #getEncodedSize()
      */
     @Override
-    public int compareTo(final OffsetEncoder e) {
+    public int compareTo(final OffsetEncoderBase e) {
         return Integer.compare(this.getEncodedSizeEstimate(), e.getEncodedSizeEstimate());
     }
 }

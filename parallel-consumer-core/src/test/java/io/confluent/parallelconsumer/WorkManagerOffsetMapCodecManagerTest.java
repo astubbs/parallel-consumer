@@ -282,7 +282,7 @@ class WorkManagerOffsetMapCodecManagerTest {
 
             Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, inputString);
 
-            OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, partitionHighWaterMark, longs).invoke();
+            OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, partitionHighWaterMark).invoke(longs);
             byte[] byteByte = simultaneousEncoder.getEncodingMap().get(ByteArray);
             byte[] bitsBytes = simultaneousEncoder.getEncodingMap().get(BitSet);
 
@@ -306,8 +306,8 @@ class WorkManagerOffsetMapCodecManagerTest {
         wm.raisePartitionHighestSeen(highWater, tp);
 
         Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, input);
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater, longs);
-        encoder.invoke();
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater);
+        encoder.invoke(longs);
         byte[] pack = encoder.packSmallest();
 
         //
@@ -347,8 +347,8 @@ class WorkManagerOffsetMapCodecManagerTest {
             //
             log.debug("Testing round - size: {} input: '{}'", input.length(), input);
             Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, input);
-            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater, longs);
-            encoder.invoke();
+            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater);
+            encoder.invoke(longs);
 
             // test all encodings created
             for (final EncodedOffsetData pair : encoder.sortedEncodingData) {

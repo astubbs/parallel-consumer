@@ -31,26 +31,26 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      */
     public static final int LARGE_INPUT_MAP_SIZE_THRESHOLD = 200;
 
-    /**
-     * The offsets which have not yet been fully completed and can't have their offset committed
-     */
-    @Getter
-    private final Set<Long> incompleteOffsets;
+//    /**
+//     * The offsets which have not yet been fully completed and can't have their offset committed
+//     */
+//    @Getter
+//    private final Set<Long> incompleteOffsets;
 
     /**
      * The highest committable offset
      */
-    private final long baseOffset;
+    private long baseOffset;
 
     /**
      * The next expected offset to be returned by the broker
      */
-    private final long nextExpectedOffset;
+    private long nextExpectedOffset;
 
     /**
      * The difference between the base offset (the offset to be committed) and the highest seen offset
      */
-    private final int length;
+    private int length;
 
     /**
      * Map of different encoding types for the same offset data, used for retrieving the data for the encoding type
@@ -78,30 +78,43 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * The encoders to run
      */
     private Set<OffsetEncoderBase> encoders;
-    private Queue<OffsetEncoderBase> sortedEncoders = new PriorityQueue<>();
+    private Queue<OffsetEncoderBase> sortedEncoders;
 
     /**
      * @param lowWaterMark The highest committable offset
      */
-    public OffsetSimultaneousEncoder(long lowWaterMark, Long nextExpectedOffset, Set<Long> incompleteOffsets) {
-        this.baseOffset = lowWaterMark;
-        this.nextExpectedOffset = nextExpectedOffset;
-        this.incompleteOffsets = incompleteOffsets;
+    public OffsetSimultaneousEncoder(
+            long lowWaterMark
+            , Long nextExpectedOffset
 
-        long longLength = this.nextExpectedOffset - this.baseOffset;
-        length = (int) longLength;
-        // sanity
-        if (longLength != length) throw new IllegalArgumentException("Integer overflow");
+//            ,
+    ) {
 
-        initEncoders(lowWaterMark);
+//        this.incompleteOffsets = incompleteOffsets;
+
+        initialise(lowWaterMark, nextExpectedOffset);
     }
 
-    private void initEncoders(final long baseOffset) {
+    private int initLength(long currentBaseOffset, long currentNextExpectedOffset) {
+        long longLength = currentNextExpectedOffset - currentBaseOffset;
+        int intLength = (int) longLength;
+        // sanity
+        if (longLength != intLength)
+            throw new IllegalArgumentException("Casting inconsistency");
+        return intLength;
+    }
+
+    private void initialise(final long currentBaseOffset, long currentNextExpectedOffset) {
+        this.baseOffset = currentBaseOffset;
+        this.nextExpectedOffset = currentNextExpectedOffset;
+        this.length = initLength(currentBaseOffset, currentNextExpectedOffset);
+
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
             log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, nextExpectedOffset);
         }
 
         encoders = new HashSet<>();
+        sortedEncoders = new PriorityQueue<>();
 
         try {
             encoders.add(new BitsetEncoder(baseOffset, length, this, v1));
@@ -155,9 +168,9 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * <p>
      *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
      */
-    public OffsetSimultaneousEncoder invoke() {
+    public OffsetSimultaneousEncoder invoke(Set<Long> incompleteOffsets) {
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, nextExpectedOffset);
-        log.trace("Incompletes are: {}", this.incompleteOffsets);
+        log.trace("Incompletes are: {}", incompleteOffsets);
 
         //
         log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.nextExpectedOffset, length);
@@ -169,7 +182,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
          */
         range(length).forEach(rangeIndex -> {
             final long offset = this.baseOffset + rangeIndex;
-            if (this.incompleteOffsets.contains(offset)) {
+            if (incompleteOffsets.contains(offset)) {
                 log.trace("Found an incomplete offset {}", offset);
                 encoders.forEach(x -> {
                     x.encodeIncompleteOffset(rangeIndex);
@@ -180,6 +193,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
                 });
             }
         });
+
+        isToBeCalledRegisterEncodings(encoders);
 
         log.debug("In order: {}", this.sortedEncodingData);
 
@@ -233,32 +248,49 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     }
 
     @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
-        if (lowWaterMarkCheck(relativeOffset)) {
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
+        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, nextExpectedOffsetFromBroker))
             return;
-        }
 
         for (final OffsetEncoderBase encoder : encoders) {
-            encoder.encodeIncompleteOffset(baseOffset, relativeOffset);
+            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
         }
     }
 
     @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
-        if (lowWaterMarkCheck(relativeOffset)) {
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
+        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, nextExpectedOffsetFromBroker))
             return;
-        }
-        checkBaseOffset(baseOffset);
+
         for (final OffsetEncoderBase encoder : encoders) {
-            encoder.encodeIncompleteOffset(baseOffset, relativeOffset);
+            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
         }
     }
 
-    private void checkBaseOffset(final long currentBaseOffset) {
+    private boolean preEncodeCheckCanSkip(final long currentBaseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
+        checkConditionsHaventChanged(currentBaseOffset, nextExpectedOffsetFromBroker);
+
+        return lowWaterMarkCheck(relativeOffset);
+    }
+
+    private void checkConditionsHaventChanged(final long currentBaseOffset, final long nextExpectedOffsetFromBroker) {
+        boolean reinitialise = false;
+
+        if (this.nextExpectedOffset != nextExpectedOffsetFromBroker) {
+            log.debug("Next expected offset from broker {} has moved to {} - need to reset encoders",
+                    this.nextExpectedOffset, nextExpectedOffsetFromBroker);
+            reinitialise = true;
+
+        }
+
         if (this.baseOffset != currentBaseOffset) {
             log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to reset encoders",
                     this.baseOffset, currentBaseOffset);
-            initEncoders(currentBaseOffset);
+            reinitialise = true;
+        }
+
+        if (reinitialise) {
+            initialise(currentBaseOffset, nextExpectedOffsetFromBroker);
         }
     }
 

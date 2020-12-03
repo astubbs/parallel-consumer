@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.LoopingResumingIterator;
 import io.confluent.csid.utils.Range;
+import io.confluent.csid.utils.StringUtils;
 import io.confluent.csid.utils.WallClock;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import lombok.Getter;
@@ -77,7 +78,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * Continuous offset encodings
      */
-    private final Map<TopicPartition, OffsetSimultaneousEncoder> continuousOffsetEncodings = new ConcurrentHashMap<>();
+    private final Map<TopicPartition, OffsetSimultaneousEncoder> partitionContinuousOffsetEncoders = new ConcurrentHashMap<>();
 
     private final BackoffAnalyser backoffer;
 
@@ -139,6 +140,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * todo partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething
      * <p>
      * if true, more messages are allowed
+     * <p>
+     * Default (missing elements) is true - more messages can be processed
      */
     Map<TopicPartition, Boolean> partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething = new HashMap<>();
 
@@ -743,37 +746,46 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         long offsetAtEndOfEncodingRange = highestCompleted + 1;
         long nextExpectedOffset = offsetAtEndOfEncodingRange;
 
-        OffsetSimultaneousEncoder offsetSimultaneousEncoder = continuousOffsetEncodings
+        OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders
                 .computeIfAbsent(tp, (ignore) ->
-                        new OffsetSimultaneousEncoder(baseOffset, nextExpectedOffset, new HashSet<>())
+                        new OffsetSimultaneousEncoder(baseOffset, nextExpectedOffset)
                 );
 
         long offset = wc.offset();
         long relativeOffset = offset - baseOffset;
+        long nextExpectedOffsetFromBroker = partitionOffsetHighestCompleted.get(tp) + 1;
 
         if (offsetComplete)
-            offsetSimultaneousEncoder.encodeCompletedOffset(baseOffset, relativeOffset);
+            offsetSimultaneousEncoder.encodeCompletedOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
         else
-            offsetSimultaneousEncoder.encodeIncompleteOffset(baseOffset, relativeOffset);
+            offsetSimultaneousEncoder.encodeIncompleteOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
 
-        calculateSpaceRequirements();
+        manageOffEncoderSpaceRequirements();
     }
 
-    private void calculateSpaceRequirements() {
-        int available = OffsetMapCodecManager.DefaultMaxMetadataSize;
-        int perPartition = available / numberOfAssignedPartitions;
+    /**
+     * Todo: Does this need to be run per message of a a result set? or only once the batch has been finished, once per
+     * partition? As we can't change anything mid flight - only for the next round
+     */
+    private void manageOffEncoderSpaceRequirements() {
+        int maxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
+        int perPartition = maxMetadataSize / numberOfAssignedPartitions;
         double tolerance = 0.9; //90%
 
-        // for each encoded partition so far, check if we're within tolerance of available space
-        for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> entry : continuousOffsetEncodings.entrySet()) {
+        // for each encoded partition so far, check if we're within tolerance of max space
+        for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> entry : partitionContinuousOffsetEncoders.entrySet()) {
             TopicPartition tp = entry.getKey();
             OffsetSimultaneousEncoder encoder = entry.getValue();
             int encodedSize = encoder.getEncodedSizeEstimate();
 
             int allowed = (int) (perPartition * tolerance);
-            // tolerance threshold crossed - turn on back pressure - no more for this partition
+
             boolean moreMessagesAreAllowed = allowed > encodedSize;
+            // tolerance threshold crossed - turn on back pressure - no more for this partition
             partitionMaximumRecrodRangeOrMaxMessagesCountOrSomething.put(tp, moreMessagesAreAllowed);
+            if (!moreMessagesAreAllowed) {
+                log.debug(msg("No more messages allowed for partition {}, best encoder needs {} which is within restricted space of {} (max: {})", tp, encodedSize, allowed, maxMetadataSize));
+            }
         }
     }
 
