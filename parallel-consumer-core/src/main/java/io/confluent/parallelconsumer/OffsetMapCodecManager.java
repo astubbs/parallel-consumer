@@ -125,9 +125,10 @@ public class OffsetMapCodecManager<K, V> {
      * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
      */
     byte[] encodeOffsetsCompressed(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
-        Long nextExpectedOffset = wm.partitionOffsetHighestSeen.get(tp) + 1;
+        Long nextExpectedOffset = wm.partitionOffsetHighestSeen.get(tp) + 1; // this is a problem - often the highest succeeded is very different from highest seet
         // todo use new encoder for accuracy
-        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, nextExpectedOffset).invoke(incompleteOffsets, finalOffsetForPartition, );
+        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, nextExpectedOffset)
+                .invoke(incompleteOffsets, finalOffsetForPartition, nextExpectedOffset);
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
             log.warn("Forcing use of {}, for testing", forcedOffsetEncoding);
@@ -167,8 +168,8 @@ public class OffsetMapCodecManager<K, V> {
     String incompletesToBitmapString(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) {
         StringBuilder runLengthString = new StringBuilder();
         Long lowWaterMark = finalOffsetForPartition;
-        Long highWaterMark = wm.partitionOffsetHighestSeen.get(tp);
-        long end = highWaterMark - lowWaterMark;
+        Long highestSeen = wm.partitionOffsetHighestSeen.get(tp);  // this is a problem - often the highest succeeded is very different from highest seet
+        long end = highestSeen - lowWaterMark;
         for (final var relativeOffset : range(end)) {
             long offset = lowWaterMark + relativeOffset;
             if (incompleteOffsets.contains(offset)) {

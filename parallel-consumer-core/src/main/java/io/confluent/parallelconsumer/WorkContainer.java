@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
+import io.confluent.csid.utils.StringUtils;
 import io.confluent.csid.utils.WallClock;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
@@ -143,6 +144,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     @Override
     public String toString() {
 //        return "WorkContainer(" + toTP(cr) + ":" + cr.offset() + ":" + cr.key() + ":" + cr.value() + ")";
-        return "WorkContainer(" + getTopicPartition() + ":" + cr.offset() + ":" + cr.key() + ")";
+//        return "WorkContainer(" + getTopicPartition() + ":" + cr.offset() + ":" + cr.key() + ")";
+        return StringUtils.msg("WorkContainer({}:{}:{}:{})", getTopicPartition(), cr.offset(), cr.key(), isUserFunctionSucceeded());
     }
 }

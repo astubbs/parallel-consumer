@@ -55,7 +55,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
         encoder.compressionForced = true;
 
         //
-        encoder.invoke(incompletes);
+        encoder.invoke(incompletes, lowWaterMark, nextExpectedOffset);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //

@@ -38,6 +38,13 @@ import static lombok.AccessLevel.PACKAGE;
 
 /**
  * Sharded, prioritised, offset managed, order controlled, delayed work queue.
+ * <p>
+ * Low Water Mark - the highest offset (continuously successful) with all it's previous messages succeeded (the offset
+ * one commits to broker)
+ * <p>
+ * High Water Mark - the highest offset which has succeeded (previous may be incomplete)
+ * <p>
+ * Highest seen offset - the highest ever seen offset
  *
  * @param <K>
  * @param <V>
@@ -433,9 +440,23 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             TopicPartition tp = toTP(rec);
             raisePartitionHighestSeen(offset, tp);
 
+            checkPreviousLowWaterMarks(wc);
+
             processingShards.computeIfAbsent(shardKey, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
 
             partitionCommitQueues.computeIfAbsent(tp, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
+        }
+    }
+
+    /**
+     * If we've never seen a record for this partition before, it must be our first ever seen record for this partition,
+     * which means by definition, it's previous offset is the low water mark.
+     */
+    private void checkPreviousLowWaterMarks(final WorkContainer<K, V> wc) {
+        Long old = partitionOffsetHighestContinuousCompleted.get(wc.getTopicPartition());
+        if (old == null) {
+            long previousLowWaterMark = wc.offset() - 1;
+            partitionOffsetHighestContinuousCompleted.put(wc.getTopicPartition(), previousLowWaterMark);
         }
     }
 
@@ -685,7 +706,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             partitionsSeenForLogging.add(tp);
 
             long missingPreviousHighValue = -1l; // this offset will always be higher
-            long previousHighestContinuous = partitionOffsetHighestContinuousCompleted.getOrDefault(tp, missingPreviousHighValue);
+            long previousHighestContinuous = partitionOffsetHighestContinuousCompleted.get(tp);
 
             if (thisOffsetIsFailed) {
                 // simpler path
@@ -739,6 +760,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                         partitionOffsetHighestContinuousCompleted.put(tp, thisOffset);
                     } else {
                         partitionNowFormsAContinuousBlock.put(tp, false);
+//                        Long old = partitionOffsetHighestContinuousCompleted.get(tp);
                     }
 //                    else {
 //                        // easy, yes it's continuous, as there's no gap from previous highest
@@ -975,8 +997,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // ordered iteration via offset keys thanks to the tree-map
                 WorkContainer<K, V> work = offsetAndItsWorkContainer.getValue();
                 long offset = work.getCr().offset();
+                boolean notInFlight = work.isNotInFlight(); // check is part of this mailbox sweet
                 boolean workCompleted = work.isUserFunctionComplete();
-                if (workCompleted) {
+                if (workCompleted && notInFlight) {
                     if (work.isUserFunctionSucceeded() && !iteratedBeyondLowWaterMarkBeingLowestCommittableOffset) {
                         log.trace("Found offset candidate ({}) to add to offset commit map", work);
                         workToRemove.add(work);
@@ -1014,13 +1037,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 OffsetSimultaneousEncoder precomputed = partitionContinuousOffsetEncoders.get(topicPartitionKey);
                 byte[] bytes = new byte[0];
                 try {
-                    long baseOffset = partitionOffsetHighestContinuousCompleted.get(topicPartitionKey);
-                    long nextExpected = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
-                    if (baseOffset != firstIncomplete) {
+                    Long baseOffset = partitionOffsetHighestContinuousCompleted.getOrDefault(topicPartitionKey, 0L);
+                    Long nextExpected = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
+                    if (baseOffset != firstIncomplete - 1) {
                         log.warn("inconsistent");
                     }
-                    if (nextExpected != partitionOffsetHighestSeen.get(topicPartitionKey)) {
-                        log.warn("inconsistent");
+                    Long highestSeen = partitionOffsetHighestSeen.get(topicPartitionKey); // we don't expect these to be different
+                    if (nextExpected != highestSeen) {
+                        log.warn("inconsistent {} {}", nextExpected, highestSeen);
                     }
                     precomputed.invoke(incompleteOffsets, baseOffset, nextExpected);
                     bytes = precomputed.packSmallest();

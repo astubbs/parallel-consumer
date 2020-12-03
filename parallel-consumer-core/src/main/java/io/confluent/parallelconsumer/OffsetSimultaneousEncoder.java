@@ -169,6 +169,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      *  runlength entry is a Short)
      * <p>
      *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
+     * @param currentBaseOffset to use now, checked for consistency
+     * @param nextExpectedOffsetFromBroker to use now, checked for consistency
      */
     public OffsetSimultaneousEncoder invoke(Set<Long> incompleteOffsets, final long currentBaseOffset, final long nextExpectedOffsetFromBroker) {
         checkConditionsHaventChanged(currentBaseOffset, nextExpectedOffsetFromBroker);
