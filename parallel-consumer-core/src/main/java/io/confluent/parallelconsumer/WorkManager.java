@@ -640,6 +640,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private void onResultUpdateHighestContinuousBatch(final Set<? extends WorkContainer<K, V>> workResults) {
         HashSet<TopicPartition> partitionsSeenForLogging = new HashSet<>();
+        Map<TopicPartition, Long> originalMarks = new HashMap<>();
         Map<TopicPartition, Boolean> partitionNowFormsAContinuousBlock = new HashMap<>();
         for (final WorkContainer<K, V> work : workResults) {
             TopicPartition tp = work.getTopicPartition();
@@ -705,6 +706,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     }
                     if (continuous) {
                         partitionNowFormsAContinuousBlock.put(tp, true);
+                        if (!originalMarks.containsKey(tp)) {
+                            Long previousOffset = partitionOffsetHighestContinuousCompleted.get(tp);
+                            originalMarks.put(tp, previousOffset);
+                        }
                         partitionOffsetHighestContinuousCompleted.put(tp, thisOffset);
                     } else {
                         partitionNowFormsAContinuousBlock.put(tp, false);
@@ -718,7 +723,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             }
         }
         for (final TopicPartition topicPartition : partitionsSeenForLogging) {
-            log.debug("Low water mark (highest continuous completed) for partition {} now {}", topicPartition, partitionOffsetHighestContinuousCompleted.get(topicPartition));
+            Long oldOffset = originalMarks.get(topicPartition);
+            Long newOffset = partitionOffsetHighestContinuousCompleted.get(topicPartition);
+            log.debug("Low water mark (highest continuous completed) for partition {} moved from {} to {}", topicPartition, oldOffset, newOffset);
         }
     }
 
@@ -731,7 +738,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         Long highestCompleted = partitionOffsetHighestCompleted.getOrDefault(tp, -1L);
         long thisOffset = work.getCr().offset();
         if (thisOffset > highestCompleted) {
-            log.debug("Updating highest completed - was: {} now: {}", highestCompleted, thisOffset);
+            log.trace("Updating highest completed - was: {} now: {}", highestCompleted, thisOffset);
             partitionOffsetHighestCompleted.put(tp, thisOffset);
         }
     }

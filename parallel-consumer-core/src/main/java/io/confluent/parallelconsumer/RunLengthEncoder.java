@@ -8,11 +8,21 @@ import java.util.Optional;
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.OffsetEncoding.*;
 
+/**
+ * todo docs tail runlength?
+ */
 class RunLengthEncoder extends OffsetEncoderBase {
 
+    /**
+     * The current run length being counted / built
+     */
     private int currentRunLengthCount = 0;
+
     private boolean previousRunLengthState = false;
 
+    /**
+     * Stores all the run lengths
+     */
     private final List<Integer> runLengthEncodingIntegers;
 
     private Optional<byte[]> encodedBytes = Optional.empty();
@@ -46,22 +56,20 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     @Override
     public void encodeIncompleteOffset(final int relativeOffset) {
-        encodeRunLength(false);
+        encodeRunLength(false, relativeOffset);
     }
 
     @Override
     public void encodeCompletedOffset(final int relativeOffset) {
-        encodeRunLength(true);
+        encodeRunLength(true, relativeOffset);
     }
 
     @Override
     public byte[] serialise() throws EncodingNotSupportedException {
         runLengthEncodingIntegers.add(currentRunLengthCount); // add tail
 
-        int entryWidth = switch (version) {
-            case v1 -> Short.BYTES;
-            case v2 -> Integer.BYTES;
-        };
+        int entryWidth = getEntryWidth();
+
         ByteBuffer runLengthEncodedByteBuffer = ByteBuffer.allocate(runLengthEncodingIntegers.size() * entryWidth);
 
         for (final Integer runlength : runLengthEncodingIntegers) {
@@ -82,6 +90,13 @@ class RunLengthEncoder extends OffsetEncoderBase {
         encodedBytes = Optional.of(array);
         return array;
     }
+
+    private int getEntryWidth() {
+        return switch (version) {
+            case v1 -> Short.BYTES;
+            case v2 -> Integer.BYTES;
+        };
+    }
 //
 //    @Override
 //    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
@@ -100,7 +115,11 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     @Override
     public int getEncodedSizeEstimate() {
-        return runLengthEncodingIntegers.size();
+        int numEntries = runLengthEncodingIntegers.size();
+        if (currentRunLengthCount > 0)
+            numEntries = numEntries + 1;
+        int accumulativeEntrySize = numEntries * getEntryWidth();
+        return accumulativeEntrySize + standardOverhead;
     }
 
     @Override
@@ -108,7 +127,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
         return encodedBytes.get();
     }
 
-    private void encodeRunLength(final boolean currentIsComplete) {
+    private void encodeRunLength(final boolean currentIsComplete, final int relativeOffset) {
         // run length
         boolean currentOffsetMatchesOurRunLengthState = previousRunLengthState == currentIsComplete;
         if (currentOffsetMatchesOurRunLengthState) {

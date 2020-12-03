@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.StringUtils;
+import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
 import java.util.BitSet;
@@ -28,6 +29,7 @@ import static io.confluent.parallelconsumer.OffsetEncoding.*;
  * @see RunLengthEncoder
  * @see OffsetBitSet
  */
+@Slf4j
 class BitsetEncoder extends OffsetEncoderBase {
 
     private final Version version; // default to new version
@@ -35,6 +37,7 @@ class BitsetEncoder extends OffsetEncoderBase {
     private static final Version DEFAULT_VERSION = Version.v2;
 
     public static final Integer MAX_LENGTH_ENCODABLE = Integer.MAX_VALUE;
+    private final int originalLength;
 
     private ByteBuffer wrappedBitsetBytesBuffer;
     private final BitSet bitSet;
@@ -55,6 +58,8 @@ class BitsetEncoder extends OffsetEncoderBase {
             case v2 -> initV2(length);
         }
         bitSet = new BitSet(length);
+
+        this.originalLength = length;
     }
 
     /**
@@ -110,6 +115,7 @@ class BitsetEncoder extends OffsetEncoderBase {
 
     @Override
     public void encodeCompletedOffset(final int relativeOffset) {
+        log.debug("Relative offset set {}", relativeOffset);
         bitSet.set(relativeOffset);
     }
 
@@ -139,7 +145,14 @@ class BitsetEncoder extends OffsetEncoderBase {
 
     @Override
     public int getEncodedSizeEstimate() {
-        return bitSet.length(); // logical size
+        return bitSet.length() + standardOverhead + getLengthEntryBytes(); // logical size
+    }
+
+    private int getLengthEntryBytes() {
+        return switch (version) {
+            case v1 -> Short.BYTES;
+            case v2 -> Integer.BYTES;
+        };
     }
 
     @Override

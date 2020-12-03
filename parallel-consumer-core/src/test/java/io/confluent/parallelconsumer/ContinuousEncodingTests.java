@@ -189,7 +189,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
     void testFullCycleWithGaps() {
         var options = ParallelConsumerOptions.<String, String>builder()
 //                .numberOfThreads(1000)
-                .numberOfThreads(10)
+                .numberOfThreads(100)
                 .build();
 //        var pc = new ParallelEoSStreamProcessor<String, String>(options);
 //        var wm = new WorkManager<>(options, consumerSpy);
@@ -198,11 +198,13 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
         BrokerPollSystem.setLongPollTimeout(Duration.ofSeconds(2));
 
 //        int expected = 1_000_000;
-        int expected = 1000;
+//        int expected = 100_000;
+        int expected = 20_000;
+//        int expected = 1_00;
 
         List<ConsumerRecord<String, String>> consumerRecords = ktu.generateRecordsForKey(1, expected);
         // remove a few records to create gaps
-        List<Integer> toRemove = of(4, 8, 15);
+        List<Integer> toRemove = of(4, 8, 15, 16, 17, 18, 19, 20, 60, 90);
         List<ConsumerRecord<String, String>> filtered = consumerRecords.stream().filter(x -> !toRemove.contains((int) x.offset())).collect(Collectors.toList());
         ktu.send(consumerSpy, filtered);
 

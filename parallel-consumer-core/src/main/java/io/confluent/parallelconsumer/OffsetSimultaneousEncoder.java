@@ -78,7 +78,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * The encoders to run
      */
     private Set<OffsetEncoderBase> encoders;
-    private Queue<OffsetEncoderBase> sortedEncoders;
+    private List<OffsetEncoderBase> sortedEncoders;
 
     /**
      * @param lowWaterMark The highest committable offset
@@ -114,7 +114,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         }
 
         encoders = new HashSet<>();
-        sortedEncoders = new PriorityQueue<>();
+//        sortedEncoders = new PriorityQueue<>();
+        sortedEncoders = new ArrayList<>();
 
         try {
             encoders.add(new BitsetEncoder(baseOffset, length, this, v1));
@@ -297,12 +298,12 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * todo docs
      */
-    private boolean noEncodingRequiredSoFar = true;
+    private boolean definitlyNoEncodingRequiredSoFar = true;
 
     private boolean lowWaterMarkCheck(final long relativeOffset) {
         // only encode if this work is above the low water mark
-        noEncodingRequiredSoFar = relativeOffset <= 0;
-        return noEncodingRequiredSoFar;
+        definitlyNoEncodingRequiredSoFar = relativeOffset <= 0;
+        return definitlyNoEncodingRequiredSoFar;
     }
 
     /**
@@ -327,12 +328,16 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public int getEncodedSizeEstimate() {
-        if (noEncodingRequiredSoFar) {
+        if (definitlyNoEncodingRequiredSoFar) {
             return 0;
         } else {
-            OffsetEncoderBase smallestEncoder = sortedEncoders.peek();
+            Collections.sort(sortedEncoders);
+            if (sortedEncoders.isEmpty())
+                throw new InternalRuntimeError("No encoders");
+            OffsetEncoderBase smallestEncoder = sortedEncoders.get(0);
             int encodedSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
-            log.debug("Currently estimated smallest codec is {}, needing {} bytes", smallestEncoder.getEncodingType(), smallestEncoder.getEncodedSizeEstimate());
+            log.debug("Currently estimated smallest codec is {}, needing {} bytes",
+                    smallestEncoder.getEncodingType(), smallestEncoder.getEncodedSizeEstimate());
             return encodedSizeEstimate;
         }
     }
