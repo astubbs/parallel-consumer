@@ -63,16 +63,16 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             100_000L,
             100_000_000L, // slow
     })
-    void largeIncompleteOffsetValues(long nextExpectedOffset) {
+    void largeIncompleteOffsetValues(long currentHighestCompleted) {
         var incompletes = new HashSet<Long>();
         long lowWaterMark = 123L;
         incompletes.addAll(UniSets.of(lowWaterMark, 2345L, 8765L));
 
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset);
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, currentHighestCompleted);
         encoder.compressionForced = true;
 
         //
-        encoder.invoke(incompletes, lowWaterMark, nextExpectedOffset);
+        encoder.invoke(incompletes, lowWaterMark, currentHighestCompleted);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //
@@ -207,15 +207,15 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
     @SneakyThrows
     @Test
     void ensureEncodingGracefullyWorksWhenOffsetsArentSequentialTwo() {
-        long nextExpectedOffset = 101;
+        long currentHighestCompleted = 101;
         long lowWaterMark = 0;
         var incompletes = new HashSet<>(UniSets.of(1L, 4L, 5L, 100L));
 
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset);
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, currentHighestCompleted);
         encoder.compressionForced = true;
 
         //
-        encoder.invoke(incompletes, lowWaterMark, nextExpectedOffset);
+        encoder.invoke(incompletes, lowWaterMark, currentHighestCompleted);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //
@@ -224,7 +224,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         ParallelConsumer.Tuple<Long, Set<Long>> decodedIncompletes = unwrap.getDecodedIncompletes(lowWaterMark);
         assertThat(decodedIncompletes.getRight()).containsExactlyInAnyOrderElementsOf(incompletes);
 
-        if (nextExpectedOffset - lowWaterMark > BitsetEncoder.MAX_LENGTH_ENCODABLE)
+        if (currentHighestCompleted - lowWaterMark > BitsetEncoder.MAX_LENGTH_ENCODABLE)
             assertThat(encodingMap.keySet()).as("Gracefully ignores that Bitset can't be supported").doesNotContain(OffsetEncoding.BitSet);
         else
             assertThat(encodingMap.keySet()).contains(OffsetEncoding.BitSet);

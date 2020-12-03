@@ -441,6 +441,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             raisePartitionHighestSeen(offset, tp);
 
             checkPreviousLowWaterMarks(wc);
+            checkHighestSucceededSoFar(wc);
 
             processingShards.computeIfAbsent(shardKey, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
 
@@ -448,16 +449,17 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
     }
 
+    private void checkHighestSucceededSoFar(final WorkContainer<K, V> wc) {
+        partitionOffsetHighestSucceeded.putIfAbsent(wc.getTopicPartition(), wc.offset());
+    }
+
     /**
      * If we've never seen a record for this partition before, it must be our first ever seen record for this partition,
      * which means by definition, it's previous offset is the low water mark.
      */
     private void checkPreviousLowWaterMarks(final WorkContainer<K, V> wc) {
-        Long old = partitionOffsetHighestContinuousCompleted.get(wc.getTopicPartition());
-        if (old == null) {
-            long previousLowWaterMark = wc.offset() - 1;
-            partitionOffsetHighestContinuousCompleted.put(wc.getTopicPartition(), previousLowWaterMark);
-        }
+        long previousLowWaterMark = wc.offset() - 1;
+        partitionOffsetHighestContinuousCompleted.putIfAbsent(wc.getTopicPartition(), previousLowWaterMark);
     }
 
     void raisePartitionHighestSeen(long seenOffset, TopicPartition tp) {
@@ -792,28 +794,29 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
+     * Make encoders add new work result to their encodings
+     *
      * todo refactor to offset manager?
      */
     private void manageEncoding(final boolean offsetComplete, final WorkContainer<K, V> wc) {
         TopicPartition tp = wc.getTopicPartition();
-        long baseOffset = partitionOffsetHighestContinuousCompleted.getOrDefault(tp, -1L);
-        Long highestCompleted = partitionOffsetHighestSucceeded.getOrDefault(tp, -1L);
-        long offsetAtEndOfEncodingRange = highestCompleted + 1;
-        long nextExpectedOffset = offsetAtEndOfEncodingRange;
+        long lowWaterMark = partitionOffsetHighestContinuousCompleted.get(tp);
+        Long highestCompleted = partitionOffsetHighestSucceeded.get(tp);
+//        long offsetAtEndOfEncodingRange = highestCompleted + 1;
+        long nextExpectedOffsetFromBroker = lowWaterMark + 1;
 
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders
                 .computeIfAbsent(tp, (ignore) ->
-                        new OffsetSimultaneousEncoder(baseOffset, nextExpectedOffset)
+                        new OffsetSimultaneousEncoder(nextExpectedOffsetFromBroker, highestCompleted)
                 );
 
         long offset = wc.offset();
-        long relativeOffset = offset - baseOffset;
-        long nextExpectedOffsetFromBroker = partitionOffsetHighestSucceeded.get(tp) + 1;
+        long relativeOffset = offset - nextExpectedOffsetFromBroker;
 
         if (offsetComplete)
-            offsetSimultaneousEncoder.encodeCompletedOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
+            offsetSimultaneousEncoder.encodeCompletedOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
         else
-            offsetSimultaneousEncoder.encodeIncompleteOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
+            offsetSimultaneousEncoder.encodeIncompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
 
         manageOffEncoderSpaceRequirements();
     }
@@ -1038,15 +1041,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 byte[] bytes = new byte[0];
                 try {
                     Long baseOffset = partitionOffsetHighestContinuousCompleted.getOrDefault(topicPartitionKey, 0L);
-                    Long nextExpected = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
+                    Long currentHighestCompleted = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
                     if (baseOffset != firstIncomplete - 1) {
                         log.warn("inconsistent");
                     }
                     Long highestSeen = partitionOffsetHighestSeen.get(topicPartitionKey); // we don't expect these to be different
-                    if (nextExpected != highestSeen) {
-                        log.warn("inconsistent {} {}", nextExpected, highestSeen);
+                    if (currentHighestCompleted != highestSeen) {
+                        log.warn("inconsistent {} {}", currentHighestCompleted, highestSeen);
                     }
-                    precomputed.invoke(incompleteOffsets, baseOffset, nextExpected);
+                    precomputed.invoke(incompleteOffsets, baseOffset, currentHighestCompleted);
                     bytes = precomputed.packSmallest();
                     String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
                     log.debug("comparisonOffsetPayloadString {}", comparisonOffsetPayloadString);

@@ -8,6 +8,12 @@ import java.nio.ByteBuffer;
 
 /**
  * Base OffsetEncoder
+ * <p>
+ * When encoding offset data beyond the low water mark, we only need to record information up until the highest
+ * succeeded offset, as any beyond (because they have failed or haven't suceeded yet) we can treat as though we've never
+ * seen them when we come across them again.
+ *
+ * @see WorkManager
  */
 @Slf4j
 abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<OffsetEncoderBase> {
@@ -62,9 +68,9 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
     public abstract byte[] getEncodedBytes();
 
     @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
         if (baseOffset != this.baseOffset) {
-            throw new InternalRuntimeError("Na");
+            throw new InternalRuntimeError("Inconsistent");
         }
         int castOffset = (int) relativeOffset;
         if (castOffset != relativeOffset)
@@ -73,7 +79,7 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
     }
 
     @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
         if (baseOffset != this.baseOffset) {
             throw new InternalRuntimeError("Na");
         }

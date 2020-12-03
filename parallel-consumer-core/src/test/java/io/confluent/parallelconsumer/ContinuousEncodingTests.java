@@ -46,16 +46,16 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
             100_000L,
             100_000_000L, // slow
     })
-    void largeIncompleteOffsetValues(long nextExpectedOffset) {
+    void largeIncompleteOffsetValues(long currentHighestCompleted) {
         var incompletes = new HashSet<Long>();
         long lowWaterMark = 123L;
         incompletes.addAll(UniSets.of(lowWaterMark, 2345L, 8765L));
 
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, nextExpectedOffset);
+        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(lowWaterMark, currentHighestCompleted);
         encoder.compressionForced = true;
 
         //
-        encoder.invoke(incompletes, lowWaterMark, nextExpectedOffset);
+        encoder.invoke(incompletes, lowWaterMark, currentHighestCompleted);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //

@@ -38,14 +38,14 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 //    private final Set<Long> incompleteOffsets;
 
     /**
-     * The highest committable offset
+     * The highest committable offset - the next expected offset to be returned by the broker
      */
     private long baseOffset;
 
     /**
-     * The next expected offset to be returned by the broker
+     *
      */
-    private long nextExpectedOffset;
+    private long highestSuceeded;
 
     /**
      * The difference between the base offset (the offset to be committed) and the highest seen offset
@@ -86,18 +86,18 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     public OffsetSimultaneousEncoder(
             long lowWaterMark
             ,
-            Long nextExpectedOffset
+            Long newHighestCompleted
 
 //            ,
     ) {
 
 //        this.incompleteOffsets = incompleteOffsets;
 
-        initialise(lowWaterMark, nextExpectedOffset);
+        initialise(lowWaterMark, newHighestCompleted);
     }
 
-    private int initLength(long currentBaseOffset, long currentNextExpectedOffset) {
-        long longLength = currentNextExpectedOffset - currentBaseOffset;
+    private int initLength(long currentBaseOffset, long highestCompleted) {
+        long longLength = highestCompleted - currentBaseOffset;
         int intLength = (int) longLength;
         // sanity
         if (longLength != intLength)
@@ -105,13 +105,15 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         return intLength;
     }
 
-    private void initialise(final long currentBaseOffset, long currentNextExpectedOffset) {
+    private void initialise(final long currentBaseOffset, long currentHighestCompleted) {
         this.baseOffset = currentBaseOffset;
-        this.nextExpectedOffset = currentNextExpectedOffset;
-        this.length = initLength(currentBaseOffset, currentNextExpectedOffset);
+        this.highestSuceeded = currentHighestCompleted;
+
+        //
+        this.length = initLength(currentBaseOffset, highestSuceeded);
 
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
-            log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, nextExpectedOffset);
+            log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, this.highestSuceeded);
         }
 
         encoders = new HashSet<>();
@@ -170,16 +172,16 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * <p>
      *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
      * @param currentBaseOffset to use now, checked for consistency
-     * @param nextExpectedOffsetFromBroker to use now, checked for consistency
+     * @param currentHighestCompleted to use now, checked for consistency
      */
-    public OffsetSimultaneousEncoder invoke(Set<Long> incompleteOffsets, final long currentBaseOffset, final long nextExpectedOffsetFromBroker) {
-        checkConditionsHaventChanged(currentBaseOffset, nextExpectedOffsetFromBroker);
+    public OffsetSimultaneousEncoder invoke(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
+        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
 
-        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, nextExpectedOffset);
+        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, highestSuceeded);
         log.trace("Incompletes are: {}", incompleteOffsets);
 
         //
-        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.nextExpectedOffset, length);
+        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.highestSuceeded, length);
         /*
          * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
          *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
@@ -254,37 +256,37 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     }
 
     @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
-        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, nextExpectedOffsetFromBroker))
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
             return;
 
         for (final OffsetEncoderBase encoder : encoders) {
-            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
+            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
         }
     }
 
     @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
-        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, nextExpectedOffsetFromBroker))
+    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
             return;
 
         for (final OffsetEncoderBase encoder : encoders) {
-            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, nextExpectedOffsetFromBroker);
+            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
         }
     }
 
-    private boolean preEncodeCheckCanSkip(final long currentBaseOffset, final long relativeOffset, final long nextExpectedOffsetFromBroker) {
-        checkConditionsHaventChanged(currentBaseOffset, nextExpectedOffsetFromBroker);
+    private boolean preEncodeCheckCanSkip(final long currentBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
 
         return lowWaterMarkCheck(relativeOffset);
     }
 
-    private void checkConditionsHaventChanged(final long currentBaseOffset, final long nextExpectedOffsetFromBroker) {
+    private void checkConditionsHaventChanged(final long currentBaseOffset, final long currentHighestCompleted) {
         boolean reinitialise = false;
 
-        if (this.nextExpectedOffset != nextExpectedOffsetFromBroker) {
+        if (this.highestSuceeded != currentHighestCompleted) {
             log.debug("Next expected offset from broker {} has moved to {} - need to reset encoders",
-                    this.nextExpectedOffset, nextExpectedOffsetFromBroker);
+                    this.highestSuceeded, currentHighestCompleted);
             reinitialise = true;
 
         }
@@ -296,7 +298,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         }
 
         if (reinitialise) {
-            initialise(currentBaseOffset, nextExpectedOffsetFromBroker);
+            initialise(currentBaseOffset, currentHighestCompleted);
         }
     }
 
