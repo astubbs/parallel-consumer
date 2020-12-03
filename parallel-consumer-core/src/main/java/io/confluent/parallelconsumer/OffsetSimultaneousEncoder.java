@@ -40,7 +40,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * The highest committable offset
      */
-    private final long lowWaterMark;
+    private final long baseOffset;
 
     /**
      * The next expected offset to be returned by the broker
@@ -64,7 +64,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * @see #packSmallest()
      */
     @Getter
-    PriorityQueue<EncodedOffsetPair> sortedEncodings = new PriorityQueue();
+    PriorityQueue<EncodedOffsetData> sortedEncodingData = new PriorityQueue();
 
 
     /**
@@ -77,17 +77,18 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * The encoders to run
      */
-    private final Set<OffsetEncoder> encoders = new HashSet<>();
+    private Set<OffsetEncoderBase> encoders;
+    private Queue<OffsetEncoderBase> sortedEncoders = new PriorityQueue<>();
 
     /**
      * @param lowWaterMark The highest committable offset
      */
     public OffsetSimultaneousEncoder(long lowWaterMark, Long nextExpectedOffset, Set<Long> incompleteOffsets) {
-        this.lowWaterMark = lowWaterMark;
+        this.baseOffset = lowWaterMark;
         this.nextExpectedOffset = nextExpectedOffset;
         this.incompleteOffsets = incompleteOffsets;
 
-        long longLength = this.nextExpectedOffset - this.lowWaterMark;
+        long longLength = this.nextExpectedOffset - this.baseOffset;
         length = (int) longLength;
         // sanity
         if (longLength != length) throw new IllegalArgumentException("Integer overflow");
@@ -97,8 +98,10 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     private void initEncoders(final long baseOffset) {
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
-            log.debug("~Large input map size: {} (start: {} end: {})", length, this.lowWaterMark, nextExpectedOffset);
+            log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, nextExpectedOffset);
         }
+
+        encoders = new HashSet<>();
 
         try {
             encoders.add(new BitsetEncoder(baseOffset, length, this, v1));
@@ -114,6 +117,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
         encoders.add(new RunLengthEncoder(baseOffset, this, v1));
         encoders.add(new RunLengthEncoder(baseOffset, this, v2));
+
+        sortedEncoders.addAll(encoders);
     }
 
     /**
@@ -151,11 +156,11 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
      */
     public OffsetSimultaneousEncoder invoke() {
-        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", lowWaterMark, nextExpectedOffset);
+        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, nextExpectedOffset);
         log.trace("Incompletes are: {}", this.incompleteOffsets);
 
         //
-        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.lowWaterMark, this.nextExpectedOffset, length);
+        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.nextExpectedOffset, length);
         /*
          * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
          *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
@@ -163,8 +168,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
          *  didn't need the whole loop.
          */
         range(length).forEach(rangeIndex -> {
-            final long offset = this.lowWaterMark + rangeIndex;
-            List<OffsetEncoder> removeToBeRemoved = new ArrayList<>();
+            final long offset = this.baseOffset + rangeIndex;
             if (this.incompleteOffsets.contains(offset)) {
                 log.trace("Found an incomplete offset {}", offset);
                 encoders.forEach(x -> {
@@ -175,19 +179,16 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
                     x.encodeCompletedOffset(rangeIndex);
                 });
             }
-            encoders.removeAll(removeToBeRemoved);
         });
 
-        registerEncodings(encoders);
-
-        log.debug("In order: {}", this.sortedEncodings);
+        log.debug("In order: {}", this.sortedEncodingData);
 
         return this;
     }
 
-    private void registerEncodings(final Set<? extends OffsetEncoder> encoders) {
-        List<OffsetEncoder> toRemove = new ArrayList<>();
-        for (OffsetEncoder encoder : encoders) {
+    private void isToBeCalledRegisterEncodings(final Set<? extends OffsetEncoderBase> encoders) {
+        List<OffsetEncoderBase> toRemove = new ArrayList<>();
+        for (OffsetEncoderBase encoder : encoders) {
             try {
                 encoder.register();
             } catch (EncodingNotSupportedException e) {
@@ -199,23 +200,23 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
         // compressed versions
         // sizes over LARGE_INPUT_MAP_SIZE_THRESHOLD bytes seem to benefit from compression
-        boolean noEncodingsAreSmallEnough = encoders.stream().noneMatch(OffsetEncoder::quiteSmall);
+        boolean noEncodingsAreSmallEnough = encoders.stream().noneMatch(OffsetEncoderBase::quiteSmall);
         if (noEncodingsAreSmallEnough || compressionForced) {
-            encoders.forEach(OffsetEncoder::registerCompressed);
+            encoders.forEach(OffsetEncoderBase::registerCompressed);
         }
     }
 
     /**
      * Select the smallest encoding, and pack it.
      *
-     * @see #packEncoding(EncodedOffsetPair)
+     * @see #packEncoding(EncodedOffsetData)
      */
     public byte[] packSmallest() throws EncodingNotSupportedException {
         // todo might be called multiple times, should cache?
-        if (sortedEncodings.isEmpty()) {
+        if (sortedEncodingData.isEmpty()) {
             throw new EncodingNotSupportedException("No encodings could be used");
         }
-        final EncodedOffsetPair best = this.sortedEncodings.poll();
+        final EncodedOffsetData best = this.sortedEncodingData.poll();
         log.debug("Compression chosen is: {}", best.encoding.name());
         return packEncoding(best);
     }
@@ -223,7 +224,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * Pack the encoded bytes into a magic byte wrapped byte array which indicates the encoding type.
      */
-    byte[] packEncoding(final EncodedOffsetPair best) {
+    byte[] packEncoding(final EncodedOffsetData best) {
         final int magicByteSize = Byte.BYTES;
         final ByteBuffer result = ByteBuffer.allocate(magicByteSize + best.data.capacity());
         result.put(best.encoding.magicByte);
@@ -237,7 +238,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             return;
         }
 
-        for (final OffsetEncoder encoder : encoders) {
+        for (final OffsetEncoderBase encoder : encoders) {
             encoder.encodeIncompleteOffset(baseOffset, relativeOffset);
         }
     }
@@ -247,8 +248,17 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         if (lowWaterMarkCheck(relativeOffset)) {
             return;
         }
-        for (final OffsetEncoder encoder : encoders) {
+        checkBaseOffset(baseOffset);
+        for (final OffsetEncoderBase encoder : encoders) {
             encoder.encodeIncompleteOffset(baseOffset, relativeOffset);
+        }
+    }
+
+    private void checkBaseOffset(final long currentBaseOffset) {
+        if (this.baseOffset != currentBaseOffset) {
+            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to reset encoders",
+                    this.baseOffset, currentBaseOffset);
+            initEncoders(currentBaseOffset);
         }
     }
 
@@ -259,11 +269,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     private boolean lowWaterMarkCheck(final long relativeOffset) {
         // only encode if this work is above the low water mark
-        if (relativeOffset < 0) {
-            noEncodingRequiredSoFar = true;
-        } else {
-            noEncodingRequiredSoFar = false;
-        }
+        noEncodingRequiredSoFar = relativeOffset <= 0;
         return noEncodingRequiredSoFar;
     }
 
@@ -273,16 +279,29 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     @SneakyThrows
     @Override
     public int getEncodedSize() {
-        if (noEncodingRequiredSoFar) {
-            return 0;
-        } else {
-            byte[] bytes = packSmallest();
-            return bytes.length;
-        }
+//        if (noEncodingRequiredSoFar) {
+//            return 0;
+//        } else {
+//            OffsetEncoder peek = sortedEncoders.peek();
+//            return peek.getEncodedSize();
+//        }
+        throw new InternalRuntimeError("");
     }
 
     @Override
     public byte[] getEncodedBytes() {
         return new byte[0];
+    }
+
+    @Override
+    public int getEncodedSizeEstimate() {
+        if (noEncodingRequiredSoFar) {
+            return 0;
+        } else {
+            OffsetEncoderBase smallestEncoder = sortedEncoders.peek();
+            int encodedSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
+            log.debug("Currently estimated smallest codec is {}, needing {} bytes", smallestEncoder.getEncodingType(), smallestEncoder.getEncodedSizeEstimate());
+            return encodedSizeEstimate;
+        }
     }
 }

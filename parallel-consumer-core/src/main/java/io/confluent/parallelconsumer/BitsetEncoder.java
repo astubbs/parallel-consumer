@@ -28,7 +28,7 @@ import static io.confluent.parallelconsumer.OffsetEncoding.*;
  * @see RunLengthEncoder
  * @see OffsetBitSet
  */
-class BitsetEncoder extends OffsetEncoder {
+class BitsetEncoder extends OffsetEncoderBase {
 
     private final Version version; // default to new version
 
@@ -135,6 +135,11 @@ class BitsetEncoder extends OffsetEncoder {
     @Override
     public int getEncodedSize() {
         return this.encodedBytes.get().length;
+    }
+
+    @Override
+    public int getEncodedSizeEstimate() {
+        return bitSet.length(); // logical size
     }
 
     @Override

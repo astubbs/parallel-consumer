@@ -18,4 +18,9 @@ public interface OffsetEncoderContract {
 
     byte[] getEncodedBytes();
 
+    /**
+     * Used for comparing encoders
+     */
+    int getEncodedSizeEstimate();
+
 }

@@ -5,7 +5,7 @@ import java.nio.ByteBuffer;
 import static io.confluent.parallelconsumer.OffsetEncoding.ByteArray;
 import static io.confluent.parallelconsumer.OffsetEncoding.ByteArrayCompressed;
 
-class ByteBufferEncoder extends OffsetEncoder {
+class ByteBufferEncoder extends OffsetEncoderBase {
 
     private final ByteBuffer bytesBuffer;
 
@@ -51,6 +51,11 @@ class ByteBufferEncoder extends OffsetEncoder {
 
     @Override
     public int getEncodedSize() {
+        return this.bytesBuffer.capacity();
+    }
+
+    @Override
+    public int getEncodedSizeEstimate() {
         return this.bytesBuffer.capacity();
     }
 

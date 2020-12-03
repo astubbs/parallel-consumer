@@ -16,7 +16,6 @@ import pl.tlinkowski.unij.api.UniSets;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.BrokenBarrierException;
-import java.util.concurrent.FutureTask;
 import java.util.stream.Collectors;
 
 import static io.confluent.parallelconsumer.OffsetEncoding.*;
@@ -78,7 +77,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
 
         //
         byte[] smallestBytes = encoder.packSmallest();
-        EncodedOffsetPair unwrap = EncodedOffsetPair.unwrap(smallestBytes);
+        EncodedOffsetData unwrap = EncodedOffsetData.unwrap(smallestBytes);
         ParallelConsumer.Tuple<Long, Set<Long>> decodedIncompletes = unwrap.getDecodedIncompletes(lowWaterMark);
         assertThat(decodedIncompletes.getRight()).containsExactlyInAnyOrderElementsOf(incompletes);
 
@@ -87,7 +86,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             log.info("Testing {}", encodingToUse);
             byte[] bitsetBytes = encodingMap.get(encodingToUse);
             if (bitsetBytes != null) {
-                EncodedOffsetPair bitsetUnwrap = EncodedOffsetPair.unwrap(encoder.packEncoding(new EncodedOffsetPair(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
+                EncodedOffsetData bitsetUnwrap = EncodedOffsetData.unwrap(encoder.packEncoding(new EncodedOffsetData(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
                 ParallelConsumer.Tuple<Long, Set<Long>> decodedBitsets = bitsetUnwrap.getDecodedIncompletes(lowWaterMark);
                 assertThat(decodedBitsets.getRight())
                         .as(encodingToUse.toString())
@@ -221,7 +220,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
 
         //
         byte[] smallestBytes = encoder.packSmallest();
-        EncodedOffsetPair unwrap = EncodedOffsetPair.unwrap(smallestBytes);
+        EncodedOffsetData unwrap = EncodedOffsetData.unwrap(smallestBytes);
         ParallelConsumer.Tuple<Long, Set<Long>> decodedIncompletes = unwrap.getDecodedIncompletes(lowWaterMark);
         assertThat(decodedIncompletes.getRight()).containsExactlyInAnyOrderElementsOf(incompletes);
 
@@ -235,7 +234,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             log.info("Testing {}", encodingToUse);
             byte[] bitsetBytes = encodingMap.get(encodingToUse);
             if (bitsetBytes != null) {
-                EncodedOffsetPair bitsetUnwrap = EncodedOffsetPair.unwrap(encoder.packEncoding(new EncodedOffsetPair(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
+                EncodedOffsetData bitsetUnwrap = EncodedOffsetData.unwrap(encoder.packEncoding(new EncodedOffsetData(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
                 ParallelConsumer.Tuple<Long, Set<Long>> decodedBitsets = bitsetUnwrap.getDecodedIncompletes(lowWaterMark);
                 assertThat(decodedBitsets.getRight())
                         .as(encodingToUse.toString())

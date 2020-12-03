@@ -311,7 +311,7 @@ class WorkManagerOffsetMapCodecManagerTest {
         byte[] pack = encoder.packSmallest();
 
         //
-        EncodedOffsetPair encodedOffsetPair = EncodedOffsetPair.unwrap(pack);
+        EncodedOffsetData encodedOffsetPair = EncodedOffsetData.unwrap(pack);
         String deserialisedBitSet = encodedOffsetPair.getDecodedString();
         assertThat(deserialisedBitSet).isEqualTo(input);
     }
@@ -351,7 +351,7 @@ class WorkManagerOffsetMapCodecManagerTest {
             encoder.invoke();
 
             // test all encodings created
-            for (final EncodedOffsetPair pair : encoder.sortedEncodings) {
+            for (final EncodedOffsetData pair : encoder.sortedEncodingData) {
                 byte[] result = encoder.packEncoding(pair);
 
                 //

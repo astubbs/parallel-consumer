@@ -667,8 +667,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 updateHighestCompletedOffsetSoFar(work);
 
                 if (thisOffset <= previousHighestContinuous) {
-                    // sanity? by definition it must be higher
-                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
+//                     sanity? by definition it must be higher
+//                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
+                    // things can be racey, so this can happen, if so, just continue
+                    log.debug("Completed offset lower than current highest continuous offset - must have been completed while previous continuous blocks were being examined");
+                    continue;
                 } else {
                     // does it form a new continuous block?
 
@@ -765,7 +768,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> entry : continuousOffsetEncodings.entrySet()) {
             TopicPartition tp = entry.getKey();
             OffsetSimultaneousEncoder encoder = entry.getValue();
-            int encodedSize = encoder.getEncodedSize();
+            int encodedSize = encoder.getEncodedSizeEstimate();
 
             int allowed = (int) (perPartition * tolerance);
             // tolerance threshold crossed - turn on back pressure - no more for this partition

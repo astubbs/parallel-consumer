@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.nio.ByteBuffer;
@@ -61,7 +60,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
 
         //
         byte[] smallestBytes = encoder.packSmallest();
-        EncodedOffsetPair unwrap = EncodedOffsetPair.unwrap(smallestBytes);
+        EncodedOffsetData unwrap = EncodedOffsetData.unwrap(smallestBytes);
         ParallelConsumer.Tuple<Long, Set<Long>> decodedIncompletes = unwrap.getDecodedIncompletes(lowWaterMark);
         assertThat(decodedIncompletes.getRight()).containsExactlyInAnyOrderElementsOf(incompletes);
 
@@ -70,7 +69,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
             log.info("Testing {}", encodingToUse);
             byte[] bitsetBytes = encodingMap.get(encodingToUse);
             if (bitsetBytes != null) {
-                EncodedOffsetPair bitsetUnwrap = EncodedOffsetPair.unwrap(encoder.packEncoding(new EncodedOffsetPair(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
+                EncodedOffsetData bitsetUnwrap = EncodedOffsetData.unwrap(encoder.packEncoding(new EncodedOffsetData(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
                 ParallelConsumer.Tuple<Long, Set<Long>> decodedBitsets = bitsetUnwrap.getDecodedIncompletes(lowWaterMark);
                 assertThat(decodedBitsets.getRight())
                         .as(encodingToUse.toString())

@@ -8,7 +8,7 @@ import java.util.Optional;
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.OffsetEncoding.*;
 
-class RunLengthEncoder extends OffsetEncoder {
+class RunLengthEncoder extends OffsetEncoderBase {
 
     private int currentRunLengthCount = 0;
     private boolean previousRunLengthState = false;
@@ -21,7 +21,7 @@ class RunLengthEncoder extends OffsetEncoder {
 
     private static final Version DEFAULT_VERSION = Version.v2;
 
-    public RunLengthEncoder(long baseOffset,OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) {
+    public RunLengthEncoder(long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) {
         super(baseOffset, offsetSimultaneousEncoder);
         // run length setup
         runLengthEncodingIntegers = new ArrayList<>();
@@ -99,6 +99,11 @@ class RunLengthEncoder extends OffsetEncoder {
     }
 
     @Override
+    public int getEncodedSizeEstimate() {
+        return runLengthEncodingIntegers.size();
+    }
+
+    @Override
     public byte[] getEncodedBytes() {
         return encodedBytes.get();
     }
@@ -114,4 +119,5 @@ class RunLengthEncoder extends OffsetEncoder {
             currentRunLengthCount = 1; // reset to 1
         }
     }
+
 }

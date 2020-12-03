@@ -133,7 +133,7 @@ public class OffsetMapCodecManager<K, V> {
             byte[] bytes = encodingMap.get(forcedOffsetEncoding);
             if (bytes == null)
                 throw new EncodingNotSupportedException(msg("Can't force an encoding that hasn't been run: {}", forcedOffsetEncoding));
-            return simultaneousEncoder.packEncoding(new EncodedOffsetPair(forcedOffsetEncoding, ByteBuffer.wrap(bytes)));
+            return simultaneousEncoder.packEncoding(new EncodedOffsetData(forcedOffsetEncoding, ByteBuffer.wrap(bytes)));
         } else {
             return simultaneousEncoder.packSmallest();
         }
@@ -151,7 +151,7 @@ public class OffsetMapCodecManager<K, V> {
             return ParallelConsumer.Tuple.pairOf(finalOffsetForPartition, UniSets.of());
         }
 
-        EncodedOffsetPair result = EncodedOffsetPair.unwrap(decodedBytes);
+        EncodedOffsetData result = EncodedOffsetData.unwrap(decodedBytes);
 
         ParallelConsumer.Tuple<Long, Set<Long>> incompletesTuple = result.getDecodedIncompletes(finalOffsetForPartition);
 

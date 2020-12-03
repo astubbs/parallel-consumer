@@ -10,7 +10,7 @@ import java.nio.ByteBuffer;
  * Base OffsetEncoder
  */
 @Slf4j
-abstract class OffsetEncoder implements OffsetEncoderContract {
+abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<OffsetEncoder> {
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
     private final long baseOffset;
@@ -48,7 +48,7 @@ abstract class OffsetEncoder implements OffsetEncoderContract {
 
     private void register(final OffsetEncoding type, final byte[] bytes) {
         log.debug("Registering {}, with site {}", type, bytes.length);
-        offsetSimultaneousEncoder.sortedEncodings.add(new EncodedOffsetPair(type, ByteBuffer.wrap(bytes)));
+        offsetSimultaneousEncoder.sortedEncodingData.add(new EncodedOffsetData(type, ByteBuffer.wrap(bytes)));
         offsetSimultaneousEncoder.encodingMap.put(type, bytes);
     }
 
@@ -67,7 +67,8 @@ abstract class OffsetEncoder implements OffsetEncoderContract {
             throw new InternalRuntimeError("Na");
         }
         int castOffset = (int) relativeOffset;
-        if (castOffset != relativeOffset) throw new IllegalArgumentException("Interger overflow");
+        if (castOffset != relativeOffset)
+            throw new IllegalArgumentException("Interger overflow");
         encodeIncompleteOffset(castOffset);
     }
 
@@ -77,7 +78,20 @@ abstract class OffsetEncoder implements OffsetEncoderContract {
             throw new InternalRuntimeError("Na");
         }
         int castOffset = (int) relativeOffset;
-        if (castOffset != relativeOffset) throw new IllegalArgumentException("Interger overflow");
+        if (castOffset != relativeOffset)
+            throw new IllegalArgumentException("Interger overflow");
         encodeCompletedOffset(castOffset);
+    }
+
+    /**
+     * Compared with returned encoding size
+     * <p>
+     * Note: this class has a natural ordering that is inconsistent with equals.
+     *
+     * @see #getEncodedSize()
+     */
+    @Override
+    public int compareTo(final OffsetEncoder e) {
+        return Integer.compare(this.getEncodedSizeEstimate(), e.getEncodedSizeEstimate());
     }
 }
