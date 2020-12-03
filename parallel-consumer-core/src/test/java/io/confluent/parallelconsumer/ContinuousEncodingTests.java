@@ -1,12 +1,16 @@
 package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.KafkaTestUtils;
+import io.confluent.csid.utils.ProgressBarUtils;
+import io.confluent.csid.utils.TrimListRepresentation;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import me.tongfei.progressbar.ProgressBar;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -14,17 +18,22 @@ import org.junit.jupiter.params.provider.ValueSource;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.BrokenBarrierException;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static io.confluent.parallelconsumer.OffsetEncoding.ByteArray;
 import static io.confluent.parallelconsumer.OffsetEncoding.ByteArrayCompressed;
+import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.in;
 import static org.hamcrest.Matchers.not;
 import static org.junit.Assume.assumeThat;
+import static org.junit.jupiter.api.Assertions.fail;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 @Slf4j
@@ -170,6 +179,83 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
                 }
             }
         }
+    }
+
+
+    /**
+     * Gaps may exist for certain race results
+     */
+    @Test
+    void testFullCycleMaybeGaps() {
+        var options = ParallelConsumerOptions.<String, String>builder()
+//                .numberOfThreads(1000)
+                .numberOfThreads(10)
+                .build();
+//        var pc = new ParallelEoSStreamProcessor<String, String>(options);
+//        var wm = new WorkManager<>(options, consumerSpy);
+        setupParallelConsumerInstance(options);
+
+        BrokerPollSystem.setLongPollTimeout(Duration.ofSeconds(2));
+
+//        int expected = 1_000_000;
+        int expected = 1000;
+
+        List<ConsumerRecord<String, String>> consumerRecords = ktu.generateRecordsForKey(1, expected);
+        ktu.send(consumerSpy, consumerRecords);
+
+
+//        BrokerPollSystem<String, String> stringStringBrokerPollSystem = new BrokerPollSystem<>(new ConsumerManager<>(consumerSpy), wm, pc, options);
+//        stringStringBrokerPollSystem.start();
+//
+////        ArrayBlockingQueue<Runnable> buffer = new ArrayBlockingQueue<>(options.getNumberOfThreads() * 3);
+//        LinkedBlockingQueue<Runnable> buffer = new LinkedBlockingQueue<>();
+//
+//        ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(options.getNumberOfThreads(), options.getNumberOfThreads(),
+//                0L, MILLISECONDS,
+//                buffer);
+//
+
+        Consumer<ConsumerRecord<String, String>> usersFunction = (rec) -> {
+//            log.info("user func sleep {}", rec.offset());
+            try {
+//                Thread.sleep(RandomUtils.nextInt(20, 200));
+                Thread.sleep(0);
+//                Thread.sleep(2);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+//            log.info("user func end");
+        };
+        Consumer<String> callback = (astring) -> {
+            log.info("user callback");
+        };
+
+//        rb.startRingBuffer(buffer, usersFunction, callback);
+
+//        var rb = new RingBufferManager<String, String>(options, wm, pc, threadPoolExecutor);
+        log.info("Starting");
+        parallelConsumer.poll(usersFunction);
+
+        ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expected);
+
+        Assertions.useRepresentation(new TrimListRepresentation());
+        await().atMost(ofSeconds(60))
+                .untilAsserted(() -> {
+                    List<Map<TopicPartition, OffsetAndMetadata>> commitHistoryInt = consumerSpy.getCommitHistoryInt();
+                    assertThat(commitHistoryInt).isNotEmpty();
+                    long offset = commitHistoryInt.get(commitHistoryInt.size() - 1).entrySet().stream().findFirst().get().getValue().offset();
+                    bar.stepTo(successfulWork.size());// is going to dance around
+                    assertThat(offset).isEqualTo(expected);
+                });
+        bar.stepTo(expected);
+        bar.close();
+
+        parallelConsumer.close();
+    }
+
+    @Test
+    void testFullCycleGaps() {
+        fail();
     }
 
 

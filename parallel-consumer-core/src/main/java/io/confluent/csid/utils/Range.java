@@ -4,19 +4,37 @@ package io.confluent.csid.utils;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
+import io.confluent.parallelconsumer.InternalRuntimeError;
+
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
 
 /**
+ * for (var i : range) {}
+ * <p>
  * https://stackoverflow.com/a/16570509/105741
  */
 public class Range implements Iterable<Integer> {
 
-    private long limit;
+    private int base = 0;
+    private int limit;
 
     public Range(long limit) {
-        this.limit = limit;
+        this.limit = (int) limit;
+        checkIntegerOverflow(this.limit, limit);
+    }
+
+    private void checkIntegerOverflow(final int actual, final long expected) {
+        if (actual != expected)
+            throw new InternalRuntimeError(StringUtils.msg("Overflow {} from {}", actual, expected));
+    }
+
+    public Range(long base, long limit) {
+        this.base = (int) base;
+        checkIntegerOverflow(this.base, base);
+        this.limit = (int) limit;
+        checkIntegerOverflow(this.limit, limit);
     }
 
     public static Range range(long max) {
@@ -28,7 +46,7 @@ public class Range implements Iterable<Integer> {
         final long max = limit;
         return new Iterator<Integer>() {
 
-            private int current = 0;
+            private int current = base;
 
             @Override
             public boolean hasNext() {
@@ -58,7 +76,7 @@ public class Range implements Iterable<Integer> {
     }
 
     public IntStream toStream() {
-        return IntStream.range(0, (int)limit);
+        return IntStream.range(0, (int) limit);
     }
 
     static IntStream rangeStream(int i) {

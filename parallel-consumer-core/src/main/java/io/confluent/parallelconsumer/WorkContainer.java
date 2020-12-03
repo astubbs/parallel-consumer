@@ -40,7 +40,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     private Optional<Instant> failedAt = Optional.empty();
     private boolean inFlight = false;
 
-    @Getter
+//    @Getter
     private Optional<Boolean> userFunctionSucceeded = Optional.empty();
 
     /**
@@ -96,12 +96,14 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
             return clock.getNow();
     }
 
+    /**
+     * @return compares by offset
+     */
     @Override
-    public int compareTo(WorkContainer o) {
+    public int compareTo(WorkContainer workToCompare) {
         long myOffset = this.cr.offset();
-        long theirOffset = o.cr.offset();
-        int compare = Long.compare(myOffset, theirOffset);
-        return compare;
+        long theirOffset = workToCompare.cr.offset();
+        return Long.compare(myOffset, theirOffset);
     }
 
     public boolean isNotInFlight() {
@@ -126,11 +128,11 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     }
 
     public boolean isUserFunctionComplete() {
-        return this.getUserFunctionSucceeded().isPresent();
+        return userFunctionSucceeded.isPresent();
     }
 
     public boolean isUserFunctionSucceeded() {
-        Optional<Boolean> userFunctionSucceeded = this.getUserFunctionSucceeded();
+        Optional<Boolean> userFunctionSucceeded = this.userFunctionSucceeded;
         return userFunctionSucceeded.orElse(false);
     }
 

@@ -729,7 +729,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
      */
     private void processWorkCompleteMailBox() {
         log.trace("Processing mailbox (might block waiting for results)...");
-        Set<WorkContainer<K, V>> results = new HashSet<>();
+        Set<WorkContainer<K, V>> results = new TreeSet<>(); // insure sorted by offset as we insert
         final Duration timeout = getTimeToNextCommit(); // don't sleep longer than when we're expected to maybe commit
 
         // blocking get the head of the queue
@@ -748,6 +748,8 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         } catch (InterruptedException e) {
             log.debug("Interrupted waiting on work results");
         }
+
+        //
         if (firstBlockingPoll == null) {
             log.debug("Mailbox results returned null, indicating timeout (which was set as {}) or interruption during a blocking wait for returned work results", timeout);
         } else {
@@ -772,12 +774,8 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
 //            }
 //        }
 
-        log.trace("Processing drained work {}...", results.size());
-        for (var work : results) {
-            MDC.put("offset", work.toString());
-            handleFutureResult(work);
-            MDC.clear();
-        }
+        log.debug("Processing drained work {}...", results.size());
+        wm.onResultBatch(results);
     }
 
     /**
@@ -845,25 +843,6 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
             return;
         }
         committer.retrieveOffsetsAndCommit();
-    }
-
-    protected void handleFutureResult(WorkContainer<K, V> wc) {
-        if (wc.getUserFunctionSucceeded().get()) {
-            onSuccess(wc);
-        } else {
-            onFailure(wc);
-        }
-    }
-
-    private void onFailure(WorkContainer<K, V> wc) {
-        // error occurred, put it back in the queue if it can be retried
-        // if not explicitly retriable, put it back in with an try counter so it can be later given up on
-        wm.onFailure(wc);
-    }
-
-    protected void onSuccess(WorkContainer<K, V> wc) {
-        log.trace("Processing success...");
-        wm.onSuccess(wc);
     }
 
     /**
