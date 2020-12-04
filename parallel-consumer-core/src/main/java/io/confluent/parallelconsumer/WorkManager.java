@@ -440,17 +440,31 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             TopicPartition tp = toTP(rec);
             raisePartitionHighestSeen(offset, tp);
 
+            //
             checkPreviousLowWaterMarks(wc);
             checkHighestSucceededSoFar(wc);
 
+            //
+            prepareContinuousEncoder(wc);
+
+            //
             processingShards.computeIfAbsent(shardKey, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
 
             partitionCommitQueues.computeIfAbsent(tp, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
         }
     }
 
+    private void prepareContinuousEncoder(final WorkContainer<K, V> wc) {
+        TopicPartition tp = wc.getTopicPartition();
+        if (!partitionContinuousOffsetEncoders.containsKey(tp)) {
+            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(partitionOffsetHighestContinuousCompleted.get(tp), partitionOffsetHighestSucceeded.get(tp));
+            partitionContinuousOffsetEncoders.put(tp, encoder);
+        }
+    }
+
     private void checkHighestSucceededSoFar(final WorkContainer<K, V> wc) {
-        partitionOffsetHighestSucceeded.putIfAbsent(wc.getTopicPartition(), wc.offset());
+        // preivous record must be completed if we've never seen this before
+        partitionOffsetHighestSucceeded.putIfAbsent(wc.getTopicPartition(), wc.offset() - 1);
     }
 
     /**
@@ -530,7 +544,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             log.trace("Looking for work on shard: {}", shard.getKey());
             if (work.size() >= workToGetDelta) {
                 this.iterationResumePoint = Optional.of(shard.getKey());
-                log.debug("Work taken is now over max, stopping (saving iteration resume point {})", iterationResumePoint);
+                log.debug("Work taken is now over max requested, stopping (saving iteration resume point {})", iterationResumePoint);
                 break;
             }
 
@@ -542,7 +556,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             for (var queueEntry : shardQueueEntries) {
                 int taken = work.size() + shardWork.size();
                 if (taken >= workToGetDelta) {
-                    log.trace("Work taken ({}) exceeds max ({})", taken, workToGetDelta);
+                    log.trace("Work taken ({}) exceeds max requested ({})", taken, workToGetDelta);
                     break;
                 }
 
@@ -795,7 +809,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     /**
      * Make encoders add new work result to their encodings
-     *
+     * <p>
      * todo refactor to offset manager?
      */
     private void manageEncoding(final boolean offsetComplete, final WorkContainer<K, V> wc) {
@@ -805,10 +819,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //        long offsetAtEndOfEncodingRange = highestCompleted + 1;
         long nextExpectedOffsetFromBroker = lowWaterMark + 1;
 
-        OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders
-                .computeIfAbsent(tp, (ignore) ->
-                        new OffsetSimultaneousEncoder(nextExpectedOffsetFromBroker, highestCompleted)
-                );
+        OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders.get(tp);
 
         long offset = wc.offset();
         long relativeOffset = offset - nextExpectedOffsetFromBroker;
@@ -1042,7 +1053,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 try {
                     Long baseOffset = partitionOffsetHighestContinuousCompleted.getOrDefault(topicPartitionKey, 0L);
                     Long currentHighestCompleted = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
-                    if (baseOffset != firstIncomplete - 1) {
+                    if (firstIncomplete != null && baseOffset != firstIncomplete - 1) {
                         log.warn("inconsistent");
                     }
                     Long highestSeen = partitionOffsetHighestSeen.get(topicPartitionKey); // we don't expect these to be different
@@ -1055,7 +1066,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
                     bytes = precomputed.packSmallest();
                     String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
-                    log.debug("comparisonOffsetPayloadString {}", comparisonOffsetPayloadString);
+                    log.debug("comparisonOffsetPayloadString :{}:", comparisonOffsetPayloadString);
                 } catch (EncodingNotSupportedException e) {
                     e.printStackTrace();
                 }

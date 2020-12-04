@@ -139,8 +139,8 @@ public class ConsumerManager<K, V> implements AutoCloseable {
         noWakeups++;
         while (inProgress) {
             try {
-                List<Thread> collect = Thread.getAllStackTraces().keySet().stream().filter(x -> x.getId() == 46L).collect(Collectors.toList());
-                log.info("46:{}, {}", collect.get(0), consumerLock.isHeldByCurrentThread());
+//                List<Thread> collect = Thread.getAllStackTraces().keySet().stream().filter(x -> x.getId() == 46L).collect(Collectors.toList());
+//                log.info("46:{}, {}", collect.get(0), consumerLock.isHeldByCurrentThread());
                 doWithConsumer(() ->
                         consumer.commitAsync(offsets, callback)
                 );

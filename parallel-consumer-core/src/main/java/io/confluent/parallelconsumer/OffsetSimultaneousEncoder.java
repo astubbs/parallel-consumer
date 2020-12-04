@@ -66,7 +66,6 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     @Getter
     PriorityQueue<EncodedOffsetData> sortedEncodingData = new PriorityQueue();
 
-
     /**
      * Force the encoder to also add the compressed versions. Useful for testing.
      * <p>
@@ -105,20 +104,25 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         return intLength;
     }
 
-    private void initialise(final long currentBaseOffset, long currentHighestCompleted) {
+    //todo can remove sync?
+    private synchronized void initialise(final long currentBaseOffset, long currentHighestCompleted) {
         this.baseOffset = currentBaseOffset;
         this.highestSuceeded = currentHighestCompleted;
+
+        encoders = new HashSet<>();
+        sortedEncoders = new ArrayList<>();
 
         //
         this.length = initLength(currentBaseOffset, highestSuceeded);
 
+        if (length < 1) {
+            //won't need to encode anything
+            return;
+        }
+
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
             log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, this.highestSuceeded);
         }
-
-        encoders = new HashSet<>();
-//        sortedEncoders = new PriorityQueue<>();
-        sortedEncoders = new ArrayList<>();
 
         try {
             encoders.add(new BitsetEncoder(baseOffset, length, this, v1));
@@ -171,7 +175,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      *  runlength entry is a Short)
      * <p>
      *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
-     * @param currentBaseOffset to use now, checked for consistency
+     *
+     * @param currentBaseOffset       to use now, checked for consistency
      * @param currentHighestCompleted to use now, checked for consistency
      */
     public OffsetSimultaneousEncoder runOverIncompletes(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
@@ -235,7 +240,12 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * @see #packEncoding(EncodedOffsetData)
      */
     public byte[] packSmallest() throws EncodingNotSupportedException {
+        if (isNoEncodingNeeded()) {
+            // no compression needed, so return empty / zero
+            return new byte[]{};
+        }
         // todo might be called multiple times, should cache?
+        // todo need more granular check on this
         if (sortedEncodingData.isEmpty()) {
             throw new EncodingNotSupportedException("No encodings could be used");
         }
@@ -278,7 +288,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     private boolean preEncodeCheckCanSkip(final long currentBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
         checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
 
-        return lowWaterMarkCheck(relativeOffset);
+        return checkIfNeededFromLowWater(relativeOffset);
     }
 
     private void checkConditionsHaventChanged(final long currentBaseOffset, final long currentHighestCompleted) {
@@ -305,12 +315,13 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * todo docs
      */
-    private boolean definitlyNoEncodingRequiredSoFar = true;
+    private boolean relativeOffsetNegative = true;
 
-    private boolean lowWaterMarkCheck(final long relativeOffset) {
+    //todo remove don't think this is ever possible, or throw exception
+    private boolean checkIfNeededFromLowWater(final long relativeOffset) {
         // only encode if this work is above the low water mark
-        definitlyNoEncodingRequiredSoFar = relativeOffset <= 0;
-        return definitlyNoEncodingRequiredSoFar;
+        relativeOffsetNegative = relativeOffset <= 0;
+        return relativeOffsetNegative;
     }
 
     /**
@@ -335,18 +346,23 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public int getEncodedSizeEstimate() {
-        if (definitlyNoEncodingRequiredSoFar) {
+        if (isNoEncodingNeeded() || length < 1) {
             return 0;
         } else {
-            Collections.sort(sortedEncoders);
-            if (sortedEncoders.isEmpty())
+            if (sortedEncoders.isEmpty()) {
                 throw new InternalRuntimeError("No encoders");
+            }
+            Collections.sort(sortedEncoders);
             OffsetEncoderBase smallestEncoder = sortedEncoders.get(0);
             int smallestSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
             log.debug("Currently estimated smallest codec is {}, needing {} bytes",
                     smallestEncoder.getEncodingType(), smallestSizeEstimate);
             return smallestSizeEstimate;
         }
+    }
+
+    private boolean isNoEncodingNeeded() {
+        return relativeOffsetNegative || length < 1;
     }
 
     public Object getSmallestCodec() {
