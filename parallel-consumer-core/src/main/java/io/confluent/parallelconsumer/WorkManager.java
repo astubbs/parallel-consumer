@@ -127,7 +127,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * selves.
      *
      * @see #findCompletedEligibleOffsetsAndRemove(boolean)
-     * @see #manageEncoding(boolean, WorkContainer)
+     * @see #encodeWorkResult(boolean, WorkContainer)
      * @see #onSuccess(WorkContainer)
      * @see #onFailure(WorkContainer)
      */
@@ -672,7 +672,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         //
         recordsOutForProcessing--;
 
-        manageEncoding(true, wc);
+        encodeWorkResult(true, wc);
 
         // remove work from partition commit queue
         partitionCommitQueues.get(wc.getTopicPartition()).remove(wc.offset());
@@ -743,12 +743,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         for (final WorkContainer<K, V> work : workResults) {
             TopicPartition tp = work.getTopicPartition();
 
-            handleFutureResult(work);
-
+            // gaurd
             if (work.getEpoch() < parittionsAssignmentEpochs.get(tp)) {
                 log.warn("message assigned from old epoch, ignore: {}", work);
                 continue;
             }
+
+            handleFutureResult(work);
 
             Boolean partitionSoFarIsContinuous = partitionNowFormsAContinuousBlock.get(tp);
             if (partitionSoFarIsContinuous != null && !partitionSoFarIsContinuous) {
@@ -858,7 +859,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * <p>
      * todo refactor to offset manager?
      */
-    private void manageEncoding(final boolean offsetComplete, final WorkContainer<K, V> wc) {
+    private void encodeWorkResult(final boolean offsetComplete, final WorkContainer<K, V> wc) {
         TopicPartition tp = wc.getTopicPartition();
         long lowWaterMark = partitionOffsetHighestContinuousCompleted.get(tp);
         Long highestCompleted = partitionOffsetHighestSucceeded.get(tp);
@@ -927,7 +928,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         putBack(wc);
 
         //
-        manageEncoding(false, wc);
+        encodeWorkResult(false, wc);
     }
 
     /**

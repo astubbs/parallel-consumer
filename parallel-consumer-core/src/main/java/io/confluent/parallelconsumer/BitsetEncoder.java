@@ -37,10 +37,11 @@ class BitsetEncoder extends OffsetEncoderBase {
     private static final Version DEFAULT_VERSION = Version.v2;
 
     public static final Integer MAX_LENGTH_ENCODABLE = Integer.MAX_VALUE;
-    private final int originalLength;
 
+    private final int originalLength;
     private ByteBuffer wrappedBitsetBytesBuffer;
-    private final BitSet bitSet;
+
+    private BitSet bitSet;
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
@@ -139,6 +140,45 @@ class BitsetEncoder extends OffsetEncoderBase {
 //    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
 //        super(baseOffset, relativeOffset);
 //    }
+
+    @Override
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        // noop - bitset defaults to 0's (`unset`)
+
+    }
+
+    @Override
+    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        boolean reinitialise = false;
+
+        long newLength = currentHighestCompleted - newBaseOffset;
+        if (originalLength != newLength) {
+//        if (this.highestSuceeded != currentHighestCompleted) {
+            log.debug("Length of Bitset changed {} to {}",
+                    originalLength, newLength);
+            reinitialise = true;
+        }
+
+        if (originalBaseOffset != newBaseOffset) {
+            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to shift bitset right",
+                    this.originalBaseOffset, newBaseOffset);
+            reinitialise = true;
+        }
+
+        if (newBaseOffset < originalBaseOffset)
+            throw new InternalRuntimeError("");
+
+        if (reinitialise) {
+            long baseDelta = newBaseOffset - originalBaseOffset;
+            // truncate at new relative delta
+//            BitSet truncated = this.bitSet.get((int) baseDelta, this.bitSet.size());
+//            this.bitSet = new BitSet((int) newLength);
+//            this.bitSet.or(truncated); // fill with old values
+            this.bitSet = new BitSet((int) newLength);
+        }
+
+        encodeCompletedOffset((int) relativeOffset);
+    }
 
     @Override
     public int getEncodedSize() {

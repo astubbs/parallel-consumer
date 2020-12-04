@@ -90,7 +90,10 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
 //            ,
     ) {
-
+        if (lowWaterMark < 0)
+            lowWaterMark = 0;
+        if (newHighestCompleted < 0)
+            newHighestCompleted = 0L;
 //        this.incompleteOffsets = incompleteOffsets;
 
         initialise(lowWaterMark, newHighestCompleted);
@@ -181,7 +184,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * @param currentHighestCompleted to use now, checked for consistency
      */
     public OffsetSimultaneousEncoder runOverIncompletes(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
-        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
+//        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
 
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, highestSuceeded);
         log.trace("Incompletes are: {}", incompleteOffsets);
@@ -268,8 +271,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
-            return;
+//        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
+//            return;
 
         for (final OffsetEncoderBase encoder : encoders) {
             encoder.encodeIncompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
@@ -278,8 +281,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
-            return;
+//        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
+//            return;
 
         for (final OffsetEncoderBase encoder : encoders) {
             encoder.encodeIncompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
@@ -287,31 +290,30 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     }
 
     private boolean preEncodeCheckCanSkip(final long currentBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
+//        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
 
-        return checkIfNeededFromLowWater(relativeOffset);
+        return checkIfEncodingNeededBasedOnLowWater(relativeOffset);
     }
 
-    private void checkConditionsHaventChanged(final long currentBaseOffset, final long currentHighestCompleted) {
-        boolean reinitialise = false;
-
-        if (this.highestSuceeded != currentHighestCompleted) {
-            log.debug("Next expected offset from broker {} has moved to {} - need to reset encoders",
-                    this.highestSuceeded, currentHighestCompleted);
-            reinitialise = true;
-
-        }
-
-        if (this.baseOffset != currentBaseOffset) {
-            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to reset encoders",
-                    this.baseOffset, currentBaseOffset);
-            reinitialise = true;
-        }
-
-        if (reinitialise) {
-            initialise(currentBaseOffset, currentHighestCompleted);
-        }
-    }
+//    private void checkConditionsHaventChanged(final long currentBaseOffset, final long currentHighestCompleted) {
+//        boolean reinitialise = false;
+//
+//        if (this.highestSuceeded != currentHighestCompleted) {
+//            log.debug("Next expected offset from broker {} has moved to {} - need to reset encoders",
+//                    this.highestSuceeded, currentHighestCompleted);
+//            reinitialise = true;
+//        }
+//
+//        if (this.baseOffset != currentBaseOffset) {
+//            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to reset encoders",
+//                    this.baseOffset, currentBaseOffset);
+//            reinitialise = true;
+//        }
+//
+//        if (reinitialise) {
+//            initialise(currentBaseOffset, currentHighestCompleted);
+//        }
+//    }
 
     /**
      * todo docs
@@ -319,7 +321,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     private boolean relativeOffsetNegative = true;
 
     //todo remove don't think this is ever possible, or throw exception
-    private boolean checkIfNeededFromLowWater(final long relativeOffset) {
+    private boolean checkIfEncodingNeededBasedOnLowWater(final long relativeOffset) {
         // only encode if this work is above the low water mark
         relativeOffsetNegative = relativeOffset <= 0;
         return relativeOffsetNegative;

@@ -19,10 +19,10 @@ import java.nio.ByteBuffer;
 abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<OffsetEncoderBase> {
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
-    private final long baseOffset;
+    protected final long originalBaseOffset;
 
     public OffsetEncoderBase(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
-        this.baseOffset = baseOffset;
+        this.originalBaseOffset = baseOffset;
         this.offsetSimultaneousEncoder = offsetSimultaneousEncoder;
     }
 
@@ -67,27 +67,30 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
 
     public abstract byte[] getEncodedBytes();
 
-    @Override
-    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        if (baseOffset != this.baseOffset) {
-            throw new InternalRuntimeError("Inconsistent");
-        }
-        int castOffset = (int) relativeOffset;
-        if (castOffset != relativeOffset)
-            throw new IllegalArgumentException("Interger overflow");
-        encodeIncompleteOffset(castOffset);
-    }
+//    @Override
+//    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+////        if (baseOffset != this.baseOffset) {
+////            throw new InternalRuntimeError("Inconsistent");
+////        }
+//
+//        int castOffset = (int) relativeOffset;
+//        if (castOffset != relativeOffset)
+//            throw new IllegalArgumentException("Interger overflow");
+//
+//        encodeIncompleteOffset(castOffset);
+//    }
 
-    @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        if (baseOffset != this.baseOffset) {
-            throw new InternalRuntimeError("Na");
-        }
-        int castOffset = (int) relativeOffset;
-        if (castOffset != relativeOffset)
-            throw new IllegalArgumentException("Interger overflow");
-        encodeCompletedOffset(castOffset);
-    }
+//    @Override
+//    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+//        if (baseOffset != this.baseOffset) {
+//            throw new InternalRuntimeError("Na");
+//        }
+//        int castOffset = (int) relativeOffset;
+//        if (castOffset != relativeOffset)
+//            throw new IllegalArgumentException("Interger overflow");
+//
+//        encodeCompletedOffset(castOffset);
+//    }
 
     /**
      * Compared with returned encoding size
@@ -100,4 +103,5 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
     public int compareTo(final OffsetEncoderBase e) {
         return Integer.compare(this.getEncodedSizeEstimate(), e.getEncodedSizeEstimate());
     }
+
 }

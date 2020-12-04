@@ -1,5 +1,7 @@
 package io.confluent.parallelconsumer;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +13,7 @@ import static io.confluent.parallelconsumer.OffsetEncoding.*;
 /**
  * todo docs tail runlength?
  */
+@Slf4j
 class RunLengthEncoder extends OffsetEncoderBase {
 
     /**
@@ -23,7 +26,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
     /**
      * Stores all the run lengths
      */
-    private final List<Integer> runLengthEncodingIntegers;
+    private List<Integer> runLengthEncodingIntegers;
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
@@ -107,6 +110,43 @@ class RunLengthEncoder extends OffsetEncoderBase {
 //    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
 //asdf
 //    }
+
+    @Override
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        // noop
+    }
+
+
+    @Override
+    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        boolean reinitialise = false;
+
+        long newLength = currentHighestCompleted - newBaseOffset;
+//        if (originalLength != newLength) {
+////        if (this.highestSuceeded != currentHighestCompleted) {
+//            log.debug("Length of Bitset changed {} to {}",
+//                    originalLength, newLength);
+//            reinitialise = true;
+//        }
+
+        if (originalBaseOffset != newBaseOffset) {
+            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to shift bitset right",
+                    this.originalBaseOffset, newBaseOffset);
+            reinitialise = true;
+        }
+
+        if (newBaseOffset < originalBaseOffset)
+            throw new InternalRuntimeError("");
+
+        if (reinitialise) {
+            long baseDelta = newBaseOffset - originalBaseOffset;
+            // truncate at new relative delta
+//            runLengthEncodingIntegers = runLengthEncodingIntegers.subList((int) baseDelta, runLengthEncodingIntegers.size());
+            runLengthEncodingIntegers = new ArrayList<>();
+        }
+
+        encodeCompletedOffset((int) relativeOffset);
+    }
 
     @Override
     public int getEncodedSize() {
