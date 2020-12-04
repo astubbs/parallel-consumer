@@ -81,7 +81,7 @@ public class ConsumerManager<K, V> implements AutoCloseable {
         // if the call to wakeup happens /after/ the check for a wake up state inside #poll, then the next call will through the wake up exception (i.e. #commit)
         if (pollingBroker.get()) {
             log.debug("Waking up consumer");
-            doWithConsumer(consumer::wakeup);
+//            doWithConsumer(consumer::wakeup);
             consumer.wakeup();
         }
     }
@@ -235,15 +235,18 @@ public class ConsumerManager<K, V> implements AutoCloseable {
         return consumer.committed(assignment);
     }
 
-    private void aquireLock() throws InterruptedException {
+    void aquireLock() throws InterruptedException {
+        log.debug("Locking");
 //        if (consumerLock.tryLock()) {
+        wakeup();
         consumerLock.lock();
 //        } else {
 //            throw new InternalRuntimeError("Deadlock");
 //        }
     }
 
-    private void releaseLock() {
+    void releaseLock() {
+        log.debug("Unlocking");
         consumerLock.unlock();
     }
 

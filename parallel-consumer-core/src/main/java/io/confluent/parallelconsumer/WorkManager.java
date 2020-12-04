@@ -153,7 +153,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * <p>
      * Default (missing elements) is true - more messages can be processed.
      *
-     * @see #manageOffEncoderSpaceRequirements()
+     * @see #manageOffsetEncoderSpaceRequirements()
      * @see OffsetMapCodecManager#DefaultMaxMetadataSize
      */
     Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new ConcurrentHashMap<>();
@@ -184,11 +184,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         backoffer = new BackoffAnalyser(options.getNumberOfThreads() * 10);
     }
 
+    Map<TopicPartition, Integer> parittionsAssignmentEpochs = new HashMap<>();
+
     /**
      * Load offset map for assigned partitions
      */
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+        incrementPartitionAssignmentEpoch(partitions);
+
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} partitions - that's {} bytes per partition for encoding offset overruns",
                 numberOfAssignedPartitions, OffsetMapCodecManager.DefaultMaxMetadataSize / numberOfAssignedPartitions);
@@ -204,6 +208,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
     }
 
+    private void incrementPartitionAssignmentEpoch(final Collection<TopicPartition> partitions) {
+        for (final TopicPartition partition : partitions) {
+            int epoch = parittionsAssignmentEpochs.getOrDefault(partition, -1);
+            epoch++;
+            parittionsAssignmentEpochs.put(partition, epoch);
+        }
+    }
+
     /**
      * Clear offset map for revoked partitions
      * <p>
@@ -213,6 +225,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+        incrementPartitionAssignmentEpoch(partitions);
+
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
@@ -229,6 +243,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
+        incrementPartitionAssignmentEpoch(partitions);
+
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
@@ -250,7 +266,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             partitionOffsetsIncompleteMetadataPayloads.remove(partition);
             partitionMoreRecordsAllowedToProcess.remove(partition);
 
+            //
             NavigableMap<Long, WorkContainer<K, V>> oldWorkPartitionCommitQueue = partitionCommitQueues.remove(partition);
+
+            //
             if (oldWorkPartitionCommitQueue != null) {
                 removeShardsFoundIn(oldWorkPartitionCommitQueue);
             } else {
@@ -435,9 +454,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         } else {
             Object shardKey = computeShardKey(rec);
             long offset = rec.offset();
-            var wc = new WorkContainer<>(rec);
-
             TopicPartition tp = toTP(rec);
+
+            Integer currentPartitionEpoch = parittionsAssignmentEpochs.get(tp);
+            var wc = new WorkContainer<>(currentPartitionEpoch, rec);
+
             raisePartitionHighestSeen(offset, tp);
 
             //
@@ -667,6 +688,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     protected void handleFutureResult(WorkContainer<K, V> wc) {
+        TopicPartition tp = wc.getTopicPartition();
+        if (wc.getEpoch() < parittionsAssignmentEpochs.get(tp)) {
+            log.warn("message assigned from old epoch, ignore: {}", wc);
+            return;
+        }
         if (wc.isUserFunctionSucceeded()) {
             onSuccess(wc);
         } else {
@@ -707,6 +733,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         Map<TopicPartition, Boolean> partitionNowFormsAContinuousBlock = new HashMap<>();
         for (final WorkContainer<K, V> work : workResults) {
             TopicPartition tp = work.getTopicPartition();
+
+            if (work.getEpoch() < parittionsAssignmentEpochs.get(tp)) {
+                log.warn("message assigned from old epoch, ignore: {}", work);
+                continue;
+            }
 
             Boolean partitionSoFarIsContinuous = partitionNowFormsAContinuousBlock.get(tp);
             if (partitionSoFarIsContinuous != null && !partitionSoFarIsContinuous) {
@@ -829,14 +860,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         else
             offsetSimultaneousEncoder.encodeIncompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
 
-        manageOffEncoderSpaceRequirements();
+        manageOffsetEncoderSpaceRequirements();
     }
 
     /**
      * Todo: Does this need to be run per message of a a result set? or only once the batch has been finished, once per
      * partition? As we can't change anything mid flight - only for the next round
      */
-    private void manageOffEncoderSpaceRequirements() {
+    private void manageOffsetEncoderSpaceRequirements() {
         int perPartition = getMetadataSpaceAvailablePerPartition();
         double tolerance = 0.7; // 90%
 

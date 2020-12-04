@@ -26,7 +26,14 @@ import static io.confluent.csid.utils.KafkaUtils.toTP;
 @EqualsAndHashCode
 public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 
-    private final String DEFAULT_TYPE = "DEFAULT";
+    private static final String DEFAULT_TYPE = "DEFAULT";
+
+    /**
+     * Assignment generation this record comes from. Used for fencing messages after partition loss, for work lingering
+     * in the system of in flight.
+     */
+    @Getter
+    private final int epoch;
 
     /**
      * Simple way to differentiate treatment based on type
@@ -54,12 +61,12 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     @Setter(AccessLevel.PUBLIC)
     private Future<List<Object>> future;
 
-    public WorkContainer(ConsumerRecord<K, V> cr) {
-        this.cr = cr;
-        workType = DEFAULT_TYPE;
+    public WorkContainer(int epoch, ConsumerRecord<K, V> cr) {
+        this(epoch, cr, DEFAULT_TYPE);
     }
 
-    public WorkContainer(ConsumerRecord<K, V> cr, String workType) {
+    public WorkContainer(int epoch, ConsumerRecord<K, V> cr, String workType) {
+        this.epoch = epoch;
         this.cr = cr;
         Objects.requireNonNull(workType);
         this.workType = workType;

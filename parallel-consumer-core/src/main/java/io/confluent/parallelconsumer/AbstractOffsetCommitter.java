@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer;
 
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -18,27 +19,34 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
     /**
      * Get offsets from {@link WorkManager} that are ready to commit
      */
+    @SneakyThrows
     @Override
     public void retrieveOffsetsAndCommit() {
         log.debug("Commit starting - find completed work to commit offsets");
-        // todo shouldn't be removed until commit succeeds (there's no harm in committing the same offset twice)
-        preAcquireWork();
+        consumerMgr.aquireLock();
+
         try {
-            Map<TopicPartition, OffsetAndMetadata> offsetsToSend = wm.findCompletedEligibleOffsetsAndRemove();
-            if (offsetsToSend.isEmpty()) {
-                log.trace("No offsets ready");
-            } else {
-                log.debug("Will commit offsets for {} partition(s): {}", offsetsToSend.size(), offsetsToSend);
-                ConsumerGroupMetadata groupMetadata = consumerMgr.groupMetadata();
+            // todo shouldn't be removed until commit succeeds (there's no harm in committing the same offset twice)
+            preAcquireWork();
+            try {
+                Map<TopicPartition, OffsetAndMetadata> offsetsToSend = wm.findCompletedEligibleOffsetsAndRemove();
+                if (offsetsToSend.isEmpty()) {
+                    log.trace("No offsets ready");
+                } else {
+                    log.debug("Will commit offsets for {} partition(s): {}", offsetsToSend.size(), offsetsToSend);
+                    ConsumerGroupMetadata groupMetadata = consumerMgr.groupMetadata();
 
-                log.debug("Begin commit");
-                commitOffsets(offsetsToSend, groupMetadata);
+                    log.debug("Begin commit");
+                    commitOffsets(offsetsToSend, groupMetadata);
 
-                log.debug("On commit success");
-                onOffsetCommitSuccess(offsetsToSend);
+                    log.debug("On commit success");
+                    onOffsetCommitSuccess(offsetsToSend);
+                }
+            } finally {
+                postCommit();
             }
-        } finally {
-            postCommit();
+        }finally {
+            consumerMgr.releaseLock();
         }
     }
 

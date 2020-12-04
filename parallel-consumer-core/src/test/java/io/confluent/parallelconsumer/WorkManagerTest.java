@@ -233,7 +233,7 @@ public class WorkManagerTest {
 
     @Test
     public void containerDelay() {
-        var wc = new WorkContainer<String, String>(null);
+        var wc = new WorkContainer<String, String>(0, null);
         assertThat(wc.hasDelayPassed(clock)).isTrue(); // when new no delay
         wc.fail(clock);
         assertThat(wc.hasDelayPassed(clock)).isFalse();
@@ -593,7 +593,7 @@ public class WorkManagerTest {
 
         var treeMap = new TreeMap<Long, WorkContainer<String, String>>();
         for (ConsumerRecord<String, String> record : records) {
-            treeMap.put(record.offset(), new WorkContainer<>(record));
+            treeMap.put(record.offset(), new WorkContainer<>(0, record));
         }
 
         // read back, assert correct order
