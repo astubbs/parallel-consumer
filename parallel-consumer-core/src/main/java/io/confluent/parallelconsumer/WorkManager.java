@@ -1103,41 +1103,41 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 }
             }
 
-            {
-                OffsetSimultaneousEncoder precomputed = partitionContinuousOffsetEncoders.get(topicPartitionKey);
-                byte[] bytes = new byte[0];
-                try {
-                    Long currentHighestCompleted = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
-                    if (firstIncomplete != null && baseOffset != firstIncomplete - 1) {
-                        log.warn("inconsistent base new vs old {} {} diff: {}", baseOffset, firstIncomplete, firstIncomplete - baseOffset);
-                        if (baseOffset > firstIncomplete) {
-                            log.warn("batch computed is higher than this scan??");
-                        }
-                    }
-                    Long highestSeen = partitionOffsetHighestSeen.get(topicPartitionKey); // we don't expect these to be different
-                    if (currentHighestCompleted != highestSeen) {
-                        log.debug("New system upper end vs old system {} {} (delta: {})", currentHighestCompleted, highestSeen, highestSeen - currentHighestCompleted);
-                    }
-
-//                    precomputed.runOverIncompletes(incompleteOffsets, baseOffset, currentHighestCompleted);
-                    precomputed.serializeAllEncoders();
-
-                    // make this a field instead - has no state?
-                    OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumerMgr);
-                    String smallestMetadataPacked = om.makeOffsetMetadataPayload(precomputed);
-
-                    totalOffsetMetaCharacterLengthUsed += smallestMetadataPacked.length();
-                    log.debug("comparisonOffsetPayloadString :{}:", smallestMetadataPacked);
-                    OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(baseOffset + 1, smallestMetadataPacked);
-                    offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
-                } catch (EncodingNotSupportedException e) {
-                    e.printStackTrace();
-                }
-//                OffsetAndMetadata offsetAndMetadata = offsetMetadataToCommit.get(topicPartitionKey);
-//                {
-//                    int offsetMetaPayloadSpaceUsed = getTotalOffsetMetaCharacterLength(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed, incompleteOffsets, topicPartitionKey);
-//                    totalOffsetMetaCharacterLengthUsed += offsetMetaPayloadSpaceUsed;
+//            {
+//                OffsetSimultaneousEncoder precomputed = partitionContinuousOffsetEncoders.get(topicPartitionKey);
+//                byte[] bytes = new byte[0];
+//                try {
+//                    Long currentHighestCompleted = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
+//                    if (firstIncomplete != null && baseOffset != firstIncomplete - 1) {
+//                        log.warn("inconsistent base new vs old {} {} diff: {}", baseOffset, firstIncomplete, firstIncomplete - baseOffset);
+//                        if (baseOffset > firstIncomplete) {
+//                            log.warn("batch computed is higher than this scan??");
+//                        }
+//                    }
+//                    Long highestSeen = partitionOffsetHighestSeen.get(topicPartitionKey); // we don't expect these to be different
+//                    if (currentHighestCompleted != highestSeen) {
+//                        log.debug("New system upper end vs old system {} {} (delta: {})", currentHighestCompleted, highestSeen, highestSeen - currentHighestCompleted);
+//                    }
+//
+////                    precomputed.runOverIncompletes(incompleteOffsets, baseOffset, currentHighestCompleted);
+//                    precomputed.serializeAllEncoders();
+//
+//                    // make this a field instead - has no state?
+//                    OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumerMgr);
+//                    String smallestMetadataPacked = om.makeOffsetMetadataPayload(precomputed);
+//
+//                    totalOffsetMetaCharacterLengthUsed += smallestMetadataPacked.length();
+//                    log.debug("comparisonOffsetPayloadString :{}:", smallestMetadataPacked);
+//                    OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(baseOffset + 1, smallestMetadataPacked);
+//                    offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
+//                } catch (EncodingNotSupportedException e) {
+//                    e.printStackTrace();
 //                }
+
+            OffsetAndMetadata offsetAndMetadata = offsetMetadataToCommit.get(topicPartitionKey);
+            {
+                int offsetMetaPayloadSpaceUsed = getTotalOffsetMetaCharacterLength(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed, incompleteOffsets, topicPartitionKey);
+                totalOffsetMetaCharacterLengthUsed += offsetMetaPayloadSpaceUsed;
             }
 
             if (remove) {
@@ -1147,6 +1147,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     partitionQueue.remove(offset);
                 }
             }
+
         }
 
         maybeStripOffsetPayload(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed);
@@ -1334,8 +1335,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(precomputed.getBaseOffset(), smallestMetadataPacked);
                 offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
-                //log.error("Failed to encode offsets", e);
-                throw new InternalRuntimeError("Failed to encode offsets", e);
+                log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
+                backoffer.onFailure();
             }
 
         }

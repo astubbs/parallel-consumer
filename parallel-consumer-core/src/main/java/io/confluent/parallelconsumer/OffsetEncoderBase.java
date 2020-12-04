@@ -56,6 +56,7 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
     void register() throws EncodingNotSupportedException {
         final byte[] bytes = this.serialise();
         final OffsetEncoding encodingType = this.getEncodingType();
+        log.debug("Registering {} with size {}", getEncodingType(), bytes.length);
         this.register(encodingType, bytes);
     }
 
@@ -63,7 +64,6 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
         int encodedSizeEstimate = getEncodedSizeEstimate();
         int length = bytes.length;
         log.debug("Registering {}, with actual size {} vs estimate {}", type, length, encodedSizeEstimate);
-        int encodedSimate = getEncodedSizeEstimate();
         offsetSimultaneousEncoder.sortedEncodingData.add(new EncodedOffsetData(type, ByteBuffer.wrap(bytes)));
         offsetSimultaneousEncoder.encodingMap.put(type, bytes);
     }

@@ -171,9 +171,9 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             completedEligibleOffsetsAndRemove = wmm.serialiseEncoders(); // new version
 //            String bestPayload = topicPartitionOffsetAndMetadataMap.
             // check for graceful fall back to the smallest available encoder
-            OffsetMapCodecManager<String, String> om = new OffsetMapCodecManager<>(wmm, consumerManager);
+//            OffsetMapCodecManager<String, String> om = new OffsetMapCodecManager<>(wmm, consumerManager);
 
-            Set<Long> collect = firstSucceededRecordRemoved.stream().map(x -> x.offset()).collect(Collectors.toSet());
+//            Set<Long> collect = firstSucceededRecordRemoved.stream().map(x -> x.offset()).collect(Collectors.toSet());
             OffsetMapCodecManager.forcedCodec = Optional.empty(); // turn off forced
 //            String bestPayload = om.makeOffsetMetadataPayload(1, tp, collect);
 //            assertThat(bestPayload).isNotEmpty();
