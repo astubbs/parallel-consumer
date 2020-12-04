@@ -640,8 +640,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public void onSuccess(WorkContainer<K, V> wc) {
         //
-        successRatePer5Seconds.newEvent();
+//        successRatePer5Seconds.newEvent();
 //        successRatePer5SecondsEMA.
+
+        //
         workStateIsDirtyNeedsCommitting.set(true);
 
         //
@@ -679,15 +681,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             onResultUpdatePartitionRecordsBatch(results);
         }
 
-        // individual
-        for (var work : results) {
-            MDC.put("offset", work.toString());
-            handleFutureResult(work);
-            MDC.clear();
-        }
+//        // individual
+//        for (var work : results) {
+//            handleFutureResult(work);
+//        }
     }
 
     protected void handleFutureResult(WorkContainer<K, V> wc) {
+        MDC.put("offset", wc.toString());
         TopicPartition tp = wc.getTopicPartition();
         if (wc.getEpoch() < parittionsAssignmentEpochs.get(tp)) {
             log.warn("message assigned from old epoch, ignore: {}", wc);
@@ -698,6 +699,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         } else {
             onFailure(wc);
         }
+        MDC.clear();
     }
 
     /**
@@ -733,6 +735,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         Map<TopicPartition, Boolean> partitionNowFormsAContinuousBlock = new HashMap<>();
         for (final WorkContainer<K, V> work : workResults) {
             TopicPartition tp = work.getTopicPartition();
+
+            handleFutureResult(work);
 
             if (work.getEpoch() < parittionsAssignmentEpochs.get(tp)) {
                 log.warn("message assigned from old epoch, ignore: {}", work);
@@ -851,7 +855,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         TopicPartition tp = wc.getTopicPartition();
         long lowWaterMark = partitionOffsetHighestContinuousCompleted.get(tp);
         Long highestCompleted = partitionOffsetHighestSucceeded.get(tp);
-//        long offsetAtEndOfEncodingRange = highestCompleted + 1;
+
         long nextExpectedOffsetFromBroker = lowWaterMark + 1;
 
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders.get(tp);
@@ -1112,14 +1116,19 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
                     bytes = precomputed.packSmallest();
                     String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
+
+                    totalOffsetMetaCharacterLengthUsed += comparisonOffsetPayloadString.length();
                     log.debug("comparisonOffsetPayloadString :{}:", comparisonOffsetPayloadString);
+                    OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(baseOffset + 1, comparisonOffsetPayloadString);
+                    offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
                 } catch (EncodingNotSupportedException e) {
                     e.printStackTrace();
                 }
 //                OffsetAndMetadata offsetAndMetadata = offsetMetadataToCommit.get(topicPartitionKey);
-
-                int offsetMetaPayloadSpaceUsed = getTotalOffsetMetaCharacterLength(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed, incompleteOffsets, topicPartitionKey);
-                totalOffsetMetaCharacterLengthUsed += offsetMetaPayloadSpaceUsed;
+//                {
+//                    int offsetMetaPayloadSpaceUsed = getTotalOffsetMetaCharacterLength(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed, incompleteOffsets, topicPartitionKey);
+//                    totalOffsetMetaCharacterLengthUsed += offsetMetaPayloadSpaceUsed;
+//                }
             }
 
             if (remove) {
