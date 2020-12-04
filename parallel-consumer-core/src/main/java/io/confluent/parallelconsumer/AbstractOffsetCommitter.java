@@ -29,7 +29,8 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
             // todo shouldn't be removed until commit succeeds (there's no harm in committing the same offset twice)
             preAcquireWork();
             try {
-                Map<TopicPartition, OffsetAndMetadata> offsetsToSend = wm.findCompletedEligibleOffsetsAndRemove();
+                //Map<TopicPartition, OffsetAndMetadata> offsetsToSend = wm.findCompletedEligibleOffsetsAndRemove();
+                Map<TopicPartition, OffsetAndMetadata> offsetsToSend = wm.serialiseEncoders();
                 if (offsetsToSend.isEmpty()) {
                     log.trace("No offsets ready");
                 } else {

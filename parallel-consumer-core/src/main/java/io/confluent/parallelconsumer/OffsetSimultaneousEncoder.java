@@ -40,6 +40,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * The highest committable offset - the next expected offset to be returned by the broker
      */
+    @Getter
     private long baseOffset;
 
     /**

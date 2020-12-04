@@ -673,6 +673,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         recordsOutForProcessing--;
 
         manageEncoding(true, wc);
+
+        // remove work from partition commit queue
+        partitionCommitQueues.get(wc.getTopicPartition()).remove(wc.offset());
     }
 
     public void onResultBatch(final Set<WorkContainer<K, V>> results) {
@@ -1298,6 +1301,46 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public boolean isNotPartitionedOrDrained() {
         return getNumberOfEntriesInPartitionQueues() > 0 && getWorkQueuedInMailboxCount() > 0;
 
+    }
+
+    public Map<TopicPartition, OffsetAndMetadata> serialiseEncoders() {
+        if (!isDirty()) {
+            // nothing to commit
+            return UniMaps.of();
+        }
+
+        Map<TopicPartition, OffsetAndMetadata> offsetMetadataToCommit = new HashMap<>();
+//        int totalPartitionQueueSizeForLogging = 0;
+        int totalOffsetMetaCharacterLengthUsed = 0;
+
+        for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> tpEncoder : partitionContinuousOffsetEncoders.entrySet()) {
+
+            TopicPartition topicPartitionKey = tpEncoder.getKey();
+            OffsetSimultaneousEncoder precomputed = tpEncoder.getValue();
+            try {
+                precomputed.serializeAllEncoders();
+
+                byte[] bytes = precomputed.packSmallest();
+                String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
+
+                totalOffsetMetaCharacterLengthUsed += comparisonOffsetPayloadString.length();
+                log.debug("comparisonOffsetPayloadString :{}:", comparisonOffsetPayloadString);
+
+                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(precomputed.getBaseOffset(), comparisonOffsetPayloadString);
+                offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
+            } catch (EncodingNotSupportedException e) {
+                //log.error("Failed to encode offsets", e);
+                throw new InternalRuntimeError("Failed to encode offsets", e);
+            }
+
+        }
+
+        maybeStripOffsetPayload(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed);
+
+        log.debug("Scan finished, coalesced to {} offset(s) ({}) to be committed",
+                offsetMetadataToCommit.size(), offsetMetadataToCommit);
+
+        return offsetMetadataToCommit;
     }
 
 }
