@@ -162,7 +162,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * Highest committable offset - the end offset of the highest (from the lowest seen) continuous set of completed
      * offsets. AKA low water mark.
      */
-    Map<TopicPartition, Long> partitionOffsetHighestContinuousCompleted = new ConcurrentHashMap<>();
+    Map<TopicPartition, Long> partitionOffsetHighestContinuousSucceeded = new ConcurrentHashMap<>();
 
     // visible for testing
     long MISSING_HIGHEST_SEEN = -1L;
@@ -262,7 +262,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             log.debug("Removing records for partition {}", partition);
             partitionOffsetHighestSeen.remove(partition);
             partitionOffsetHighestSucceeded.remove(partition);
-            partitionOffsetHighestContinuousCompleted.remove(partition);
+            partitionOffsetHighestContinuousSucceeded.remove(partition);
             partitionOffsetsIncompleteMetadataPayloads.remove(partition);
             partitionMoreRecordsAllowedToProcess.remove(partition);
 
@@ -478,7 +478,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private void prepareContinuousEncoder(final WorkContainer<K, V> wc) {
         TopicPartition tp = wc.getTopicPartition();
         if (!partitionContinuousOffsetEncoders.containsKey(tp)) {
-            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(partitionOffsetHighestContinuousCompleted.get(tp), partitionOffsetHighestSucceeded.get(tp));
+            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(partitionOffsetHighestContinuousSucceeded.get(tp), partitionOffsetHighestSucceeded.get(tp));
             partitionContinuousOffsetEncoders.put(tp, encoder);
         }
     }
@@ -494,7 +494,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private void checkPreviousLowWaterMarks(final WorkContainer<K, V> wc) {
         long previousLowWaterMark = wc.offset() - 1;
-        partitionOffsetHighestContinuousCompleted.putIfAbsent(wc.getTopicPartition(), previousLowWaterMark);
+        partitionOffsetHighestContinuousSucceeded.putIfAbsent(wc.getTopicPartition(), previousLowWaterMark);
     }
 
     void raisePartitionHighestSeen(long seenOffset, TopicPartition tp) {
@@ -768,7 +768,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             boolean thisOffsetIsFailed = !work.isUserFunctionSucceeded();
             partitionsSeenForLogging.add(tp);
 
-            long previousHighestContinuous = partitionOffsetHighestContinuousCompleted.get(tp);
+            long previousHighestContinuous = partitionOffsetHighestContinuousSucceeded.get(tp);
 
             if (thisOffsetIsFailed) {
                 // simpler path
@@ -819,10 +819,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     if (continuous) {
                         partitionNowFormsAContinuousBlock.put(tp, true);
                         if (!originalMarks.containsKey(tp)) {
-                            Long previousOffset = partitionOffsetHighestContinuousCompleted.get(tp);
+                            Long previousOffset = partitionOffsetHighestContinuousSucceeded.get(tp);
                             originalMarks.put(tp, previousOffset);
                         }
-                        partitionOffsetHighestContinuousCompleted.put(tp, thisOffset);
+                        partitionOffsetHighestContinuousSucceeded.put(tp, thisOffset);
                     } else {
                         partitionNowFormsAContinuousBlock.put(tp, false);
 //                        Long old = partitionOffsetHighestContinuousCompleted.get(tp);
@@ -837,7 +837,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
         for (final TopicPartition topicPartition : partitionsSeenForLogging) {
             Long oldOffset = originalMarks.get(topicPartition);
-            Long newOffset = partitionOffsetHighestContinuousCompleted.get(topicPartition);
+            Long newOffset = partitionOffsetHighestContinuousSucceeded.get(topicPartition);
             log.debug("Low water mark (highest continuous completed) for partition {} moved from {} to {}", topicPartition, oldOffset, newOffset);
         }
     }
@@ -863,7 +863,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private void encodeWorkResult(final boolean offsetComplete, final WorkContainer<K, V> wc) {
         TopicPartition tp = wc.getTopicPartition();
-        long lowWaterMark = partitionOffsetHighestContinuousCompleted.get(tp);
+        long lowWaterMark = partitionOffsetHighestContinuousSucceeded.get(tp);
         Long highestCompleted = partitionOffsetHighestSucceeded.get(tp);
 
         long nextExpectedOffsetFromBroker = lowWaterMark + 1;
@@ -1058,7 +1058,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             TopicPartition topicPartitionKey = partitionQueueEntry.getKey();
             log.trace("Starting scan of partition: {}", topicPartitionKey);
             Long firstIncomplete = null;
-            Long baseOffset = partitionOffsetHighestContinuousCompleted.get(topicPartitionKey);
+            Long baseOffset = partitionOffsetHighestContinuousSucceeded.get(topicPartitionKey);
             for (final var offsetAndItsWorkContainer : partitionQueue.entrySet()) {
                 // ordered iteration via offset keys thanks to the tree-map
                 WorkContainer<K, V> work = offsetAndItsWorkContainer.getValue();
@@ -1332,7 +1332,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 totalOffsetMetaCharacterLengthUsed += smallestMetadataPacked.length();
                 log.debug("comparisonOffsetPayloadString :{}:", smallestMetadataPacked);
 
-                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(precomputed.getBaseOffset(), smallestMetadataPacked);
+                long nextExpectedOffsetFromBroker = precomputed.getBaseOffset();
+                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(nextExpectedOffsetFromBroker, smallestMetadataPacked);
                 offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
                 log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);

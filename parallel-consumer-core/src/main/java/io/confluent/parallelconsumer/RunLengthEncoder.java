@@ -269,7 +269,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
     public List<Long> calculateSuceededActualOffsets() {
         List<Long> successfulOffsets = new ArrayList<>();
         boolean succeeded = false;
-        int previous = 0;
+//        int previous = 0;
         long offsetPosition = originalBaseOffset;
         for (final Integer run : runLengthEncodingIntegers) {
 
@@ -286,7 +286,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
             //
             offsetPosition += run;
-            previous = run;
+//            previous = run;
             succeeded = !succeeded;
         }
         return successfulOffsets;

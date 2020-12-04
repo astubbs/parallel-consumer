@@ -349,7 +349,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             throw new InternalRuntimeError("");
 
         if (reinitialise) {
-            initialise(baseOffset, currentHighestCompleted);
+            initialise(currentBaseOffset, currentHighestCompleted);
         }
 
         reinitEncoders(currentBaseOffset, currentHighestCompleted);
