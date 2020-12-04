@@ -572,7 +572,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
                 log.debug("Found not enough messages queued up, ensuring poller is awake");
                 brokerPollSubsystem.wakeup();
             } else {
-                log.info("");
+                log.debug("messages queued up ok");
             }
         }
 

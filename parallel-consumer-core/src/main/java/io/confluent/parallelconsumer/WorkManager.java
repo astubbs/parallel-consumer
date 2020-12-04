@@ -752,7 +752,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             boolean thisOffsetIsFailed = !work.isUserFunctionSucceeded();
             partitionsSeenForLogging.add(tp);
 
-            long missingPreviousHighValue = -1l; // this offset will always be higher
             long previousHighestContinuous = partitionOffsetHighestContinuousCompleted.get(tp);
 
             if (thisOffsetIsFailed) {
@@ -789,11 +788,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                                     partitionNowFormsAContinuousBlock.put(tp, false);
                                     continuous = false;
                                     break;
+                                } else if (workToExamine.isUserFunctionSucceeded() && !workToExamine.isNotInFlight()) {
+                                    log.trace("Skipping comparing to work still in flight: {} (not part of this batch this: {})", workToExamine, work);
+                                    continue;
                                 } else {
                                     // counts as continuous, just isn't in this batch - previously successful but there used to be gaps
+                                    log.trace("Work not in batch, but seen now in commitQueue as succeeded {}", workToExamine);
                                 }
                             } else {
                                 // offset doesn't exist in source partition
+                                log.trace("Work missing, assuming doesn't exist in source {}", offsetToCheck);
                             }
                         }
 
@@ -897,6 +901,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private int getMetadataSpaceAvailablePerPartition() {
         int maxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
+        if (numberOfAssignedPartitions == 0) {
+            // no partitions assigned - all available
+            return maxMetadataSize;
+//            throw new InternalRuntimeError("Nothing assigned");
+        }
         int perPartition = maxMetadataSize / numberOfAssignedPartitions;
         return perPartition;
     }
@@ -1009,7 +1018,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * todo: refactor into smaller methods?
      */
     <R> Map<TopicPartition, OffsetAndMetadata> findCompletedEligibleOffsetsAndRemove(boolean remove) {
-        boolean dirty = isDirty();
         if (!isDirty()) {
             // nothing to commit
             return UniMaps.of();
@@ -1038,13 +1046,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             TopicPartition topicPartitionKey = partitionQueueEntry.getKey();
             log.trace("Starting scan of partition: {}", topicPartitionKey);
             Long firstIncomplete = null;
+            Long baseOffset = partitionOffsetHighestContinuousCompleted.get(topicPartitionKey);
             for (final var offsetAndItsWorkContainer : partitionQueue.entrySet()) {
                 // ordered iteration via offset keys thanks to the tree-map
                 WorkContainer<K, V> work = offsetAndItsWorkContainer.getValue();
+                boolean inFlight = !work.isNotInFlight(); // check is part of this mailbox set / not in flight
+                if (inFlight) {
+                    log.trace("Skipping comparing to work still in flight: {}", work);
+                    continue;
+                }
                 long offset = work.getCr().offset();
-                boolean notInFlight = work.isNotInFlight(); // check is part of this mailbox sweet
                 boolean workCompleted = work.isUserFunctionComplete();
-                if (workCompleted && notInFlight) {
+                if (workCompleted) {
                     if (work.isUserFunctionSucceeded() && !iteratedBeyondLowWaterMarkBeingLowestCommittableOffset) {
                         log.trace("Found offset candidate ({}) to add to offset commit map", work);
                         workToRemove.add(work);
@@ -1082,14 +1095,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 OffsetSimultaneousEncoder precomputed = partitionContinuousOffsetEncoders.get(topicPartitionKey);
                 byte[] bytes = new byte[0];
                 try {
-                    Long baseOffset = partitionOffsetHighestContinuousCompleted.getOrDefault(topicPartitionKey, 0L);
                     Long currentHighestCompleted = partitionOffsetHighestSucceeded.get(topicPartitionKey) + 1;
                     if (firstIncomplete != null && baseOffset != firstIncomplete - 1) {
-                        log.warn("inconsistent");
+                        log.warn("inconsistent base new vs old {} {} diff: {}", baseOffset, firstIncomplete, firstIncomplete - baseOffset);
+                        if (baseOffset > firstIncomplete) {
+                            log.warn("batch computed is higher than this scan??");
+                        }
                     }
                     Long highestSeen = partitionOffsetHighestSeen.get(topicPartitionKey); // we don't expect these to be different
                     if (currentHighestCompleted != highestSeen) {
-                        log.warn("inconsistent {} {}", currentHighestCompleted, highestSeen);
+                        log.debug("New system upper end vs old system {} {} (delta: {})", currentHighestCompleted, highestSeen, highestSeen - currentHighestCompleted);
                     }
 
 //                    precomputed.runOverIncompletes(incompleteOffsets, baseOffset, currentHighestCompleted);
