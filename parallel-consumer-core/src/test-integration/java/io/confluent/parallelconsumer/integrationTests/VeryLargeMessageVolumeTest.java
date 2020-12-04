@@ -118,7 +118,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
                 .consumer(newConsumer)
                 .producer(newProducer)
                 .commitMode(commitMode)
-                .numberOfThreads(1_000)
+                .numberOfThreads(1)
 //                .numberOfThreads(100)
 //                .softMaxNumberMessagesBeyondBaseCommitOffset(100_000)
 //                .softMaxNumberMessagesBeyondBaseCommitOffset(10_000)
@@ -137,11 +137,12 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
         pc.pollAndProduce(record -> {
-//                    try {
+                    try {
 //                        Thread.sleep(RandomUtils.nextInt(2, 100));
-//                    } catch (InterruptedException e) {
-//                        e.printStackTrace();
-//                    }
+                        Thread.sleep(5);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
                     bar.stepBy(1);
                     consumedKeys.add(record.key());
                     processedCount.incrementAndGet();
