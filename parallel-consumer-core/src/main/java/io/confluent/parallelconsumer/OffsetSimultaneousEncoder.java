@@ -133,7 +133,13 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     private void reinitEncoders(final long currentBaseOffset, final long currentHighestCompleted) {
         log.debug("Reinitialise all encoders");
         for (final OffsetEncoderBase encoder : encoders) {
-            encoder.maybeReiniailise(currentBaseOffset, currentHighestCompleted);
+            try {
+                encoder.maybeReinitialise(currentBaseOffset, currentHighestCompleted);
+            } catch (EncodingNotSupportedException a) {
+                log.debug("Cannot use {} encoder with new base {} and highest {}: {}",
+                        encoder.getClass().getSimpleName(), currentBaseOffset, currentHighestCompleted, a.getMessage());
+                encoder.disable(a);
+            }
         }
     }
 
@@ -146,7 +152,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             log.debug("Adding encoders");
         }
 
-        if(!encoders.isEmpty()){
+        if (!encoders.isEmpty()) {
             return;
         }
 
@@ -309,16 +315,20 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 //            return;
 
         for (final OffsetEncoderBase encoder : encoders) {
-            encoder.encodeCompletedOffset(baseOffset, relativeOffset, currentHighestCompleted);
+            try {
+                encoder.encodeCompletedOffset(baseOffset, relativeOffset, currentHighestCompleted);
+            } catch (EncodingNotSupportedException e) {
+                encoder.disable(e);
+            }
         }
     }
 
     private void preCheck(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        maybeReiniailise(baseOffset, currentHighestCompleted);
+        maybeReinitialise(baseOffset, currentHighestCompleted);
     }
 
     @Override
-    public void maybeReiniailise(final long currentBaseOffset, final long currentHighestCompleted) {
+    public void maybeReinitialise(final long currentBaseOffset, final long currentHighestCompleted) {
         boolean reinitialise = false;
 
         long newLength = currentHighestCompleted - currentBaseOffset;

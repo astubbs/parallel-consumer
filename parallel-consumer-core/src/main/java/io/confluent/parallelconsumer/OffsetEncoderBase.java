@@ -20,6 +20,8 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
 
+    private boolean disabled = false;
+
     /**
      * The highest committable offset - the next expected offset to be returned by the broker. So by definition, this
      * index in our offset map we're encoding, is always incomplete.
@@ -112,4 +114,12 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
         return Integer.compare(this.getEncodedSizeEstimate(), e.getEncodedSizeEstimate());
     }
 
+    public void disable(final EncodingNotSupportedException e) {
+        disabled = true;
+        log.warn("Disabling {}, {}", this.getEncodingType(), e.getMessage(), e);
+    }
+
+    public void enable() {
+        disabled = false;
+    }
 }

@@ -70,7 +70,7 @@ class ByteBufferEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void maybeReiniailise(final long newBaseOffset, final long currentHighestCompleted) {
+    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) {
         throw new InternalRuntimeError("Na");
     }
 

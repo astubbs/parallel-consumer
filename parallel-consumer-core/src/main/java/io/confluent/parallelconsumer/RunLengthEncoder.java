@@ -133,13 +133,13 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     @Override
     public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        maybeReiniailise(newBaseOffset, currentHighestCompleted);
+        maybeReinitialise(newBaseOffset, currentHighestCompleted);
 
         encodeCompletedOffset((int) relativeOffset);
     }
 
     @Override
-    public void maybeReiniailise(final long newBaseOffset, final long currentHighestCompleted) {
+    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) {
         boolean reinitialise = false;
 
         long newLength = currentHighestCompleted - newBaseOffset;
@@ -197,6 +197,8 @@ class RunLengthEncoder extends OffsetEncoderBase {
 //        currentRunLengthCount = 0;
 //        previousRelativeOffsetFromBase = 0;
 //        previousRunLengthState = false;
+
+        enable();
     }
 
     @Override

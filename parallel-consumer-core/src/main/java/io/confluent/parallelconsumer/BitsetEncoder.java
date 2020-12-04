@@ -7,6 +7,7 @@ import java.nio.ByteBuffer;
 import java.util.BitSet;
 import java.util.Optional;
 
+import static io.confluent.csid.utils.JavaUtils.safeCast;
 import static io.confluent.parallelconsumer.OffsetEncoding.*;
 
 /**
@@ -54,13 +55,18 @@ class BitsetEncoder extends OffsetEncoderBase {
 
         this.version = newVersion;
 
+        initByteBuffer(length, newVersion);
+
+        bitSet = new BitSet(length);
+
+        this.originalLength = length;
+    }
+
+    private void initByteBuffer(final int length, final Version newVersion) throws BitSetEncodingNotSupportedException {
         switch (newVersion) {
             case v1 -> initV1(length);
             case v2 -> initV2(length);
         }
-        bitSet = new BitSet(length);
-
-        this.originalLength = length;
     }
 
     /**
@@ -148,8 +154,8 @@ class BitsetEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        maybeReiniailise(newBaseOffset, currentHighestCompleted);
+    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
+        maybeReinitialise(newBaseOffset, currentHighestCompleted);
 
         encodeCompletedOffset((int) relativeOffset);
     }
@@ -166,7 +172,7 @@ class BitsetEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void maybeReiniailise(final long newBaseOffset, final long currentHighestCompleted) {
+    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
         boolean reinitialise = false;
 
         long newLength = currentHighestCompleted - newBaseOffset;
@@ -189,11 +195,16 @@ class BitsetEncoder extends OffsetEncoderBase {
         if (reinitialise) {
             long baseDelta = newBaseOffset - originalBaseOffset;
             // truncate at new relative delta
-//            BitSet truncated = this.bitSet.get((int) baseDelta, this.bitSet.size());
-//            this.bitSet = new BitSet((int) newLength);
-//            this.bitSet.or(truncated); // fill with old values
+            BitSet truncated = this.bitSet.get((int) baseDelta, this.bitSet.size());
             this.bitSet = new BitSet((int) newLength);
+            this.bitSet.or(truncated); // fill with old values
+
+            initByteBuffer(safeCast(newLength), this.version);
+
+//            this.bitSet = new BitSet((int) newLength);
         }
+
+        enable();
     }
 
     private int getLengthEntryBytes() {
