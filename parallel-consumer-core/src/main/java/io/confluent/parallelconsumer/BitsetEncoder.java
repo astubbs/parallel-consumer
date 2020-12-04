@@ -1,14 +1,16 @@
 package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.JavaUtils;
-import io.confluent.csid.utils.StringUtils;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
+import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.util.BitSet;
 import java.util.Optional;
 
 import static io.confluent.csid.utils.JavaUtils.safeCast;
+import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.OffsetEncoding.*;
 
 /**
@@ -41,7 +43,7 @@ class BitsetEncoder extends OffsetEncoderBase {
     public static final Integer MAX_LENGTH_ENCODABLE = Integer.MAX_VALUE;
 
     private final int originalLength;
-    private ByteBuffer wrappedBitsetBytesBuffer;
+//    private ByteBuffer wrappedBitsetBytesBuffer;
 
     private BitSet bitSet;
 
@@ -56,48 +58,56 @@ class BitsetEncoder extends OffsetEncoderBase {
 
         this.version = newVersion;
 
-        initByteBuffer(length, newVersion);
-
         bitSet = new BitSet(length);
 
         this.originalLength = length;
     }
 
-    private void initByteBuffer(final int length, final Version newVersion) throws BitSetEncodingNotSupportedException {
-        switch (newVersion) {
+    private ByteBuffer constructWrappedByteBuffer(final int length, final Version newVersion) throws BitSetEncodingNotSupportedException {
+        return switch (newVersion) {
             case v1 -> initV1(length);
             case v2 -> initV2(length);
-        }
+        };
     }
 
     /**
      * Switch from encoding bitset length as a short to an integer (length of 32,000 was reasonable too short).
      * <p>
      * Integer.MAX_VALUE should always be good enough as system restricts large from being processed at once.
+     *
+     * @return
      */
-    private void initV2(int length) throws BitSetEncodingNotSupportedException {
+    private ByteBuffer initV2(int length) throws BitSetEncodingNotSupportedException {
         if (length > MAX_LENGTH_ENCODABLE) {
             // need to upgrade to using Integer for the bitset length, but can't change serialisation format in-place
-            throw new BitSetEncodingNotSupportedException(StringUtils.msg("Bitset V2 too long to encode, as length overflows Integer.MAX_VALUE. Length: {}. (max: {})", length, MAX_LENGTH_ENCODABLE));
+            throw new BitSetEncodingNotSupportedException(msg("Bitset V2 too long to encode, as length overflows Integer.MAX_VALUE. Length: {}. (max: {})", length, MAX_LENGTH_ENCODABLE));
         }
+
         // prep bit set buffer
-        this.wrappedBitsetBytesBuffer = ByteBuffer.allocate(Integer.BYTES + ((length / 8) + 1));
+        ByteBuffer wrappedBitsetBytesBuffer = ByteBuffer.allocate(Integer.BYTES + ((length / 8) + 1));
         // bitset doesn't serialise it's set capacity, so we have to as the unused capacity actually means something
-        this.wrappedBitsetBytesBuffer.putInt(length);
+        wrappedBitsetBytesBuffer.putInt(length);
+
+        return wrappedBitsetBytesBuffer;
     }
 
     /**
      * This was a bit "short" sighted of me....
+     *
+     * @return
      */
-    private void initV1(int length) throws BitSetEncodingNotSupportedException {
+    private ByteBuffer initV1(int length) throws BitSetEncodingNotSupportedException {
         if (length > Short.MAX_VALUE) {
             // need to upgrade to using Integer for the bitset length, but can't change serialisation format in-place
             throw new BitSetEncodingNotSupportedException("Bitset V1 too long to encode, bitset length overflows Short.MAX_VALUE: " + length + ". (max: " + Short.MAX_VALUE + ")");
         }
+
         // prep bit set buffer
-        this.wrappedBitsetBytesBuffer = ByteBuffer.allocate(Short.BYTES + ((length / 8) + 1));
+        ByteBuffer wrappedBitsetBytesBuffer = ByteBuffer.allocate(Short.BYTES + ((length / 8) + 1));
         // bitset doesn't serialise it's set capacity, so we have to as the unused capacity actually means something
-        this.wrappedBitsetBytesBuffer.putShort((short) length);
+        wrappedBitsetBytesBuffer.putShort((short) length);
+
+        return wrappedBitsetBytesBuffer;
     }
 
     @Override
@@ -127,13 +137,20 @@ class BitsetEncoder extends OffsetEncoderBase {
         bitSet.set(relativeOffset);
     }
 
+    @SneakyThrows
     @Override
     public byte[] serialise() {
         final byte[] bitSetArray = this.bitSet.toByteArray();
-        if (wrappedBitsetBytesBuffer.capacity() < bitSetArray.length)
+        ByteBuffer wrappedBitsetBytesBuffer = constructWrappedByteBuffer(originalLength, version);
+        if (wrappedBitsetBytesBuffer.remaining() < bitSetArray.length)
             throw new InternalRuntimeError("Not enough space in byte array");
-        this.wrappedBitsetBytesBuffer.put(bitSetArray);
-        final byte[] array = this.wrappedBitsetBytesBuffer.array();
+        try {
+            wrappedBitsetBytesBuffer.put(bitSetArray);
+        } catch (BufferOverflowException e) {
+            log.error("{}", e);
+            throw e;
+        }
+        final byte[] array = wrappedBitsetBytesBuffer.array();
         this.encodedBytes = Optional.of(array);
         return array;
     }
@@ -158,7 +175,7 @@ class BitsetEncoder extends OffsetEncoderBase {
     public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
         maybeReinitialise(newBaseOffset, currentHighestCompleted);
 
-        encodeCompletedOffset(JavaUtils.safeCast(relativeOffset));
+        encodeCompletedOffset(safeCast(relativeOffset));
     }
 
     @Override
@@ -196,11 +213,19 @@ class BitsetEncoder extends OffsetEncoderBase {
         if (reinitialise) {
             long baseDelta = newBaseOffset - originalBaseOffset;
             // truncate at new relative delta
-            BitSet truncated = this.bitSet.get((int) baseDelta, this.bitSet.size());
-            this.bitSet = new BitSet((int) newLength);
-            this.bitSet.or(truncated); // fill with old values
+            try {
+//                newBs.or(this.bitSet);
+                int endIndex = safeCast(baseDelta + originalLength);
+                int startIndex = (int) baseDelta;
+                BitSet truncated = this.bitSet.get(startIndex, endIndex);
+                this.bitSet = new BitSet(safeCast(newLength));
+                this.bitSet.or(truncated); // fill with old values
+            } catch (IndexOutOfBoundsException i) {
+                log.error("{}", i);
+            }
 
-            initByteBuffer(safeCast(newLength), this.version);
+            // TODO throws away whats returned
+            constructWrappedByteBuffer(safeCast(newLength), this.version);
 
 //            this.bitSet = new BitSet((int) newLength);
         }

@@ -915,7 +915,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     private int getMetadataSpaceAvailablePerPartition() {
-        int maxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
+//        int maxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
+        int maxMetadataSize = 5;
         if (numberOfAssignedPartitions == 0) {
             // no partitions assigned - all available
             return maxMetadataSize;
