@@ -1,5 +1,6 @@
 package io.confluent.parallelconsumer;
 
+import io.confluent.csid.utils.Range;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
@@ -89,19 +90,21 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
         ByteBuffer runLengthEncodedByteBuffer = ByteBuffer.allocate(runLengthEncodingIntegers.size() * entryWidth);
 
-        for (final Integer runlength : runLengthEncodingIntegers) {
+        for (final Integer run : runLengthEncodingIntegers) {
             switch (version) {
                 case v1 -> {
-                    final short shortCastRunlength = runlength.shortValue();
-                    if (runlength != shortCastRunlength)
-                        throw new RunlengthV1EncodingNotSupported(msg("Runlength too long for Short ({} cast to {})", runlength, shortCastRunlength));
+                    final short shortCastRunlength = run.shortValue();
+                    if (run != shortCastRunlength)
+                        throw new RunlengthV1EncodingNotSupported(msg("Runlength too long for Short ({} cast to {})", run, shortCastRunlength));
                     runLengthEncodedByteBuffer.putShort(shortCastRunlength);
                 }
                 case v2 -> {
-                    runLengthEncodedByteBuffer.putInt(runlength);
+                    runLengthEncodedByteBuffer.putInt(run);
                 }
             }
         }
+
+        List<Long> sanity = calculateSuceededActualOffsets();
 
         byte[] array = runLengthEncodedByteBuffer.array();
         encodedBytes = Optional.of(array);
@@ -222,18 +225,17 @@ class RunLengthEncoder extends OffsetEncoderBase {
     }
 
     private void encodeRunLength(final boolean currentIsComplete, final int relativeOffsetFromBase) {
-        checkForIncompletesGap(currentIsComplete, relativeOffsetFromBase);
+        injectGapsWithIncomplee(currentIsComplete, relativeOffsetFromBase);
 
         // run length
         boolean currentOffsetMatchesOurRunLengthState = previousRunLengthState == currentIsComplete;
 
         //
-        int delta = relativeOffsetFromBase - previousRelativeOffsetFromBase;
-        currentRunLengthCount = currentRunLengthCount + delta;
 
         if (currentOffsetMatchesOurRunLengthState) {
-//            currentRunLengthCount++; // incorrect - assumes continuous offsets in source partition (think compacting)
-            // no op
+//            currentRunLengthCount++; // no gap case
+            int delta = relativeOffsetFromBase - previousRelativeOffsetFromBase;
+            currentRunLengthCount = currentRunLengthCount + delta;
         } else {
             previousRunLengthState = currentIsComplete;
             runLengthEncodingIntegers.add(currentRunLengthCount);
@@ -242,21 +244,52 @@ class RunLengthEncoder extends OffsetEncoderBase {
         previousRelativeOffsetFromBase = relativeOffsetFromBase;
     }
 
-    private void checkForIncompletesGap(final boolean currentIsComplete, final int relativeOffsetFromBase) {
-        boolean bothThisRecordAndPreviousRecordAreComplete = previousRunLengthState && currentIsComplete;
-        if (bothThisRecordAndPreviousRecordAreComplete) {
-            // check for gap - if there's a gap, we need to assume all inbetween are incomplete. If they don't exist, this action has no affect, as we only use it to skip succeeded
-            Integer previousSucceedRunLengthEntry = runLengthEncodingIntegers.get(runLengthEncodingIntegers.size() - 1);
-            int gap = relativeOffsetFromBase - previousSucceedRunLengthEntry;
-            if (gap > 0) {
-                // there is a gap, so first insert the incomplete
-                runLengthEncodingIntegers.add(gap);
-                currentRunLengthCount = 1; // reset to 1
-                previousRunLengthState = false;
-                // reverse engineer the previous offset from base - we have to add up all runlengnths. This could be perhaps cached
-                previousRelativeOffsetFromBase = previousSucceedRunLengthEntry + gap;
-            }
+    private void injectGapsWithIncomplee(final boolean currentIsComplete, final int relativeOffsetFromBase) {
+//        boolean bothThisRecordAndPreviousRecordAreComplete = previousRunLengthState && currentIsComplete;
+//        if (bothThisRecordAndPreviousRecordAreComplete) {
+        int difference = relativeOffsetFromBase - previousRelativeOffsetFromBase - 1;
+        if (currentRunLengthCount == 0)
+            difference++;
+        if (difference > 1) {
+            // check for gap - if there's a gap, we need to assume all in-between are incomplete, except the first
+            if (currentRunLengthCount != 0)
+                runLengthEncodingIntegers.add(currentRunLengthCount);
+            // If they don't exist, this action has no affect, as we only use it to skip succeeded
+            // there is a gap, so first insert the incomplete
+            runLengthEncodingIntegers.add(difference);
+            currentRunLengthCount = 1; // reset to 1
+            previousRunLengthState = true; // make it no flip
+            // reverse engineer the previous offset from base - we have to add up all run lengths. This could be perhaps cached
+//                final int previousSucceedRunLengthEntry = runLengthEncodingIntegers.get(runLengthEncodingIntegers.size() - 2);
+            previousRelativeOffsetFromBase = relativeOffsetFromBase;
         }
+//        }
+    }
+
+    public List<Long> calculateSuceededActualOffsets() {
+        List<Long> successfulOffsets = new ArrayList<>();
+        boolean succeeded = false;
+        int previous = 0;
+        long offsetPosition = originalBaseOffset;
+        for (final Integer run : runLengthEncodingIntegers) {
+
+            if (succeeded) {
+//                offsetPosition++;
+                for (final Integer integer : Range.range(run)) {
+                    long newGoodOffset = offsetPosition + integer;
+                    successfulOffsets.add(newGoodOffset);
+                }
+            }
+//            else {
+//                offsetPosition = offsetPosition + run;
+//            }
+
+            //
+            offsetPosition += run;
+            previous = run;
+            succeeded = !succeeded;
+        }
+        return successfulOffsets;
     }
 
 }

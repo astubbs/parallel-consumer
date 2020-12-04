@@ -118,6 +118,11 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 1, "akey", "avalue"));
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 4, "akey", "avalue"));
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 5, "akey", "avalue"));
+
+        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 10, "akey", "avalue"));
+        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 11, "akey", "avalue"));
+        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 12, "akey", "avalue"));
+
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 69, "akey", "avalue")); // will complete
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 100, "akey", "avalue"));
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 1_000, "akey", "avalue"));
@@ -135,6 +140,10 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
 
         var firstSucceededRecordRemoved = new ArrayList<>(records);
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 0).findFirst().get());
+        firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 4).findFirst().get());
+        firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 10).findFirst().get());
+        firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 11).findFirst().get());
+        firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 12).findFirst().get());
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 69).findFirst().get());
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 25_000).findFirst().get());
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == complete).findFirst().get());
@@ -160,6 +169,12 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             List<WorkContainer<String, String>> work = wmm.maybeGetWork();
 
             KafkaTestUtils.completeWork(wmm, work, 0);
+
+            KafkaTestUtils.completeWork(wmm, work, 4);
+
+            KafkaTestUtils.completeWork(wmm, work, 10);
+            KafkaTestUtils.completeWork(wmm, work, 11);
+            KafkaTestUtils.completeWork(wmm, work, 12);
 
             KafkaTestUtils.completeWork(wmm, work, 69);
 

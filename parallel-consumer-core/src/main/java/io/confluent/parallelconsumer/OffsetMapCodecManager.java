@@ -139,6 +139,7 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     private byte[] packSmallest(final OffsetSimultaneousEncoder simultaneousEncoder) throws EncodingNotSupportedException {
+        byte[] result;
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
             log.warn("Forcing use of {}, for testing", forcedOffsetEncoding);
@@ -146,10 +147,11 @@ public class OffsetMapCodecManager<K, V> {
             byte[] bytes = encodingMap.get(forcedOffsetEncoding);
             if (bytes == null)
                 throw new EncodingNotSupportedException(msg("Can't force an encoding that hasn't been run: {}", forcedOffsetEncoding));
-            return simultaneousEncoder.packEncoding(new EncodedOffsetData(forcedOffsetEncoding, ByteBuffer.wrap(bytes)));
+            result = simultaneousEncoder.packEncoding(new EncodedOffsetData(forcedOffsetEncoding, ByteBuffer.wrap(bytes)));
         } else {
-            return simultaneousEncoder.packSmallest();
+            result = simultaneousEncoder.packSmallest();
         }
+        return result;
     }
 
     /**
