@@ -128,27 +128,33 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         // Extremely large tests for v2 encoders
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 40_000, "akey", "avalue")); // higher than Short.MAX_VALUE
         int avoidOffByOne = 2;
-        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 40_000 + Short.MAX_VALUE + avoidOffByOne, "akey", "avalue")); // runlength higher than Short.MAX_VALUE
+        int complete = 40_000 + Short.MAX_VALUE + avoidOffByOne;
+        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, complete, "akey", "avalue")); // runlength higher than Short.MAX_VALUE // will complete
+
+        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 40_000 + Short.MAX_VALUE + avoidOffByOne * 100, "akey", "avalue")); // runlength higher than Short.MAX_VALUE
 
         var firstSucceededRecordRemoved = new ArrayList<>(records);
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 0).findFirst().get());
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 69).findFirst().get());
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 25_000).findFirst().get());
+        firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == complete).findFirst().get());
 
         //
         ktu.send(consumerSpy, records);
 
-        //
+        // setup
         ParallelConsumerOptions options = parallelConsumer.getWm().getOptions();
         HashMap<TopicPartition, List<ConsumerRecord<String, String>>> recordsMap = new HashMap<>();
         TopicPartition tp = new TopicPartition(INPUT_TOPIC, 0);
         recordsMap.put(tp, records);
         ConsumerRecords<String, String> crs = new ConsumerRecords<>(recordsMap);
 
+
         // write offsets
         Map<TopicPartition, OffsetAndMetadata> completedEligibleOffsetsAndRemove;
         {
             WorkManager<String, String> wmm = new WorkManager<>(options, consumerManager);
+            wmm.onPartitionsAssigned(UniSets.of(new TopicPartition(INPUT_TOPIC, 0)));
             wmm.registerWork(crs);
 
             List<WorkContainer<String, String>> work = wmm.maybeGetWork();
@@ -159,14 +165,18 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
 
             KafkaTestUtils.completeWork(wmm, work, 25_000);
 
-            completedEligibleOffsetsAndRemove = wmm.findCompletedEligibleOffsetsAndRemove();
+            KafkaTestUtils.completeWork(wmm, work, complete);
 
+//            completedEligibleOffsetsAndRemove = wmm.findCompletedEligibleOffsetsAndRemove(); // old version
+            completedEligibleOffsetsAndRemove = wmm.serialiseEncoders(); // new version
+//            String bestPayload = topicPartitionOffsetAndMetadataMap.
             // check for graceful fall back to the smallest available encoder
             OffsetMapCodecManager<String, String> om = new OffsetMapCodecManager<>(wmm, consumerManager);
+
             Set<Long> collect = firstSucceededRecordRemoved.stream().map(x -> x.offset()).collect(Collectors.toSet());
             OffsetMapCodecManager.forcedCodec = Optional.empty(); // turn off forced
-            String bestPayload = om.makeOffsetMetadataPayload(1, tp, collect);
-            assertThat(bestPayload).isNotEmpty();
+//            String bestPayload = om.makeOffsetMetadataPayload(1, tp, collect);
+//            assertThat(bestPayload).isNotEmpty();
         }
         consumerSpy.commitSync(completedEligibleOffsetsAndRemove);
 

@@ -110,6 +110,12 @@ public class OffsetMapCodecManager<K, V> {
         return offsetMap;
     }
 
+    String makeOffsetMetadataPayload(OffsetSimultaneousEncoder simultaneousEncoder) throws EncodingNotSupportedException {
+        byte[] smallest = packSmallest(simultaneousEncoder);
+        String offsetMap = OffsetSimpleSerialisation.base64(smallest);
+        return offsetMap;
+    }
+
     String serialiseIncompleteOffsetMapToBase64(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
         byte[] compressedEncoding = encodeOffsetsCompressed(finalOffsetForPartition, tp, incompleteOffsets);
         String b64 = OffsetSimpleSerialisation.base64(compressedEncoding);
@@ -129,6 +135,10 @@ public class OffsetMapCodecManager<K, V> {
         // todo use new encoder for accuracy
         OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, currentHighestCompleted)
                 .runOverIncompletes(incompleteOffsets, finalOffsetForPartition, currentHighestCompleted);
+        return packSmallest(simultaneousEncoder);
+    }
+
+    private byte[] packSmallest(final OffsetSimultaneousEncoder simultaneousEncoder) throws EncodingNotSupportedException {
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
             log.warn("Forcing use of {}, for testing", forcedOffsetEncoding);

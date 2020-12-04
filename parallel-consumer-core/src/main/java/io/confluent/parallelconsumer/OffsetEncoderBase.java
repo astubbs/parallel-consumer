@@ -19,7 +19,12 @@ import java.nio.ByteBuffer;
 abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<OffsetEncoderBase> {
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
-    protected final long originalBaseOffset;
+
+    /**
+     * The highest committable offset - the next expected offset to be returned by the broker. So by definition, this
+     * index in our offset map we're encoding, is always incomplete.
+     */
+    protected long originalBaseOffset;
 
     public OffsetEncoderBase(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
         this.originalBaseOffset = baseOffset;
@@ -53,7 +58,10 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
     }
 
     private void register(final OffsetEncoding type, final byte[] bytes) {
-        log.debug("Registering {}, with site {}", type, bytes.length);
+        int encodedSizeEstimate = getEncodedSizeEstimate();
+        int length = bytes.length;
+        log.debug("Registering {}, with actual size {} vs estimate {}", type, length, encodedSizeEstimate);
+        int encodedSimate = getEncodedSizeEstimate();
         offsetSimultaneousEncoder.sortedEncodingData.add(new EncodedOffsetData(type, ByteBuffer.wrap(bytes)));
         offsetSimultaneousEncoder.encodingMap.put(type, bytes);
     }

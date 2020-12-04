@@ -70,6 +70,11 @@ class ByteBufferEncoder extends OffsetEncoderBase {
     }
 
     @Override
+    public void maybeReiniailise(final long newBaseOffset, final long currentHighestCompleted) {
+        throw new InternalRuntimeError("Na");
+    }
+
+    @Override
     public byte[] getEncodedBytes() {
         return this.bytesBuffer.array();
     }

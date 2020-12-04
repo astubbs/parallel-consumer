@@ -18,6 +18,7 @@ import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.TopicPartition;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.util.Lists;
+import pl.tlinkowski.unij.api.UniSets;
 
 import java.util.*;
 import java.util.concurrent.FutureTask;
@@ -256,7 +257,8 @@ public class KafkaTestUtils {
         assertThat(future).isDone();
         wc.setFuture(future);
         wc.onUserFunctionSuccess();
-        wmm.onSuccess(wc);
+//        wmm.onSuccess(wc);
+        wmm.onResultBatch(UniSets.of(wc));
         assertThat(wc.isUserFunctionComplete()).isTrue();
     }
 }

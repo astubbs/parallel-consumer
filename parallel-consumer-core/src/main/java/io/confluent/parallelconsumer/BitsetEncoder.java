@@ -149,11 +149,29 @@ class BitsetEncoder extends OffsetEncoderBase {
 
     @Override
     public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        maybeReiniailise(newBaseOffset, currentHighestCompleted);
+
+        encodeCompletedOffset((int) relativeOffset);
+    }
+
+    @Override
+    public int getEncodedSize() {
+        return this.encodedBytes.get().length;
+    }
+
+    @Override
+    public int getEncodedSizeEstimate() {
+        int logicalSize = bitSet.length() / Byte.SIZE;
+        return logicalSize + getLengthEntryBytes();
+    }
+
+    @Override
+    public void maybeReiniailise(final long newBaseOffset, final long currentHighestCompleted) {
         boolean reinitialise = false;
 
         long newLength = currentHighestCompleted - newBaseOffset;
         if (originalLength != newLength) {
-//        if (this.highestSuceeded != currentHighestCompleted) {
+//        if (this.highestSucceeded != currentHighestCompleted) {
             log.debug("Length of Bitset changed {} to {}",
                     originalLength, newLength);
             reinitialise = true;
@@ -176,18 +194,6 @@ class BitsetEncoder extends OffsetEncoderBase {
 //            this.bitSet.or(truncated); // fill with old values
             this.bitSet = new BitSet((int) newLength);
         }
-
-        encodeCompletedOffset((int) relativeOffset);
-    }
-
-    @Override
-    public int getEncodedSize() {
-        return this.encodedBytes.get().length;
-    }
-
-    @Override
-    public int getEncodedSizeEstimate() {
-        return bitSet.length() + standardOverhead + getLengthEntryBytes(); // logical size
     }
 
     private int getLengthEntryBytes() {

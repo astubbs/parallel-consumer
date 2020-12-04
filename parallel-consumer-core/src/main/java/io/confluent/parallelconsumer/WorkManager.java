@@ -647,6 +647,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         workStateIsDirtyNeedsCommitting.set(true);
 
         //
+        // update as we go
+        updateHighestSucceededOffsetSoFar(wc);
+
+        //
         ConsumerRecord<K, V> cr = wc.getCr();
         log.trace("Work success ({}), removing from processing shard queue", wc);
         wc.succeed();
@@ -772,8 +776,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 Boolean previouslyContinuous = partitionNowFormsAContinuousBlock.get(tp);
                 partitionNowFormsAContinuousBlock.put(tp, false); // this partitions continuous block
             } else {
-                // update as we go
-                updateHighestSucceededOffsetSoFar(work);
 
                 if (thisOffset <= previousHighestContinuous) {
 //                     sanity? by definition it must be higher
@@ -1120,12 +1122,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //                    precomputed.runOverIncompletes(incompleteOffsets, baseOffset, currentHighestCompleted);
                     precomputed.serializeAllEncoders();
 
-                    bytes = precomputed.packSmallest();
-                    String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
+                    // make this a field instead - has no state?
+                    OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumerMgr);
+                    String smallestMetadataPacked = om.makeOffsetMetadataPayload(precomputed);
 
-                    totalOffsetMetaCharacterLengthUsed += comparisonOffsetPayloadString.length();
-                    log.debug("comparisonOffsetPayloadString :{}:", comparisonOffsetPayloadString);
-                    OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(baseOffset + 1, comparisonOffsetPayloadString);
+                    totalOffsetMetaCharacterLengthUsed += smallestMetadataPacked.length();
+                    log.debug("comparisonOffsetPayloadString :{}:", smallestMetadataPacked);
+                    OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(baseOffset + 1, smallestMetadataPacked);
                     offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
                 } catch (EncodingNotSupportedException e) {
                     e.printStackTrace();
@@ -1317,19 +1320,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         int totalOffsetMetaCharacterLengthUsed = 0;
 
         for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> tpEncoder : partitionContinuousOffsetEncoders.entrySet()) {
-
             TopicPartition topicPartitionKey = tpEncoder.getKey();
             OffsetSimultaneousEncoder precomputed = tpEncoder.getValue();
             try {
                 precomputed.serializeAllEncoders();
 
-                byte[] bytes = precomputed.packSmallest();
-                String comparisonOffsetPayloadString = OffsetSimpleSerialisation.base64(bytes);
+                OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumerMgr);
+                String smallestMetadataPacked = om.makeOffsetMetadataPayload(precomputed);
 
-                totalOffsetMetaCharacterLengthUsed += comparisonOffsetPayloadString.length();
-                log.debug("comparisonOffsetPayloadString :{}:", comparisonOffsetPayloadString);
+                totalOffsetMetaCharacterLengthUsed += smallestMetadataPacked.length();
+                log.debug("comparisonOffsetPayloadString :{}:", smallestMetadataPacked);
 
-                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(precomputed.getBaseOffset(), comparisonOffsetPayloadString);
+                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(precomputed.getBaseOffset(), smallestMetadataPacked);
                 offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
                 //log.error("Failed to encode offsets", e);

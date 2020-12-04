@@ -19,9 +19,11 @@ class RunLengthEncoder extends OffsetEncoderBase {
     /**
      * The current run length being counted / built
      */
-    private int currentRunLengthCount = 0;
+    private int currentRunLengthCount;
 
-    private boolean previousRunLengthState = false;
+    private int previousRelativeOffsetFromBase;
+
+    private boolean previousRunLengthState;
 
     /**
      * Stores all the run lengths
@@ -36,9 +38,21 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     public RunLengthEncoder(long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) {
         super(baseOffset, offsetSimultaneousEncoder);
-        // run length setup
-        runLengthEncodingIntegers = new ArrayList<>();
         version = newVersion;
+
+        init();
+    }
+
+    private void init() {
+        runLengthEncodingIntegers = new ArrayList<>();
+        currentRunLengthCount = 0;
+        previousRelativeOffsetFromBase = 0;
+        previousRunLengthState = false;
+    }
+
+    private void reset() {
+        log.debug("Resetting");
+        init();
     }
 
     @Override
@@ -119,6 +133,13 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     @Override
     public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        maybeReiniailise(newBaseOffset, currentHighestCompleted);
+
+        encodeCompletedOffset((int) relativeOffset);
+    }
+
+    @Override
+    public void maybeReiniailise(final long newBaseOffset, final long currentHighestCompleted) {
         boolean reinitialise = false;
 
         long newLength = currentHighestCompleted - newBaseOffset;
@@ -130,7 +151,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
 //        }
 
         if (originalBaseOffset != newBaseOffset) {
-            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to shift bitset right",
+            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work",
                     this.originalBaseOffset, newBaseOffset);
             reinitialise = true;
         }
@@ -139,13 +160,43 @@ class RunLengthEncoder extends OffsetEncoderBase {
             throw new InternalRuntimeError("");
 
         if (reinitialise) {
-            long baseDelta = newBaseOffset - originalBaseOffset;
-            // truncate at new relative delta
-//            runLengthEncodingIntegers = runLengthEncodingIntegers.subList((int) baseDelta, runLengthEncodingIntegers.size());
-            runLengthEncodingIntegers = new ArrayList<>();
+            reinitialise(newBaseOffset, currentHighestCompleted);
         }
+    }
 
-        encodeCompletedOffset((int) relativeOffset);
+    private void reinitialise(final long newBaseOffset, final long currentHighestCompleted) {
+        long longDelta = newBaseOffset - originalBaseOffset;
+        int baseDelta = (int) longDelta;
+        if (baseDelta != longDelta) throw new InternalRuntimeError("Cast error");
+
+        // for each run entry
+        List<Integer> indexesToRemove = new ArrayList<>();
+        List<Integer> newRunLengths = new ArrayList<>();
+        for (Integer aRunLength : runLengthEncodingIntegers) {
+            if (aRunLength < baseDelta) {
+//                indexesToRemove.add(aRunLength);
+            } else {
+                int adjustedRunLength = aRunLength - baseDelta;
+                newRunLengths.add(adjustedRunLength);
+            }
+        }
+//        for (final Integer aRunLength : runLengthEncodingIntegers) {
+//            if (aRunLength < baseDelta) {
+//                toRemove.add(aRunLength)
+//            }
+//        }
+        // check if it's above the new base, if not remove it
+        // then subtract baseDelta
+
+
+        // truncate at new relative delta
+//            runLengthEncodingIntegers = runLengthEncodingIntegers.subList((int) baseDelta, runLengthEncodingIntegers.size());
+
+        this.originalBaseOffset = newBaseOffset;
+
+//        currentRunLengthCount = 0;
+//        previousRelativeOffsetFromBase = 0;
+//        previousRunLengthState = false;
     }
 
     @Override
@@ -156,10 +207,11 @@ class RunLengthEncoder extends OffsetEncoderBase {
     @Override
     public int getEncodedSizeEstimate() {
         int numEntries = runLengthEncodingIntegers.size();
-        if (currentRunLengthCount > 0)
-            numEntries = numEntries + 1;
-        int accumulativeEntrySize = numEntries * getEntryWidth();
-        return accumulativeEntrySize + standardOverhead;
+//        if (currentRunLengthCount > 0)
+//            numEntries = numEntries + 1;
+        int entryWidth = getEntryWidth();
+        int accumulativeEntrySize = numEntries * entryWidth;
+        return accumulativeEntrySize;// + standardOverhead;
     }
 
     @Override
@@ -167,15 +219,41 @@ class RunLengthEncoder extends OffsetEncoderBase {
         return encodedBytes.get();
     }
 
-    private void encodeRunLength(final boolean currentIsComplete, final int relativeOffset) {
+    private void encodeRunLength(final boolean currentIsComplete, final int relativeOffsetFromBase) {
+        checkForIncompletesGap(currentIsComplete, relativeOffsetFromBase);
+
         // run length
         boolean currentOffsetMatchesOurRunLengthState = previousRunLengthState == currentIsComplete;
+
+        //
+        int delta = relativeOffsetFromBase - previousRelativeOffsetFromBase;
+        currentRunLengthCount = currentRunLengthCount + delta;
+
         if (currentOffsetMatchesOurRunLengthState) {
-            currentRunLengthCount++;
+//            currentRunLengthCount++; // incorrect - assumes continuous offsets in source partition (think compacting)
+            // no op
         } else {
             previousRunLengthState = currentIsComplete;
             runLengthEncodingIntegers.add(currentRunLengthCount);
             currentRunLengthCount = 1; // reset to 1
+        }
+        previousRelativeOffsetFromBase = relativeOffsetFromBase;
+    }
+
+    private void checkForIncompletesGap(final boolean currentIsComplete, final int relativeOffsetFromBase) {
+        boolean bothThisRecordAndPreviousRecordAreComplete = previousRunLengthState && currentIsComplete;
+        if (bothThisRecordAndPreviousRecordAreComplete) {
+            // check for gap - if there's a gap, we need to assume all inbetween are incomplete. If they don't exist, this action has no affect, as we only use it to skip succeeded
+            Integer previousSucceedRunLengthEntry = runLengthEncodingIntegers.get(runLengthEncodingIntegers.size() - 1);
+            int gap = relativeOffsetFromBase - previousSucceedRunLengthEntry;
+            if (gap > 0) {
+                // there is a gap, so first insert the incomplete
+                runLengthEncodingIntegers.add(gap);
+                currentRunLengthCount = 1; // reset to 1
+                previousRunLengthState = false;
+                // reverse engineer the previous offset from base - we have to add up all runlengnths. This could be perhaps cached
+                previousRelativeOffsetFromBase = previousSucceedRunLengthEntry + gap;
+            }
         }
     }
 

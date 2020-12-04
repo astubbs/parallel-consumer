@@ -3,6 +3,7 @@ package io.confluent.parallelconsumer;
 public interface OffsetEncoderContract {
 
     /**
+     * TODO this method isnt' actually used by any encoder
      * @param baseOffset need the baseOffset also, as it may change with new success (highest committable may rise)
      * @param relativeOffset Offset relative to the base offset (e.g. offset - baseOffset)
      */
@@ -22,5 +23,7 @@ public interface OffsetEncoderContract {
      * Used for comparing encoders
      */
     int getEncodedSizeEstimate();
+
+    void maybeReiniailise(final long newBaseOffset, final long currentHighestCompleted);
 
 }

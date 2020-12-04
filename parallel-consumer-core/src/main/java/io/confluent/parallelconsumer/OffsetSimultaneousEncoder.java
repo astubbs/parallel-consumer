@@ -38,7 +38,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 //    private final Set<Long> incompleteOffsets;
 
     /**
-     * The highest committable offset - the next expected offset to be returned by the broker
+     * The highest committable offset - the next expected offset to be returned by the broker. So by definition, this
+     * index in our offset map we're encoding, is always incomplete.
      */
     @Getter
     private long baseOffset;
@@ -77,8 +78,9 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * The encoders to run
      */
-    private Set<OffsetEncoderBase> encoders;
-    private List<OffsetEncoderBase> sortedEncoders;
+    private Set<OffsetEncoderBase> encoders = new HashSet<>();
+
+    private List<OffsetEncoderBase> sortedEncoders = new ArrayList<>();
 
     /**
      * @param lowWaterMark The highest committable offset
@@ -113,19 +115,39 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         this.baseOffset = currentBaseOffset;
         this.highestSuceeded = currentHighestCompleted;
 
-        encoders = new HashSet<>();
-        sortedEncoders = new ArrayList<>();
+
+        // todo do something more efficient than just garbage? // call reinitialise on the encoders
+        log.debug("Creating encoder collection");
+
 
         //
         this.length = initLength(currentBaseOffset, highestSuceeded);
 
-        if (length < 1) {
-            //won't need to encode anything
-            return;
-        }
-
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
             log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, this.highestSuceeded);
+        }
+
+        addEncodersMaybe();
+    }
+
+    private void reinitEncoders(final long currentBaseOffset, final long currentHighestCompleted) {
+        log.debug("Reinitialise all encoders");
+        for (final OffsetEncoderBase encoder : encoders) {
+            encoder.maybeReiniailise(currentBaseOffset, currentHighestCompleted);
+        }
+    }
+
+    private void addEncodersMaybe() {
+        // still need to register encoders?
+        if (length < 1) {
+            // won't need to encode anything
+            return;
+        } else {
+            log.debug("Adding encoders");
+        }
+
+        if(!encoders.isEmpty()){
+            return;
         }
 
         try {
@@ -271,6 +293,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
 //        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
 //            return;
 
@@ -281,11 +304,50 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
 //        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
 //            return;
 
         for (final OffsetEncoderBase encoder : encoders) {
-            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
+            encoder.encodeCompletedOffset(baseOffset, relativeOffset, currentHighestCompleted);
+        }
+    }
+
+    private void preCheck(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        maybeReiniailise(baseOffset, currentHighestCompleted);
+    }
+
+    @Override
+    public void maybeReiniailise(final long currentBaseOffset, final long currentHighestCompleted) {
+        boolean reinitialise = false;
+
+        long newLength = currentHighestCompleted - currentBaseOffset;
+//        if (originalLength != newLength) {
+////        if (this.highestSuceeded != currentHighestCompleted) {
+//            log.debug("Length of Bitset changed {} to {}",
+//                    originalLength, newLength);
+//            reinitialise = true;
+//        }
+
+        if (this.baseOffset != currentBaseOffset) {
+            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to shift bitset right",
+                    this.baseOffset, currentBaseOffset);
+            reinitialise = true;
+        }
+
+        if (currentBaseOffset < this.baseOffset)
+            throw new InternalRuntimeError("");
+
+        if (reinitialise) {
+            initialise(baseOffset, currentHighestCompleted);
+        }
+
+        reinitEncoders(currentBaseOffset, currentHighestCompleted);
+    }
+
+    private void mabeyAddEncodersIfMissing() {
+        if (encoders.isEmpty()) {
+            this.addEncodersMaybe();
         }
     }
 
