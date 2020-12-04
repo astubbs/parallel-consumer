@@ -24,7 +24,7 @@ public class DynamicLoadFactor {
     private long lastStep = 0;
     private final int step = 1;
     @Getter
-    private final int max = 5;
+    private final int max = 10;
 
     @Getter
     int current = DEFAULT_INITIAL_LOADING_FACTOR;

@@ -684,6 +684,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             onResultUpdatePartitionRecordsBatch(results);
         }
 
+        //
+        manageOffsetEncoderSpaceRequirements();
+
+
 //        // individual
 //        for (var work : results) {
 //            handleFutureResult(work);
@@ -870,8 +874,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             offsetSimultaneousEncoder.encodeCompletedOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
         else
             offsetSimultaneousEncoder.encodeIncompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
-
-        manageOffsetEncoderSpaceRequirements();
     }
 
     /**
