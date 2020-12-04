@@ -136,7 +136,8 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         int complete = 40_000 + Short.MAX_VALUE + avoidOffByOne;
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, complete, "akey", "avalue")); // runlength higher than Short.MAX_VALUE // will complete
 
-        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 40_000 + Short.MAX_VALUE + avoidOffByOne * 100, "akey", "avalue")); // runlength higher than Short.MAX_VALUE
+        int largeTwo = 40_000 + Short.MAX_VALUE + avoidOffByOne * 100;
+        records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, largeTwo, "akey", "avalue")); // runlength higher than Short.MAX_VALUE // incomplete (should be ignored)
 
         var firstSucceededRecordRemoved = new ArrayList<>(records);
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 0).findFirst().get());

@@ -125,6 +125,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * We only need to know the full incompletes when we do the {@link #findCompletedEligibleOffsetsAndRemove} scan, so
      * find the full sent only then, and discard. Otherwise, for continuous encoding, the encoders track it them
      * selves.
+     * <p>
+     * We work with incompletes, instead of completes, because it's a bet that most of the time the storage space for
+     * storing the incompletes in memory will be smaller.
      *
      * @see #findCompletedEligibleOffsetsAndRemove(boolean)
      * @see #encodeWorkResult(boolean, WorkContainer)
