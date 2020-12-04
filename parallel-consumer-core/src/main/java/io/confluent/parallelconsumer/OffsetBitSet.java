@@ -60,7 +60,6 @@ public class OffsetBitSet {
         };
         ByteBuffer slice = wrap.slice();
         Set<Long> incompletes = deserialiseBitSetToIncompletes(baseOffset, originalBitsetSize, slice);
-        log.info("{}", incompletes);
         long highestSeenRecord = baseOffset + originalBitsetSize;
         return Tuple.pairOf(highestSeenRecord, incompletes);
     }

@@ -61,7 +61,8 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
     @ValueSource(longs = {
             10_000L,
             100_000L,
-            100_000_000L, // slow
+            100_000_0L,
+//            100_000_000L, // slow
     })
     void largeIncompleteOffsetValues(long currentHighestCompleted) {
         var incompletes = new HashSet<Long>();
@@ -204,14 +205,14 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             List<WorkContainer<String, String>> workContainers = newWm.maybeGetWork();
             switch (encoding) {
                 case BitSet, BitSetCompressed, // BitSetV1 both get a short overflow due to the length being too long
-                        BitSetV2, // BitSetv2 uncompressed is too large to fit in metadata payload
+                        BitSetV2, // BitSetv2 uncompressed is too large to fit in metadata payload, so the whole encoding is dropped ~9101 bytes (max ~4000)
                         RunLength, RunLengthCompressed // RunLength V1 max runlength is Short.MAX_VALUE
                         -> {
                     assertThatThrownBy(() ->
                             assertThat(workContainers).extracting(WorkContainer::getCr)
                                     .containsExactlyElementsOf(firstSucceededRecordRemoved))
-                            .hasMessageContaining("but some elements were not expected")
-                            .hasMessageContaining("offset = 25000");
+                            .hasMessageContaining("were not expected")
+                            .hasMessageContaining("offset = 20000");
                 }
                 default -> {
                     assertThat(workContainers).extracting(WorkContainer::getCr).containsExactlyElementsOf(firstSucceededRecordRemoved);

@@ -503,7 +503,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     void raisePartitionHighestSeen(long seenOffset, TopicPartition tp) {
         // rise the high water mark
         Long oldHighestSeen = partitionOffsetHighestSeen.getOrDefault(tp, MISSING_HIGHEST_SEEN);
-        if (seenOffset >= oldHighestSeen || seenOffset == MISSING_HIGHEST_SEEN) {
+        if (seenOffset > oldHighestSeen || seenOffset == MISSING_HIGHEST_SEEN) {
             partitionOffsetHighestSeen.put(tp, seenOffset);
         }
     }
@@ -516,8 +516,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             // record previously saved into incompletes as having not been processed successfully yet
             return false;
         } else {
-            Long offsetHighWaterMarks = partitionOffsetHighestSeen.getOrDefault(tp, MISSING_HIGHEST_SEEN);
-            if (thisRecordsOffset < offsetHighWaterMarks) {
+            Long partitionHighestSeenRecord = partitionOffsetHighestSeen.getOrDefault(tp, MISSING_HIGHEST_SEEN);
+            if (thisRecordsOffset <= partitionHighestSeenRecord) {
                 // within the range of tracked offsets, but not in incompletes, so must have been previously completed
                 return true;
             } else {

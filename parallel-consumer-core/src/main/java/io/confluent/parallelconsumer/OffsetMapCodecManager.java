@@ -174,9 +174,9 @@ public class OffsetMapCodecManager<K, V> {
         ParallelConsumer.Tuple<Long, Set<Long>> incompletesTuple = result.getDecodedIncompletes(finalOffsetForPartition);
 
         Set<Long> incompletes = incompletesTuple.getRight();
-        long highWater = incompletesTuple.getLeft();
+        long highestSeenOffset = incompletesTuple.getLeft();
 
-        ParallelConsumer.Tuple<Long, Set<Long>> tuple = ParallelConsumer.Tuple.pairOf(highWater, incompletes);
+        ParallelConsumer.Tuple<Long, Set<Long>> tuple = ParallelConsumer.Tuple.pairOf(highestSeenOffset, incompletes);
         return tuple;
     }
 
