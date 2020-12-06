@@ -107,6 +107,8 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
         int avoidOffByOne = 2;
         records.add(new ConsumerRecord<>(INPUT_TOPIC, 0, 40_000 + Short.MAX_VALUE + avoidOffByOne, "akey", "avalue")); // runlength higher than Short.MAX_VALUE
 
+//        int recsToRequestArbitrary = 10000;
+
         var firstSucceededRecordRemoved = new ArrayList<>(records);
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 0).findFirst().get());
         firstSucceededRecordRemoved.remove(firstSucceededRecordRemoved.stream().filter(x -> x.offset() == 69).findFirst().get());
@@ -189,7 +191,7 @@ public class ContinuousEncodingTests extends ParallelEoSStreamProcessorTestBase 
     void testFullCycleWithGaps() {
         var options = ParallelConsumerOptions.<String, String>builder()
 //                .numberOfThreads(1000)
-                .numberOfThreads(100)
+                .maxConcurrency(100)
                 .build();
 //        var pc = new ParallelEoSStreamProcessor<String, String>(options);
 //        var wm = new WorkManager<>(options, consumerSpy);

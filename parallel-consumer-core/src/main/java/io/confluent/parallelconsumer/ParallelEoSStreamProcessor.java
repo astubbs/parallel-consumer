@@ -8,7 +8,6 @@ import io.confluent.csid.utils.WallClock;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.clients.consumer.internals.ConsumerCoordinator;
 import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.utils.Time;
@@ -16,7 +15,6 @@ import org.slf4j.MDC;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.io.Closeable;
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -178,7 +176,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
 
 
         LinkedBlockingQueue<Runnable> poolQueue = new LinkedBlockingQueue<>();
-        workerPool = new ThreadPoolExecutor(newOptions.getNumberOfThreads(), newOptions.getNumberOfThreads(),
+        workerPool = new ThreadPoolExecutor(newOptions.getMaxConcurrency(), newOptions.getMaxConcurrency(),
                 0L, MILLISECONDS,
                 poolQueue)
         ;
@@ -662,12 +660,12 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
     private int getPoolQueueTarget() {
 //        int loadingFactor = options.getLoadingFactor();
 //        return options.getNumberOfThreads() * loadingFactor;
-        return options.getNumberOfThreads();
+        return options.getMaxConcurrency();
     }
 
     private boolean isPoolQueueLow() {
         double ninteyPercent = 0.9; // at least 90% of threads are utilised
-        boolean threadsUnderUtilised = workerPool.getActiveCount() < (options.getNumberOfThreads() * ninteyPercent);
+        boolean threadsUnderUtilised = workerPool.getActiveCount() < (options.getMaxConcurrency() * ninteyPercent);
         return getPoolQueueTarget() > workerPool.getQueue().size()
                 && wm.isNotPartitionedOrDrained()
                 && threadsUnderUtilised;

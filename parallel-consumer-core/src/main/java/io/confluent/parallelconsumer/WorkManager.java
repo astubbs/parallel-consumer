@@ -184,10 +184,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         this.options = options;
         this.consumerMgr = consumer;
 
-        backoffer = new BackoffAnalyser(options.getNumberOfThreads() * 10);
+        backoffer = new BackoffAnalyser(options.getMaxConcurrency() * 10);
     }
 
-    Map<TopicPartition, Integer> parittionsAssignmentEpochs = new HashMap<>();
+    Map<TopicPartition, Integer> partitionsAssignmentEpochs = new HashMap<>();
 
     /**
      * Load offset map for assigned partitions
@@ -213,9 +213,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private void incrementPartitionAssignmentEpoch(final Collection<TopicPartition> partitions) {
         for (final TopicPartition partition : partitions) {
-            int epoch = parittionsAssignmentEpochs.getOrDefault(partition, -1);
+            int epoch = partitionsAssignmentEpochs.getOrDefault(partition, -1);
             epoch++;
-            parittionsAssignmentEpochs.put(partition, epoch);
+            partitionsAssignmentEpochs.put(partition, epoch);
         }
     }
 
@@ -347,7 +347,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         int taken = 0;
 
 //        log.debug("Will register {} (max configured: {}) records of work ({} already registered)", gap, max, inFlight);
-        log.debug("Will attempt to register {}, {} available", requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
+        log.debug("Will attempt to register and get {} requested records, {} available", requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
 
         // process individual records
         while (taken < gap && !internalFlattenedMailQueue.isEmpty()) {
@@ -459,7 +459,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             long offset = rec.offset();
             TopicPartition tp = toTP(rec);
 
-            Integer currentPartitionEpoch = parittionsAssignmentEpochs.get(tp);
+            Integer currentPartitionEpoch = partitionsAssignmentEpochs.get(tp);
+            if (currentPartitionEpoch == null) {
+                throw new InternalRuntimeError(msg("Received message for a partition which is not assigned: {}", rec));
+            }
             var wc = new WorkContainer<>(currentPartitionEpoch, rec);
 
             raisePartitionHighestSeen(offset, tp);
@@ -534,8 +537,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         };
     }
 
+    /**
+     * @return the maximum amount of work possible
+     */
     public <R> List<WorkContainer<K, V>> maybeGetWork() {
-        return maybeGetWork(getMaxMessagesToQueue());
+        return maybeGetWork(Integer.MAX_VALUE);
     }
 
     /**
@@ -586,6 +592,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
                 var workContainer = queueEntry.getValue();
 
+                // TODO refactor this and the rest of the partition state monitoring code out
                 // check we have capacity in offset storage to process more messages
                 var topicPartitionKey = workContainer.getTopicPartition();
                 Boolean allowedMoreRecords = partitionMoreRecordsAllowedToProcess.get(topicPartitionKey);
@@ -627,19 +634,19 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         return work;
     }
+//
+//    private int getMaxMessagesToQueue() {
+//        //return options.getNumberOfThreads() * options.getLoadingFactor();
+//        double rate = successRatePer5Seconds.getRate();
+//        int newRatae = (int) rate * 2;
+//        int max = Math.max(newRatae, options.getMaxConcurrency() * 10);
+//        log.debug("max to queue: {}", max);
+//        return max;
+////        return options.getNumberOfThreads() * 10;
+//    }
 
-    private int getMaxMessagesToQueue() {
-        //return options.getNumberOfThreads() * options.getLoadingFactor();
-        double rate = successRatePer5Seconds.getRate();
-        int newRatae = (int) rate * 2;
-        int max = Math.max(newRatae, options.getNumberOfThreads() * 10);
-        log.debug("max to queue: {}", max);
-        return max;
-//        return options.getNumberOfThreads() * 10;
-    }
-
-    private final WindowedEventRate successRatePer5Seconds = new WindowedEventRate(5);
-    private final ExponentialMovingAverage successRatePer5SecondsEMA = new ExponentialMovingAverage(0.5);
+//    private final WindowedEventRate successRatePer5Seconds = new WindowedEventRate(5);
+//    private final ExponentialMovingAverage successRatePer5SecondsEMA = new ExponentialMovingAverage(0.5);
 
     public void onSuccess(WorkContainer<K, V> wc) {
         //
@@ -705,7 +712,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     protected void handleFutureResult(WorkContainer<K, V> wc) {
         MDC.put("offset", wc.toString());
         TopicPartition tp = wc.getTopicPartition();
-        if (wc.getEpoch() < parittionsAssignmentEpochs.get(tp)) {
+        if (wc.getEpoch() < partitionsAssignmentEpochs.get(tp)) {
             log.warn("message assigned from old epoch, ignore: {}", wc);
             return;
         }
@@ -801,7 +808,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     // do the entries in the gap exist in our partition queue? or are they skipped in the source log?
                     long rangeBase = (previousHighestContinuous < 0) ? 0 : previousHighestContinuous + 1;
                     Range offSetRangeToCheck = new Range(rangeBase, thisOffset);
-                    log.warn("Gap detected between {} and {}", rangeBase, thisOffset);
+                    log.trace("Gap detected between {} and {}", rangeBase, thisOffset);
                     for (var offsetToCheck : offSetRangeToCheck) {
                         WorkContainer<K, V> workToExamine = commitQueue.get((long) offsetToCheck);
                         if (workToExamine != null) {
@@ -881,7 +888,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         long relativeOffset = offset - nextExpectedOffsetFromBroker;
         if (relativeOffset < 0) {
 //            throw new InternalRuntimeError(msg("Relative offset negative {}", relativeOffset));
-            log.warn("Offset {} now below low water mark {}, no need to encode", offset, lowWaterMark);
+            log.trace("Offset {} now below low water mark {}, no need to encode", offset, lowWaterMark);
             return;
         }
 

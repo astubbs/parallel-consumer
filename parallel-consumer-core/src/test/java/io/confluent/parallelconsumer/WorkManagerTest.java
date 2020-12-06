@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -72,6 +73,12 @@ public class WorkManagerTest {
             log.debug("Heard some successful work: {}", work);
             successfulWork.add(work);
         });
+        int partition = 0;
+        assignPartition(partition);
+    }
+
+    private void assignPartition(final int partition) {
+        wm.onPartitionsAssigned(UniLists.of(new TopicPartition(INPUT_TOPIC, partition)));
     }
 
     private void registerSomeWork() {
@@ -144,13 +151,13 @@ public class WorkManagerTest {
         assertOffsets(works, of(1));
         wm.onSuccess(works.get(0));
 
-        Assertions.assertThat(successfulWork)
+        assertThat(successfulWork)
                 .extracting(x -> (int) x.getCr().offset())
                 .isEqualTo(of(0, 2, 1));
     }
 
     private AbstractListAssert<?, List<? extends Integer>, Integer, ObjectAssert<Integer>> assertOffsets(List<WorkContainer<String, String>> works, List<Integer> expected) {
-        return Assertions.assertThat(works)
+        return assertThat(works)
                 .extracting(x -> (int) x.getCr().offset())
                 .isEqualTo(expected);
     }
@@ -315,35 +322,35 @@ public class WorkManagerTest {
     public void maxPerTopic() {
     }
 
-    @Test
-    public void maxInFlight() {
-        //
-        var opts = ParallelConsumerOptions.builder();
-//        opts.softMaxNumberMessagesBeyondBaseCommitOffset(1);
-        setupWorkManager(opts.build());
+//    @Test
+//    public void maxInFlight() {
+//        //
+//        var opts = ParallelConsumerOptions.builder();
+////        opts.softMaxNumberMessagesBeyondBaseCommitOffset(1);
+//        setupWorkManager(opts.build());
+//
+//        //
+//        registerSomeWork();
+//
+//        //
+//        assertThat(wm.maybeGetWork()).hasSize(1);
+//        assertThat(wm.maybeGetWork()).isEmpty();
+//    }
 
-        //
-        registerSomeWork();
-
-        //
-        assertThat(wm.maybeGetWork()).hasSize(1);
-        assertThat(wm.maybeGetWork()).isEmpty();
-    }
-
-    @Test
-    public void maxConcurrency() {
-        //
-        var opts = ParallelConsumerOptions.builder();
-//        opts.maxMessagesToQueue(1);
-        setupWorkManager(opts.build());
-
-        //
-        registerSomeWork();
-
-        //
-        assertThat(wm.maybeGetWork()).hasSize(1);
-        assertThat(wm.maybeGetWork()).isEmpty();
-    }
+//    @Test
+//    void maxConcurrency() {
+//        //
+//        var opts = ParallelConsumerOptions.builder();
+//        opts.maxConcurrency(1);
+//        setupWorkManager(opts.build());
+//
+//        //
+//        registerSomeWork();
+//
+//        //
+//        assertThat(wm.maybeGetWork()).hasSize(1);
+//        assertThat(wm.maybeGetWork()).isEmpty();
+//    }
 
     static class FluentQueue<T> implements Iterable<T> {
         ArrayDeque<T> work = new ArrayDeque<>();
@@ -367,83 +374,83 @@ public class WorkManagerTest {
         }
     }
 
-    @Test
-    public void maxConcurrencyVsInFlightAndNoLeaks() {
-        //
-        var opts = ParallelConsumerOptions.builder();
-        opts.ordering(UNORDERED);
-
-//        opts.softMaxNumberMessagesBeyondBaseCommitOffset(3);
-//        opts.maxMessagesToQueue(2);
-
-        setupWorkManager(opts.build());
-
-        //
-        registerSomeWork();
-        registerSomeWork();
-        registerSomeWork();
-
-        //
-        assertThat(wm.getTotalWorkWaitingProcessing()).isEqualTo(9);
-
-        //
-        var work = new FluentQueue<WorkContainer<String, String>>();
-        Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(2);
-
-        //
-        assertThat(wm.maybeGetWork()).isEmpty();
-
-        // succeed
-        wm.onSuccess(work.poll());
-
-        //
-        Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(1);
-
-        //
-        wm.onFailure(work.poll());
-        // bump the clock - we're not testing delayed failure
-        advanceClockByDelay();
-
-        //
-        Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(1);
-
-        //
-        wm.onSuccess(work.poll());
-        wm.onSuccess(work.poll());
-
-        //
-        Assertions.assertThat(work.add(wm.maybeGetWork(100))).hasSize(2);
-
-        //
-        for (var ignore : work) {
-            wm.onSuccess(work.poll());
-        }
-
-        //
-        Assertions.assertThat(work.add(wm.maybeGetWork(10))).hasSize(2);
-
-        //
-        assertThat(wm.getRecordsOutForProcessing()).isEqualTo(2);
-        assertThat(wm.getNumberOfEntriesInPartitionQueues()).isEqualTo(9);
-        assertThat(wm.getWorkQueuedInShardsCount()).isEqualTo(4);
-        Assertions.assertThat(successfulWork).hasSize(5);
-
-        //
-        wm.onSuccess(work.poll());
-        wm.onSuccess(work.poll());
-
-        //
-        Assertions.assertThat(work.add(wm.maybeGetWork(10))).hasSize(2);
-        wm.onSuccess(work.poll());
-        wm.onSuccess(work.poll());
-
-        //
-        assertThat(work.size()).isEqualTo(0);
-        Assertions.assertThat(successfulWork).hasSize(9);
-        assertThat(wm.getRecordsOutForProcessing()).isEqualTo(0);
-        assertThat(wm.getWorkQueuedInShardsCount()).isEqualTo(0);
-        assertThat(wm.getNumberOfEntriesInPartitionQueues()).isEqualTo(9);
-    }
+//    @Test
+//    public void maxConcurrencyVsInFlightAndNoLeaks() {
+//        //
+//        var opts = ParallelConsumerOptions.builder();
+//        opts.ordering(UNORDERED);
+//
+////        opts.softMaxNumberMessagesBeyondBaseCommitOffset(3);
+////        opts.maxMessagesToQueue(2);
+//
+//        setupWorkManager(opts.build());
+//
+//        //
+//        registerSomeWork();
+//        registerSomeWork();
+//        registerSomeWork();
+//
+//        //
+//        assertThat(wm.getTotalWorkWaitingProcessing()).isEqualTo(9);
+//
+//        //
+//        var work = new FluentQueue<WorkContainer<String, String>>();
+//        Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(2);
+//
+//        //
+//        assertThat(wm.maybeGetWork()).isEmpty();
+//
+//        // succeed
+//        wm.onSuccess(work.poll());
+//
+//        //
+//        Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(1);
+//
+//        //
+//        wm.onFailure(work.poll());
+//        // bump the clock - we're not testing delayed failure
+//        advanceClockByDelay();
+//
+//        //
+//        Assertions.assertThat(work.add(wm.maybeGetWork())).hasSize(1);
+//
+//        //
+//        wm.onSuccess(work.poll());
+//        wm.onSuccess(work.poll());
+//
+//        //
+//        Assertions.assertThat(work.add(wm.maybeGetWork(100))).hasSize(2);
+//
+//        //
+//        for (var ignore : work) {
+//            wm.onSuccess(work.poll());
+//        }
+//
+//        //
+//        Assertions.assertThat(work.add(wm.maybeGetWork(10))).hasSize(2);
+//
+//        //
+//        assertThat(wm.getRecordsOutForProcessing()).isEqualTo(2);
+//        assertThat(wm.getNumberOfEntriesInPartitionQueues()).isEqualTo(9);
+//        assertThat(wm.getWorkQueuedInShardsCount()).isEqualTo(4);
+//        Assertions.assertThat(successfulWork).hasSize(5);
+//
+//        //
+//        wm.onSuccess(work.poll());
+//        wm.onSuccess(work.poll());
+//
+//        //
+//        Assertions.assertThat(work.add(wm.maybeGetWork(10))).hasSize(2);
+//        wm.onSuccess(work.poll());
+//        wm.onSuccess(work.poll());
+//
+//        //
+//        assertThat(work.size()).isEqualTo(0);
+//        Assertions.assertThat(successfulWork).hasSize(9);
+//        assertThat(wm.getRecordsOutForProcessing()).isEqualTo(0);
+//        assertThat(wm.getWorkQueuedInShardsCount()).isEqualTo(0);
+//        assertThat(wm.getNumberOfEntriesInPartitionQueues()).isEqualTo(9);
+//    }
 
     @Test
     @Disabled
@@ -469,6 +476,7 @@ public class WorkManagerTest {
         registerSomeWork();
 
         var partition = 2;
+        assignPartition(2);
         var rec = new ConsumerRecord<>(INPUT_TOPIC, partition, 10, "66", "value");
         var rec2 = new ConsumerRecord<>(INPUT_TOPIC, partition, 6, "66", "value");
         var rec3 = new ConsumerRecord<>(INPUT_TOPIC, partition, 8, "66", "value");
@@ -511,6 +519,7 @@ public class WorkManagerTest {
         registerSomeWork();
 
         var partition = 2;
+        assignPartition(2);
         var rec = new ConsumerRecord<>(INPUT_TOPIC, partition, 10, "key-a", "value");
         var rec2 = new ConsumerRecord<>(INPUT_TOPIC, partition, 6, "key-a", "value");
         var rec3 = new ConsumerRecord<>(INPUT_TOPIC, partition, 8, "key-b", "value");
@@ -551,24 +560,28 @@ public class WorkManagerTest {
     public void unorderedPartitionsGreedy() {
     }
 
+    /**
+     *
+     * @param quantityOfRecords the number of messages to test with
+     */
     //        @Test
     @ParameterizedTest
-    @ValueSource(ints = {1, 2, 5, 10, 20, 30, 50, 1000})
-    public void highVolumeKeyOrder(int quantity) {
+    @ValueSource(ints = {1, 2, 5, 10, 20, 30, 50, 1_000, 10_000})
+    void highVolumeKeyOrder(int quantityOfRecords) {
 //    public void highVolumeKeyOrder() {
-//        int quantity = 20000;
+//        int quantityOfRecords = 20000;
         int uniqueKeys = 100;
 
         ParallelConsumerOptions build = ParallelConsumerOptions.builder().ordering(KEY).build();
         setupWorkManager(build);
 
-        KafkaTestUtils ktu = new KafkaTestUtils(new MockConsumer(OffsetResetStrategy.EARLIEST));
+        KafkaTestUtils ktu = new KafkaTestUtils(new MockConsumer<>(OffsetResetStrategy.EARLIEST));
 
         List<Integer> keys = range(uniqueKeys).list();
 
-        var records = ktu.generateRecords(keys, quantity);
+        var records = ktu.generateRecords(keys, quantityOfRecords);
         var flattened = ktu.flatten(records.values());
-        Collections.sort(flattened, (o1, o2) -> Long.compare(o1.offset(), o2.offset()));
+        flattened.sort(Comparator.comparingLong(ConsumerRecord::offset));
 
         Map<TopicPartition, List<ConsumerRecord<String, String>>> m = new HashMap<>();
         m.put(new TopicPartition(INPUT_TOPIC, 0), flattened);
@@ -578,10 +591,10 @@ public class WorkManagerTest {
         wm.registerWork(recs);
 
         //
-        List<WorkContainer<String, String>> work = wm.maybeGetWork();
+        List<WorkContainer<String, String>> work = wm.maybeGetWork(quantityOfRecords);
 
         //
-        Assertions.assertThat(work).hasSameSizeAs(records.keySet());
+        assertThat(work).hasSameSizeAs(records.keySet());
     }
 
     @Test

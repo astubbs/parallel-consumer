@@ -80,8 +80,8 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
         // pre-produce messages to input-topic
         List<String> expectedKeys = new ArrayList<>();
-        int expectedMessageCount = 1_000_000;
-//        int expectedMessageCount = 1_000_00;
+//        int expectedMessageCount = 1_000_000;
+        int expectedMessageCount = 1_000_00;
 //        int expectedMessageCount = 1_000_0;
         log.info("Producing {} messages before starting test", expectedMessageCount);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
@@ -119,7 +119,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
                 .producer(newProducer)
                 .commitMode(commitMode)
 //                .numberOfThreads(1)
-                .numberOfThreads(100)
+                .maxConcurrency(1000)
 //                .softMaxNumberMessagesBeyondBaseCommitOffset(100_000)
 //                .softMaxNumberMessagesBeyondBaseCommitOffset(10_000)
 //                .maxMessagesToQueue(10_000)
@@ -137,12 +137,20 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
         pc.pollAndProduce(record -> {
-//                    try {
-////                        Thread.sleep(RandomUtils.nextInt(2, 100));
+                    try {
+                        // 1/5 chance of taking a long time
+                        int chance = 10;
+                        int dice = RandomUtils.nextInt(0, chance);
+                        if (dice == 0) {
+                            log.debug("slow message");
+                            Thread.sleep(100);
+                        } else {
+                            Thread.sleep(RandomUtils.nextInt(3, 20));
+                        }
 //                        Thread.sleep(5);
-//                    } catch (InterruptedException e) {
-//                        e.printStackTrace();
-//                    }
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
                     bar.stepBy(1);
                     consumedKeys.add(record.key());
                     processedCount.incrementAndGet();

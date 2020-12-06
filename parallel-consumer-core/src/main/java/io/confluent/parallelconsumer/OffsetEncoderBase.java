@@ -122,4 +122,12 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
     public void enable() {
         disabled = false;
     }
+
+    public boolean canEncoderBeUsed() {
+        return !disabled;
+    }
+
+    public boolean isEncoderNeeded() {
+        return !disabled;
+    }
 }
