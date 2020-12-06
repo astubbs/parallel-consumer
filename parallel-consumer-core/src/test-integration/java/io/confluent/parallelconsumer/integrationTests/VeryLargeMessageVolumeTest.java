@@ -55,10 +55,10 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
     int HIGH_MAX_POLL_RECORDS_CONFIG = 10_000;
 
-    public List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
-    public List<String> producedKeysAcknowledged = Collections.synchronizedList(new ArrayList<>());
-    public AtomicInteger processedCount = new AtomicInteger(0);
-    public AtomicInteger producedCount = new AtomicInteger(0);
+    List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
+    List<String> producedKeysAcknowledged = Collections.synchronizedList(new ArrayList<>());
+    AtomicInteger processedCount = new AtomicInteger(0);
+    AtomicInteger producedCount = new AtomicInteger(0);
 
 
     /**
