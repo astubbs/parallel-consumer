@@ -196,6 +196,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
         incrementPartitionAssignmentEpoch(partitions);
 
+        // init messages allowed state
+        for (final TopicPartition partition : partitions) {
+            partitionMoreRecordsAllowedToProcess.putIfAbsent(partition, true);
+        }
+
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} partitions - that's {} bytes per partition for encoding offset overruns",
                 numberOfAssignedPartitions, OffsetMapCodecManager.DefaultMaxMetadataSize / numberOfAssignedPartitions);
@@ -596,12 +601,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // check we have capacity in offset storage to process more messages
                 var topicPartitionKey = workContainer.getTopicPartition();
                 Boolean allowedMoreRecords = partitionMoreRecordsAllowedToProcess.get(topicPartitionKey);
-                if (allowedMoreRecords != null && !allowedMoreRecords) {
+                // If the record has been previosly attempted, it is already represented in the current offset encoding,
+                // and may in fact be the message holding up the partition so must be retried
+                if (!allowedMoreRecords && workContainer.hasPreviouslyFailed()) {
                     OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders.get(topicPartitionKey);
                     int encodedSizeEstimate = offsetSimultaneousEncoder.getEncodedSizeEstimate();
                     int available = getMetadataSpaceAvailablePerPartition();
-                    log.warn("Not allowed more records for the partition of this work {} continuing on to next container in shard (estimated required: {}, available: {})",
-                            topicPartitionKey, encodedSizeEstimate, available);
+                    log.warn("Not allowed more records for the partition ({}) that this record ({}) belongs to due to offset " +
+                                    "encoding back pressure, continuing on to next container in shard (estimated " +
+                                    "required: {}, max available (without tolerance threshold): {})",
+                            topicPartitionKey, workContainer.offset(), encodedSizeEstimate, available);
                     continue;
                 }
 
@@ -907,7 +916,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         int perPartition = getMetadataSpaceAvailablePerPartition();
         double tolerance = 0.7; // 90%
 
-        boolean anyPartitionsHalted = false;
+        boolean anyPartitionsAreHalted = false;
 
         // for each encoded partition so far, check if we're within tolerance of max space
         for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> entry : partitionContinuousOffsetEncoders.entrySet()) {
@@ -919,14 +928,17 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
             boolean moreMessagesAreAllowed = allowed > encodedSize;
 
+            boolean previousMessagesAllowedState = partitionMoreRecordsAllowedToProcess.get(tp);
             // update partition with tolerance threshold crossed status
             partitionMoreRecordsAllowedToProcess.put(tp, moreMessagesAreAllowed);
-            if (!moreMessagesAreAllowed) {
-                anyPartitionsHalted = true;
-                log.debug(msg("Back-pressure for {} activated, no more messages allowed, best encoder {} needs {} which is more than calculated restricted space of {} (max: {}). Messages will be allowed again once messages complete and encoding space required shrinks.",
-                        tp, encoder.getSmallestCodec(), encodedSize, allowed, OffsetMapCodecManager.DefaultMaxMetadataSize));
-            } else {
+            if (!moreMessagesAreAllowed && previousMessagesAllowedState) {
+                anyPartitionsAreHalted = true;
+                log.debug(msg("Back-pressure for {} activated, no more messages allowed, best encoder {} needs {} which is more than calculated restricted space of {} (max: {}, tolerance {}%). Messages will be allowed again once messages complete and encoding space required shrinks.",
+                        tp, encoder.getSmallestCodec(), encodedSize, allowed, perPartition, tolerance * 100));
+            } else if (moreMessagesAreAllowed && !previousMessagesAllowedState) {
                 log.trace("Partition is now unblocked, needed {}, allowed {}", encodedSize, allowed);
+            } else if (!moreMessagesAreAllowed && !previousMessagesAllowedState) {
+                log.trace("Partition {} still blocked for new message processing", tp);
             }
 
             // TODO
@@ -937,9 +949,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                         "messages complete successfully and the offset encoding space required shrinks again.");
             }
 
-
         }
-        if (anyPartitionsHalted) {
+        if (anyPartitionsAreHalted) {
             log.debug("Some partitions were halted");
         }
     }
@@ -1273,6 +1284,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     public void onOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> offsetsCommitted) {
         truncateOffsetsIncompleteMetadataPayloads(offsetsCommitted);
+        workStateIsDirtyNeedsCommitting.set(false);
     }
 
     /**
@@ -1348,7 +1360,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public Map<TopicPartition, OffsetAndMetadata> serialiseEncoders() {
         if (!isDirty()) {
-            // nothing to commit
+            log.trace("Nothing to commit, work state is clean");
             return UniMaps.of();
         }
 
@@ -1375,7 +1387,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
                 backoffer.onFailure();
             }
-
         }
 
         maybeStripOffsetPayload(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed);

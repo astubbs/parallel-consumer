@@ -22,7 +22,7 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
     @SneakyThrows
     @Override
     public void retrieveOffsetsAndCommit() {
-        log.debug("Commit starting - find completed work to commit offsets");
+        log.debug("Commit process starting");
         consumerMgr.aquireLock();
 
         try {

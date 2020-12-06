@@ -806,7 +806,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
 
     private void commitOffsetsThatAreReady() {
         if (wm.isClean()) {
-            log.debug("Nothing changed since last commit, skipping");
+            log.debug("Nothing succeeded since last commit, skipping");
             return;
         }
         committer.retrieveOffsetsAndCommit();

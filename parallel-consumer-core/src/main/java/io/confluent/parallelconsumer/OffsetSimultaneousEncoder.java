@@ -45,10 +45,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     @Getter
     private long baseOffset;
 
-    /**
-     *
-     */
-    private long highestSuceeded;
+    private long highestSucceeded;
 
     /**
      * The difference between the base offset (the offset to be committed) and the highest seen offset
@@ -80,8 +77,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * The encoders to run
      */
     // TODO do we really need both views?
-    private final HashSet<OffsetEncoderBase> encoders = new HashSet<>();
-    private final List<OffsetEncoderBase> sortedEncoders = new ArrayList<>();
+    final HashSet<OffsetEncoderBase> encoders = new HashSet<>();
+    final List<OffsetEncoderBase> sortedEncoders = new ArrayList<>();
 
     /**
      * @param lowWaterMark The highest committable offset
@@ -117,12 +114,12 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     private synchronized void initialise(final long currentBaseOffset, long currentHighestCompleted) {
         log.trace("Initialising {},{}", currentBaseOffset, currentHighestCompleted);
         this.baseOffset = currentBaseOffset;
-        this.highestSuceeded = currentHighestCompleted;
+        this.highestSucceeded = currentHighestCompleted;
 
-        this.length = initLength(currentBaseOffset, highestSuceeded);
+        this.length = initLength(currentBaseOffset, highestSucceeded);
 
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
-            log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, this.highestSuceeded);
+            log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, this.highestSucceeded);
         }
     }
 
@@ -210,11 +207,11 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     public OffsetSimultaneousEncoder runOverIncompletes(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
 //        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
 
-        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, highestSuceeded);
+        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, highestSucceeded);
         log.trace("Incompletes are: {}", incompleteOffsets);
 
         //
-        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.highestSuceeded, length);
+        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.highestSucceeded, length);
         /*
          * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
          *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
@@ -243,6 +240,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     }
 
     public void serializeAllEncoders() {
+        sortedEncodingData.clear();
         List<OffsetEncoderBase> toRemove = new ArrayList<>();
         for (OffsetEncoderBase encoder : encoders) {
 //            try {
@@ -346,8 +344,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         if (currentBaseOffset < this.baseOffset)
             throw new InternalRuntimeError(msg("New base offset {} smaller than previous {}", currentBaseOffset, baseOffset));
 
-        this.highestSuceeded = currentHighestCompleted; // always track, change has no impact on me
-        this.length = initLength(currentBaseOffset, highestSuceeded);
+        this.highestSucceeded = currentHighestCompleted; // always track, change has no impact on me
+        this.length = initLength(currentBaseOffset, highestSucceeded);
 
         if (reinitialise) {
             initialise(currentBaseOffset, currentHighestCompleted);
@@ -451,6 +449,6 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public String toString() {
-        return msg("{} nextExpected: {}, highest succeeded: {}, encoders:{}", getClass().getSimpleName(), baseOffset, highestSuceeded, encoders);
+        return msg("{} nextExpected: {}, highest succeeded: {}, encoders:{}", getClass().getSimpleName(), baseOffset, highestSucceeded, encoders);
     }
 }

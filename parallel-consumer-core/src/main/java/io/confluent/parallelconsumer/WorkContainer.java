@@ -44,8 +44,12 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 
     @Getter
     private final ConsumerRecord<K, V> cr;
+
+    @Getter
     private int numberOfFailedAttempts;
+
     private Optional<Instant> failedAt = Optional.empty();
+
     private boolean inFlight = false;
 
     //    @Getter
@@ -153,5 +157,9 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 //        return "WorkContainer(" + toTP(cr) + ":" + cr.offset() + ":" + cr.key() + ":" + cr.value() + ")";
 //        return "WorkContainer(" + getTopicPartition() + ":" + cr.offset() + ":" + cr.key() + ")";
         return StringUtils.msg("WorkContainer({}:{}:{}:{})", getTopicPartition(), cr.offset(), cr.key(), isUserFunctionSucceeded());
+    }
+
+    public boolean hasPreviouslyFailed() {
+        return numberOfFailedAttempts > 0;
     }
 }

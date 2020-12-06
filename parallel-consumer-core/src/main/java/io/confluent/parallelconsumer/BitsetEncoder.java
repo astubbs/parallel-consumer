@@ -50,7 +50,7 @@ class BitsetEncoder extends OffsetEncoderBase {
     private int originalLength;
 //    private ByteBuffer wrappedBitsetBytesBuffer;
 
-    private BitSet bitSet = new BitSet();
+    BitSet bitSet = new BitSet();
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
@@ -233,7 +233,7 @@ class BitsetEncoder extends OffsetEncoderBase {
         // truncate at new relative delta
         try {
 //                newBs.or(this.bitSet);
-            int endIndex = safeCast(baseDelta + originalLength);
+            int endIndex = safeCast(baseDelta + originalLength + 1);
             int startIndex = (int) baseDelta;
             BitSet truncated = this.bitSet.get(startIndex, endIndex);
             this.bitSet = new BitSet(safeCast(newLength));

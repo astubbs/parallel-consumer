@@ -13,9 +13,12 @@ import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Test;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static io.confluent.csid.utils.ThreadUtils.sleepQueietly;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.TRANSACTIONAL_PRODUCER;
@@ -23,7 +26,9 @@ import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
+import static org.awaitility.Awaitility.await;
 import static org.awaitility.Awaitility.waitAtMost;
+import static pl.tlinkowski.unij.api.UniLists.of;
 
 @Slf4j
 public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBase {
@@ -42,19 +47,23 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
         OffsetMapCodecManager.forcedCodec = Optional.of(OffsetEncoding.BitSetV2); // force one that takes a predictable large amount of space
 
         //
-        int maxConcurrency = 200;
-        ParallelConsumerOptions<String, String> build = ParallelConsumerOptions.<String, String>builder()
-                .commitMode(TRANSACTIONAL_PRODUCER)
-                .maxConcurrency(maxConcurrency)
-                .build();
-        WorkManager<String, String> wm = new WorkManager<>(build, consumerManager);
+//        int maxConcurrency = 200;
+//        ParallelConsumerOptions<String, String> build = ParallelConsumerOptions.<String, String>builder()
+//                .commitMode(TRANSACTIONAL_PRODUCER)
+//                .maxConcurrency(maxConcurrency)
+//                .build();
+//        WorkManager<String, String> wm = new WorkManager<>(build, consumerManager);
+
+        ktu.send(consumerSpy, ktu.generateRecords(numRecords));
 
         AtomicInteger processedCount = new AtomicInteger(0);
+        CountDownLatch msgLock = new CountDownLatch(1);
         parallelConsumer.poll((rec) -> {
             // block the partition to create bigger and bigger offset encoding blocks
             if (rec.offset() == 0) {
                 log.debug("force first message to 'never' complete, causing a large offset encoding (lots of messages completing above the low water mark");
-                sleepQueietly(20 * 1000);
+                awaitLatch(msgLock, 60);
+                log.debug("very slow message awoken");
             } else {
                 sleepQueietly(5);
             }
@@ -66,8 +75,6 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
 //            ConsumerRecords<String, String> crs = buildConsumerRecords(numRecords);
 //            wm.registerWork(crs);
 //        }
-
-        ktu.send(consumerSpy, ktu.generateRecords(numRecords));
 
         // wait for all pre-produced messages to be processed and produced
         Assertions.useRepresentation(new TrimListRepresentation());
@@ -84,25 +91,36 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
 //                        all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").hasSameSizeAs(expectedKeys);
 //                        all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are produced ok ").hasSameSizeAs(expectedKeys);
 //                        all.assertAll();
-                    assertThat(processedCount).isEqualTo(numRecords);
+                    assertThat(processedCount.get() - 1).isEqualTo(numRecords);
                 });
 //        } catch (ConditionTimeoutException e) {
 //            fail(failureMessage + "\n" + e.getMessage());
 //        }
 
         // assert commit ok
+        assertCommits(of(0));
+        WorkManager<String, String> wm = parallelConsumer.wm;
+        assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse();
 
         // feed more messages
+        ktu.send(consumerSpy, ktu.generateRecords(numRecords));
 
         // assert partition blocked
+        assertCommits(of(0));
+        assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse();
 
-        // assert committed new messages still ok
-
-        // finish some messages
+        // finish some messages - release latch
+        msgLock.countDown();
 
         // assert no partitions blocked
+        await().untilAsserted(() -> assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse());
 
         // assert all committed
+        await().untilAsserted(() -> assertCommits(of(99)));
+    }
+
+    @Test
+    void failedMessagesThatCanRetryDontDeadlockABlockedPartition() {
     }
 
 }
