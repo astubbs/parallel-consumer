@@ -7,6 +7,7 @@ package io.confluent.parallelconsumer.integrationTests;
 import io.confluent.csid.utils.EnumCartesianProductTestSets;
 import io.confluent.csid.utils.StringUtils;
 import io.confluent.csid.utils.TrimListRepresentation;
+import io.confluent.parallelconsumer.InternalRuntimeError;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -34,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.TRANSACTIONAL_PRODUCER;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.time.Duration.ofSeconds;
@@ -161,16 +163,35 @@ public class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, 
 
         // wait for all pre-produced messages to be processed and produced
         Assertions.useRepresentation(new TrimListRepresentation());
-        var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
+        var failureMessage = msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
+
+        AtomicInteger lastSeen = new AtomicInteger(0);
+        AtomicInteger rounds = new AtomicInteger(0);
+        final int roundsAllowed = 3;
         try {
-            waitAtMost(ofSeconds(20)).alias(failureMessage).untilAsserted(() -> {
-                log.info("Processed-count: {}, Produced-count: {}", processedCount.get(), producedCount.get());
-                SoftAssertions all = new SoftAssertions();
-                all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").hasSameSizeAs(expectedKeys);
-                all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are produced ok ").hasSameSizeAs(expectedKeys);
-                all.assertAll();
-            });
+            waitAtMost(ofSeconds(20))
+                    .failFast(() -> {
+                        boolean progress = processedCount.get() > lastSeen.get();
+                        boolean warmedUp = processedCount.get() > 0;
+                        boolean enoughAttempts = rounds.get() > roundsAllowed;
+                        if (warmedUp && !progress && enoughAttempts) {
+                            return true;
+                        } else if (progress) {
+                            rounds.set(0);
+                        }
+                        lastSeen.set(processedCount.get());
+                        rounds.incrementAndGet();
+                        return false;
+                    }, () -> new InternalRuntimeError(msg("No progress beyond {} records after {} rounds", processedCount, rounds)))
+                    .alias(failureMessage)
+                    .untilAsserted(() -> {
+                        log.info("Processed-count: {}, Produced-count: {}", processedCount.get(), producedCount.get());
+                        SoftAssertions all = new SoftAssertions();
+                        all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").hasSameSizeAs(expectedKeys);
+                        all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are produced ok ").hasSameSizeAs(expectedKeys);
+                        all.assertAll();
+                    });
         } catch (ConditionTimeoutException e) {
             log.debug("Expected keys (size {})", expectedKeys.size());
             log.debug("Consumed keys ack'd (size {})", consumedKeys.size());

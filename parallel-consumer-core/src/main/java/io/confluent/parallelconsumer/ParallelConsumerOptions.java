@@ -106,9 +106,14 @@ public class ParallelConsumerOptions<K, V> {
      * limiting support #24.
      * <p>
      * In the core module, this sets the number of threads to use in the core's thread pool.
+     * <p>
+     * It's recommended to set this quite high, much higher than core count, as it's expected that these threads will
+     * spend most of their time blocked waiting for IO. For automatic setting of this variable, look out for issue
+     * https://github.com/confluentinc/parallel-consumer/issues/21 Dynamic concurrency control with flow control or tcp
+     * congestion control theory #21.
      */
     @Builder.Default
-    private final int maxConcurrency = 16;
+    private final int maxConcurrency = 100;
 
     public void validate() {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
