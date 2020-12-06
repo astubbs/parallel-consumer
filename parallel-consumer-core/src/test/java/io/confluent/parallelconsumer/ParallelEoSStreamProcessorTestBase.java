@@ -90,7 +90,7 @@ public class ParallelEoSStreamProcessorTestBase {
      * Time to wait to verify some assertion types
      */
     long verificationWaitDelay;
-    protected TopicPartition topicPartition;
+    protected TopicPartition topicPartition = new TopicPartition(INPUT_TOPIC, 0);
 
     @BeforeEach
     public void setupAsyncConsumerTestBase() {
@@ -254,8 +254,8 @@ public class ParallelEoSStreamProcessorTestBase {
     protected void waitForCommitExact(int partition, int offset) {
         log.debug("Waiting for commit offset {} on partition {}", offset, partition);
         var expectedOffset = new OffsetAndMetadata(offset, "");
-        this.topicPartition = new TopicPartition(INPUT_TOPIC, partition);
-        var expectedOffsetMap = UniMaps.of(topicPartition, expectedOffset);
+        TopicPartition specificTP = new TopicPartition(INPUT_TOPIC, partition);
+        var expectedOffsetMap = UniMaps.of(specificTP, expectedOffset);
         verify(producerSpy, timeout(defaultTimeoutMs).times(1)).sendOffsetsToTransaction(argThat(
                 (offsetMap) -> offsetMap.equals(expectedOffsetMap)),
                 any(ConsumerGroupMetadata.class));

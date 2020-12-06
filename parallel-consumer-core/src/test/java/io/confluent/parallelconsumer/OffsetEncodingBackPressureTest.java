@@ -1,42 +1,33 @@
 package io.confluent.parallelconsumer;
 
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.StringUtils;
-import io.confluent.csid.utils.ThreadUtils;
 import io.confluent.csid.utils.TrimListRepresentation;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.assertj.core.api.Assertions;
-import org.assertj.core.api.SoftAssertions;
-import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Test;
-import pl.tlinkowski.unij.api.UniLists;
 
-import java.util.*;
+import java.util.List;
+import java.util.Optional;
+import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static io.confluent.csid.utils.ThreadUtils.sleepQueietly;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.TRANSACTIONAL_PRODUCER;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.fail;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Awaitility.waitAtMost;
-import static pl.tlinkowski.unij.api.UniLists.of;
 
 @Slf4j
-public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBase {
+public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase {
 
     /**
      * Tests that when required space for encoding offset becomes too large, back pressure is put into the system so
      * that no further messages for the given partitions can be taken for processing, until more messages complete.
      */
+    @SneakyThrows
     @Test
     void backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing() {
         // mock messages downloaded for processing > MAX_TO_QUEUE
@@ -91,14 +82,30 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
 //                        all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").hasSameSizeAs(expectedKeys);
 //                        all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are produced ok ").hasSameSizeAs(expectedKeys);
 //                        all.assertAll();
-                    assertThat(processedCount.get() - 1).isEqualTo(numRecords);
+                    assertThat(processedCount.get()).isEqualTo(numRecords - 1);
                 });
 //        } catch (ConditionTimeoutException e) {
 //            fail(failureMessage + "\n" + e.getMessage());
 //        }
 
         // assert commit ok
-        assertCommits(of(0));
+        {
+            waitForSomeLoopCycles(1);
+            parallelConsumer.requestCommitAsap();
+            waitForSomeLoopCycles(1);
+            List<OffsetAndMetadata> offsetAndMetadataList = extractAllPartitionsOffsetsAndMetadataSequentially();
+            assertThat(offsetAndMetadataList).hasSize(1);
+            OffsetAndMetadata offsetAndMetadata = offsetAndMetadataList.get(0);
+            assertThat(offsetAndMetadata.offset()).isEqualTo(0L);
+            String metadata = offsetAndMetadata.metadata();
+            ParallelConsumer.Tuple<Long, TreeSet<Long>> longTreeSetTuple = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(0, metadata);
+            Long highestSucceeded = longTreeSetTuple.getLeft();
+            assertThat(highestSucceeded).isEqualTo(99L);
+            TreeSet<Long> incompletes = longTreeSetTuple.getRight();
+            assertThat(incompletes).isNotEmpty().contains(0L).doesNotContain(1L, 50L, 99L);
+        }
+
+        //
         WorkManager<String, String> wm = parallelConsumer.wm;
         assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse();
 
@@ -106,17 +113,19 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
         ktu.send(consumerSpy, ktu.generateRecords(numRecords));
 
         // assert partition blocked
-        assertCommits(of(0));
+        waitForOneLoopCycle();
         assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse();
 
-        // finish some messages - release latch
+        // release message that was blocking partition progression
         msgLock.countDown();
 
         // assert no partitions blocked
-        await().untilAsserted(() -> assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse());
+        waitForOneLoopCycle();
+        await().untilAsserted(() -> assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isTrue());
 
         // assert all committed
-        await().untilAsserted(() -> assertCommits(of(99)));
+        await().untilAsserted(() -> assertThat(extractAllPartitionsOffsetsSequentially()).contains(199));
+        await().untilAsserted(() -> assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isTrue());
     }
 
     @Test
