@@ -5,9 +5,8 @@ package io.confluent.parallelconsumer.integrationTests;
  */
 
 import io.confluent.csid.utils.EnumCartesianProductTestSets;
-import io.confluent.csid.utils.StringUtils;
+import io.confluent.csid.utils.ProgressTracker;
 import io.confluent.csid.utils.TrimListRepresentation;
-import io.confluent.parallelconsumer.InternalRuntimeError;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -166,24 +165,11 @@ public class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, 
         var failureMessage = msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
 
-        AtomicInteger lastSeen = new AtomicInteger(0);
-        AtomicInteger rounds = new AtomicInteger(0);
-        final int roundsAllowed = 3;
+
+        ProgressTracker progress = new ProgressTracker(processedCount);
         try {
             waitAtMost(ofSeconds(20))
-                    .failFast(() -> {
-                        boolean progress = processedCount.get() > lastSeen.get();
-                        boolean warmedUp = processedCount.get() > 0;
-                        boolean enoughAttempts = rounds.get() > roundsAllowed;
-                        if (warmedUp && !progress && enoughAttempts) {
-                            return true;
-                        } else if (progress) {
-                            rounds.set(0);
-                        }
-                        lastSeen.set(processedCount.get());
-                        rounds.incrementAndGet();
-                        return false;
-                    }, () -> new InternalRuntimeError(msg("No progress beyond {} records after {} rounds", processedCount, rounds)))
+                    .failFast(progress::checkForProgress, progress::getError)
                     .alias(failureMessage)
                     .untilAsserted(() -> {
                         log.info("Processed-count: {}, Produced-count: {}", processedCount.get(), producedCount.get());

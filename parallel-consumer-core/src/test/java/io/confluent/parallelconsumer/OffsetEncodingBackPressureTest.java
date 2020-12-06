@@ -94,8 +94,8 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
             parallelConsumer.requestCommitAsap();
             waitForSomeLoopCycles(1);
             List<OffsetAndMetadata> offsetAndMetadataList = extractAllPartitionsOffsetsAndMetadataSequentially();
-            assertThat(offsetAndMetadataList).hasSize(1);
-            OffsetAndMetadata offsetAndMetadata = offsetAndMetadataList.get(0);
+            assertThat(offsetAndMetadataList).isNotEmpty();
+            OffsetAndMetadata offsetAndMetadata = offsetAndMetadataList.get(offsetAndMetadataList.size());
             assertThat(offsetAndMetadata.offset()).isEqualTo(0L);
             String metadata = offsetAndMetadata.metadata();
             ParallelConsumer.Tuple<Long, TreeSet<Long>> longTreeSetTuple = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(0, metadata);

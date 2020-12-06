@@ -49,7 +49,7 @@ public class ParallelEoSStreamProcessorTestBase {
      *
      * @see LongPollingMockConsumer#poll(Duration)
      */
-    public static final int DEFAULT_BROKER_POLL_FREQUENCY_MS = 2000;
+    public static final int DEFAULT_BROKER_POLL_FREQUENCY_MS = 100;
 
     /**
      * The commit interval for the main {@link ParallelEoSStreamProcessor} control thread. Actually the timeout that we
@@ -59,7 +59,7 @@ public class ParallelEoSStreamProcessorTestBase {
      * @see ParallelEoSStreamProcessor#workMailBox
      * @see ParallelEoSStreamProcessor#processWorkCompleteMailBox
      */
-    public static final int DEFAULT_COMMIT_INTERVAL_MAX_MS = 2000; //TODO
+    public static final int DEFAULT_COMMIT_INTERVAL_MAX_MS = 100; //TODO
 
     protected ConsumerManager<String, String> consumerManager;
     protected LongPollingMockConsumer<String, String> consumerSpy;
@@ -67,7 +67,7 @@ public class ParallelEoSStreamProcessorTestBase {
 
     protected ParallelEoSStreamProcessor<String, String> parallelConsumer;
 
-    protected static int defaultTimeoutSeconds = 20;
+    protected static int defaultTimeoutSeconds = 5;
 
     protected static Duration defaultTimeout = ofSeconds(defaultTimeoutSeconds);
     protected static long defaultTimeoutMs = defaultTimeout.toMillis();

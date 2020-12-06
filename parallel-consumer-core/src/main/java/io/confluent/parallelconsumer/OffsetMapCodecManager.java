@@ -145,7 +145,7 @@ public class OffsetMapCodecManager<K, V> {
         byte[] result;
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
-            log.warn("Forcing use of {}, for testing", forcedOffsetEncoding);
+            log.debug("Forcing use of {}, for testing", forcedOffsetEncoding);
             Map<OffsetEncoding, byte[]> encodingMap = simultaneousEncoder.getEncodingMap();
             byte[] bytes = encodingMap.get(forcedOffsetEncoding);
             if (bytes == null)
