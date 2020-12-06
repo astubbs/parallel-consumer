@@ -42,10 +42,10 @@ class BitsetEncoder extends OffsetEncoderBase {
 
     public static final Integer MAX_LENGTH_ENCODABLE = Integer.MAX_VALUE;
 
-    private final int originalLength;
+    private int originalLength;
 //    private ByteBuffer wrappedBitsetBytesBuffer;
 
-    private BitSet bitSet;
+    private BitSet bitSet = new BitSet();
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
@@ -58,9 +58,7 @@ class BitsetEncoder extends OffsetEncoderBase {
 
         this.version = newVersion;
 
-        bitSet = new BitSet(length);
-
-        this.originalLength = length;
+        reinitialise(baseOffset, length);
     }
 
     private ByteBuffer constructWrappedByteBuffer(final int length, final Version newVersion) throws BitSetEncodingNotSupportedException {
@@ -211,24 +209,43 @@ class BitsetEncoder extends OffsetEncoderBase {
             throw new InternalRuntimeError("");
 
         if (reinitialise) {
-            long baseDelta = newBaseOffset - originalBaseOffset;
-            // truncate at new relative delta
-            try {
-//                newBs.or(this.bitSet);
-                int endIndex = safeCast(baseDelta + originalLength);
-                int startIndex = (int) baseDelta;
-                BitSet truncated = this.bitSet.get(startIndex, endIndex);
-                this.bitSet = new BitSet(safeCast(newLength));
-                this.bitSet.or(truncated); // fill with old values
-            } catch (IndexOutOfBoundsException i) {
-                log.error("{}", i);
-            }
+            reinitialise(newBaseOffset, newLength);
+        }
 
-            // TODO throws away whats returned
-            constructWrappedByteBuffer(safeCast(newLength), this.version);
+    }
+
+    private void reinitialise(final long newBaseOffset, final long newLength) throws BitSetEncodingNotSupportedException {
+        if (newLength == -1) {
+            log.warn("Nothing to encode, highest successful offset one behing out starting point");
+            bitSet = new BitSet();
+            this.originalLength = Math.toIntExact(newLength);
+            return;
+        } else if (newLength < -1) {
+            throw new InternalRuntimeError("Invalid state - highest successful too far behind starting point");
+        }
+
+        long baseDelta = newBaseOffset - originalBaseOffset;
+        // truncate at new relative delta
+        try {
+//                newBs.or(this.bitSet);
+            int endIndex = safeCast(baseDelta + originalLength);
+            int startIndex = (int) baseDelta;
+            BitSet truncated = this.bitSet.get(startIndex, endIndex);
+            this.bitSet = new BitSet(safeCast(newLength));
+            this.bitSet.or(truncated); // fill with old values
+        } catch (IndexOutOfBoundsException i) {
+            log.error("{}", i);
+        }
+
+//        bitSet = new BitSet(length);
+
+        this.originalLength = Math.toIntExact(newLength);
+
+        // TODO throws away whats returned
+        constructWrappedByteBuffer(safeCast(newLength), this.version);
 
 //            this.bitSet = new BitSet((int) newLength);
-        }
+
 
         enable();
     }

@@ -12,6 +12,7 @@ import java.nio.ByteBuffer;
 import java.util.*;
 
 import static io.confluent.csid.utils.Range.range;
+import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.OffsetEncoding.Version.v1;
 import static io.confluent.parallelconsumer.OffsetEncoding.Version.v2;
 
@@ -346,7 +347,7 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         }
 
         if (currentBaseOffset < this.baseOffset)
-            throw new InternalRuntimeError("");
+            throw new InternalRuntimeError(msg("New base offset {} smaller than previous {}", currentBaseOffset, baseOffset));
 
         if (reinitialise) {
             initialise(currentBaseOffset, currentHighestCompleted);
