@@ -81,7 +81,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         // pre-produce messages to input-topic
         List<String> expectedKeys = new ArrayList<>();
 //        int expectedMessageCount = 1_000_000;
-        int expectedMessageCount = 1_000_00;
+        int expectedMessageCount = 100_000;
 //        int expectedMessageCount = 1_000_0;
         log.info("Producing {} messages before starting test", expectedMessageCount);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
@@ -142,7 +142,6 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
                         int chance = 10;
                         int dice = RandomUtils.nextInt(0, chance);
                         if (dice == 0) {
-                            log.debug("slow message");
                             Thread.sleep(100);
                         } else {
                             Thread.sleep(RandomUtils.nextInt(3, 20));

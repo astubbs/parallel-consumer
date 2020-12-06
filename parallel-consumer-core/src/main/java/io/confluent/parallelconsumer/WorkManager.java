@@ -956,8 +956,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     private int getMetadataSpaceAvailablePerPartition() {
-//        int defaultMaxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
-        int defaultMaxMetadataSize = 40; // TODO DELETE
+        int defaultMaxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
         // TODO what else is the overhead in b64 encoding?
         int maxMetadataSize = defaultMaxMetadataSize - OffsetEncoding.standardOverhead;
         if (numberOfAssignedPartitions == 0) {

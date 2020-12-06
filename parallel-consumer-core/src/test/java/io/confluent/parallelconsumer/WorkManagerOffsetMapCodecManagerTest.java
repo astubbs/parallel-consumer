@@ -272,7 +272,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     void largeOffsetMap() {
         wm.raisePartitionHighestSeen(200L, tp);
         byte[] bytes = om.encodeOffsetsCompressed(0L, tp, incomplete);
-        assertThat(bytes.length).as("very small").isLessThan(30);
+        assertThat(bytes).as("very small").hasSizeLessThan(30);
     }
 
     @SneakyThrows
