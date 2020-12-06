@@ -1,5 +1,7 @@
 package io.confluent.parallelconsumer;
 
+import lombok.ToString;
+
 import java.nio.ByteBuffer;
 
 import static io.confluent.parallelconsumer.OffsetEncoding.ByteArray;

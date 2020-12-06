@@ -2,8 +2,10 @@ package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.KafkaTestUtils;
 import io.confluent.csid.utils.StringUtils;
+import io.confluent.csid.utils.ThreadUtils;
 import io.confluent.csid.utils.TrimListRepresentation;
 import lombok.extern.slf4j.Slf4j;
+
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static io.confluent.csid.utils.ThreadUtils.sleepQueietly;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.TRANSACTIONAL_PRODUCER;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -33,9 +36,10 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
     void backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing() {
         // mock messages downloaded for processing > MAX_TO_QUEUE
         // make sure work manager doesn't queue more than MAX_TO_QUEUE
-        final int numRecords = 1_000_0;
+//        final int numRecords = 1_000_0;
+        final int numRecords = 1_00;
 
-        OffsetMapCodecManager.forcedCodec = OffsetEncoding.BitSetV2; // force one that takes a predictable large amount of space
+        OffsetMapCodecManager.forcedCodec = Optional.of(OffsetEncoding.BitSetV2); // force one that takes a predictable large amount of space
 
         //
         int maxConcurrency = 200;
@@ -49,12 +53,10 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
         parallelConsumer.poll((rec) -> {
             // block the partition to create bigger and bigger offset encoding blocks
             if (rec.offset() == 0) {
-                try {
-                    // force first message to "never" complete, causing a large offset encoding (lots of messages completing above the low water mark
-                    Thread.sleep(20 * 1000);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+                log.debug("force first message to 'never' complete, causing a large offset encoding (lots of messages completing above the low water mark");
+                sleepQueietly(20 * 1000);
+            } else {
+                sleepQueietly(5);
             }
             processedCount.getAndIncrement();
         });
@@ -88,6 +90,19 @@ public class OffsetEncodingBackPressure extends ParallelEoSStreamProcessorTestBa
 //            fail(failureMessage + "\n" + e.getMessage());
 //        }
 
+        // assert commit ok
+
+        // feed more messages
+
+        // assert partition blocked
+
+        // assert committed new messages still ok
+
+        // finish some messages
+
+        // assert no partitions blocked
+
+        // assert all committed
     }
 
 }

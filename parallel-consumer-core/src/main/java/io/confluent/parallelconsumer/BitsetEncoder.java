@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.JavaUtils;
 import lombok.SneakyThrows;
+import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.BufferOverflowException;
@@ -33,15 +34,19 @@ import static io.confluent.parallelconsumer.OffsetEncoding.*;
  * @see RunLengthEncoder
  * @see OffsetBitSet
  */
+@ToString(onlyExplicitlyIncluded = true, callSuper = true)
 @Slf4j
 class BitsetEncoder extends OffsetEncoderBase {
 
+    @ToString.Include
     private final Version version; // default to new version
 
+    @ToString.Include
     private static final Version DEFAULT_VERSION = Version.v2;
 
     public static final Integer MAX_LENGTH_ENCODABLE = Integer.MAX_VALUE;
 
+    @ToString.Include
     private int originalLength;
 //    private ByteBuffer wrappedBitsetBytesBuffer;
 
@@ -183,7 +188,7 @@ class BitsetEncoder extends OffsetEncoderBase {
 
     @Override
     public int getEncodedSizeEstimate() {
-        int logicalSize = bitSet.length() / Byte.SIZE;
+        int logicalSize = originalLength / Byte.SIZE;
         return logicalSize + getLengthEntryBytes();
     }
 

@@ -849,10 +849,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //                    }
             }
         }
-        for (final TopicPartition topicPartition : partitionsSeenForLogging) {
-            Long oldOffset = originalMarks.get(topicPartition);
-            Long newOffset = partitionOffsetHighestContinuousSucceeded.get(topicPartition);
-            log.debug("Low water mark (highest continuous completed) for partition {} moved from {} to {}", topicPartition, oldOffset, newOffset);
+        for (final TopicPartition tp : partitionsSeenForLogging) {
+            Long oldOffset = originalMarks.get(tp);
+            Long newOffset = partitionOffsetHighestContinuousSucceeded.get(tp);
+            log.debug("Low water mark (highest continuous completed) for partition {} moved from {} to {}, highest succeeded {}",
+                    tp, oldOffset, newOffset, partitionOffsetHighestSucceeded.get(tp));
         }
     }
 
@@ -917,13 +918,26 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             int allowed = (int) (perPartition * tolerance);
 
             boolean moreMessagesAreAllowed = allowed > encodedSize;
-            // tolerance threshold crossed - turn on back pressure - no more for this partition
+
+            // update partition with tolerance threshold crossed status
             partitionMoreRecordsAllowedToProcess.put(tp, moreMessagesAreAllowed);
             if (!moreMessagesAreAllowed) {
                 anyPartitionsHalted = true;
-                log.debug(msg("No more messages allowed for partition {}, best encoder {} needs {} which is more than calculated restricted space of {} (max: {})",
+                log.debug(msg("Back-pressure for {} activated, no more messages allowed, best encoder {} needs {} which is more than calculated restricted space of {} (max: {}). Messages will be allowed again once messages complete and encoding space required shrinks.",
                         tp, encoder.getSmallestCodec(), encodedSize, allowed, OffsetMapCodecManager.DefaultMaxMetadataSize));
+            } else {
+                log.trace("Partition is now unblocked, needed {}, allowed {}", encodedSize, allowed);
             }
+
+            // TODO
+            boolean offsetEncodingAllreadyWontFitAtAll = encodedSize > perPartition;
+            if (offsetEncodingAllreadyWontFitAtAll) {
+                log.warn("Despite attempts, current offset encoding requirements are now above what will fit. Offset encoding " +
+                        "will be dropped for this round, but no more messages for this partition will be attempted until " +
+                        "messages complete successfully and the offset encoding space required shrinks again.");
+            }
+
+
         }
         if (anyPartitionsHalted) {
             log.debug("Some partitions were halted");
@@ -931,8 +945,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     private int getMetadataSpaceAvailablePerPartition() {
-//        int maxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
-        int maxMetadataSize = 5;
+//        int defaultMaxMetadataSize = OffsetMapCodecManager.DefaultMaxMetadataSize;
+        int defaultMaxMetadataSize = 40; // TODO DELETE
+        // TODO what else is the overhead in b64 encoding?
+        int maxMetadataSize = defaultMaxMetadataSize - OffsetEncoding.standardOverhead;
         if (numberOfAssignedPartitions == 0) {
             // no partitions assigned - all available
             return maxMetadataSize;
@@ -1343,6 +1359,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         for (final Map.Entry<TopicPartition, OffsetSimultaneousEncoder> tpEncoder : partitionContinuousOffsetEncoders.entrySet()) {
             TopicPartition topicPartitionKey = tpEncoder.getKey();
             OffsetSimultaneousEncoder precomputed = tpEncoder.getValue();
+            log.trace("Serialising available encoders for {} using {}", topicPartitionKey, precomputed);
             try {
                 precomputed.serializeAllEncoders();
 
@@ -1350,7 +1367,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 String smallestMetadataPacked = om.makeOffsetMetadataPayload(precomputed);
 
                 totalOffsetMetaCharacterLengthUsed += smallestMetadataPacked.length();
-                log.debug("comparisonOffsetPayloadString :{}:", smallestMetadataPacked);
 
                 long nextExpectedOffsetFromBroker = precomputed.getBaseOffset();
                 OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(nextExpectedOffsetFromBroker, smallestMetadataPacked);

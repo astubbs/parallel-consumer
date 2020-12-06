@@ -1,10 +1,12 @@
 package io.confluent.parallelconsumer;
 
 import lombok.SneakyThrows;
+import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+
 
 /**
  * Base OffsetEncoder
@@ -15,17 +17,20 @@ import java.nio.ByteBuffer;
  *
  * @see WorkManager
  */
+@ToString(onlyExplicitlyIncluded = true)
 @Slf4j
 abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<OffsetEncoderBase> {
 
     private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
 
+    @ToString.Include
     private boolean disabled = false;
 
     /**
      * The highest committable offset - the next expected offset to be returned by the broker. So by definition, this
      * index in our offset map we're encoding, is always incomplete.
      */
+    @ToString.Include
     protected long originalBaseOffset;
 
     public OffsetEncoderBase(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
@@ -53,14 +58,23 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
         return OffsetSimpleSerialisation.compressZstd(this.getEncodedBytes());
     }
 
-    void register() throws EncodingNotSupportedException {
-        final byte[] bytes = this.serialise();
-        final OffsetEncoding encodingType = this.getEncodingType();
-        log.debug("Registering {} with size {}", getEncodingType(), bytes.length);
-        this.register(encodingType, bytes);
+    void registerSerialisedDataIfEnabled() { //throws EncodingNotSupportedException {
+        if (!disabled) {
+            final byte[] bytes;
+            try {
+                bytes = this.serialise();
+            } catch (EncodingNotSupportedException e) {
+                throw new InternalRuntimeError(e);
+            }
+            final OffsetEncoding encodingType = this.getEncodingType();
+//            log.trace("Registering {} with size {}", getEncodingType(), bytes.length);
+            this.registerSerialisedData(encodingType, bytes);
+        } else {
+            log.trace("{} disabled, not registering serialised data", this);
+        }
     }
 
-    private void register(final OffsetEncoding type, final byte[] bytes) {
+    private void registerSerialisedData(final OffsetEncoding type, final byte[] bytes) {
         int encodedSizeEstimate = getEncodedSizeEstimate();
         int length = bytes.length;
         log.debug("Registering {}, with actual size {} vs estimate {}", type, length, encodedSizeEstimate);
@@ -72,7 +86,7 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
     void registerCompressed() {
         final byte[] compressed = compress();
         final OffsetEncoding encodingType = this.getEncodingTypeCompressed();
-        this.register(encodingType, compressed);
+        this.registerSerialisedData(encodingType, compressed);
     }
 
     public abstract byte[] getEncodedBytes();

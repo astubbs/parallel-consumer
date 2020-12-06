@@ -79,9 +79,9 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     /**
      * The encoders to run
      */
-    private Set<OffsetEncoderBase> encoders = new HashSet<>();
-
-    private List<OffsetEncoderBase> sortedEncoders = new ArrayList<>();
+    // TODO do we really need both views?
+    private final HashSet<OffsetEncoderBase> encoders = new HashSet<>();
+    private final List<OffsetEncoderBase> sortedEncoders = new ArrayList<>();
 
     /**
      * @param lowWaterMark The highest committable offset
@@ -100,6 +100,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 //        this.incompleteOffsets = incompleteOffsets;
 
         initialise(lowWaterMark, newHighestCompleted);
+
+        addEncoders();
     }
 
     private int initLength(long currentBaseOffset, long highestCompleted) {
@@ -113,22 +115,15 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     //todo can remove sync?
     private synchronized void initialise(final long currentBaseOffset, long currentHighestCompleted) {
+        log.trace("Initialising {},{}", currentBaseOffset, currentHighestCompleted);
         this.baseOffset = currentBaseOffset;
         this.highestSuceeded = currentHighestCompleted;
 
-
-        // todo do something more efficient than just garbage? // call reinitialise on the encoders
-        log.debug("Creating encoder collection");
-
-
-        //
         this.length = initLength(currentBaseOffset, highestSuceeded);
 
         if (length > LARGE_INPUT_MAP_SIZE_THRESHOLD) {
             log.debug("~Large input map size: {} (start: {} end: {})", length, this.baseOffset, this.highestSuceeded);
         }
-
-        addEncodersMaybe();
     }
 
     private void reinitEncoders(final long currentBaseOffset, final long currentHighestCompleted) {
@@ -144,18 +139,18 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         }
     }
 
-    private void addEncodersMaybe() {
+    private void addEncoders() {
         // still need to register encoders?
-        if (length < 1) {
-            // won't need to encode anything
-            return;
-        } else {
-            log.debug("Adding encoders");
-        }
+//        if (length < 1) {
+//            // won't need to encode anything
+//            return;
+//        } else {
+//            log.debug("Adding encoders");
+//        }
 
-        if (!encoders.isEmpty()) {
-            return;
-        }
+//        if (!encoders.isEmpty()) {
+//            return;
+//        }
 
         try {
             encoders.add(new BitsetEncoder(baseOffset, length, this, v1));
@@ -250,12 +245,12 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     public void serializeAllEncoders() {
         List<OffsetEncoderBase> toRemove = new ArrayList<>();
         for (OffsetEncoderBase encoder : encoders) {
-            try {
-                encoder.register();
-            } catch (EncodingNotSupportedException e) {
-                log.debug("Removing {} encoder, not supported ({})", encoder.getEncodingType().description(), e.getMessage());
-                toRemove.add(encoder);
-            }
+//            try {
+            encoder.registerSerialisedDataIfEnabled();
+//            } catch (EncodingNotSupportedException e) {
+//                log.debug("Removing {} encoder, not supported ({})", encoder.getEncodingType().description(), e.getMessage());
+//                toRemove.add(encoder);
+//            }
         }
         encoders.removeAll(toRemove);
 
@@ -265,6 +260,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         if (noEncodingsAreSmallEnough || compressionForced) {
             encoders.forEach(OffsetEncoderBase::registerCompressed);
         }
+
+        log.debug("Encoding results: {}", sortedEncodingData);
     }
 
     /**
@@ -349,6 +346,9 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         if (currentBaseOffset < this.baseOffset)
             throw new InternalRuntimeError(msg("New base offset {} smaller than previous {}", currentBaseOffset, baseOffset));
 
+        this.highestSuceeded = currentHighestCompleted; // always track, change has no impact on me
+        this.length = initLength(currentBaseOffset, highestSuceeded);
+
         if (reinitialise) {
             initialise(currentBaseOffset, currentHighestCompleted);
         }
@@ -356,11 +356,11 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         reinitEncoders(currentBaseOffset, currentHighestCompleted);
     }
 
-    private void mabeyAddEncodersIfMissing() {
-        if (encoders.isEmpty()) {
-            this.addEncodersMaybe();
-        }
-    }
+//    private void mabeyAddEncodersIfMissing() {
+//        if (encoders.isEmpty()) {
+//            this.addEncodersMaybe();
+//        }
+//    }
 
     private boolean preEncodeCheckCanSkip(final long currentBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
 //        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
@@ -388,16 +388,10 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 //        }
 //    }
 
-    /**
-     * todo docs
-     */
-    private boolean relativeOffsetNegative = true;
-
     //todo remove don't think this is ever possible, or throw exception
     private boolean checkIfEncodingNeededBasedOnLowWater(final long relativeOffset) {
         // only encode if this work is above the low water mark
-        relativeOffsetNegative = relativeOffset <= 0;
-        return relativeOffsetNegative;
+        return relativeOffset <= 0;
     }
 
     /**
@@ -425,20 +419,27 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         if (isNoEncodingNeeded() || length < 1) {
             return 0;
         } else {
-            if (sortedEncoders.isEmpty()) {
-                throw new InternalRuntimeError("No encoders");
+            if (OffsetMapCodecManager.forcedCodec.isPresent()) {
+                OffsetEncoding offsetEncoding = OffsetMapCodecManager.forcedCodec.get();
+                // todo - this is rubbish
+                OffsetEncoderBase offsetEncoderBase = sortedEncoders.stream().filter(x -> x.getEncodingType().equals(offsetEncoding)).findFirst().get();
+                return offsetEncoderBase.getEncodedSizeEstimate();
+            } else {
+                if (sortedEncoders.isEmpty()) {
+                    throw new InternalRuntimeError("No encoders");
+                }
+                Collections.sort(sortedEncoders);
+                OffsetEncoderBase smallestEncoder = sortedEncoders.get(0);
+                int smallestSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
+                log.debug("Currently estimated smallest codec is {}, needing {} bytes",
+                        smallestEncoder.getEncodingType(), smallestSizeEstimate);
+                return smallestSizeEstimate;
             }
-            Collections.sort(sortedEncoders);
-            OffsetEncoderBase smallestEncoder = sortedEncoders.get(0);
-            int smallestSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
-            log.debug("Currently estimated smallest codec is {}, needing {} bytes",
-                    smallestEncoder.getEncodingType(), smallestSizeEstimate);
-            return smallestSizeEstimate;
         }
     }
 
     private boolean isNoEncodingNeeded() {
-        return relativeOffsetNegative || length < 1;
+        return length < 1;
     }
 
     public Object getSmallestCodec() {
@@ -446,5 +447,10 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         if (sortedEncoders.isEmpty())
             throw new InternalRuntimeError("No encoders");
         return sortedEncoders.get(0);
+    }
+
+    @Override
+    public String toString() {
+        return msg("{} nextExpected: {}, highest succeeded: {}, encoders:{}", getClass().getSimpleName(), baseOffset, highestSuceeded, encoders);
     }
 }

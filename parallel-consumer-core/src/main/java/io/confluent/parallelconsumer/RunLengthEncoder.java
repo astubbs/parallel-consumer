@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.Range;
+import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
@@ -14,6 +15,7 @@ import static io.confluent.parallelconsumer.OffsetEncoding.*;
 /**
  * todo docs tail runlength?
  */
+@ToString(onlyExplicitlyIncluded = true, callSuper = true)
 @Slf4j
 class RunLengthEncoder extends OffsetEncoderBase {
 
@@ -33,6 +35,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
+    @ToString.Include
     private final Version version; // default to new version
 
     private static final Version DEFAULT_VERSION = Version.v2;
