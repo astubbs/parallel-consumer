@@ -96,9 +96,12 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
         int entryWidth = getEntryWidth();
 
-        ByteBuffer runLengthEncodedByteBuffer = ByteBuffer.allocate(runLengthEncodingIntegers.size() * entryWidth);
+        ByteBuffer runLengthEncodedByteBuffer = ByteBuffer.allocate(getSize() * entryWidth);
 
-        for (final Integer run : runLengthEncodingIntegers) {
+
+        //for (final Integer run : getRunLengthEncodingIntegers()) {
+        for (final RunLengthEntry n : ns) {
+            Integer run = n.runLength;
             switch (version) {
                 case v1 -> {
                     final short shortCastRunlength = run.shortValue();
@@ -115,6 +118,11 @@ class RunLengthEncoder extends OffsetEncoderBase {
         byte[] array = runLengthEncodedByteBuffer.array();
         encodedBytes = Optional.of(array);
         return array;
+    }
+
+    private int getSize() {
+        //return runLengthEncodingIntegers.size();
+        return ns.size();
     }
 
     /**
@@ -217,37 +225,24 @@ class RunLengthEncoder extends OffsetEncoderBase {
      * Uses cached positions so it does't have to search
      */
     void truncateRunlengthsV2(final int newBaseOffset) {
-        int currentOffset = 0;
         if (runLengthEncodingIntegers.size() > 1000) {
             log.info("length: {}", runLengthEncodingIntegers.size());
         }
-        int index = 0;
-        int adjustedRunLength = -1;
-
 
         RunLengthEntry floor = ns.floor(new RunLengthEntry(newBaseOffset, -1));
-        RunLengthEntry ceiling = ns.ceiling(new RunLengthEntry(newBaseOffset, -1));
-        RunLengthEntry higher = ns.higher(floor);
-//        RunLengthEntry higher = ns.(floor);
+        if (floor == null) throw new InternalRuntimeError("Couldn't find interception point");
+//        RunLengthEntry ceiling = ns.ceiling(new RunLengthEntry(newBaseOffset, -1));
+//        RunLengthEntry higher = ns.higher(floor);
+//        RunLengthEntry lower = ns.lower(floor);
 
+        int adjustedRunLength = floor.runLength - (newBaseOffset - floor.startOffset);
+        ns = ns.tailSet(floor, true);
+//        floor.
+        ns.remove(floor);
+        ns.add(new RunLengthEntry(floor.startOffset, adjustedRunLength));
 
-        for (Integer aRunLength : runLengthEncodingIntegers) {
-            currentOffset = currentOffset + aRunLength;
-            if (currentOffset <= newBaseOffset) {
-                // drop from new collection
-            } else {
-                // found first intersection - truncate
-                adjustedRunLength = currentOffset - newBaseOffset;
-                break; // done
-            }
-            index++;
-        }
-        if (adjustedRunLength == -1) throw new InternalRuntimeError("Couldn't find interception point");
-        List<Integer> integers = runLengthEncodingIntegers.subList(index, runLengthEncodingIntegers.size());
-        integers.set(0, adjustedRunLength); // overwrite with adjusted
-
-        // swap
-        this.runLengthEncodingIntegers = integers;
+//        List<Integer> integers = runLengthEncodingIntegers.subList(index, runLengthEncodingIntegers.size());
+//        integers.set(0, adjustedRunLength); // overwrite with adjusted
 
         //
         this.originalBaseOffset = newBaseOffset;
@@ -293,7 +288,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     @Override
     public int getEncodedSizeEstimate() {
-        int numEntries = runLengthEncodingIntegers.size();
+        int numEntries = getSize();
 //        if (currentRunLengthCount > 0)
 //            numEntries = numEntries + 1;
         int entryWidth = getEntryWidth();
@@ -368,7 +363,9 @@ class RunLengthEncoder extends OffsetEncoderBase {
         boolean succeeded = false;
 //        int previous = 0;
         long offsetPosition = originalBaseOffset;
-        for (final Integer run : runLengthEncodingIntegers) {
+        //for (final Integer run : runLengthEncodingIntegers) {
+        for (final RunLengthEntry n : ns) {
+            int run = n.getRunLength();
             if (succeeded) {
 //                offsetPosition++;
                 for (final Integer integer : Range.range(run)) {
