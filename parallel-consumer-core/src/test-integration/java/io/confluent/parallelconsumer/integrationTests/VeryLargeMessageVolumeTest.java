@@ -70,6 +70,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
      */
     @Test
     public void shouldNotThrowBitsetTooLongException() {
+        // TODO compare key to partition to unordered
         runTest(HIGH_MAX_POLL_RECORDS_CONFIG, CommitMode.CONSUMER_ASYNCHRONOUS, ProcessingOrder.KEY);
     }
 
@@ -80,8 +81,8 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
         // pre-produce messages to input-topic
         List<String> expectedKeys = new ArrayList<>();
-//        int expectedMessageCount = 1_000_000;
-        int expectedMessageCount = 100_000;
+        int expectedMessageCount = 1_000_000;
+//        int expectedMessageCount = 100_000;
 //        int expectedMessageCount = 1_000_0;
         log.info("Producing {} messages before starting test", expectedMessageCount);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
