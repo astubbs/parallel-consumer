@@ -15,7 +15,7 @@ public class RunLengthEncoderTest {
      * <p>
      * 0 0   1 1 0 1 1  0 0 0  1    0  0  0   1 1  1  1
      * <p>
-     * The run lengths are: 2,2,1,2,3,1
+     * The run lengths are: 2,2,1,2,3,1,3,4
      * <p>
      * If we were to need to truncate at offset 4 (the new base)
      * <p>

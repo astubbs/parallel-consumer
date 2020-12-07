@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.JavaUtils;
 import io.confluent.csid.utils.Range;
+import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.Value;
@@ -197,7 +198,9 @@ class RunLengthEncoder extends OffsetEncoderBase {
 //
 
     @Value
+    @EqualsAndHashCode(onlyExplicitlyIncluded = true)
     static class RunLengthEntry implements Comparable<RunLengthEntry> {
+        @EqualsAndHashCode.Include
         int startOffset;
         int runLength;
 
@@ -325,7 +328,14 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
     private void addRunLength(final int currentRunLengthCount, final int relativeOffsetFromBase) {
         runLengthEncodingIntegers.add(currentRunLengthCount);
-        ns.add(new RunLengthEntry(relativeOffsetFromBase, currentRunLengthCount));
+        log.warn(runLengthEncodingIntegers.toString());
+        log.warn(ns.toString());
+        log.warn(ns.size() + "");
+        RunLengthEntry e = new RunLengthEntry(relativeOffsetFromBase, currentRunLengthCount);
+        boolean contains = ns.contains(e);
+        ns.add(e);
+        log.warn(ns.toString());
+        log.warn(ns.size() + "");
     }
 
     private void injectGapsWithIncomplete(final boolean currentIsComplete, final int relativeOffsetFromBase) {
@@ -337,15 +347,14 @@ class RunLengthEncoder extends OffsetEncoderBase {
         if (difference > 0) {
             // check for gap - if there's a gap, we need to assume all in-between are incomplete, except the first
             if (currentRunLengthCount != 0) {
-                addRunLength(currentRunLengthCount, relativeOffsetFromBase);
+                addRunLength(currentRunLengthCount, previousRelativeOffsetFromBase - currentRunLengthCount + 1);
             }
             // If they don't exist, this action has no affect, as we only use it to skip succeeded
+            //
             // there is a gap, so first insert the incomplete
-            addRunLength(difference, relativeOffsetFromBase);
+            addRunLength(difference, relativeOffsetFromBase - difference);
             currentRunLengthCount = 1; // reset to 1
             previousRunLengthState = true; // make it no flip
-            // reverse engineer the previous offset from base - we have to add up all run lengths. This could be perhaps cached
-//                final int previousSucceedRunLengthEntry = runLengthEncodingIntegers.get(runLengthEncodingIntegers.size() - 2);
             previousRelativeOffsetFromBase = relativeOffsetFromBase;
         }
 //        }
