@@ -365,27 +365,33 @@ public class RunLengthEncoderTest {
     }
 
     /**
-     * Has to combine 3 run lengths into 1
+     * Has to combine 3 run lengths into 1, both from above and below
      */
     @Test
     void segmentTestThree() {
         RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
 
         rl.encodeCompleteOffset(10, 20, 20);
+        assertOffsetsAndRuns(rl,
+                of(30),
+                of(20, 1));
 
         rl.encodeCompleteOffset(10, 14, 20);
+        assertOffsetsAndRuns(rl,
+                of(24, 30),
+                of(4, 1, 6, 1));
+
         rl.encodeCompleteOffset(10, 16, 20);
+        assertOffsetsAndRuns(rl,
+                of(24, 26, 30),
+                of(4, 1, 1, 1, 3, 1));
 
         //
         rl.encodeCompleteOffset(10, 15, 20);
-
-//        rl.addTail();
-        rl.truncateRunlengthsV2(2);
-
-        assertThat(rl.runLengthOffsetPairs).isEmpty();
-        assertThat(rl.calculateSucceededActualOffsets()).isEmpty();
+        assertOffsetsAndRuns(rl,
+                of(24, 25, 26, 30),
+                of(4, 3, 3, 1));
     }
-
 
     /**
      * Has to combine 2 run lengths into 1
@@ -395,15 +401,14 @@ public class RunLengthEncoderTest {
         RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
 
         rl.encodeCompleteOffset(0, 5, 5);
+        assertOffsetsAndRuns(rl,
+                of(5),
+                of(5, 1));
 
-        //
         rl.encodeCompleteOffset(0, 6, 6);
-
-//        rl.addTail();
-        rl.truncateRunlengthsV2(2);
-
-        assertThat(rl.runLengthOffsetPairs).isEmpty();
-        assertThat(rl.calculateSucceededActualOffsets()).isEmpty();
+        assertOffsetsAndRuns(rl,
+                of(5, 6),
+                of(5, 2));
     }
 
     /**
@@ -432,22 +437,16 @@ public class RunLengthEncoderTest {
     void segmentTestFiveUnder() {
         RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
 
-        rl.encodeCompleteOffset(0, 4, 5);
+        rl.encodeCompleteOffset(0, 4, 4);
         assertOffsetsAndRuns(rl,
                 of(4),
                 of(4, 1));
 
         //
-        rl.encodeCompleteOffset(0, 3, 5);
+        rl.encodeCompleteOffset(0, 3, 4);
         assertOffsetsAndRuns(rl,
-                of(4, 3),
+                of(3, 4),
                 of(3, 2));
-
-//        rl.addTail();
-        rl.truncateRunlengthsV2(2);
-
-        assertThat(rl.runLengthOffsetPairs).isEmpty();
-        assertThat(rl.calculateSucceededActualOffsets()).isEmpty();
     }
 
     /**
@@ -477,11 +476,53 @@ public class RunLengthEncoderTest {
         assertOffsetsAndRuns(rl,
                 of(4, 5, 6, 7),
                 of(4, 4));
+    }
 
-//        rl.addTail();
-        rl.truncateRunlengthsV2(2);
+    /**
+     * Has to combine both up and down
+     */
+    @Test
+    void segmentTestFixUpAndDownSimpleUpwards() {
+        RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
 
-        assertThat(rl.runLengthOffsetPairs).isEmpty();
-        assertThat(rl.calculateSucceededActualOffsets()).isEmpty();
+        rl.encodeCompleteOffset(0, 4, 4);
+        assertOffsetsAndRuns(rl,
+                of(4),
+                of(4, 1));
+
+        //
+        rl.encodeCompleteOffset(0, 6, 6);
+        assertOffsetsAndRuns(rl,
+                of(4, 6),
+                of(4, 1, 1, 1));
+
+        rl.encodeCompleteOffset(0, 5, 6);
+        assertOffsetsAndRuns(rl,
+                of(4, 5, 6),
+                of(4, 3));
+    }
+
+    /**
+     * Has to combine both up and down
+     */
+    @Test
+    void segmentTestFixUpAndDownSimpleDownwards() {
+        RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
+
+        rl.encodeCompleteOffset(0, 6, 6);
+        assertOffsetsAndRuns(rl,
+                of(6),
+                of(6, 1));
+
+        //
+        rl.encodeCompleteOffset(0, 4, 6);
+        assertOffsetsAndRuns(rl,
+                of(4, 6),
+                of(4, 1, 1, 1));
+
+        rl.encodeCompleteOffset(0, 5, 6);
+        assertOffsetsAndRuns(rl,
+                of(4, 5, 6),
+                of(4, 3));
     }
 }
