@@ -2,10 +2,7 @@ package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.JavaUtils;
 import io.confluent.csid.utils.Range;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.ToString;
-import lombok.Value;
+import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
@@ -81,13 +78,13 @@ class RunLengthEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void encodeIncompleteOffset(final int relativeOffset) {
-        encodeRunLength(false, relativeOffset);
+    public void encodeIncompleteOffset(final long newBaseOffset, final int relativeOffset) {
+        encodeRunLength(false, newBaseOffset, relativeOffset);
     }
 
     @Override
-    public void encodeCompletedOffset(final int relativeOffset) {
-        encodeRunLength(true, relativeOffset);
+    public void encodeCompletedOffset(final long newBaseOffset, final int relativeOffset) {
+        encodeRunLength(true, newBaseOffset, relativeOffset);
     }
 
     @Override
@@ -129,8 +126,12 @@ class RunLengthEncoder extends OffsetEncoderBase {
      * Add the dangling in flight run to the list, done before serialising
      */
     void addTail() {
-        RunLengthEntry previous = runLengthOffsetPairs.last();
-        addRunLength(currentRunLengthCount, previous.startOffset + previous.runLength);
+        if (runLengthOffsetPairs.isEmpty()) {
+            addRunLength(originalBaseOffset, currentRunLengthCount, safeCast(originalBaseOffset));
+        } else {
+            RunLengthEntry previous = runLengthOffsetPairs.last();
+            addRunLength(originalBaseOffset, currentRunLengthCount, safeCast(previous.startOffset + previous.runLength - originalBaseOffset));
+        }
     }
 
     private int getEntryWidth() {
@@ -157,10 +158,10 @@ class RunLengthEncoder extends OffsetEncoderBase {
 
 
     @Override
-    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+    public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
         maybeReinitialise(newBaseOffset, currentHighestCompleted);
 
-        encodeCompletedOffset(safeCast(relativeOffset));
+        encodeCompletedOffset(newBaseOffset, safeCast(relativeOffset));
     }
 
     @Override
@@ -205,12 +206,43 @@ class RunLengthEncoder extends OffsetEncoderBase {
     NavigableSet<RunLengthEntry> runLengthOffsetPairs = new TreeSet<>();
 //
 
-    @Value
+    @ToString
     @EqualsAndHashCode(onlyExplicitlyIncluded = true)
     static class RunLengthEntry implements Comparable<RunLengthEntry> {
+
+        @Getter
         @EqualsAndHashCode.Include
-        int startOffset;
-        int runLength;
+        private int startOffset;
+
+        @Getter
+        private Integer runLength;
+
+        public RunLengthEntry(final int startOffset) {
+            this(startOffset, null);
+        }
+
+        public RunLengthEntry(final int startOffset, final Integer runLength) {
+            if (startOffset < 0) {
+                throw new IllegalArgumentException(msg("Bad start offset {}", startOffset, runLength));
+            }
+            this.startOffset = startOffset;
+            if (runLength != null)
+                setRunLength(runLength);
+        }
+
+        public void setRunLength(final int runLength) {
+            if (runLength < 1) {
+                throw new IllegalArgumentException(msg("Bad run length {}", runLength));
+            }
+            this.runLength = runLength;
+        }
+
+        /**
+         * Inclusive end offset of the range this entry represents
+         */
+        public int getEndOffsetInclusive() {
+            return startOffset + runLength - 1;
+        }
 
         @Override
         public int compareTo(final RunLengthEncoder.RunLengthEntry o) {
@@ -225,27 +257,26 @@ class RunLengthEncoder extends OffsetEncoderBase {
      * Uses cached positions so it does't have to search
      */
     void truncateRunlengthsV2(final int newBaseOffset) {
-//        if (runLengthEncodingIntegers.size() > 1000) {
-//            log.debug("length: {}", runLengthEncodingIntegers.size());
-//        }
+        if (runLengthOffsetPairs.size() > 2_000) {
+            log.debug("length: {}", runLengthEncodingIntegers.size());
+        }
 
-        RunLengthEntry floor = runLengthOffsetPairs.floor(new RunLengthEntry(newBaseOffset, -1));
-        if (floor == null) throw new InternalRuntimeError("Couldn't find interception point");
-//        RunLengthEntry ceiling = ns.ceiling(new RunLengthEntry(newBaseOffset, -1));
-//        RunLengthEntry higher = ns.higher(floor);
-//        RunLengthEntry lower = ns.lower(floor);
+        RunLengthEntry intersectionRunLength = runLengthOffsetPairs.floor(new RunLengthEntry(newBaseOffset));
+        if (intersectionRunLength == null)
+            throw new InternalRuntimeError("Couldn't find interception point");
+        else if (newBaseOffset > intersectionRunLength.getEndOffsetInclusive()) {
+            // there is no intersection as the new base offset is a point beyond what our run lengths encode
+            // remove all
+            runLengthOffsetPairs.clear();
+        } else {
+            // truncate intersection run length
+            int adjustedRunLength = intersectionRunLength.runLength - (newBaseOffset - intersectionRunLength.startOffset);
+            intersectionRunLength.setRunLength(adjustedRunLength);
 
-        int adjustedRunLength = floor.runLength - (newBaseOffset - floor.startOffset);
-        NavigableSet<RunLengthEntry> tail = this.runLengthOffsetPairs.tailSet(floor, true);
-        this.runLengthOffsetPairs = new TreeSet<>();
-        // ugh slow. can't use tailset as it's just a view and can't add elements to it
-        runLengthOffsetPairs.addAll(tail);
-//        floor.
-        this.runLengthOffsetPairs.remove(floor);
-        this.runLengthOffsetPairs.add(new RunLengthEntry(floor.startOffset, adjustedRunLength));
-
-//        List<Integer> integers = runLengthEncodingIntegers.subList(index, runLengthEncodingIntegers.size());
-//        integers.set(0, adjustedRunLength); // overwrite with adjusted
+            // truncate all runlengths before intersection point
+            NavigableSet<RunLengthEntry> setToTruncateFromSet = runLengthOffsetPairs.headSet(intersectionRunLength, false);
+            setToTruncateFromSet.clear();
+        }
 
         //
         this.originalBaseOffset = newBaseOffset;
@@ -304,8 +335,8 @@ class RunLengthEncoder extends OffsetEncoderBase {
         return encodedBytes.get();
     }
 
-    private void encodeRunLength(final boolean currentIsComplete, final int relativeOffsetFromBase) {
-        injectGapsWithIncomplete(currentIsComplete, relativeOffsetFromBase);
+    private void encodeRunLength(final boolean currentIsComplete, final long newBaseOffset, final int relativeOffsetFromBase) {
+        injectGapsWithIncomplete(currentIsComplete, newBaseOffset, relativeOffsetFromBase);
 
         // run length
         boolean currentOffsetMatchesOurRunLengthState = previousRunLengthState == currentIsComplete;
@@ -318,23 +349,28 @@ class RunLengthEncoder extends OffsetEncoderBase {
             currentRunLengthCount = currentRunLengthCount + delta;
         } else {
             previousRunLengthState = currentIsComplete;
-            addRunLength(currentRunLengthCount, relativeOffsetFromBase);
+            addRunLength(newBaseOffset, currentRunLengthCount, relativeOffsetFromBase);
             currentRunLengthCount = 1; // reset to 1
         }
         previousRelativeOffsetFromBase = relativeOffsetFromBase;
     }
 
-    private void addRunLength(final int currentRunLengthCount, final int relativeOffsetFromBase) {
-        runLengthEncodingIntegers.add(currentRunLengthCount);
-        RunLengthEntry entry = new RunLengthEntry(relativeOffsetFromBase, currentRunLengthCount);
-        try {
-            runLengthOffsetPairs.add(entry);
-        } catch (Exception e) {
-            log.error("{}", e);
+    private void addRunLength(final long newBaseOffset, final int currentRunLengthCount, final int relativeOffsetFromBase) {
+        // v1
+//        runLengthEncodingIntegers.add(currentRunLengthCount);
+
+        // v2
+        int offset = safeCast(newBaseOffset + relativeOffsetFromBase);
+        if (!runLengthOffsetPairs.isEmpty()) {
+            RunLengthEntry previous = runLengthOffsetPairs.last();
+            if (previous != null && offset != previous.startOffset + previous.runLength)
+                throw new IllegalArgumentException(msg("Can't add a run length offset {} that's not continuous from previous {}", offset, previous));
         }
+        RunLengthEntry entry = new RunLengthEntry(offset, currentRunLengthCount);
+        runLengthOffsetPairs.add(entry);
     }
 
-    private void injectGapsWithIncomplete(final boolean currentIsComplete, final int relativeOffsetFromBase) {
+    private void injectGapsWithIncomplete(final boolean currentIsComplete, final long newBaseOffset, final int relativeOffsetFromBase) {
 //        boolean bothThisRecordAndPreviousRecordAreComplete = previousRunLengthState && currentIsComplete;
 //        if (bothThisRecordAndPreviousRecordAreComplete) {
         int difference = relativeOffsetFromBase - previousRelativeOffsetFromBase - 1;
@@ -343,12 +379,12 @@ class RunLengthEncoder extends OffsetEncoderBase {
         if (difference > 0) {
             // check for gap - if there's a gap, we need to assume all in-between are incomplete, except the first
             if (currentRunLengthCount != 0) {
-                addRunLength(currentRunLengthCount, previousRelativeOffsetFromBase - currentRunLengthCount + 1);
+                addRunLength(newBaseOffset, currentRunLengthCount, previousRelativeOffsetFromBase - currentRunLengthCount + 1);
             }
             // If they don't exist, this action has no affect, as we only use it to skip succeeded
             //
             // there is a gap, so first insert the incomplete
-            addRunLength(difference, relativeOffsetFromBase - difference);
+            addRunLength(newBaseOffset, difference, relativeOffsetFromBase - difference);
             currentRunLengthCount = 1; // reset to 1
             previousRunLengthState = true; // make it no flip
             previousRelativeOffsetFromBase = relativeOffsetFromBase;

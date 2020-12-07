@@ -1,10 +1,7 @@
 package io.confluent.parallelconsumer;
 
 import lombok.SneakyThrows;
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
-
-import java.util.HashSet;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -21,7 +18,7 @@ public class BitSetEncoderTest {
         // offset 0 is missing
 
         highest++;
-        o.encodeCompletedOffset(base, highest, highest);
+        o.encodeCompleteOffset(base, highest, highest);
         {
             long[] actual = o.bitSet.stream().asLongStream().toArray();
             assertThat(actual).doesNotContain(0).contains(1);
@@ -29,7 +26,7 @@ public class BitSetEncoderTest {
 
         {
             highest++;
-            o.encodeCompletedOffset(base, highest, highest);
+            o.encodeCompleteOffset(base, highest, highest);
             long[] actual = o.bitSet.stream().asLongStream().toArray();
             assertThat(actual).doesNotContain(0).contains(1, 2);
         }
@@ -38,7 +35,7 @@ public class BitSetEncoderTest {
         {
             highest++;
             highest++;
-            o.encodeCompletedOffset(base, highest, highest);
+            o.encodeCompleteOffset(base, highest, highest);
             long[] actual = o.bitSet.stream().asLongStream().toArray();
             assertThat(actual).doesNotContain(0).contains(1, 2, 4);
         }
@@ -54,10 +51,10 @@ public class BitSetEncoderTest {
         BitsetEncoder o = new BitsetEncoder(0, 0, new OffsetSimultaneousEncoder(0, 0L));
 
         //
-        o.encodeCompletedOffset(base, highest, highest);
+        o.encodeCompleteOffset(base, highest, highest);
 
         highest++;
-        o.encodeCompletedOffset(base, highest, highest);
+        o.encodeCompleteOffset(base, highest, highest);
         {
             long[] actual = o.bitSet.stream().asLongStream().toArray();
             assertThat(actual).contains(1);

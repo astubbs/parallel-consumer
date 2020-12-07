@@ -1,7 +1,5 @@
 package io.confluent.parallelconsumer;
 
-import lombok.ToString;
-
 import java.nio.ByteBuffer;
 
 import static io.confluent.parallelconsumer.OffsetEncoding.ByteArray;
@@ -27,12 +25,12 @@ class ByteBufferEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void encodeIncompleteOffset(final int relativeOffset) {
+    public void encodeIncompleteOffset(final long newBaseOffset, final int relativeOffset) {
         this.bytesBuffer.put((byte) 0);
     }
 
     @Override
-    public void encodeCompletedOffset(final int relativeOffset) {
+    public void encodeCompletedOffset(final long newBaseOffset, final int relativeOffset) {
         this.bytesBuffer.put((byte) 1);
     }
 
@@ -57,7 +55,7 @@ class ByteBufferEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+    public void encodeCompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
 
     }
 

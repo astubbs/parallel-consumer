@@ -1,6 +1,5 @@
 package io.confluent.parallelconsumer;
 
-import io.confluent.csid.utils.JavaUtils;
 import lombok.SneakyThrows;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -130,12 +129,12 @@ class BitsetEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void encodeIncompleteOffset(final int relativeOffset) {
+    public void encodeIncompleteOffset(final long newBaseOffset, final int relativeOffset) {
         // noop - bitset defaults to 0's (`unset`)
     }
 
     @Override
-    public void encodeCompletedOffset(final int relativeOffset) {
+    public void encodeCompletedOffset(final long newBaseOffset, final int relativeOffset) {
         log.trace("Relative offset set {}", relativeOffset);
         bitSet.set(relativeOffset);
     }
@@ -175,10 +174,14 @@ class BitsetEncoder extends OffsetEncoderBase {
     }
 
     @Override
-    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
-        maybeReinitialise(newBaseOffset, currentHighestCompleted);
+    public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        try {
+            maybeReinitialise(newBaseOffset, currentHighestCompleted);
+        } catch (EncodingNotSupportedException e) {
+            this.disable(e);
+        }
 
-        encodeCompletedOffset(safeCast(relativeOffset));
+        encodeCompletedOffset(newBaseOffset, safeCast(relativeOffset));
     }
 
     @Override

@@ -223,11 +223,11 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             if (incompleteOffsets.contains(offset)) {
                 log.trace("Found an incomplete offset {}", offset);
                 encoders.forEach(x -> {
-                    x.encodeIncompleteOffset(rangeIndex);
+                    x.encodeIncompleteOffset(currentBaseOffset, rangeIndex, currentHighestCompleted);
                 });
             } else {
                 encoders.forEach(x -> {
-                    x.encodeCompletedOffset(rangeIndex);
+                    x.encodeCompleteOffset(currentBaseOffset, rangeIndex, currentHighestCompleted);
                 });
             }
         });
@@ -305,17 +305,17 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     }
 
     @Override
-    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+    public void encodeCompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
         preCheck(baseOffset, relativeOffset, currentHighestCompleted);
 //        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
 //            return;
 
         for (final OffsetEncoderBase encoder : encoders) {
-            try {
-                encoder.encodeCompletedOffset(baseOffset, relativeOffset, currentHighestCompleted);
-            } catch (EncodingNotSupportedException e) {
-                encoder.disable(e);
-            }
+//            try {
+                encoder.encodeCompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
+//            } catch (EncodingNotSupportedException e) {
+//                encoder.disable(e);
+//            }
         }
     }
 

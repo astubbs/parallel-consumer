@@ -903,7 +903,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
 
         if (offsetComplete)
-            offsetSimultaneousEncoder.encodeCompletedOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
+            offsetSimultaneousEncoder.encodeCompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
         else
             offsetSimultaneousEncoder.encodeIncompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
     }

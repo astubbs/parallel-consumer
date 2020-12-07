@@ -38,15 +38,14 @@ public class RunLengthEncoderTest {
         {
             RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, 0);
 
             assertThat(rl.getRunLengthEncodingIntegers()).containsExactly(2, 2, 1, 2, 3, 1, 3, 4);
-            assertThat(rl.calculateSucceededActualOffsets()).containsExactly(2L, 3L, 5L, 6L, 10L, 14L, 15L, 16L, 17L);
+            assertThat(rl.calculateSucceededActualOffsets()).containsExactly(12L, 13L, 15L, 16L, 20L, 24L, 25L, 26L, 27L);
 
             rl.truncateRunlengths(12);
 
-            List<Integer> runLengthEncodingIntegers = rl.getRunLengthEncodingIntegers();
-            assertThat(runLengthEncodingIntegers).containsExactly(2, 4);
+            assertThat(rl.getRunLengthEncodingIntegers()).containsExactly(2, 4);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(14L, 15L, 16L, 17L);
         }
 
@@ -54,7 +53,7 @@ public class RunLengthEncoderTest {
         {
             RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, 0);
 
             rl.truncateRunlengths(4);
 
@@ -67,7 +66,7 @@ public class RunLengthEncoderTest {
         {
             RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, 0);
 
             rl.truncateRunlengths(8);
 
@@ -81,7 +80,7 @@ public class RunLengthEncoderTest {
         {
             RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, 0);
 
             rl.truncateRunlengths(9);
 
@@ -94,24 +93,25 @@ public class RunLengthEncoderTest {
     @Test
     void truncateV2() {
         {
-            RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
+            // test case where base != 0
+            int base = 10;
+            RunLengthEncoder rl = new RunLengthEncoder(base, new OffsetSimultaneousEncoder(base, (long) base), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, base);
 
-            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getStartOffset).containsExactly(0, 2, 4, 5, 7, 10, 11, 14);
-            assertThat(rl.getRunLengthEncodingIntegers()).containsExactly(2, 2, 1, 2, 3, 1, 3, 4);
-            assertThat(rl.calculateSucceededActualOffsets()).containsExactly(2L, 3L, 5L, 6L, 10L, 14L, 15L, 16L, 17L);
+            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getStartOffset).containsExactly(10, 12, 14, 15, 17, 20, 21, 24);
+            assertThat(rl.calculateSucceededActualOffsets()).containsExactly(12L, 13L, 15L, 16L, 20L, 24L, 25L, 26L, 27L);
 
-            rl.truncateRunlengthsV2(12);
+            rl.truncateRunlengthsV2(22);
 
             assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(2, 4);
-            assertThat(rl.calculateSucceededActualOffsets()).containsExactly(14L, 15L, 16L, 17L);
+            assertThat(rl.calculateSucceededActualOffsets()).containsExactly(24L, 25L, 26L, 27L);
         }
 
         {
             RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, 0);
 
             rl.truncateRunlengthsV2(4);
 
@@ -122,7 +122,7 @@ public class RunLengthEncoderTest {
         {
             RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, 0);
 
             rl.truncateRunlengthsV2(8);
 
@@ -134,7 +134,7 @@ public class RunLengthEncoderTest {
         {
             RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 0L), OffsetEncoding.Version.v2);
 
-            encodePattern(rl);
+            encodePattern(rl, 0);
 
             rl.truncateRunlengthsV2(9);
 
@@ -143,9 +143,8 @@ public class RunLengthEncoderTest {
         }
     }
 
-    private void encodePattern(final RunLengthEncoder rl) {
-        long base = 0L;
-        int highest = 10;
+    private void encodePattern(final RunLengthEncoder rl, long base) {
+        int highest = 17 + (int) base;
         int relative = 0;
         {
             rl.encodeIncompleteOffset(base, relative, highest);
@@ -153,27 +152,17 @@ public class RunLengthEncoderTest {
             rl.encodeIncompleteOffset(base, relative, highest);
             relative++;
 
-            rl.encodeCompletedOffset(base, relative, highest);
+            rl.encodeCompleteOffset(base, relative, highest);
             relative++;
-            rl.encodeCompletedOffset(base, relative, highest);
-            relative++;
-
-            rl.encodeIncompleteOffset(base, relative, highest);
-            relative++;
-
-            rl.encodeCompletedOffset(base, relative, highest);
-            relative++;
-            rl.encodeCompletedOffset(base, relative, highest);
+            rl.encodeCompleteOffset(base, relative, highest);
             relative++;
 
             rl.encodeIncompleteOffset(base, relative, highest);
             relative++;
-            rl.encodeIncompleteOffset(base, relative, highest);
-            relative++;
-            rl.encodeIncompleteOffset(base, relative, highest);
-            relative++;
 
-            rl.encodeCompletedOffset(base, relative, highest);
+            rl.encodeCompleteOffset(base, relative, highest);
+            relative++;
+            rl.encodeCompleteOffset(base, relative, highest);
             relative++;
 
             rl.encodeIncompleteOffset(base, relative, highest);
@@ -183,16 +172,40 @@ public class RunLengthEncoderTest {
             rl.encodeIncompleteOffset(base, relative, highest);
             relative++;
 
-            rl.encodeCompletedOffset(base, relative, highest);
+            rl.encodeCompleteOffset(base, relative, highest);
             relative++;
-            rl.encodeCompletedOffset(base, relative, highest);
+
+            rl.encodeIncompleteOffset(base, relative, highest);
             relative++;
-            rl.encodeCompletedOffset(base, relative, highest);
+            rl.encodeIncompleteOffset(base, relative, highest);
             relative++;
-            rl.encodeCompletedOffset(base, relative, highest);
+            rl.encodeIncompleteOffset(base, relative, highest);
+            relative++;
+
+            rl.encodeCompleteOffset(base, relative, highest);
+            relative++;
+            rl.encodeCompleteOffset(base, relative, highest);
+            relative++;
+            rl.encodeCompleteOffset(base, relative, highest);
+            relative++;
+            rl.encodeCompleteOffset(base, relative, highest);
 
 
             rl.addTail();
         }
+    }
+
+    @Test
+    void v2TruncateOverMax() {
+        RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
+
+        rl.encodeIncompleteOffset(0, 0, 0);
+        rl.encodeCompleteOffset(0, 1, 1);
+
+        rl.addTail();
+        rl.truncateRunlengthsV2(2);
+
+        assertThat(rl.runLengthOffsetPairs).isEmpty();
+        assertThat(rl.calculateSucceededActualOffsets()).isEmpty();
     }
 }

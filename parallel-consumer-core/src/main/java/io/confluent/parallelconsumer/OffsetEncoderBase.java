@@ -42,9 +42,9 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
 
     protected abstract OffsetEncoding getEncodingTypeCompressed();
 
-    public abstract void encodeIncompleteOffset(final int relativeOffset);
+    public abstract void encodeIncompleteOffset(final long newBaseOffset, final int relativeOffset);
 
-    public abstract void encodeCompletedOffset(final int relativeOffset);
+    public abstract void encodeCompletedOffset(final long newBaseOffset, final int relativeOffset);
 
     abstract byte[] serialise() throws EncodingNotSupportedException;
 

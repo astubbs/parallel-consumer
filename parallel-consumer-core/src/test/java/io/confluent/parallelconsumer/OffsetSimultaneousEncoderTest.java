@@ -6,7 +6,6 @@ import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
-import java.util.Map;
 
 @Slf4j
 public class OffsetSimultaneousEncoderTest {
@@ -19,12 +18,12 @@ public class OffsetSimultaneousEncoderTest {
         OffsetSimultaneousEncoder o = new OffsetSimultaneousEncoder(base, highest);
 
         //
-        o.encodeCompletedOffset(base, highest, highest);
+        o.encodeCompleteOffset(base, highest, highest);
         highest++;
-        o.encodeCompletedOffset(base, highest, highest);
+        o.encodeCompleteOffset(base, highest, highest);
 
         highest++;
-        o.encodeCompletedOffset(base, highest, highest);
+        o.encodeCompleteOffset(base, highest, highest);
 
         //
         HashSet<OffsetEncoderBase> encoders = o.encoders;
