@@ -63,12 +63,13 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
             final byte[] bytes;
             try {
                 bytes = this.serialise();
-            } catch (EncodingNotSupportedException e) {
-                throw new InternalRuntimeError(e);
-            }
-            final OffsetEncoding encodingType = this.getEncodingType();
+                final OffsetEncoding encodingType = this.getEncodingType();
 //            log.trace("Registering {} with size {}", getEncodingType(), bytes.length);
-            this.registerSerialisedData(encodingType, bytes);
+                this.registerSerialisedData(encodingType, bytes);
+            } catch (EncodingNotSupportedException e) {
+                log.debug("Encoding not supported, disabling", e);
+                disable(e);
+            }
         } else {
             log.trace("{} disabled, not registering serialised data", this);
         }
@@ -130,7 +131,7 @@ abstract class OffsetEncoderBase implements OffsetEncoderContract, Comparable<Of
 
     public void disable(final EncodingNotSupportedException e) {
         disabled = true;
-        log.warn("Disabling {}, {}", this.getEncodingType(), e.getMessage(), e);
+        log.debug("Disabling {}, {}", this.getEncodingType(), e.getMessage(), e);
     }
 
     public void enable() {

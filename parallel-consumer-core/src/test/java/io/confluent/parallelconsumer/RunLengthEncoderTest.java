@@ -98,13 +98,13 @@ public class RunLengthEncoderTest {
 
             encodePattern(rl);
 
-            assertThat(rl.ns).extracting(RunLengthEntry::getStartOffset).containsExactly(0, 2, 4, 5, 7, 10, 11, 14);
+            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getStartOffset).containsExactly(0, 2, 4, 5, 7, 10, 11, 14);
             assertThat(rl.getRunLengthEncodingIntegers()).containsExactly(2, 2, 1, 2, 3, 1, 3, 4);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(2L, 3L, 5L, 6L, 10L, 14L, 15L, 16L, 17L);
 
             rl.truncateRunlengthsV2(12);
 
-            assertThat(rl.ns).extracting(RunLengthEntry::getRunLength).containsExactly(2, 4);
+            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(2, 4);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(14L, 15L, 16L, 17L);
         }
 
@@ -115,7 +115,7 @@ public class RunLengthEncoderTest {
 
             rl.truncateRunlengthsV2(4);
 
-            assertThat(rl.ns).extracting(RunLengthEntry::getRunLength).containsExactly(1, 2, 3, 1, 3, 4);
+            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(1, 2, 3, 1, 3, 4);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(5L, 6L, 10L, 14L, 15L, 16L, 17L);
         }
 
@@ -126,7 +126,7 @@ public class RunLengthEncoderTest {
 
             rl.truncateRunlengthsV2(8);
 
-            assertThat(rl.ns).extracting(RunLengthEntry::getRunLength).containsExactly(2, 1, 3, 4);
+            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(2, 1, 3, 4);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(10L, 14L, 15L, 16L, 17L);
         }
 
@@ -138,7 +138,7 @@ public class RunLengthEncoderTest {
 
             rl.truncateRunlengthsV2(9);
 
-            assertThat(rl.ns).extracting(RunLengthEntry::getRunLength).containsExactly(1, 1, 3, 4);
+            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(1, 1, 3, 4);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(10L, 14L, 15L, 16L, 17L);
         }
     }
