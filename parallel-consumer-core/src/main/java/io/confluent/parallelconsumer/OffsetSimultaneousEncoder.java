@@ -335,8 +335,8 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 //            reinitialise = true;
 //        }
 
-        if (this.baseOffset != currentBaseOffset) {
-            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to shift bitset right",
+        if (this.baseOffset < currentBaseOffset) {
+            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to truncate",
                     this.baseOffset, currentBaseOffset);
             reinitialise = true;
         }

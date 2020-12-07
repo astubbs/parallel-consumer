@@ -88,7 +88,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private final Map<TopicPartition, OffsetSimultaneousEncoder> partitionContinuousOffsetEncoders = new ConcurrentHashMap<>();
 
-    private final BackoffAnalyser backoffer;
+//    private final BackoffAnalyser backoffer;
 
     /**
      * Iteration resume point, to ensure fairness (prevent shard starvation) when we can't process messages from every
@@ -184,7 +184,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         this.options = options;
         this.consumerMgr = consumer;
 
-        backoffer = new BackoffAnalyser(options.getMaxConcurrency() * 10);
+//        backoffer = new BackoffAnalyser(options.getMaxConcurrency() * 10);
     }
 
     Map<TopicPartition, Integer> partitionsAssignmentEpochs = new HashMap<>();
@@ -272,7 +272,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * Called by other threads (broker poller) to be later removed inline by control.
      */
-    private void registerPartitionsToBeRemoved(Collection<TopicPartition> partitions){
+    private void registerPartitionsToBeRemoved(Collection<TopicPartition> partitions) {
         partitionsToRemove.addAll(partitions);
     }
 
@@ -386,38 +386,38 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //        internalBatchMailQueue.removeAll(toRemove);
     }
 
-    private int getMaxToGoBeyondOffset() {
-        return backoffer.getCurrentTotalMaxCountBeyondOffset();
-    }
+//    private int getMaxToGoBeyondOffset() {
+//        return backoffer.getCurrentTotalMaxCountBeyondOffset();
+//    }
 
-    /**
-     * @return true if the records were accepted, false if they cannot be
-     * @see #processInbox()
-     */
-    private boolean processInbox(ConsumerRecords<K, V> records) {
-        int partitionWorkRemainingCount = getWorkQueuedInShardsCount();
-        int recordsToAdd = records.count();
-        // we don't break up individual record sets (although we could, but "overhead") so need to queue up records even if it goes over by some amount
-        boolean overMax = partitionWorkRemainingCount - recordsToAdd >= getMaxToGoBeyondOffset();
-        if (overMax) {
-            log.debug("Work remaining in partition queues has surpassed max, so won't bring further messages in from the pipeline queued: {} / max: {}",
-                    partitionWorkRemainingCount, getMaxToGoBeyondOffset());
-            return false;
-        }
-
-//        if (!inboundOffsetWidthWithinRange(records)) {
+//    /**
+//     * @return true if the records were accepted, false if they cannot be
+//     * @see #processInbox()
+//     */
+//    private boolean processInbox(ConsumerRecords<K, V> records) {
+//        int partitionWorkRemainingCount = getWorkQueuedInShardsCount();
+//        int recordsToAdd = records.count();
+//        // we don't break up individual record sets (although we could, but "overhead") so need to queue up records even if it goes over by some amount
+//        boolean overMax = partitionWorkRemainingCount - recordsToAdd >= getMaxToGoBeyondOffset();
+//        if (overMax) {
+//            log.debug("Work remaining in partition queues has surpassed max, so won't bring further messages in from the pipeline queued: {} / max: {}",
+//                    partitionWorkRemainingCount, getMaxToGoBeyondOffset());
 //            return false;
 //        }
-
-        //
-        log.debug("Registering {} records of work ({} already registered)", recordsToAdd, partitionWorkRemainingCount);
-
-        for (ConsumerRecord<K, V> rec : records) {
-            processInbox(rec);
-        }
-
-        return true;
-    }
+//
+////        if (!inboundOffsetWidthWithinRange(records)) {
+////            return false;
+////        }
+//
+//        //
+//        log.debug("Registering {} records of work ({} already registered)", recordsToAdd, partitionWorkRemainingCount);
+//
+//        for (ConsumerRecord<K, V> rec : records) {
+//            processInbox(rec);
+//        }
+//
+//        return true;
+//    }
 
     private boolean inboundOffsetWidthWithinRange(final ConsumerRecords<K, V> records) {
         // brute force - surely very slow. surely this info can be cached?
@@ -733,7 +733,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         // remove work from partition commit queue
         log.trace("Removing {} from partition queue", wc.offset());
-//        partitionCommitQueues.get(wc.getTopicPartition()).remove(wc.offset());
+        partitionCommitQueues.get(wc.getTopicPartition()).remove(wc.offset());
     }
 
     public void onResultBatch(final Set<WorkContainer<K, V>> results) {
@@ -810,9 +810,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //                continue;
 //            }
 
-            {
-                handleFutureResult(work);
-            }
 
             long thisOffset = work.getCr().offset();
 
@@ -824,81 +821,87 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
                 // things can be racey, so this can happen, if so, just continue
                 log.debug("Completed offset {} lower than current highest continuous offset {} - must have been completed while previous continuous blocks were being examined", thisOffset, previousHighestContinuous);
-                continue;
-            }
+//                continue; - can't skip #handleResult
+            } else {
 
 
-            {
                 // We already know this partition's continuous range has been broken, no point checking
                 Boolean partitionSoFarIsContinuous = partitionNowFormsAContinuousBlock.get(tp);
                 if (partitionSoFarIsContinuous != null && !partitionSoFarIsContinuous) {
                     // previously we found non continuous block so we can skip
-                    continue; // to next record
+//                    continue; // to next record - can't skip #handleResult
                 } else {
                     // we can't know, we have to keep digging
-                }
-            }
 
-            boolean thisOffsetIsFailed = !work.isUserFunctionSucceeded();
-            partitionsSeenForLogging.add(tp);
 
-            if (thisOffsetIsFailed) {
-                // simpler path
-                // work isn't successful. Is this the first? Is there a gap previously? Perhaps the gap doesn't exist (skipped offsets in partition)
-                Boolean previouslyContinuous = partitionNowFormsAContinuousBlock.get(tp);
-                partitionNowFormsAContinuousBlock.put(tp, false); // this partitions continuous block
-            } else {
+                    boolean thisOffsetIsFailed = !work.isUserFunctionSucceeded();
+                    partitionsSeenForLogging.add(tp);
 
-                // does it form a new continuous block?
+                    if (thisOffsetIsFailed) {
+                        // simpler path
+                        // work isn't successful. Is this the first? Is there a gap previously? Perhaps the gap doesn't exist (skipped offsets in partition)
+                        Boolean previouslyContinuous = partitionNowFormsAContinuousBlock.get(tp);
+                        partitionNowFormsAContinuousBlock.put(tp, false); // this partitions continuous block
+                    } else {
 
-                // queue this offset belongs to
-                NavigableMap<Long, WorkContainer<K, V>> commitQueue = partitionCommitQueues.get(tp);
+                        // does it form a new continuous block?
 
-                boolean continuous = true;
-                if (thisOffset != previousHighestContinuous + 1) {
-                    // do the entries in the gap exist in our partition queue? or are they skipped in the source log?
-                    long rangeBase = (previousHighestContinuous < 0) ? 0 : previousHighestContinuous + 1;
-                    Range offSetRangeToCheck = new Range(rangeBase, thisOffset);
-                    log.trace("Gap detected between {} and {}", rangeBase, thisOffset);
-                    for (var offsetToCheck : offSetRangeToCheck) {
-                        WorkContainer<K, V> workToExamine = commitQueue.get((long) offsetToCheck);
-                        if (workToExamine != null) {
-                            if (!workToExamine.isUserFunctionSucceeded()) {
-                                log.trace("Record exists {} but is incomplete - breaks continuity finish early", workToExamine);
-                                partitionNowFormsAContinuousBlock.put(tp, false);
-                                continuous = false;
-                                break;
-                            } else if (workToExamine.isUserFunctionSucceeded() && !workToExamine.isNotInFlight()) {
-                                log.trace("Work {} comparing to succeeded work still in flight: {} (but not part of this batch)", work.offset(), workToExamine);
-                                continue;
-                            } else {
-                                // counts as continuous, just isn't in this batch - previously successful but there used to be gaps
-                                log.trace("Work not in batch, but seen now in commitQueue as succeeded {}", workToExamine);
+                        // queue this offset belongs to
+                        NavigableMap<Long, WorkContainer<K, V>> commitQueue = partitionCommitQueues.get(tp);
+
+                        boolean continuous = true;
+                        if (thisOffset != previousHighestContinuous + 1) {
+                            // do the entries in the gap exist in our partition queue? or are they skipped in the source log?
+                            long rangeBase = (previousHighestContinuous < 0) ? 0 : previousHighestContinuous + 1;
+                            Range offSetRangeToCheck = new Range(rangeBase, thisOffset);
+                            log.trace("Gap detected between {} and {}", rangeBase, thisOffset);
+                            for (var offsetToCheck : offSetRangeToCheck) {
+                                WorkContainer<K, V> workToExamine = commitQueue.get((long) offsetToCheck);
+                                if (workToExamine != null) {
+                                    if (!workToExamine.isUserFunctionSucceeded()) {
+                                        log.trace("Record exists {} but is incomplete - breaks continuity finish early", workToExamine);
+                                        partitionNowFormsAContinuousBlock.put(tp, false);
+                                        continuous = false;
+                                        break;
+                                    } else if (workToExamine.isUserFunctionSucceeded() && !workToExamine.isNotInFlight()) {
+                                        log.trace("Work {} comparing to succeeded work still in flight: {} (but not part of this batch)", work.offset(), workToExamine);
+//                                        continue;  - can't skip #handleResult
+                                    } else {
+                                        // counts as continuous, just isn't in this batch - previously successful but there used to be gaps
+                                        log.trace("Work not in batch, but seen now in commitQueue as succeeded {}", workToExamine);
+                                    }
+                                } else {
+                                    // offset doesn't exist in commit queue, can assume doesn't exist in source, or is completed
+                                    log.trace("Work offset {} checking against offset {} missing from commit queue, assuming doesn't exist in source", work.offset(), offsetToCheck);
+                                }
                             }
-                        } else {
-                            // offset doesn't exist in commit queue, can assume doesn't exist in source, or is completed
-                            log.trace("Work offset {} checking against offset {} missing from commit queue, assuming doesn't exist in source", work.offset(), offsetToCheck);
-                        }
-                    }
 
-                }
-                if (continuous) {
-                    partitionNowFormsAContinuousBlock.put(tp, true);
-                    if (!originalMarks.containsKey(tp)) {
-                        Long previousOffset = partitionOffsetHighestContinuousSucceeded.get(tp);
-                        originalMarks.put(tp, previousOffset);
-                    }
-                    partitionOffsetHighestContinuousSucceeded.put(tp, thisOffset);
-                } else {
-                    partitionNowFormsAContinuousBlock.put(tp, false);
+                        }
+                        if (continuous) {
+                            partitionNowFormsAContinuousBlock.put(tp, true);
+                            if (!originalMarks.containsKey(tp)) {
+                                Long previousOffset = partitionOffsetHighestContinuousSucceeded.get(tp);
+                                originalMarks.put(tp, previousOffset);
+                            }
+                            partitionOffsetHighestContinuousSucceeded.put(tp, thisOffset);
+                        } else {
+                            partitionNowFormsAContinuousBlock.put(tp, false);
 //                        Long old = partitionOffsetHighestContinuousCompleted.get(tp);
-                }
+                        }
 //                    else {
 //                        // easy, yes it's continuous, as there's no gap from previous highest
 //                        partitionNowFormsAContinuousBlock.put(tp, true);
 //                        partitionOffsetHighestContinuousCompleted.put(tp, thisOffset);
 //                    }
+                    }
+                }
             }
+
+            //
+            {
+                handleFutureResult(work);
+            }
+
         }
         for (final TopicPartition tp : partitionsSeenForLogging) {
             Long oldOffset = originalMarks.get(tp);
@@ -937,6 +940,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders.get(tp);
 
         long offset = wc.offset();
+
+        // give encoders chance to truncate
+        offsetSimultaneousEncoder.maybeReinitialise(nextExpectedOffsetFromBroker, highestCompleted);
+
+        if (offset <= nextExpectedOffsetFromBroker) {
+            // skip - nothing to encode
+            return;
+        }
+
         long relativeOffset = offset - nextExpectedOffsetFromBroker;
         if (relativeOffset < 0) {
 //            throw new InternalRuntimeError(msg("Relative offset negative {}", relativeOffset));
@@ -975,7 +987,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             partitionMoreRecordsAllowedToProcess.put(tp, moreMessagesAreAllowed);
             if (!moreMessagesAreAllowed && previousMessagesAllowedState) {
                 anyPartitionsAreHalted = true;
-                log.debug(msg("Back-pressure for {} activated, no more messages allowed, best encoder {} needs {} which is more than calculated restricted space of {} (max: {}, tolerance {}%). Messages will be allowed again once messages complete and encoding space required shrinks.",
+                log.debug(msg("Back-pressure for {} activated, no more messages allowed, best encoder {} needs {} which is more than " +
+                                "calculated restricted space of {} (max: {}, tolerance {}%). Messages will be allowed again once messages " +
+                                "complete and encoding space required shrinks.",
                         tp, encoder.getSmallestCodec(), encodedSize, allowed, perPartition, tolerance * 100));
             } else if (moreMessagesAreAllowed && !previousMessagesAllowedState) {
                 log.trace("Partition is now unblocked, needed {}, allowed {}", encodedSize, allowed);
@@ -983,12 +997,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 log.trace("Partition {} still blocked for new message processing", tp);
             }
 
-            // TODO
-            boolean offsetEncodingAllreadyWontFitAtAll = encodedSize > perPartition;
-            if (offsetEncodingAllreadyWontFitAtAll) {
+            boolean offsetEncodingAlreadyWontFitAtAll = encodedSize > perPartition;
+            if (offsetEncodingAlreadyWontFitAtAll) {
                 log.warn("Despite attempts, current offset encoding requirements are now above what will fit. Offset encoding " +
                         "will be dropped for this round, but no more messages for this partition will be attempted until " +
                         "messages complete successfully and the offset encoding space required shrinks again.");
+                log.warn(msg("Back-pressure for {} activated, no more messages allowed, best encoder {} needs {} which is more than calculated " +
+                                "restricted space of {} (max: {}, tolerance {}%). Messages will be allowed again once messages complete and encoding " +
+                                "space required shrinks.",
+                        tp, encoder.getSmallestCodec(), encodedSize, allowed, perPartition, tolerance * 100));
             }
 
         }
@@ -1273,7 +1290,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 perPartitionNextExpectedOffset.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
                 log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
-                backoffer.onFailure();
+//                backoffer.onFailure();
             }
         }
         return totalOffsetMetaCharacterLength;
@@ -1313,10 +1330,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 offsetsToSend.replace(tp, stripped);
             }
             log.debug("Total estimate for all partitions {}", totalSizeEstimates);
-            backoffer.onFailure();
+//            backoffer.onFailure();
         } else if (totalOffsetMetaCharacterLength != 0) {
             log.debug("Offset map small enough to fit in payload: {} (max: {})", totalOffsetMetaCharacterLength, OffsetMapCodecManager.DefaultMaxMetadataSize);
-            backoffer.onSuccess();
+//            backoffer.onSuccess();
         }
     }
 
@@ -1357,16 +1374,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     boolean isSufficientlyLoaded() {
-        int total = getTotalWorkWaitingProcessing();
-        int inPartitions = getNumberOfEntriesInPartitionQueues();
-        int maxBeyondOffset = getMaxToGoBeyondOffset();
-        boolean loadedEnoughInPipeline = total > maxBeyondOffset * loadingFactor;
-        boolean overMaxUncommitted = inPartitions >= maxBeyondOffset;
-        boolean remainingIsSufficient = loadedEnoughInPipeline || overMaxUncommitted;
-//        if (remainingIsSufficient) {
-        log.debug("isSufficientlyLoaded? loadedEnoughInPipeline {} || overMaxUncommitted {}", loadedEnoughInPipeline, overMaxUncommitted);
-//        }
-        return remainingIsSufficient;
+//        int total = getTotalWorkWaitingProcessing();
+//        int inPartitions = getNumberOfEntriesInPartitionQueues();
+//        int maxBeyondOffset = getMaxToGoBeyondOffset();
+//        boolean loadedEnoughInPipeline = total > maxBeyondOffset * loadingFactor;
+//        boolean overMaxUncommitted = inPartitions >= maxBeyondOffset;
+//        boolean remainingIsSufficient = loadedEnoughInPipeline || overMaxUncommitted;
+////        if (remainingIsSufficient) {
+//        log.debug("isSufficientlyLoaded? loadedEnoughInPipeline {} || overMaxUncommitted {}", loadedEnoughInPipeline, overMaxUncommitted);
+////        }
+//        return remainingIsSufficient;
+        // TODO is this sufficient?
+        return !workInbox.isEmpty();
     }
 
     public int getRecordsOutForProcessing() {
@@ -1426,7 +1445,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 offsetMetadataToCommit.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
                 log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
-                backoffer.onFailure();
+//                backoffer.onFailure();
             }
         }
 

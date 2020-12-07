@@ -35,6 +35,7 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
 //        final int numRecords = 1_000_0;
         final int numRecords = 1_00;
 
+        OffsetMapCodecManager.DefaultMaxMetadataSize = 40;
         OffsetMapCodecManager.forcedCodec = Optional.of(OffsetEncoding.BitSetV2); // force one that takes a predictable large amount of space
 
         //
@@ -107,7 +108,8 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
 
         //
         WorkManager<String, String> wm = parallelConsumer.wm;
-        assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse();
+        Boolean partitionBlocked = !wm.partitionMoreRecordsAllowedToProcess.get(topicPartition);
+        assertThat(partitionBlocked).isTrue();
 
         // feed more messages
         ktu.send(consumerSpy, ktu.generateRecords(numRecords));
@@ -124,7 +126,8 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
         await().untilAsserted(() -> assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isTrue());
 
         // assert all committed
-        await().untilAsserted(() -> assertThat(extractAllPartitionsOffsetsSequentially()).contains(199));
+        int nextExpectedOffsetAfterSubmittedWork = numRecords * 2;
+        await().untilAsserted(() -> assertThat(extractAllPartitionsOffsetsSequentially()).contains(nextExpectedOffsetAfterSubmittedWork));
         await().untilAsserted(() -> assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isTrue());
     }
 

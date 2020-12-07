@@ -39,7 +39,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * @see WorkManager
  */
 @Slf4j
-public class WorkManagerTest {
+class WorkManagerTest {
 
     public static final String INPUT_TOPIC = "input";
     public static final String OUTPUT_TOPIC = "output";
