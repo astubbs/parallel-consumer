@@ -489,6 +489,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
             segmented = true;
 
             if (intersectingWith.runLength == 1) {
+                // simple path
                 // single bad entry to be replaced, but with 2 good entry neighbors - combine all three
                 RunLengthEntry previous = runLengthOffsetPairs.lower(intersectingWith);
                 int runDown = previous.runLength;
@@ -505,12 +506,14 @@ class RunLengthEncoder extends OffsetEncoderBase {
                 if (missing)
                     throw new InternalRuntimeError("Cant find element that previously existed");
 
-                // create the three to replace it - 1 incomplete, 1 complete (this one), 1 incomplete
+                int newRunCumulative = 1;
+                Integer offsetStartRelative = null;
+
+                // create the three to replace the intersected node - 1 incomplete, 1 complete (this one), 1 incomplete
                 int firstRun = safeCast(offset - intersectingWith.startOffset);
                 Integer middleRelativeOffset = null;
                 int firstRelativeOffset = intersectingWith.getRelativeStartOffsetFromBase(originalBaseOffset);
-                int newRunCumulative = 1;
-                Integer offsetStartRelative = null;
+
                 if (firstRun > 0) {
                     // large gap to fill
 //                RunLengthEntry runLengthEntry = new RunLengthEntry(intersectingWith.startOffset, firstRun);
@@ -518,10 +521,14 @@ class RunLengthEncoder extends OffsetEncoderBase {
                     middleRelativeOffset = first.getRelativeStartOffsetFromBase(originalBaseOffset) + first.runLength;
                 } else {
                     // combine with the neighbor as there's no gap
+                    // check for a lower neighbour
                     RunLengthEntry previous = runLengthOffsetPairs.lower(intersectingWith);
-                    newRunCumulative = newRunCumulative + previous.runLength;
-                    runLengthOffsetPairs.remove(previous);
-                    offsetStartRelative = previous.getRelativeStartOffsetFromBase(newBaseOffset);
+                    if (previous != null && previous.getEndOffsetExclusive() == offset) {
+                        // lower neighbor connects - combine
+                        newRunCumulative = newRunCumulative + previous.runLength;
+                        offsetStartRelative = previous.getRelativeStartOffsetFromBase(newBaseOffset);
+                        runLengthOffsetPairs.remove(previous);
+                    }
                 }
 
                 if (middleRelativeOffset == null)
@@ -534,16 +541,25 @@ class RunLengthEncoder extends OffsetEncoderBase {
 //                        offsetStartRelative = next.getRelativeStartOffsetFromBase(newBaseOffset) - 1; // shift left one place
 //                    newRunCumulative = newRunCumulative + 1;
 
-                    RunLengthEntry middle = addRunLength(newBaseOffset, 1, relativeOffsetFromBase);
+                    if (offsetStartRelative == null)
+                        offsetStartRelative = relativeOffsetFromBase;
+
+                    RunLengthEntry middle = addRunLength(newBaseOffset, newRunCumulative, offsetStartRelative);
 
                     // add incomplete filler
                     int lastRange = safeCast(intersectingWith.getEndOffsetInclusive() - offset);
                     if (lastRange > 0) {
                         addRunLength(newBaseOffset, lastRange, middleRelativeOffset + 1);
+//                        int fillerStart = middle.getRelativeEndOffsetFromBase(newBaseOffset);
+//                        int use = (fillerStart != middleRelativeOffset + 1)?
+//                        if (fillerStart != middleRelativeOffset + 1) {
+//                            log.trace("");
+//                        }
+//                        addRunLength(newBaseOffset, lastRange, fillerStart);
                     }
                 } else if (gapUpward == 1) {
-                    // combine
-                    newRunCumulative = newRunCumulative + 1; // expand
+                    // combine with upper
+                    newRunCumulative = newRunCumulative + next.runLength; // expand
 //                next.setRunLength(newRunLength);
                     runLengthOffsetPairs.remove(next);
                     if (offsetStartRelative == null)
