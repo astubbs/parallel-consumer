@@ -104,18 +104,18 @@ class WorkManagerOffsetMapCodecManagerTest {
         return randomInput;
     }
 
-    @SneakyThrows
-    @Test
-    void serialiseCycle() {
-        String serialised = om.serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, tp, incomplete);
-        log.info("Size: {}", serialised.length());
-
-        //
-        Set<Long> longs = om.deserialiseIncompleteOffsetMapFromBase64(finalOffsetForPartition, serialised).getRight();
-
-        //
-        assertThat(longs.toArray()).containsExactly(incomplete.toArray());
-    }
+//    @SneakyThrows
+//    @Test
+//    void serialiseCycle() {
+//        String serialised = om.serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, tp, incomplete);
+//        log.info("Size: {}", serialised.length());
+//
+//        //
+//        Set<Long> longs = om.deserialiseIncompleteOffsetMapFromBase64(finalOffsetForPartition, serialised).getRight();
+//
+//        //
+//        assertThat(longs.toArray()).containsExactly(incomplete.toArray());
+//    }
 
     /**
      * Even Java _binary_ serialisation has very large overheads.
@@ -210,13 +210,13 @@ class WorkManagerOffsetMapCodecManagerTest {
         assertThat(originalString).isEqualTo(decodedString);
     }
 
-    @SneakyThrows
-    @Test
-    void loadCompressedRunLengthEncoding() {
-        byte[] bytes = om.encodeOffsetsCompressed(finalOffsetForPartition, tp, incomplete);
-        ParallelConsumer.Tuple<Long, Set<Long>> longs = om.decodeCompressedOffsets(finalOffsetForPartition, bytes);
-        assertThat(longs.getRight().toArray()).containsExactly(incomplete.toArray());
-    }
+//    @SneakyThrows
+//    @Test
+//    void loadCompressedRunLengthEncoding() {
+//        byte[] bytes = om.encodeOffsetsCompressed(finalOffsetForPartition, tp, incomplete);
+//        ParallelConsumer.Tuple<Long, Set<Long>> longs = om.decodeCompressedOffsets(finalOffsetForPartition, bytes);
+//        assertThat(longs.getRight().toArray()).containsExactly(incomplete.toArray());
+//    }
 
     @Test
     void decodeOffsetMap() {
@@ -267,65 +267,66 @@ class WorkManagerOffsetMapCodecManagerTest {
         assertThat(decompressedInput).isEqualTo(ByteBuffer.wrap(input));
     }
 
-    @SneakyThrows
-    @Test
-    void largeOffsetMap() {
-        wm.raisePartitionHighestSeen(200L, tp);
-        byte[] bytes = om.encodeOffsetsCompressed(0L, tp, incomplete);
-        assertThat(bytes).as("very small").hasSizeLessThan(30);
-    }
+//    @SneakyThrows
+//    @Test
+//    void largeOffsetMap() {
+//        wm.raisePartitionHighestSeen(200L, tp);
+//        byte[] bytes = om.encodeOffsetsCompressed(0L, tp, incomplete);
+//        assertThat(bytes).as("very small").hasSizeLessThan(30);
+//    }
 
-    @SneakyThrows
-    @Test
-    void stringVsByteVsBitSetEncoding() {
-        for (var inputString : inputs) {
-            int inputLength = inputString.length();
+//    @SneakyThrows
+//    @Test
+//    void stringVsByteVsBitSetEncoding() {
+//        for (var inputString : inputs) {
+//            int inputLength = inputString.length();
+//
+//            Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, inputString);
+//
+//            OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, partitionHighWaterMark)
+//                    .runOverIncompletes(longs, finalOffsetForPartition, partitionHighWaterMark);
+//            byte[] byteByte = simultaneousEncoder.getEncodingMap().get(ByteArray);
+//            byte[] bitsBytes = simultaneousEncoder.getEncodingMap().get(BitSet);
+//
+////            int compressedBytes = om.compressZstd(byteByte).length;
+////            int compressedBits = om.compressZstd(bitsBytes).length;
+//
+//            byte[] runlengthBytes = simultaneousEncoder.getEncodingMap().get(RunLength);
+////            int rlBytesCompressed = om.compressZstd(runlengthBytes).length;
+//
+//            log.info("in: {}", inputString);
+////            log.info("length: {} comp bytes: {} comp bits: {}, uncompressed bits: {}, run length {}, run length compressed: {}", inputLength, compressedBytes, compressedBits, bitsBytes.length, runlengthBytes.length, rlBytesCompressed);
+//        }
+//        return; // breakpoint
+//    }
 
-            Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, inputString);
-
-            OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, partitionHighWaterMark).runOverIncompletes(longs, finalOffsetForPartition, partitionHighWaterMark);
-            byte[] byteByte = simultaneousEncoder.getEncodingMap().get(ByteArray);
-            byte[] bitsBytes = simultaneousEncoder.getEncodingMap().get(BitSet);
-
-//            int compressedBytes = om.compressZstd(byteByte).length;
-//            int compressedBits = om.compressZstd(bitsBytes).length;
-
-            byte[] runlengthBytes = simultaneousEncoder.getEncodingMap().get(RunLength);
-//            int rlBytesCompressed = om.compressZstd(runlengthBytes).length;
-
-            log.info("in: {}", inputString);
-//            log.info("length: {} comp bytes: {} comp bits: {}, uncompressed bits: {}, run length {}, run length compressed: {}", inputLength, compressedBytes, compressedBits, bitsBytes.length, runlengthBytes.length, rlBytesCompressed);
-        }
-        return; // breakpoint
-    }
-
-    @SneakyThrows
-    @Test
-    void deserialiseBitset() {
-        var input = "oxxooooooo";
-        long highWater = input.length();
-        wm.raisePartitionHighestSeen(highWater, tp);
-
-        Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, input);
-        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater);
-        encoder.runOverIncompletes(longs, finalOffsetForPartition, highWater);
-        byte[] pack = encoder.packSmallest();
-
-        //
-        EncodedOffsetData encodedOffsetPair = EncodedOffsetData.unwrap(pack);
-        String deserialisedBitSet = encodedOffsetPair.getDecodedString();
-        assertThat(deserialisedBitSet).isEqualTo(input);
-    }
-
-    @SneakyThrows
-    @Test
-    void compressionCycle() {
-        byte[] serialised = om.encodeOffsetsCompressed(finalOffsetForPartition, tp, incomplete);
-
-        ParallelConsumer.Tuple<Long, Set<Long>> deserialised = om.decodeCompressedOffsets(finalOffsetForPartition, serialised);
-
-        assertThat(deserialised.getRight()).isEqualTo(incomplete);
-    }
+//    @SneakyThrows
+//    @Test
+//    void deserialiseBitset() {
+//        var input = "oxxooooooo";
+//        long highWater = input.length();
+//        wm.raisePartitionHighestSeen(highWater, tp);
+//
+//        Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, input);
+//        OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater);
+//        encoder.runOverIncompletes(longs, finalOffsetForPartition, highWater);
+//        byte[] pack = encoder.packSmallest();
+//
+//        //
+//        EncodedOffsetData encodedOffsetPair = EncodedOffsetData.unwrap(pack);
+//        String deserialisedBitSet = encodedOffsetPair.getDecodedString();
+//        assertThat(deserialisedBitSet).isEqualTo(input);
+//    }
+//
+//    @SneakyThrows
+//    @Test
+//    void compressionCycle() {
+//        byte[] serialised = om.encodeOffsetsCompressed(finalOffsetForPartition, tp, incomplete);
+//
+//        ParallelConsumer.Tuple<Long, Set<Long>> deserialised = om.decodeCompressedOffsets(finalOffsetForPartition, serialised);
+//
+//        assertThat(deserialised.getRight()).isEqualTo(incomplete);
+//    }
 
     @Test
     void runLengthEncoding() {
@@ -336,38 +337,38 @@ class WorkManagerOffsetMapCodecManagerTest {
         assertThat(OffsetRunLength.runLengthDecodeToString(integers)).isEqualTo(stringMap);
     }
 
-    @Test
-    void differentInputs() {
-        for (final String input : inputs) {
-            // override high water mark setup, as the test sets it manually
-            setup();
-            wm.partitionOffsetHighestSeen.put(tp, 0L); // hard reset to zero
-            long highWater = input.length();
-            wm.raisePartitionHighestSeen(highWater, tp);
-
-            //
-            log.debug("Testing round - size: {} input: '{}'", input.length(), input);
-            Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, input);
-            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater);
-            encoder.runOverIncompletes(longs, finalOffsetForPartition, highWater);
-
-            // test all encodings created
-            for (final EncodedOffsetData pair : encoder.sortedEncodingData) {
-                byte[] result = encoder.packEncoding(pair);
-
-                //
-                ParallelConsumer.Tuple<Long, Set<Long>> recoveredIncompleteOffsetTuple = om.decodeCompressedOffsets(finalOffsetForPartition, result);
-                Set<Long> recoveredIncompletes = recoveredIncompleteOffsetTuple.getRight();
-
-                //
-                assertThat(recoveredIncompletes).containsExactlyInAnyOrderElementsOf(longs);
-
-                //
-                String recoveredOffsetBitmapAsString = om.incompletesToBitmapString(finalOffsetForPartition, tp, recoveredIncompletes);
-                assertThat(recoveredOffsetBitmapAsString).isEqualTo(input);
-            }
-        }
-    }
+//    @Test
+//    void differentInputs() {
+//        for (final String input : inputs) {
+//            // override high water mark setup, as the test sets it manually
+//            setup();
+//            wm.partitionOffsetHighestSeen.put(tp, 0L); // hard reset to zero
+//            long highWater = input.length();
+//            wm.raisePartitionHighestSeen(highWater, tp);
+//
+//            //
+//            log.debug("Testing round - size: {} input: '{}'", input.length(), input);
+//            Set<Long> longs = om.bitmapStringToIncomplete(finalOffsetForPartition, input);
+//            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highWater);
+//            encoder.runOverIncompletes(longs, finalOffsetForPartition, highWater);
+//
+//            // test all encodings created
+//            for (final EncodedOffsetData pair : encoder.sortedEncodingData) {
+//                byte[] result = encoder.packEncoding(pair);
+//
+//                //
+//                ParallelConsumer.Tuple<Long, Set<Long>> recoveredIncompleteOffsetTuple = om.decodeCompressedOffsets(finalOffsetForPartition, result);
+//                Set<Long> recoveredIncompletes = recoveredIncompleteOffsetTuple.getRight();
+//
+//                //
+//                assertThat(recoveredIncompletes).containsExactlyInAnyOrderElementsOf(longs);
+//
+//                //
+//                String recoveredOffsetBitmapAsString = om.incompletesToBitmapString(finalOffsetForPartition, tp, recoveredIncompletes);
+//                assertThat(recoveredOffsetBitmapAsString).isEqualTo(input);
+//            }
+//        }
+//    }
 
     @Disabled
     @Test

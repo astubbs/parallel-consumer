@@ -107,10 +107,10 @@ public class OffsetMapCodecManager<K, V> {
         wm.partitionOffsetsIncompleteMetadataPayloads.put(tp, incompleteOffsets);
     }
 
-    String makeOffsetMetadataPayload(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
-        String offsetMap = serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, tp, incompleteOffsets);
-        return offsetMap;
-    }
+//    String makeOffsetMetadataPayload(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
+//        String offsetMap = serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, tp, incompleteOffsets);
+//        return offsetMap;
+//    }
 
     String makeOffsetMetadataPayload(OffsetSimultaneousEncoder simultaneousEncoder) throws EncodingNotSupportedException {
         byte[] smallest = packSmallest(simultaneousEncoder);
@@ -118,27 +118,27 @@ public class OffsetMapCodecManager<K, V> {
         return offsetMap;
     }
 
-    String serialiseIncompleteOffsetMapToBase64(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
-        byte[] compressedEncoding = encodeOffsetsCompressed(finalOffsetForPartition, tp, incompleteOffsets);
-        String b64 = OffsetSimpleSerialisation.base64(compressedEncoding);
-        return b64;
-    }
+//    String serialiseIncompleteOffsetMapToBase64(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
+//        byte[] compressedEncoding = encodeOffsetsCompressed(finalOffsetForPartition, tp, incompleteOffsets);
+//        String b64 = OffsetSimpleSerialisation.base64(compressedEncoding);
+//        return b64;
+//    }
 
-    /**
-     * Print out all the offset status into a String, and use X to effectively do run length encoding compression on the
-     * string.
-     * <p>
-     * Include the magic byte in the returned array.
-     * <p>
-     * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
-     */
-    byte[] encodeOffsetsCompressed(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
-        Long currentHighestCompleted = wm.partitionOffsetHighestSeen.get(tp) + 1; // this is a problem - often the highest succeeded is very different from highest seet
-        // todo use new encoder for accuracy
-        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, currentHighestCompleted)
-                .runOverIncompletes(incompleteOffsets, finalOffsetForPartition, currentHighestCompleted);
-        return packSmallest(simultaneousEncoder);
-    }
+//    /**
+//     * Print out all the offset status into a String, and use X to effectively do run length encoding compression on the
+//     * string.
+//     * <p>
+//     * Include the magic byte in the returned array.
+//     * <p>
+//     * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
+//     */
+//    byte[] encodeOffsetsCompressed(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
+//        Long currentHighestCompleted = wm.partitionOffsetHighestSeen.get(tp) + 1; // this is a problem - often the highest succeeded is very different from highest seet
+//        // todo use new encoder for accuracy
+//        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, currentHighestCompleted)
+//                .runOverIncompletes(incompleteOffsets, finalOffsetForPartition, currentHighestCompleted);
+//        return packSmallest(simultaneousEncoder);
+//    }
 
     private byte[] packSmallest(final OffsetSimultaneousEncoder simultaneousEncoder) throws EncodingNotSupportedException {
         byte[] result;

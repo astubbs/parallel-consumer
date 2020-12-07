@@ -1239,11 +1239,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //                    e.printStackTrace();
 //                }
 
-            OffsetAndMetadata offsetAndMetadata = offsetMetadataToCommit.get(topicPartitionKey);
-            {
-                int offsetMetaPayloadSpaceUsed = getTotalOffsetMetaCharacterLength(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed, incompleteOffsets, topicPartitionKey);
-                totalOffsetMetaCharacterLengthUsed += offsetMetaPayloadSpaceUsed;
-            }
+//            OffsetAndMetadata offsetAndMetadata = offsetMetadataToCommit.get(topicPartitionKey);
+//            {
+//                int offsetMetaPayloadSpaceUsed = getTotalOffsetMetaCharacterLength(offsetMetadataToCommit, totalOffsetMetaCharacterLengthUsed, incompleteOffsets, topicPartitionKey);
+//                totalOffsetMetaCharacterLengthUsed += offsetMetaPayloadSpaceUsed;
+//            }
 
             if (remove) {
                 removed += workToRemove.size();
@@ -1262,39 +1262,39 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return offsetMetadataToCommit;
     }
 
-    private int getTotalOffsetMetaCharacterLength(final Map<TopicPartition, OffsetAndMetadata> perPartitionNextExpectedOffset, int totalOffsetMetaCharacterLength, final LinkedHashSet<Long> incompleteOffsets, final TopicPartition topicPartitionKey) {
-        // offset map building
-        // Get final offset data, build the the offset map, and replace it in our map of offset data to send
-        // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
-        if (!incompleteOffsets.isEmpty()) {
-            long offsetOfNextExpectedMessage;
-            OffsetAndMetadata finalOffsetOnly = perPartitionNextExpectedOffset.get(topicPartitionKey);
-            if (finalOffsetOnly == null) {
-                // no new low water mark to commit, so use the last one again
-                offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
-            } else {
-                offsetOfNextExpectedMessage = finalOffsetOnly.offset();
-            }
-
-            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumerMgr);
-            try {
-                // TODO change from offsetOfNextExpectedMessage to getting the pre computed one from offsetOfNextExpectedMessage
-                Long highestCompletedOffset = partitionOffsetHighestSucceeded.get(topicPartitionKey);
-                if (highestCompletedOffset == null) {
-                    log.error("What now?");
-                }
-                // encode
-                String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
-                totalOffsetMetaCharacterLength += offsetMapPayload.length();
-                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
-                perPartitionNextExpectedOffset.put(topicPartitionKey, offsetWithExtraMap);
-            } catch (EncodingNotSupportedException e) {
-                log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
-//                backoffer.onFailure();
-            }
-        }
-        return totalOffsetMetaCharacterLength;
-    }
+//    private int getTotalOffsetMetaCharacterLength(final Map<TopicPartition, OffsetAndMetadata> perPartitionNextExpectedOffset, int totalOffsetMetaCharacterLength, final LinkedHashSet<Long> incompleteOffsets, final TopicPartition topicPartitionKey) {
+//        // offset map building
+//        // Get final offset data, build the the offset map, and replace it in our map of offset data to send
+//        // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
+//        if (!incompleteOffsets.isEmpty()) {
+//            long offsetOfNextExpectedMessage;
+//            OffsetAndMetadata finalOffsetOnly = perPartitionNextExpectedOffset.get(topicPartitionKey);
+//            if (finalOffsetOnly == null) {
+//                // no new low water mark to commit, so use the last one again
+//                offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
+//            } else {
+//                offsetOfNextExpectedMessage = finalOffsetOnly.offset();
+//            }
+//
+//            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumerMgr);
+//            try {
+//                // TODO change from offsetOfNextExpectedMessage to getting the pre computed one from offsetOfNextExpectedMessage
+//                Long highestCompletedOffset = partitionOffsetHighestSucceeded.get(topicPartitionKey);
+//                if (highestCompletedOffset == null) {
+//                    log.error("What now?");
+//                }
+//                // encode
+//                String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
+//                totalOffsetMetaCharacterLength += offsetMapPayload.length();
+//                OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
+//                perPartitionNextExpectedOffset.put(topicPartitionKey, offsetWithExtraMap);
+//            } catch (EncodingNotSupportedException e) {
+//                log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance", e);
+////                backoffer.onFailure();
+//            }
+//        }
+//        return totalOffsetMetaCharacterLength;
+//    }
 
     /**
      * Once all the offset maps have been calculated, check if they're too big, and if so, remove all of them.

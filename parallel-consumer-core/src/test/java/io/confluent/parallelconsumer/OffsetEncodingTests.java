@@ -73,7 +73,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         encoder.compressionForced = true;
 
         //
-        encoder.runOverIncompletes(incompletes, lowWaterMark, currentHighestCompleted);
+//        encoder.runOverIncompletes(incompletes, lowWaterMark, currentHighestCompleted);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //
@@ -244,7 +244,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         encoder.compressionForced = true;
 
         //
-        encoder.runOverIncompletes(incompletes, lowWaterMark, currentHighestCompleted);
+//        encoder.runOverIncompletes(incompletes, lowWaterMark, currentHighestCompleted);
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //

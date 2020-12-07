@@ -224,26 +224,22 @@ class BitsetEncoder extends OffsetEncoderBase {
 
     private void reinitialise(final long newBaseOffset, final long newLength) throws BitSetEncodingNotSupportedException {
         if (newLength == -1) {
-            log.warn("Nothing to encode, highest successful offset one behing out starting point");
+            log.debug("Nothing to encode, highest successful offset one behind out starting point");
             bitSet = new BitSet();
             this.originalLength = Math.toIntExact(newLength);
             return;
-        } else if (newLength < -1) {
+        } else if (newLength < -2) {
             throw new InternalRuntimeError("Invalid state - highest successful too far behind starting point");
         }
 
         long baseDelta = newBaseOffset - originalBaseOffset;
         // truncate at new relative delta
-        try {
-//                newBs.or(this.bitSet);
-            int endIndex = safeCast(baseDelta + originalLength + 1);
-            int startIndex = (int) baseDelta;
-            BitSet truncated = this.bitSet.get(startIndex, endIndex);
-            this.bitSet = new BitSet(safeCast(newLength));
-            this.bitSet.or(truncated); // fill with old values
-        } catch (IndexOutOfBoundsException i) {
-            log.error("{}", i);
-        }
+
+        int endIndex = safeCast(baseDelta + originalLength + 1);
+        int startIndex = (int) baseDelta;
+        BitSet truncated = this.bitSet.get(startIndex, endIndex);
+        this.bitSet = new BitSet(safeCast(newLength));
+        this.bitSet.or(truncated); // fill with old values
 
 //        bitSet = new BitSet(length);
 

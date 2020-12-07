@@ -176,68 +176,68 @@ class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         encoders.add(new ByteBufferEncoder(baseOffset, length, this));
     }
 
-    /**
-     * Highwater mark already encoded in string - {@link OffsetMapCodecManager#makeOffsetMetadataPayload} - so encoding
-     * BitSet run length may not be needed, or could be swapped
-     * <p/>
-     * Simultaneously encodes:
-     * <ul>
-     * <li>{@link OffsetEncoding#BitSet}</li>
-     * <li>{@link OffsetEncoding#RunLength}</li>
-     * </ul>
-     * Conditionaly encodes compression variants:
-     * <ul>
-     * <li>{@link OffsetEncoding#BitSetCompressed}</li>
-     * <li>{@link OffsetEncoding#RunLengthCompressed}</li>
-     * </ul>
-     * Currently commented out is {@link OffsetEncoding#ByteArray} as there doesn't seem to be an advantage over
-     * BitSet encoding.
-     * <p>
-     * TODO: optimisation - inline this into the partition iteration loop in {@link WorkManager}
-     * <p>
-     * TODO: optimisation - could double the run-length range from Short.MAX_VALUE (~33,000) to Short.MAX_VALUE * 2
-     *  (~66,000) by using unsigned shorts instead (higest representable relative offset is Short.MAX_VALUE because each
-     *  runlength entry is a Short)
-     * <p>
-     *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
-     *
-     * @param currentBaseOffset       to use now, checked for consistency
-     * @param currentHighestCompleted to use now, checked for consistency
-     */
-    public OffsetSimultaneousEncoder runOverIncompletes(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
-//        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
-
-        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, highestSucceeded);
-        log.trace("Incompletes are: {}", incompleteOffsets);
-
-        //
-        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.highestSucceeded, length);
-        /*
-         * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
-         *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
-         *  the entire range. So when BitSet can't be used, the encoding would be potentially a lot faster as RunLength
-         *  didn't need the whole loop.
-         */
-        range(length).forEach(rangeIndex -> {
-            final long offset = this.baseOffset + rangeIndex;
-            if (incompleteOffsets.contains(offset)) {
-                log.trace("Found an incomplete offset {}", offset);
-                encoders.forEach(x -> {
-                    x.encodeIncompleteOffset(currentBaseOffset, rangeIndex, currentHighestCompleted);
-                });
-            } else {
-                encoders.forEach(x -> {
-                    x.encodeCompleteOffset(currentBaseOffset, rangeIndex, currentHighestCompleted);
-                });
-            }
-        });
-
-        serializeAllEncoders();
-
-        log.debug("In order: {}", this.sortedEncodingData);
-
-        return this;
-    }
+//    /**
+//     * Highwater mark already encoded in string - {@link OffsetMapCodecManager#makeOffsetMetadataPayload} - so encoding
+//     * BitSet run length may not be needed, or could be swapped
+//     * <p/>
+//     * Simultaneously encodes:
+//     * <ul>
+//     * <li>{@link OffsetEncoding#BitSet}</li>
+//     * <li>{@link OffsetEncoding#RunLength}</li>
+//     * </ul>
+//     * Conditionaly encodes compression variants:
+//     * <ul>
+//     * <li>{@link OffsetEncoding#BitSetCompressed}</li>
+//     * <li>{@link OffsetEncoding#RunLengthCompressed}</li>
+//     * </ul>
+//     * Currently commented out is {@link OffsetEncoding#ByteArray} as there doesn't seem to be an advantage over
+//     * BitSet encoding.
+//     * <p>
+//     * TODO: optimisation - inline this into the partition iteration loop in {@link WorkManager}
+//     * <p>
+//     * TODO: optimisation - could double the run-length range from Short.MAX_VALUE (~33,000) to Short.MAX_VALUE * 2
+//     *  (~66,000) by using unsigned shorts instead (higest representable relative offset is Short.MAX_VALUE because each
+//     *  runlength entry is a Short)
+//     * <p>
+//     *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
+//     *
+//     * @param currentBaseOffset       to use now, checked for consistency
+//     * @param currentHighestCompleted to use now, checked for consistency
+//     */
+//    public OffsetSimultaneousEncoder runOverIncompletes(Set<Long> incompleteOffsets, final long currentBaseOffset, final long currentHighestCompleted) {
+////        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
+//
+//        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffset, highestSucceeded);
+//        log.trace("Incompletes are: {}", incompleteOffsets);
+//
+//        //
+//        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffset, this.highestSucceeded, length);
+//        /*
+//         * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
+//         *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
+//         *  the entire range. So when BitSet can't be used, the encoding would be potentially a lot faster as RunLength
+//         *  didn't need the whole loop.
+//         */
+//        range(length).forEach(rangeIndex -> {
+//            final long offset = this.baseOffset + rangeIndex;
+//            if (incompleteOffsets.contains(offset)) {
+//                log.trace("Found an incomplete offset {}", offset);
+//                encoders.forEach(x -> {
+//                    x.encodeIncompleteOffset(currentBaseOffset, rangeIndex, currentHighestCompleted);
+//                });
+//            } else {
+//                encoders.forEach(x -> {
+//                    x.encodeCompleteOffset(currentBaseOffset, rangeIndex, currentHighestCompleted);
+//                });
+//            }
+//        });
+//
+//        serializeAllEncoders();
+//
+//        log.debug("In order: {}", this.sortedEncodingData);
+//
+//        return this;
+//    }
 
     public void serializeAllEncoders() {
         sortedEncodingData.clear();
