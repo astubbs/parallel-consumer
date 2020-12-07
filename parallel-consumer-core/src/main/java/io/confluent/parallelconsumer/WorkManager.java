@@ -224,6 +224,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
     }
 
+    private List<TopicPartition> partitionsToRemove = new ArrayList<>();
+
     /**
      * Clear offset map for revoked partitions
      * <p>
@@ -239,7 +241,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         try {
             log.debug("Partitions revoked: {}", partitions);
-            removePartitionFromRecordsAndShardWork(partitions);
+//            removePartitionFromRecordsAndShardWork(partitions);
+            registerPartitionsToBeRemoved(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsRevoked", e);
             throw e;
@@ -256,23 +259,32 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            log.warn("Partitions have been lost");
-            log.debug("Lost partitions: {}", partitions);
-            removePartitionFromRecordsAndShardWork(partitions);
+            log.warn("Partitions have been lost: {}", partitions);
+//            log.debug("Lost partitions: {}", partitions);
+//            removePartitionFromRecordsAndShardWork(partitions);
+            registerPartitionsToBeRemoved(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsLost", e);
             throw e;
         }
     }
 
-    private void removePartitionFromRecordsAndShardWork(Collection<TopicPartition> partitions) {
-        for (TopicPartition partition : partitions) {
+    /**
+     * Called by other threads (broker poller) to be later removed inline by control.
+     */
+    private void registerPartitionsToBeRemoved(Collection<TopicPartition> partitions){
+        partitionsToRemove.addAll(partitions);
+    }
+
+    private void removePartitionFromRecordsAndShardWork() {
+        for (TopicPartition partition : partitionsToRemove) {
             log.debug("Removing records for partition {}", partition);
+            // todo is there a safer way than removing these?
             partitionOffsetHighestSeen.remove(partition);
             partitionOffsetHighestSucceeded.remove(partition);
             partitionOffsetHighestContinuousSucceeded.remove(partition);
             partitionOffsetsIncompleteMetadataPayloads.remove(partition);
-            partitionMoreRecordsAllowedToProcess.remove(partition);
+//            partitionMoreRecordsAllowedToProcess.remove(partition);
 
             //
             NavigableMap<Long, WorkContainer<K, V>> oldWorkPartitionCommitQueue = partitionCommitQueues.remove(partition);
@@ -556,6 +568,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         //int minWorkToGetSetting = min(min(requestedMaxWorkToRetrieve, getMaxMessagesToQueue()), getMaxToGoBeyondOffset());
 //        int minWorkToGetSetting = min(requestedMaxWorkToRetrieve, getMaxToGoBeyondOffset());
 //        int workToGetDelta = requestedMaxWorkToRetrieve - getRecordsOutForProcessing();
+        removePartitionFromRecordsAndShardWork();
+
         int workToGetDelta = requestedMaxWorkToRetrieve;
 
         // optimise early
@@ -596,10 +610,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 }
 
                 var workContainer = queueEntry.getValue();
+                var topicPartitionKey = workContainer.getTopicPartition();
+
+                {
+                    if (checkEpoch(workContainer)) continue;
+                }
 
                 // TODO refactor this and the rest of the partition state monitoring code out
                 // check we have capacity in offset storage to process more messages
-                var topicPartitionKey = workContainer.getTopicPartition();
                 Boolean allowedMoreRecords = partitionMoreRecordsAllowedToProcess.get(topicPartitionKey);
                 // If the record has been previosly attempted, it is already represented in the current offset encoding,
                 // and may in fact be the message holding up the partition so must be retried
@@ -643,6 +661,22 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         return work;
     }
+
+    /**
+     * Have our partitions been revoked?
+     */
+    private boolean checkEpoch(final WorkContainer<K, V> workContainer) {
+        TopicPartition topicPartitionKey = workContainer.getTopicPartition();
+
+        Integer currentPartitionEpoch = partitionsAssignmentEpochs.get(topicPartitionKey);
+        int workEpoch = workContainer.getEpoch();
+        if (currentPartitionEpoch != workEpoch) {
+            log.warn("Epoch mismatch {} vs {} - were partitions lost? Skipping message - it's already assigned to a different consumer.", workEpoch, currentPartitionEpoch);
+            return true;
+        }
+        return false;
+    }
+
 //
 //    private int getMaxMessagesToQueue() {
 //        //return options.getNumberOfThreads() * options.getLoadingFactor();
@@ -765,6 +799,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         Map<TopicPartition, Long> originalMarks = new HashMap<>();
         Map<TopicPartition, Boolean> partitionNowFormsAContinuousBlock = new HashMap<>();
         for (final WorkContainer<K, V> work : workResults) {
+            if (checkEpoch(work)) continue;
+
             TopicPartition tp = work.getTopicPartition();
 
             // guard against old epoch messages
@@ -774,12 +810,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //                continue;
 //            }
 
-            handleFutureResult(work);
+            {
+                handleFutureResult(work);
+            }
 
             long thisOffset = work.getCr().offset();
 
+
             // this offset has already been scanned as a part of a high range batch, so skip (we already know the highest continuous block incorporates this offset)
-            long previousHighestContinuous = partitionOffsetHighestContinuousSucceeded.get(tp);
+            Long previousHighestContinuous = partitionOffsetHighestContinuousSucceeded.get(tp);
             if (thisOffset <= previousHighestContinuous) {
 //                     sanity? by definition it must be higher
 //                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
@@ -788,13 +827,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 continue;
             }
 
-            // We already know this partition's continuous range has been broken, no point checking
-            Boolean partitionSoFarIsContinuous = partitionNowFormsAContinuousBlock.get(tp);
-            if (partitionSoFarIsContinuous != null && !partitionSoFarIsContinuous) {
-                // previously we found non continuous block so we can skip
-                continue; // to next record
-            } else {
-                // we can't know, we have to keep digging
+
+            {
+                // We already know this partition's continuous range has been broken, no point checking
+                Boolean partitionSoFarIsContinuous = partitionNowFormsAContinuousBlock.get(tp);
+                if (partitionSoFarIsContinuous != null && !partitionSoFarIsContinuous) {
+                    // previously we found non continuous block so we can skip
+                    continue; // to next record
+                } else {
+                    // we can't know, we have to keep digging
+                }
             }
 
             boolean thisOffsetIsFailed = !work.isUserFunctionSucceeded();
