@@ -277,11 +277,15 @@ public class RunLengthEncoderTest {
         RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
 
         rl.encodeCompleteOffset(0, 10, 10);
+        assertOffsetsAndRuns(rl,
+                of(10), // offsets
+                of(10, 1)); // runs
 
         // middle offset out of order
         rl.encodeCompleteOffset(0, 6, 10);
-
-//        rl.addTail();
+        assertOffsetsAndRuns(rl,
+                of(6, 10),
+                of(6, 1, 3, 1));
 
         assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getStartOffset).extracting(Long::intValue).containsExactly(0, 6, 7, 10);
         assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(6, 1, 3, 1);

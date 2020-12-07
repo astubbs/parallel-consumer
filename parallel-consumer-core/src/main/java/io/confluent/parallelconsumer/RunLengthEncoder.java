@@ -512,6 +512,7 @@ class RunLengthEncoder extends OffsetEncoderBase {
                 int newRunCumulative = 1;
                 Integer offsetStartRelative = null;
                 if (firstRun > 0) {
+                    // large gap to fill
 //                RunLengthEntry runLengthEntry = new RunLengthEntry(intersectingWith.startOffset, firstRun);
                     RunLengthEntry first = addRunLength(newBaseOffset, firstRun, firstRelativeOffset);
                     middleRelativeOffset = first.getRelativeStartOffsetFromBase(originalBaseOffset) + first.runLength;
@@ -527,12 +528,13 @@ class RunLengthEncoder extends OffsetEncoderBase {
                     middleRelativeOffset = firstRelativeOffset;
                 int gapUpward = next.getRelativeStartOffsetFromBase(newBaseOffset) - middleRelativeOffset;
                 if (gapUpward > 1) {
-                    // add this entry now, and then add gap filler
-                    if (offsetStartRelative == null)
-                        offsetStartRelative = next.getRelativeStartOffsetFromBase(newBaseOffset) - 1; // shift left one place
-                    newRunCumulative = newRunCumulative + 1;
+                    // there is a large gap between this success and the next
+                    // add this single entry now then, and then add gap filler
+//                    if (offsetStartRelative == null)
+//                        offsetStartRelative = next.getRelativeStartOffsetFromBase(newBaseOffset) - 1; // shift left one place
+//                    newRunCumulative = newRunCumulative + 1;
 
-                    RunLengthEntry middle = addRunLength(newBaseOffset, 1, offsetStartRelative);
+                    RunLengthEntry middle = addRunLength(newBaseOffset, 1, relativeOffsetFromBase);
 
                     // add incomplete filler
                     int lastRange = safeCast(intersectingWith.getEndOffsetInclusive() - offset);
