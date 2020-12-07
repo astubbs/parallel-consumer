@@ -379,18 +379,18 @@ public class RunLengthEncoderTest {
         rl.encodeCompleteOffset(10, 14, 20);
         assertOffsetsAndRuns(rl,
                 of(24, 30),
-                of(4, 1, 6, 1));
+                of(14, 1, 5, 1));
 
         rl.encodeCompleteOffset(10, 16, 20);
         assertOffsetsAndRuns(rl,
                 of(24, 26, 30),
-                of(4, 1, 1, 1, 3, 1));
+                of(14, 1, 1, 1, 3, 1));
 
         //
         rl.encodeCompleteOffset(10, 15, 20);
         assertOffsetsAndRuns(rl,
                 of(24, 25, 26, 30),
-                of(4, 3, 3, 1));
+                of(14, 3, 3, 1));
     }
 
     /**
