@@ -58,38 +58,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     @Getter
     private final ParallelConsumerOptions options;
 
-    // todo performance: disable/remove if using partition order
-    /**
-     * Map of Object keys to Map of offset to WorkUnits
-     * <p>
-     * Object is either the K key type, or it is a {@link TopicPartition}
-     * <p>
-     * Used to collate together a queue of work units for each unique key consumed
-     *
-     * @see K
-     * @see #maybeGetWork()
-     */
-    private final Map<Object, NavigableMap<Long, WorkContainer<K, V>>> processingShards = new ConcurrentHashMap<>();
-
-    /**
-     * Map of partitions to Map of offsets to WorkUnits
-     * <p>
-     * Need to record globally consumed records, to ensure correct offset order committal. Cannot rely on incrementally
-     * advancing offsets, as this isn't a guarantee of kafka's.
-     * <p>
-     * Concurrent because either the broker poller thread or the control thread may be requesting offset to commit
-     * ({@link #findCompletedEligibleOffsetsAndRemove})
-     *
-     * @see #findCompletedEligibleOffsetsAndRemove
-     */
-    private final Map<TopicPartition, NavigableMap<Long, WorkContainer<K, V>>> partitionCommitQueues = new ConcurrentHashMap<>();
-    //    private final Map<TopicPartition, NavigableMap<Long, WorkContainer<K, V>>> partitionCommitQueues = new HashMap<>();
-
-    /**
-     * Continuous offset encodings
-     */
-    private final Map<TopicPartition, OffsetSimultaneousEncoder> partitionContinuousOffsetEncoders = new ConcurrentHashMap<>();
-
 //    private final BackoffAnalyser backoffer;
 
     private final DynamicLoadFactor dynamicLoadFactor;
@@ -130,55 +98,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     ConsumerManager consumerMgr;
 
     // visible for testing
-    /**
-     * A subset of Offsets, beyond the highest committable offset, which haven't been totally completed.
-     * <p>
-     * We only need to know the full incompletes when we do the {@link #findCompletedEligibleOffsetsAndRemove} scan, so
-     * find the full sent only then, and discard. Otherwise, for continuous encoding, the encoders track it them
-     * selves.
-     * <p>
-     * We work with incompletes, instead of completes, because it's a bet that most of the time the storage space for
-     * storing the incompletes in memory will be smaller.
-     *
-     * @see #findCompletedEligibleOffsetsAndRemove(boolean)
-     * @see #encodeWorkResult(boolean, WorkContainer)
-     * @see #onSuccess(WorkContainer)
-     * @see #onFailure(WorkContainer)
-     */
-    Map<TopicPartition, Set<Long>> partitionOffsetsIncompleteMetadataPayloads = new ConcurrentHashMap<>();
-
-    // visible for testing
-    /**
-     * The highest seen offset for a partition
-     */
-    Map<TopicPartition, Long> partitionOffsetHighestSeen = new HashMap<>();
-
-    /**
-     * Highest offset which has completed
-     */
-    Map<TopicPartition, Long> partitionOffsetHighestSucceeded = new ConcurrentHashMap<>();
-
-    /**
-     * If true, more messages are allowed to process for this partition.
-     * <p>
-     * If false, we have calculated that we can't record any more offsets for this partition, as our best performing
-     * encoder requires nearly as much space is available for this partitions allocation of the maximum offset metadata
-     * size.
-     * <p>
-     * Default (missing elements) is true - more messages can be processed.
-     *
-     * @see #manageOffsetEncoderSpaceRequirements()
-     * @see OffsetMapCodecManager#DefaultMaxMetadataSize
-     */
-    Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new ConcurrentHashMap<>();
-
-    /**
-     * Highest committable offset - the end offset of the highest (from the lowest seen) continuous set of completed
-     * offsets. AKA low water mark.
-     */
-    Map<TopicPartition, Long> partitionOffsetHighestContinuousSucceeded = new ConcurrentHashMap<>();
-
-    // visible for testing
     long MISSING_HIGHEST_SEEN = -1L;
 
     /**
@@ -189,7 +108,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private AtomicBoolean workStateIsDirtyNeedsCommitting = new AtomicBoolean(false);
 
-    private int numberOfAssignedPartitions;
 
     // TODO remove
     public WorkManager(ParallelConsumerOptions options, ConsumerManager consumer) {
