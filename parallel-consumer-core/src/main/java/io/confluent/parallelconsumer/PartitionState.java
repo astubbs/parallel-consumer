@@ -1,15 +1,14 @@
 package io.confluent.parallelconsumer;
 
+import lombok.Getter;
 import org.apache.kafka.common.TopicPartition;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.NavigableMap;
-import java.util.TreeSet;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class PartitionState {
+public class PartitionState<K,V> {
 
+    Integer partitionsAssignmentEpochs;
 
     // visible for testing
     /**
@@ -38,7 +37,7 @@ public class PartitionState {
     /**
      * Continuous offset encodings
      */
-    private final Map<TopicPartition, OffsetSimultaneousEncoder> partitionContinuousOffsetEncoders = new ConcurrentHashMap<>();
+    OffsetSimultaneousEncoder partitionContinuousOffsetEncoders;
 
     /**
      * Highest offset which has completed
@@ -63,7 +62,7 @@ public class PartitionState {
      * @see #manageOffsetEncoderSpaceRequirements()
      * @see OffsetMapCodecManager#DefaultMaxMetadataSize
      */
-    Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new ConcurrentHashMap<>();
+    Boolean partitionMoreRecordsAllowedToProcess;
 
 
     /**
@@ -77,6 +76,16 @@ public class PartitionState {
      *
      * @see #findCompletedEligibleOffsetsAndRemove
      */
-    private final Map<TopicPartition, NavigableMap<Long, WorkContainer<K, V>>> partitionCommitQueues = new ConcurrentHashMap<>();
-    
+    private final NavigableMap<Long, WorkContainer<K, V>> partitionCommitQueue = new ConcurrentHashMap<>();
+
+    /**
+     * @see #partitionMoreRecordsAllowedToProcess
+     */
+    public Boolean areMoreRecordsAllowedToProcess() {
+        return partitionMoreRecordsAllowedToProcess;
+    }
+
+    public OffsetSimultaneousEncoder getOffsetEncoer() {
+        return partitionContinuousOffsetEncoders;
+    }
 }
