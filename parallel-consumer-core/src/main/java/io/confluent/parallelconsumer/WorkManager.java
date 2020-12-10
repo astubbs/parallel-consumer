@@ -73,6 +73,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     @Getter
     private int numberRecordsOutForProcessing = 0;
 
+    // todo performance: disable/remove if using partition order
+    /**
+     * Map of Object keys to Map of offset to WorkUnits
+     * <p>
+     * Object is either the K key type, or it is a {@link TopicPartition}
+     * <p>
+     * Used to collate together a queue of work units for each unique key consumed
+     *
+     * @see K
+     * @see #maybeGetWork()
+     */
+    private final Map<Object, NavigableMap<Long, WorkContainer<K, V>>> processingShards = new ConcurrentHashMap<>();
 
     /**
      * todo docs The multiple that should be pre-loaded awaiting processing. Consumer already pipelines, so we shouldn't
@@ -108,6 +120,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private AtomicBoolean workStateIsDirtyNeedsCommitting = new AtomicBoolean(false);
 
+    private PartitionMonitor<K,V> pm;
+
 
     // TODO remove
     public WorkManager(ParallelConsumerOptions options, ConsumerManager consumer) {
@@ -130,37 +144,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
-        incrementPartitionAssignmentEpoch(partitions);
-
-        // init messages allowed state
-        for (final TopicPartition partition : partitions) {
-            partitionMoreRecordsAllowedToProcess.putIfAbsent(partition, true);
-        }
-
-        numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
-        log.info("Assigned {} partitions - that's {} bytes per partition for encoding offset overruns",
-                numberOfAssignedPartitions, OffsetMapCodecManager.DefaultMaxMetadataSize / numberOfAssignedPartitions);
-
-        try {
-            log.debug("onPartitionsAssigned: {}", partitions);
-            Set<TopicPartition> partitionsSet = UniSets.copyOf(partitions);
-            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<K, V>(this, this.consumerMgr);
-            om.loadOffsetMapForPartition(partitionsSet);
-        } catch (Exception e) {
-            log.error("Error in onPartitionsAssigned", e);
-            throw e;
-        }
+        pm.onPartitionsAssigned(partitions);
     }
-
-    private void incrementPartitionAssignmentEpoch(final Collection<TopicPartition> partitions) {
-        for (final TopicPartition partition : partitions) {
-            int epoch = partitionsAssignmentEpochs.getOrDefault(partition, -1);
-            epoch++;
-            partitionsAssignmentEpochs.put(partition, epoch);
-        }
-    }
-
-    private List<TopicPartition> partitionsToRemove = new ArrayList<>();
 
     /**
      * Clear offset map for revoked partitions
@@ -171,18 +156,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
-        incrementPartitionAssignmentEpoch(partitions);
-
-        numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
-
-        try {
-            log.debug("Partitions revoked: {}", partitions);
-//            removePartitionFromRecordsAndShardWork(partitions);
-            registerPartitionsToBeRemoved(partitions);
-        } catch (Exception e) {
-            log.error("Error in onPartitionsRevoked", e);
-            throw e;
-        }
+        pm.onPartitionsRevoked(partitions);
     }
 
     /**
@@ -190,48 +164,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
-        incrementPartitionAssignmentEpoch(partitions);
-
-        numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
-
-        try {
-            log.warn("Partitions have been lost: {}", partitions);
-//            log.debug("Lost partitions: {}", partitions);
-//            removePartitionFromRecordsAndShardWork(partitions);
-            registerPartitionsToBeRemoved(partitions);
-        } catch (Exception e) {
-            log.error("Error in onPartitionsLost", e);
-            throw e;
-        }
-    }
-
-    /**
-     * Called by other threads (broker poller) to be later removed inline by control.
-     */
-    private void registerPartitionsToBeRemoved(Collection<TopicPartition> partitions) {
-        partitionsToRemove.addAll(partitions);
-    }
-
-    private void removePartitionFromRecordsAndShardWork() {
-        for (TopicPartition partition : partitionsToRemove) {
-            log.debug("Removing records for partition {}", partition);
-            // todo is there a safer way than removing these?
-            partitionOffsetHighestSeen.remove(partition);
-            partitionOffsetHighestSucceeded.remove(partition);
-            partitionOffsetHighestContinuousSucceeded.remove(partition);
-            partitionOffsetsIncompleteMetadataPayloads.remove(partition);
-//            partitionMoreRecordsAllowedToProcess.remove(partition);
-
-            //
-            NavigableMap<Long, WorkContainer<K, V>> oldWorkPartitionCommitQueue = partitionCommitQueues.remove(partition);
-
-            //
-            if (oldWorkPartitionCommitQueue != null) {
-                removeShardsFoundIn(oldWorkPartitionCommitQueue);
-            } else {
-                log.trace("Removed empty commit queue");
-            }
-        }
+        pm.onPartitionsLost(partitions);
     }
 
     /**
@@ -336,137 +269,27 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 //        return true;
 //    }
 
-    private boolean inboundOffsetWidthWithinRange(final ConsumerRecords<K, V> records) {
-        // brute force - surely very slow. surely this info can be cached?
-        Map<TopicPartition, List<ConsumerRecord<K, V>>> inbound = new HashMap<>();
-        for (final ConsumerRecord<K, V> record : records) {
-            TopicPartition tp = new TopicPartition(record.topic(), record.partition());
-            inbound.computeIfAbsent(tp, (ignore) -> new ArrayList<>()).add(record);
-        }
-
-        Set<Map.Entry<TopicPartition, List<ConsumerRecord<K, V>>>> inboundPartitionQueues = inbound.entrySet();
-        for (final Map.Entry<TopicPartition, List<ConsumerRecord<K, V>>> inboundPartitionQueue : inboundPartitionQueues) {
-            // get highest start offset
-            long start = 0l;
-            TopicPartition tp = inboundPartitionQueue.getKey();
-            NavigableMap<Long, WorkContainer<K, V>> longWorkContainerNavigableMap = partitionCommitQueues.get(tp);
-            if (longWorkContainerNavigableMap != null) {
-                for (final Map.Entry<Long, WorkContainer<K, V>> longWorkContainerEntry : longWorkContainerNavigableMap.entrySet()) {
-                    WorkContainer<K, V> value = longWorkContainerEntry.getValue();
-                    boolean userFunctionSucceeded = value.isUserFunctionSucceeded();
-                    if (!userFunctionSucceeded) {
-                        start = value.getCr().offset();
-
-                        // now find any record what would make the width too big. Binary search?
-                        // brute force
-                        List<ConsumerRecord<K, V>> inboundRecordQueue = inboundPartitionQueue.getValue();
-//                        ConsumerRecord<K, V> highestOffsetInboundRecord = inboundRecordQueue.get(inboundRecordQueue.size() - 1);
-//                        long newEnd = highestOffsetInboundRecord.offset();
-
-                        for (final ConsumerRecord<K, V> inboundRecord : inboundRecordQueue) {
-                            long newEnd = inboundRecord.offset();
-                            long width = newEnd - start;
-
-                            if (width >= BitsetEncoder.MAX_LENGTH_ENCODABLE) {
-                                long oldWidth = partitionOffsetHighestSeen.get(tp) - start;
-                                // can't be more accurate unless we break up the inbound records and count them per queue
-                                log.debug("Incoming outstanding offset difference too large for BitSet encoder (incoming width: {}, old width: {}), will wait before adding these records until the width shrinks (below {})",
-                                        width, oldWidth, BitsetEncoder.MAX_LENGTH_ENCODABLE);
-                                return false;
-//                                break;
-                            } else {
-                                log.debug("Width was ok {}", width);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return true;
-    }
-
     /**
      * @return true if the record was taken, false if it was skipped (previously successful)
      */
     private boolean processInbox(final ConsumerRecord<K, V> rec) {
-        if (isRecordPreviouslyProcessedSuccessfully(rec)) {
+        if (pm.isRecordPreviouslyProcessedSuccessfully(rec)) {
             log.trace("Record previously processed, skipping. offset: {}", rec.offset());
             return false;
         } else {
-            Object shardKey = computeShardKey(rec);
             long offset = rec.offset();
             TopicPartition tp = toTP(rec);
 
-            Integer currentPartitionEpoch = partitionsAssignmentEpochs.get(tp);
-            if (currentPartitionEpoch == null) {
-                throw new InternalRuntimeError(msg("Received message for a partition which is not assigned: {}", rec));
-            }
+            int currentPartitionEpoch = pm.getEpoch(rec, tp);
             var wc = new WorkContainer<>(currentPartitionEpoch, rec);
 
-            raisePartitionHighestSeen(offset, tp);
+            pm.processInbox(wc);
 
             //
-            checkPreviousLowWaterMarks(wc);
-            checkHighestSucceededSoFar(wc);
-
-            //
-            prepareContinuousEncoder(wc);
-
-            //
+            Object shardKey = computeShardKey(rec);
             processingShards.computeIfAbsent(shardKey, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
 
-            partitionCommitQueues.computeIfAbsent(tp, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
-
             return true;
-        }
-    }
-
-    private void prepareContinuousEncoder(final WorkContainer<K, V> wc) {
-        TopicPartition tp = wc.getTopicPartition();
-        if (!partitionContinuousOffsetEncoders.containsKey(tp)) {
-            OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(partitionOffsetHighestContinuousSucceeded.get(tp), partitionOffsetHighestSucceeded.get(tp));
-            partitionContinuousOffsetEncoders.put(tp, encoder);
-        }
-    }
-
-    private void checkHighestSucceededSoFar(final WorkContainer<K, V> wc) {
-        // preivous record must be completed if we've never seen this before
-        partitionOffsetHighestSucceeded.putIfAbsent(wc.getTopicPartition(), wc.offset() - 1);
-    }
-
-    /**
-     * If we've never seen a record for this partition before, it must be our first ever seen record for this partition,
-     * which means by definition, it's previous offset is the low water mark.
-     */
-    private void checkPreviousLowWaterMarks(final WorkContainer<K, V> wc) {
-        long previousLowWaterMark = wc.offset() - 1;
-        partitionOffsetHighestContinuousSucceeded.putIfAbsent(wc.getTopicPartition(), previousLowWaterMark);
-    }
-
-    void raisePartitionHighestSeen(long seenOffset, TopicPartition tp) {
-        // rise the high water mark
-        Long oldHighestSeen = partitionOffsetHighestSeen.getOrDefault(tp, MISSING_HIGHEST_SEEN);
-        if (seenOffset > oldHighestSeen || seenOffset == MISSING_HIGHEST_SEEN) {
-            partitionOffsetHighestSeen.put(tp, seenOffset);
-        }
-    }
-
-    private boolean isRecordPreviouslyProcessedSuccessfully(ConsumerRecord<K, V> rec) {
-        long thisRecordsOffset = rec.offset();
-        TopicPartition tp = new TopicPartition(rec.topic(), rec.partition());
-        Set<Long> incompleteOffsets = this.partitionOffsetsIncompleteMetadataPayloads.getOrDefault(tp, new TreeSet<>());
-        if (incompleteOffsets.contains(thisRecordsOffset)) {
-            // record previously saved as having not been processed
-            return false;
-        } else {
-            Long partitionHighestSeenRecord = partitionOffsetHighestSeen.getOrDefault(tp, MISSING_HIGHEST_SEEN);
-            if (thisRecordsOffset <= partitionHighestSeenRecord) {
-                // within the range of tracked offsets, but not in incompletes, so must have been previously completed
-                return true;
-            } else {
-                // not in incompletes, and is a higher offset than we've ever seen, as we haven't recorded this far up, so must not have been processed yet
-                return false;
-            }
         }
     }
 
@@ -491,7 +314,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         //int minWorkToGetSetting = min(min(requestedMaxWorkToRetrieve, getMaxMessagesToQueue()), getMaxToGoBeyondOffset());
 //        int minWorkToGetSetting = min(requestedMaxWorkToRetrieve, getMaxToGoBeyondOffset());
 //        int workToGetDelta = requestedMaxWorkToRetrieve - getRecordsOutForProcessing();
-        removePartitionFromRecordsAndShardWork();
+        pm.removePartitionFromRecordsAndShardWork();
 
         int workToGetDelta = requestedMaxWorkToRetrieve;
 
@@ -543,11 +366,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
                 // TODO refactor this and the rest of the partition state monitoring code out
                 // check we have capacity in offset storage to process more messages
-                Boolean allowedMoreRecords = partitionMoreRecordsAllowedToProcess.get(topicPartitionKey);
+                Boolean allowedMoreRecords = pm.getState(topicPartitionKey).partitionMoreRecordsAllowedToProcess;
                 // If the record has been previosly attempted, it is already represented in the current offset encoding,
                 // and may in fact be the message holding up the partition so must be retried
                 if (!allowedMoreRecords && workContainer.hasPreviouslyFailed()) {
-                    OffsetSimultaneousEncoder offsetSimultaneousEncoder = partitionContinuousOffsetEncoders.get(topicPartitionKey);
+                    OffsetSimultaneousEncoder offsetSimultaneousEncoder = pm.getState(topicPartitionKey).partitionContinuousOffsetEncoders;
                     int encodedSizeEstimate = offsetSimultaneousEncoder.getEncodedSizeEstimate();
                     int metaDataAvailable = getMetadataSpaceAvailablePerPartition();
                     log.warn("Not allowed more records for the partition ({}) that this record ({}) belongs to due to offset " +
@@ -678,7 +501,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         // remove work from partition commit queue
         log.trace("Removing {} from partition queue", wc.offset());
-        partitionCommitQueues.get(wc.getTopicPartition()).remove(wc.offset());
+//        partitionCommitQueues.get().remove(wc.offset());
+        pm.onSuccess(wc);
     }
 
     public void onResultBatch(final Set<WorkContainer<K, V>> results) {
@@ -760,7 +584,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
 
             // this offset has already been scanned as a part of a high range batch, so skip (we already know the highest continuous block incorporates this offset)
-            Long previousHighestContinuous = partitionOffsetHighestContinuousSucceeded.get(tp);
+            Long previousHighestContinuous = pm.getState(tp).partitionOffsetHighestContinuousSucceeded;
             if (thisOffset <= previousHighestContinuous) {
 //                     sanity? by definition it must be higher
 //                    throw new InternalRuntimeError(msg("Unexpected new offset {} lower than low water mark {}", thisOffset, previousHighestContinuous));
@@ -792,7 +616,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                         // does it form a new continuous block?
 
                         // queue this offset belongs to
-                        NavigableMap<Long, WorkContainer<K, V>> commitQueue = partitionCommitQueues.get(tp);
+                        NavigableMap<Long, WorkContainer<K, V>> commitQueue = pm.getState(tp).partitionCommitQueue;
 
                         boolean continuous = true;
                         if (thisOffset != previousHighestContinuous + 1) {
@@ -825,10 +649,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                         if (continuous) {
                             partitionNowFormsAContinuousBlock.put(tp, true);
                             if (!originalMarks.containsKey(tp)) {
-                                Long previousOffset = partitionOffsetHighestContinuousSucceeded.get(tp);
+                                Long previousOffset = pm.getState(tp).partitionOffsetHighestContinuousSucceeded;
                                 originalMarks.put(tp, previousOffset);
                             }
-                            partitionOffsetHighestContinuousSucceeded.put(tp, thisOffset);
+                            pm.getState(tp).partitionOffsetHighestContinuousSucceeded = thisOffset;
                         } else {
                             partitionNowFormsAContinuousBlock.put(tp, false);
 //                        Long old = partitionOffsetHighestContinuousCompleted.get(tp);
@@ -850,9 +674,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
         for (final TopicPartition tp : partitionsSeenForLogging) {
             Long oldOffset = originalMarks.get(tp);
-            Long newOffset = partitionOffsetHighestContinuousSucceeded.get(tp);
+            Long newOffset = pm.getState(tp).partitionOffsetHighestContinuousSucceeded;
             log.debug("Low water mark (highest continuous completed) for partition {} moved from {} to {}, highest succeeded {}",
-                    tp, oldOffset, newOffset, partitionOffsetHighestSucceeded.get(tp));
+                    tp, oldOffset, newOffset, pm.getState(tp).partitionOffsetHighestSucceeded);
         }
     }
 
