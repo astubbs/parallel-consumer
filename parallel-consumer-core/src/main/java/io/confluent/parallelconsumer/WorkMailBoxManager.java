@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Handles the incoming mail for {@link WorkManager}.
@@ -19,7 +20,7 @@ public class WorkMailBoxManager<K, V> {
     /**
      * The number of nested {@link ConsumerRecord} entries in the shared blocking mail box. Cached for performance.
      */
-    private int sharedBoxNestedRecordCount;
+    private final AtomicInteger sharedBoxNestedRecordCount = new AtomicInteger();
 
     /**
      * The shared thread safe mail box.
@@ -47,7 +48,7 @@ public class WorkMailBoxManager<K, V> {
      * @return amount of work queued in the mail box, awaiting processing into shards, not exact
      */
     Integer getWorkQueuedInMailboxCount() {
-        return sharedBoxNestedRecordCount +
+        return sharedBoxNestedRecordCount.get() +
                 internalBatchMailQueue.getNestedCount() +
                 internalFlattenedMailQueue.size();
     }
@@ -62,15 +63,15 @@ public class WorkMailBoxManager<K, V> {
      */
     public void registerWork(final ConsumerRecords<K, V> records) {
         synchronized (workInbox) {
-            sharedBoxNestedRecordCount += records.count();
-            workInbox.add(records);
+        sharedBoxNestedRecordCount.getAndAdd(records.count());
+        workInbox.add(records);
         }
     }
 
     private void drainSharedMailbox() {
         synchronized (workInbox) {
-            workInbox.drainTo(internalBatchMailQueue);
-            sharedBoxNestedRecordCount = 0;
+        int drained = workInbox.drainTo(internalBatchMailQueue);
+        sharedBoxNestedRecordCount.getAndAdd(drained * -1);
         }
     }
 
