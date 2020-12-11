@@ -13,6 +13,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.OffsetEncoding.*;
 
+/**
+ * RunLength encoder that leverages the nature of this system.
+ * <p>
+ * One such nature is that gaps between completed offsets get encoded as succeeded offsets. This doesn't matter because
+ * they don't exist and we'll neve see them (they no longer exist in the source partition).
+ */
 class RunLengthEncoder extends OffsetEncoder {
 
     private int currentRunLengthCount = 0;
