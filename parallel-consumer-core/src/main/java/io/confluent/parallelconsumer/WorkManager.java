@@ -224,7 +224,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     private void processInbox(final int requestedMaxWorkToRetrieve) {
-        wmbm.processInbox(requestedMaxWorkToRetrieve);
+        wmbm.processInbox();
 
         int gap = requestedMaxWorkToRetrieve;
         int taken = 0;

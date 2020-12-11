@@ -20,10 +20,10 @@ public class WorkMailBoxManager<K, V> {
     /**
      * The number of nested {@link ConsumerRecord} entries in the shared blocking mail box. Cached for performance.
      */
-    private final AtomicInteger sharedBoxNestedRecordCount = new AtomicInteger();
+    private int sharedBoxNestedRecordCount;
 
     /**
-     * The shared thread safe mail box.
+     * The shared mail box. Doesn't need to be thread safe as we already need synchronize on it.
      */
     private final LinkedBlockingQueue<ConsumerRecords<K, V>> workInbox = new LinkedBlockingQueue<>();
 
@@ -48,7 +48,7 @@ public class WorkMailBoxManager<K, V> {
      * @return amount of work queued in the mail box, awaiting processing into shards, not exact
      */
     Integer getWorkQueuedInMailboxCount() {
-        return sharedBoxNestedRecordCount.get() +
+        return sharedBoxNestedRecordCount +
                 internalBatchMailQueue.getNestedCount() +
                 internalFlattenedMailQueue.size();
     }
@@ -63,24 +63,31 @@ public class WorkMailBoxManager<K, V> {
      */
     public void registerWork(final ConsumerRecords<K, V> records) {
         synchronized (workInbox) {
-        sharedBoxNestedRecordCount.getAndAdd(records.count());
-        workInbox.add(records);
+            sharedBoxNestedRecordCount += records.count();
+            workInbox.add(records);
         }
     }
 
+
+    /**
+     * Must synchronise to keep sharedBoxNestedRecordCount in lock step with the inbox. Register is easy, but drain you
+     * need to run through an intermediary collection and then count the nested elements, to know how many to subtract
+     * from the Atomic nested count.
+     * <p>
+     * Plus registering work is relatively infrequent, so shouldn't worry about a little synchronized here - makes it
+     * much simpler.
+     */
     private void drainSharedMailbox() {
         synchronized (workInbox) {
-        int drained = workInbox.drainTo(internalBatchMailQueue);
-        sharedBoxNestedRecordCount.getAndAdd(drained * -1);
+            workInbox.drainTo(internalBatchMailQueue);
+            sharedBoxNestedRecordCount = 0;
         }
     }
 
     /**
      * Take our inbound messages from the {@link BrokerPollSystem} and add them to our registry.
-     *
-     * @param requestedMaxWorkToRetrieve
      */
-    public void processInbox(final int requestedMaxWorkToRetrieve) {
+    public void processInbox() {
         drainSharedMailbox();
 
         // flatten
