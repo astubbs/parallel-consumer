@@ -379,10 +379,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // TODO refactor this and the rest of the partition state monitoring code out
                 // check we have capacity in offset storage to process more messages
                 TopicPartition topicPartition = workContainer.getTopicPartition();
-                Boolean allowedMoreRecords = partitionMoreRecordsAllowedToProcess.get(topicPartition);
+                boolean notAllowedMoreRecords = !partitionMoreRecordsAllowedToProcess.getOrDefault(topicPartition, true);
                 // If the record has been previously attempted, it is already represented in the current offset encoding,
                 // and may in fact be the message holding up the partition so must be retried
-                if (!allowedMoreRecords && workContainer.hasPreviouslyFailed()) {
+                if (notAllowedMoreRecords && !workContainer.hasPreviouslyFailed()) {
                     log.warn("Not allowed more records for the partition ({}) as set from previous encode run, that this " +
                                     "record ({}) belongs to due to offset encoding back pressure, continuing on to next container in shard.",
                             topicPartition, workContainer.offset());

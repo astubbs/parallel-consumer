@@ -5,6 +5,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -36,7 +37,7 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
 //        final int numRecords = 1_000_0;
         final int numRecords = 1_00;
 
-        OffsetMapCodecManager.DefaultMaxMetadataSize = 40;
+        OffsetMapCodecManager.DefaultMaxMetadataSize = 40; // reduce available to make testing easier
         OffsetMapCodecManager.forcedCodec = Optional.of(OffsetEncoding.BitSetV2); // force one that takes a predictable large amount of space
 
         //
@@ -75,7 +76,7 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
 //                expectedMessageCount, commitMode, order, maxPoll);
 //        try {
         waitAtMost(ofSeconds(1200))
-                .failFast(() -> parallelConsumer.isClosedOrFailed(), () -> parallelConsumer.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
+//                .failFast(() -> parallelConsumer.isClosedOrFailed(), () -> parallelConsumer.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
 //                    .alias(failureMessage)
                 .pollInterval(1, SECONDS)
                 .untilAsserted(() -> {
@@ -100,9 +101,10 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
             OffsetAndMetadata offsetAndMetadata = offsetAndMetadataList.get(offsetAndMetadataList.size() - 1);
             assertThat(offsetAndMetadata.offset()).isEqualTo(0L);
             String metadata = offsetAndMetadata.metadata();
-            OffsetMapCodecManager.NextOffsetAndIncompletes longTreeSetTuple = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(0, metadata);
+            OffsetMapCodecManager.HighestOffsetAndIncompletes longTreeSetTuple = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(0, metadata);
+
             // todo naming here?
-            Long highestSucceeded = longTreeSetTuple.getNextExpectedOffset();
+            Long highestSucceeded = longTreeSetTuple.getHighestSeenOffset();
             assertThat(highestSucceeded).isEqualTo(99L);
             Set<Long> incompletes = longTreeSetTuple.getIncompleteOffsets();
             assertThat(incompletes).isNotEmpty().contains(0L).doesNotContain(1L, 50L, 99L);
@@ -134,6 +136,7 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
     }
 
     @Test
+    @Disabled
     void failedMessagesThatCanRetryDontDeadlockABlockedPartition() {
     }
 
