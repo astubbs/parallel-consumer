@@ -36,8 +36,12 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 
     @Getter
     private final ConsumerRecord<K, V> cr;
-    private int numberOfAttempts;
+
+    @Getter
+    private int numberOfFailedAttempts;
+
     private Optional<Instant> failedAt = Optional.empty();
+
     private boolean inFlight = false;
 
     @Getter
@@ -52,6 +56,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     @Getter
     @Setter(AccessLevel.PUBLIC)
     private Future<List<Object>> future;
+
     private long timeTakenAsWorkMs;
 
     public WorkContainer(ConsumerRecord<K, V> cr) {
@@ -67,7 +72,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 
     public void fail(WallClock clock) {
         log.trace("Failing {}", this);
-        numberOfAttempts++;
+        numberOfFailedAttempts++;
         failedAt = Optional.of(clock.getNow());
         inFlight = false;
     }
@@ -152,5 +157,9 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
 
     public long offset() {
         return getCr().offset();
+    }
+
+    public boolean hasPreviouslyFailed() {
+        return getNumberOfFailedAttempts() > 0;
     }
 }
