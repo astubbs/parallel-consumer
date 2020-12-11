@@ -1,5 +1,7 @@
 package io.confluent.parallelconsumer;
 
+import io.confluent.csid.utils.Range;
+
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -109,5 +111,34 @@ class RunLengthEncoder extends OffsetEncoder {
             currentRunLengthCount = 1; // reset to 1
         }
         previousRangeIndex = rangeIndex;
+    }
+
+    /**
+     * @return the offsets which are succeeded
+     */
+    public List<Long> calculateSucceededActualOffsets(long originalBaseOffset) {
+        List<Long> successfulOffsets = new ArrayList<>();
+        boolean succeeded = false;
+//        int previous = 0;
+        long offsetPosition = originalBaseOffset;
+        //for (final Integer run : runLengthEncodingIntegers) {
+        for (final int run : runLengthEncodingIntegers) {
+            if (succeeded) {
+//                offsetPosition++;
+                for (final Integer integer : Range.range(run)) {
+                    long newGoodOffset = offsetPosition + integer;
+                    successfulOffsets.add(newGoodOffset);
+                }
+            }
+//            else {
+//                offsetPosition = offsetPosition + run;
+//            }
+
+            //
+            offsetPosition += run;
+//            previous = run;
+            succeeded = !succeeded;
+        }
+        return successfulOffsets;
     }
 }

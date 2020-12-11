@@ -25,6 +25,7 @@ public class RunLengthEncoderTest {
     @Test
     void gapsInOffsetsWork() {
         Set<Long> incompletes = UniSets.of(0, 6, 10).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
+        Set<Long> completes = UniSets.of(1, 3, 4, 5, 9).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(-1, 0L, incompletes);
 
         {
@@ -42,6 +43,11 @@ public class RunLengthEncoderTest {
             rl.encodeCompletedOffset(9);
             rl.encodeIncompleteOffset(10);
 
+            List<Long> longs = rl.calculateSucceededActualOffsets(0);
+            
+            assertThat(longs).containsExactlyElementsOf(completes);
+
+
             byte[] raw = rl.serialise();
 
             byte[] wrapped = offsetSimultaneousEncoder.packEncoding(new EncodedOffsetPair(OffsetEncoding.RunLengthV2, ByteBuffer.wrap(raw)));
@@ -49,6 +55,7 @@ public class RunLengthEncoderTest {
             HighestOffsetAndIncompletes result = OffsetMapCodecManager.decodeCompressedOffsets(0, wrapped);
 
             assertThat(result.getHighestSeenOffset()).isEqualTo(10);
+
             assertThat(result.getIncompleteOffsets()).containsExactlyElementsOf(incompletes);
         }
     }
