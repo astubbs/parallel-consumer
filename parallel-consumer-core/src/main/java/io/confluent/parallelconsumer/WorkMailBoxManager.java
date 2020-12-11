@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 
+import java.util.Collection;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -33,7 +34,10 @@ public class WorkMailBoxManager<K, V> {
     /**
      * Queue of records flattened from the {@link #internalBatchMailQueue}.
      * <p>
-     * TODO remove this and instead extend {@link CountingCRLinkedList} to do the flatten as records are added.
+     * This is needed because {@link java.util.concurrent.BlockingQueue#drainTo(Collection)} must drain to a collection
+     * of the same type. We could have {@link BrokerPollSystem} do the flattening, but that would require many calls to
+     * the Concurrent queue, where this only needs one. Also as we don't expect there to be that many elements in these
+     * collections (as they contain large batches of records), the overhead will be small.
      */
     // TODO when partition state is also refactored, remove Getter
     @Getter
@@ -57,17 +61,14 @@ public class WorkMailBoxManager<K, V> {
      * @see WorkManager#raisePartitionHighWaterMark
      */
     public void registerWork(final ConsumerRecords<K, V> records) {
-        synchronized (workInbox) {
-            sharedBoxNestedRecordCount += records.count();
-            workInbox.add(records);
-        }
+        sharedBoxNestedRecordCount += records.count();
+        workInbox.add(records);
     }
 
     private void drainSharedMailbox() {
-        synchronized (workInbox) {
-            workInbox.drainTo(internalBatchMailQueue);
-            sharedBoxNestedRecordCount = 0;
-        }
+        int drained = workInbox.size();
+        workInbox.drainTo(internalBatchMailQueue, drained);
+        sharedBoxNestedRecordCount = sharedBoxNestedRecordCount - drained;
     }
 
     /**
