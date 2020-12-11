@@ -1,7 +1,9 @@
 package io.confluent.parallelconsumer;
 
 import lombok.SneakyThrows;
+import org.assertj.core.util.Sets;
 import org.junit.jupiter.api.Test;
+import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.nio.ByteBuffer;
@@ -19,21 +21,22 @@ public class BitsetEndoingTest {
     @Test
     void basic() {
         Set<Long> incompletes = UniSets.of(0, 4, 6, 7, 8, 10).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
-        Set<Long> completes = UniSets.of(1, 2, 3, 5, 9).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
+        List<Long> completes = UniLists.of(1, 2, 3, 5, 9).stream().map(x -> (long) x).collect(Collectors.toList()); // lol - DRY!
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(-1, 0L, incompletes);
-        BitsetEncoder bs = new BitsetEncoder(incompletes.size(), offsetSimultaneousEncoder, v2);
+        int length = 11;
+        BitsetEncoder bs = new BitsetEncoder(length, offsetSimultaneousEncoder, v2);
 
-        bs.encodeIncompleteOffset(0); // 1
-        bs.encodeCompletedOffset(1); // 3
+        bs.encodeIncompleteOffset(0);
+        bs.encodeCompletedOffset(1);
         bs.encodeCompletedOffset(2);
         bs.encodeCompletedOffset(3);
-        bs.encodeIncompleteOffset(4); // 1
-        bs.encodeCompletedOffset(5); // 1
-        bs.encodeIncompleteOffset(6); // 3
+        bs.encodeIncompleteOffset(4);
+        bs.encodeCompletedOffset(5);
+        bs.encodeIncompleteOffset(6);
         bs.encodeIncompleteOffset(7);
         bs.encodeIncompleteOffset(8);
-        bs.encodeCompletedOffset(9); // 1
-        bs.encodeIncompleteOffset(10); // 1
+        bs.encodeCompletedOffset(9);
+        bs.encodeIncompleteOffset(10);
 
         // before serialisation
         {
@@ -44,13 +47,13 @@ public class BitsetEndoingTest {
         {
             byte[] raw = bs.serialise();
 
-            byte[] wrapped = offsetSimultaneousEncoder.packEncoding(new EncodedOffsetPair(OffsetEncoding.RunLengthV2, ByteBuffer.wrap(raw)));
+            byte[] wrapped = offsetSimultaneousEncoder.packEncoding(new EncodedOffsetPair(OffsetEncoding.BitSetV2, ByteBuffer.wrap(raw)));
 
             OffsetMapCodecManager.HighestOffsetAndIncompletes result = OffsetMapCodecManager.decodeCompressedOffsets(0, wrapped);
 
-            assertThat(result.getHighestSeenOffset()).isEqualTo(10);
+            assertThat(result.getHighestSeenOffset()).isEqualTo(11);
 
-            assertThat(result.getIncompleteOffsets()).containsExactlyElementsOf(incompletes);
+            assertThat(result.getIncompleteOffsets()).containsExactlyInAnyOrderElementsOf(incompletes);
         }
     }
 }

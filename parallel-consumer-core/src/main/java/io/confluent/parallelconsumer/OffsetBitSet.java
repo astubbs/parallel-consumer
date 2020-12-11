@@ -60,17 +60,18 @@ public class OffsetBitSet {
         };
         ByteBuffer slice = wrap.slice();
         Set<Long> incompletes = deserialiseBitSetToIncompletes(baseOffset, originalBitsetSize, slice);
-        long highestSeenOffset = baseOffset + originalBitsetSize - 1;
+        long highestSeenOffset = baseOffset + originalBitsetSize;
         return HighestOffsetAndIncompletes.of(highestSeenOffset, incompletes);
     }
 
     static Set<Long> deserialiseBitSetToIncompletes(long baseOffset, int originalBitsetSize, ByteBuffer inputBuffer) {
         BitSet bitSet = BitSet.valueOf(inputBuffer);
-        var incompletes = new HashSet<Long>(); // can't know how big this needs to be yet
+        int numberOfIncompletes = originalBitsetSize - bitSet.cardinality();
+        var incompletes = new HashSet<Long>(numberOfIncompletes);
         for (var relativeOffset : range(originalBitsetSize)) {
             long offset = baseOffset + relativeOffset;
             if (bitSet.get(relativeOffset)) {
-                log.trace("Ignoring completed offset");
+                log.trace("Ignoring completed offset {}", relativeOffset);
             } else {
                 incompletes.add(offset);
             }
