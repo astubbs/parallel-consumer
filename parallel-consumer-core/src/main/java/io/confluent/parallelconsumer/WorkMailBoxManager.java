@@ -61,14 +61,17 @@ public class WorkMailBoxManager<K, V> {
      * @see WorkManager#raisePartitionHighWaterMark
      */
     public void registerWork(final ConsumerRecords<K, V> records) {
-        sharedBoxNestedRecordCount += records.count();
-        workInbox.add(records);
+        synchronized (workInbox) {
+            sharedBoxNestedRecordCount += records.count();
+            workInbox.add(records);
+        }
     }
 
     private void drainSharedMailbox() {
-        int drained = workInbox.size();
-        workInbox.drainTo(internalBatchMailQueue, drained);
-        sharedBoxNestedRecordCount = sharedBoxNestedRecordCount - drained;
+        synchronized (workInbox) {
+            workInbox.drainTo(internalBatchMailQueue);
+            sharedBoxNestedRecordCount = 0;
+        }
     }
 
     /**
