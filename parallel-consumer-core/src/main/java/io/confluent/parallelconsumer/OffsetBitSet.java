@@ -28,7 +28,7 @@ public class OffsetBitSet {
         wrap.rewind();
 
         int originalBitsetSize = switch (version) {
-            case v1 -> (int)wrap.getShort(); // up cast ok
+            case v1 -> (int) wrap.getShort(); // up cast ok
             case v2 -> wrap.getInt();
         };
 
@@ -53,14 +53,14 @@ public class OffsetBitSet {
 
     static HighestOffsetAndIncompletes deserialiseBitSetWrapToIncompletes(OffsetEncoding encoding, long baseOffset, ByteBuffer wrap) {
         wrap.rewind();
-        int originalBitsetSize = switch(encoding) {
+        int originalBitsetSize = switch (encoding) {
             case BitSet -> wrap.getShort();
             case BitSetV2 -> wrap.getInt();
             default -> throw new InternalRuntimeError("Invalid state");
         };
         ByteBuffer slice = wrap.slice();
         Set<Long> incompletes = deserialiseBitSetToIncompletes(baseOffset, originalBitsetSize, slice);
-        long highestSeenOffset = baseOffset + originalBitsetSize;
+        long highestSeenOffset = baseOffset + originalBitsetSize - 1;
         return HighestOffsetAndIncompletes.of(highestSeenOffset, incompletes);
     }
 

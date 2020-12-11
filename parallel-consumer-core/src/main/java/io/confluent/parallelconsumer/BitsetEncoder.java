@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.StringUtils;
+import lombok.Getter;
 
 import java.nio.ByteBuffer;
 import java.util.BitSet;
@@ -37,6 +38,8 @@ class BitsetEncoder extends OffsetEncoder {
     public static final Integer MAX_LENGTH_ENCODABLE = Integer.MAX_VALUE;
 
     private ByteBuffer wrappedBitsetBytesBuffer;
+
+    @Getter
     private final BitSet bitSet;
 
     private Optional<byte[]> encodedBytes = Optional.empty();

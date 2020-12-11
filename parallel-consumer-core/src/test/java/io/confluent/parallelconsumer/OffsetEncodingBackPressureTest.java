@@ -93,20 +93,23 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
 
         // assert commit ok
         {
+            //
             waitForSomeLoopCycles(1);
             parallelConsumer.requestCommitAsap();
             waitForSomeLoopCycles(1);
+
+            //
             List<OffsetAndMetadata> offsetAndMetadataList = extractAllPartitionsOffsetsAndMetadataSequentially();
             assertThat(offsetAndMetadataList).isNotEmpty();
             OffsetAndMetadata offsetAndMetadata = offsetAndMetadataList.get(offsetAndMetadataList.size() - 1);
             assertThat(offsetAndMetadata.offset()).isEqualTo(0L);
-            String metadata = offsetAndMetadata.metadata();
-            OffsetMapCodecManager.HighestOffsetAndIncompletes longTreeSetTuple = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(0, metadata);
 
-            // todo naming here?
-            Long highestSucceeded = longTreeSetTuple.getHighestSeenOffset();
+            //
+            String metadata = offsetAndMetadata.metadata();
+            OffsetMapCodecManager.HighestOffsetAndIncompletes decodedOffsetPayload = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(0, metadata);
+            Long highestSucceeded = decodedOffsetPayload.getHighestSeenOffset();
             assertThat(highestSucceeded).isEqualTo(99L);
-            Set<Long> incompletes = longTreeSetTuple.getIncompleteOffsets();
+            Set<Long> incompletes = decodedOffsetPayload.getIncompleteOffsets();
             assertThat(incompletes).isNotEmpty().contains(0L).doesNotContain(1L, 50L, 99L);
         }
 
