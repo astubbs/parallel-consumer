@@ -302,8 +302,16 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     /**
      * Will silently skip if not configured with a committer
      */
+//    RateLimiter commitLimiter = new RateLimiter(1);
+
     private void maybeDoCommit() {
-        committer.ifPresent(ConsumerOffsetCommitter::maybeDoCommit);
+//        if (commitLimiter.couldPerform()) {
+//            commitLimiter.performIfNotLimited(() ->
+                    committer.ifPresent(ConsumerOffsetCommitter::maybeDoCommit);
+//            );
+//        } else {
+//            log.warn("Commit rate exceeded, skipping commit");
+//        }
     }
 
     /**

@@ -383,10 +383,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // If the record has been previously attempted, it is already represented in the current offset encoding,
                 // and may in fact be the message holding up the partition so must be retried, in which case we don't want to skip it
                 boolean recordNeverAttempted = !workContainer.hasPreviouslyFailed();
-                if (notAllowedMoreRecords && recordNeverAttempted) {
-                    log.warn("Not allowed more records for the partition ({}) as set from previous encode run, that this " +
-                                    "record ({}) belongs to due to offset encoding back pressure, continuing on to next container in shard.",
-                            topicPartition, workContainer.offset());
+                if (notAllowedMoreRecords && recordNeverAttempted && workContainer.isNotInFlight()) {
+                    log.warn("Not allowed more records ({}) for the partition ({}) as set from previous encode run, that this " +
+                                    "record ({}) belongs to due to offset encoding back pressure, has never been attemtped before ({}), " +
+                                    "not in flight ({}), continuing on to next container in shard.",
+                            notAllowedMoreRecords, topicPartition, workContainer.offset(), recordNeverAttempted, workContainer.isNotInFlight());
                     continue;
                 }
 
@@ -610,7 +611,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                                    TopicPartition topicPartitionKey,
                                    LinkedHashSet<Long> incompleteOffsets) {
         // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
-        if (!incompleteOffsets.isEmpty()) {
+        boolean offsetEncodingNeeded = !incompleteOffsets.isEmpty();
+        if (offsetEncodingNeeded) {
             long offsetOfNextExpectedMessage;
             OffsetAndMetadata finalOffsetOnly = offsetsToSend.get(topicPartitionKey);
             if (finalOffsetOnly == null) {
@@ -625,21 +627,25 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
                 int metaPayloadLength = offsetMapPayload.length();
                 boolean moreMessagesAllowed;
+                OffsetAndMetadata offsetWithExtraMap;
                 if (metaPayloadLength < OffsetMapCodecManager.DefaultMaxMetadataSize) {
-                    OffsetAndMetadata offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
-                    offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
                     moreMessagesAllowed = true;
+                    offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
                 } else {
                     moreMessagesAllowed = false;
+                    offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage); // strip payload
                     log.warn("Offset map data too large (size: {}) to fit in metadata payload - cannot include in commit. " +
                             "Warning: messages might be replayed on rebalance. " +
-                            "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = 4096", metaPayloadLength);
+                            "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, OffsetMapCodecManager.DefaultMaxMetadataSize);
                 }
                 partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, moreMessagesAllowed);
+                offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
                 partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, false);
                 log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance.", e);
             }
+        } else {
+            partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, true);
         }
     }
 
