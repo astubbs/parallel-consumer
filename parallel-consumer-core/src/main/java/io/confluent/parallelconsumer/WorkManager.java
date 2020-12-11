@@ -384,7 +384,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // and may in fact be the message holding up the partition so must be retried, in which case we don't want to skip it
                 boolean recordNeverAttempted = !workContainer.hasPreviouslyFailed();
                 if (notAllowedMoreRecords && recordNeverAttempted && workContainer.isNotInFlight()) {
-                    log.warn("Not allowed more records ({}) for the partition ({}) as set from previous encode run, that this " +
+                    log.debug("Not allowed more records ({}) for the partition ({}) as set from previous encode run, that this " +
                                     "record ({}) belongs to due to offset encoding back pressure, has never been attemtped before ({}), " +
                                     "not in flight ({}), continuing on to next container in shard.",
                             notAllowedMoreRecords, topicPartition, workContainer.offset(), recordNeverAttempted, workContainer.isNotInFlight());

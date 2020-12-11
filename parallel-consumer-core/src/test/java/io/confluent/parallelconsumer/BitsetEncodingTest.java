@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
 import static io.confluent.parallelconsumer.OffsetEncoding.Version.v2;
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class BitsetEndoingTest {
+public class BitsetEncodingTest {
 
     @SneakyThrows
     @Test
