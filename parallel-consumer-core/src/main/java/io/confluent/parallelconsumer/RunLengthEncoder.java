@@ -48,12 +48,12 @@ class RunLengthEncoder extends OffsetEncoder {
 
     @Override
     public void encodeIncompleteOffset(final int rangeIndex) {
-        encodeRunLength(false);
+        encodeRunLength(false, rangeIndex);
     }
 
     @Override
     public void encodeCompletedOffset(final int rangeIndex) {
-        encodeRunLength(true);
+        encodeRunLength(true, rangeIndex);
     }
 
     @Override
@@ -95,15 +95,19 @@ class RunLengthEncoder extends OffsetEncoder {
         return encodedBytes.get();
     }
 
-    private void encodeRunLength(final boolean currentIsComplete) {
+    int previousRangeIndex;
+
+    private void encodeRunLength(final boolean currentIsComplete, final int rangeIndex) {
         // run length
         boolean currentOffsetMatchesOurRunLengthState = previousRunLengthState == currentIsComplete;
         if (currentOffsetMatchesOurRunLengthState) {
-            currentRunLengthCount++;
+            int delta = rangeIndex - previousRangeIndex;
+            currentRunLengthCount += delta;
         } else {
             previousRunLengthState = currentIsComplete;
             runLengthEncodingIntegers.add(currentRunLengthCount);
             currentRunLengthCount = 1; // reset to 1
         }
+        previousRangeIndex = rangeIndex;
     }
 }
