@@ -51,7 +51,7 @@ public class BitsetEndoingTest {
 
             OffsetMapCodecManager.HighestOffsetAndIncompletes result = OffsetMapCodecManager.decodeCompressedOffsets(0, wrapped);
 
-            assertThat(result.getHighestSeenOffset()).isEqualTo(11);
+            assertThat(result.getHighestSeenOffset()).isEqualTo(10);
 
             assertThat(result.getIncompleteOffsets()).containsExactlyInAnyOrderElementsOf(incompletes);
         }

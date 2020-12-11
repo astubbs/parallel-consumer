@@ -107,8 +107,8 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
             //
             String metadata = offsetAndMetadata.metadata();
             OffsetMapCodecManager.HighestOffsetAndIncompletes decodedOffsetPayload = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(0, metadata);
-            Long highestSucceeded = decodedOffsetPayload.getHighestSeenOffset();
-            assertThat(highestSucceeded).isEqualTo(99L);
+            Long highestSeenOffset = decodedOffsetPayload.getHighestSeenOffset();
+            assertThat(highestSeenOffset).isEqualTo(99L);
             Set<Long> incompletes = decodedOffsetPayload.getIncompleteOffsets();
             assertThat(incompletes).isNotEmpty().contains(0L).doesNotContain(1L, 50L, 99L);
         }

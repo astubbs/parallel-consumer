@@ -60,7 +60,7 @@ public class OffsetBitSet {
         };
         ByteBuffer slice = wrap.slice();
         Set<Long> incompletes = deserialiseBitSetToIncompletes(baseOffset, originalBitsetSize, slice);
-        long highestSeenOffset = baseOffset + originalBitsetSize;
+        long highestSeenOffset = baseOffset + originalBitsetSize - 1;
         return HighestOffsetAndIncompletes.of(highestSeenOffset, incompletes);
     }
 
