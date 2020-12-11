@@ -23,9 +23,57 @@ public class RunLengthEncoderTest {
      */
     @SneakyThrows
     @Test
+    void noGaps() {
+        Set<Long> incompletes = UniSets.of(0, 6, 7, 8, 10).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
+        Set<Long> completes = UniSets.of(1, 2, 3, 4, 5, 9).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
+        List<Integer> runs = UniLists.of(1, 5, 3, 1, 1);
+        OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(-1, 0L, incompletes);
+
+        {
+            RunLengthEncoder rl = new RunLengthEncoder(offsetSimultaneousEncoder, v2);
+
+            rl.encodeIncompleteOffset(0);
+            rl.encodeCompletedOffset(1);
+            rl.encodeCompletedOffset(2);
+            rl.encodeCompletedOffset(3);
+            rl.encodeCompletedOffset(4);
+            rl.encodeCompletedOffset(5);
+            rl.encodeIncompleteOffset(6);
+            rl.encodeIncompleteOffset(7);
+            rl.encodeIncompleteOffset(8);
+            rl.encodeCompletedOffset(9);
+            rl.encodeIncompleteOffset(10);
+
+            rl.addTail();
+
+            assertThat(rl.getRunLengthEncodingIntegers()).containsExactlyElementsOf(runs);
+
+            List<Long> longs = rl.calculateSucceededActualOffsets(0);
+
+            assertThat(longs).containsExactlyElementsOf(completes);
+
+            byte[] raw = rl.serialise();
+
+            byte[] wrapped = offsetSimultaneousEncoder.packEncoding(new EncodedOffsetPair(OffsetEncoding.RunLengthV2, ByteBuffer.wrap(raw)));
+
+            HighestOffsetAndIncompletes result = OffsetMapCodecManager.decodeCompressedOffsets(0, wrapped);
+
+            assertThat(result.getHighestSeenOffset()).isEqualTo(10);
+
+            assertThat(result.getIncompleteOffsets()).containsExactlyElementsOf(incompletes);
+        }
+    }
+
+    /**
+     * Check that run length supports gaps in the source partition - i.e. compacted topics where offsets aren't strictly
+     * sequential
+     */
+    @SneakyThrows
+    @Test
     void gapsInOffsetsWork() {
         Set<Long> incompletes = UniSets.of(0, 6, 10).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
         Set<Long> completes = UniSets.of(1, 3, 4, 5, 9).stream().map(x -> (long) x).collect(Collectors.toSet()); // lol - DRY!
+        List<Integer> runs = UniLists.of(1, 5, 3, 1, 1);
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(-1, 0L, incompletes);
 
         {
@@ -43,10 +91,11 @@ public class RunLengthEncoderTest {
             rl.encodeCompletedOffset(9);
             rl.encodeIncompleteOffset(10);
 
-            List<Long> longs = rl.calculateSucceededActualOffsets(0);
-            
-            assertThat(longs).containsExactlyElementsOf(completes);
+            assertThat(rl.getRunLengthEncodingIntegers()).containsExactlyElementsOf(runs);
 
+            List<Long> longs = rl.calculateSucceededActualOffsets(0);
+
+            assertThat(longs).containsExactlyElementsOf(completes);
 
             byte[] raw = rl.serialise();
 

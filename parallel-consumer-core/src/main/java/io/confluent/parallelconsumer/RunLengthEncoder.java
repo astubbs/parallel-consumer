@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer;
 
 import io.confluent.csid.utils.Range;
+import lombok.Getter;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -17,6 +18,7 @@ class RunLengthEncoder extends OffsetEncoder {
     private int currentRunLengthCount = 0;
     private boolean previousRunLengthState = false;
 
+    @Getter
     private final List<Integer> runLengthEncodingIntegers;
 
     private Optional<byte[]> encodedBytes = Optional.empty();
@@ -60,7 +62,7 @@ class RunLengthEncoder extends OffsetEncoder {
 
     @Override
     public byte[] serialise() throws EncodingNotSupportedException {
-        runLengthEncodingIntegers.add(currentRunLengthCount); // add tail
+        addTail();
 
         int entryWidth = switch (version) {
             case v1 -> Short.BYTES;
@@ -87,6 +89,10 @@ class RunLengthEncoder extends OffsetEncoder {
         return array;
     }
 
+    void addTail() {
+        runLengthEncodingIntegers.add(currentRunLengthCount);
+    }
+
     @Override
     public int getEncodedSize() {
         return encodedBytes.get().length;
@@ -97,7 +103,7 @@ class RunLengthEncoder extends OffsetEncoder {
         return encodedBytes.get();
     }
 
-    int previousRangeIndex;
+    int previousRangeIndex = -1;
 
     private void encodeRunLength(final boolean currentIsComplete, final int rangeIndex) {
         // run length
