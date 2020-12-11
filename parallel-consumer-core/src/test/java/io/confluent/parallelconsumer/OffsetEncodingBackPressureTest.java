@@ -144,11 +144,26 @@ public class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTe
             assertThat(wm.partitionOffsetHighWaterMarks.get(topicPartition))
                     .isGreaterThan(expectedMsgsProcessedBeforePartitionBlocks);
             assertThat(wm.partitionMoreRecordsAllowedToProcess.get(topicPartition)).isFalse();
+
+            // assert blocked, but can still write payload
+            assertThat(true).isFalse();
         }
 
+        // test max payload exceeded, payload dropped
         {
+            // force system to allow more records (i.e. the actual system attempts to never allow the payload to grow this big)
+            wm.partitionMoreRecordsAllowedToProcess.put(topicPartition, true);
+            // assert payload missing from commit now
+            assertThat(true).isFalse();
+        }
+
+        // test failed messages can retry
+        {
+            // fail the message
+            // wait for the retry
             // release message that was blocking partition progression
             msgLock.countDown();
+            assertThat(true).isFalse();
         }
 
         {

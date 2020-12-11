@@ -29,6 +29,7 @@ import java.util.function.Consumer;
 import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.csid.utils.KafkaUtils.toTP;
 import static io.confluent.csid.utils.LogUtils.at;
+import static io.confluent.parallelconsumer.OffsetMapCodecManager.DefaultMaxMetadataSize;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.lang.Math.min;
@@ -628,16 +629,29 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 int metaPayloadLength = offsetMapPayload.length();
                 boolean moreMessagesAllowed;
                 OffsetAndMetadata offsetWithExtraMap;
-                if (metaPayloadLength < OffsetMapCodecManager.DefaultMaxMetadataSize) {
+                // todo move
+                double multiplier = 0.8;
+                double pressureThresholdValue = DefaultMaxMetadataSize * multiplier;
+
+                if (metaPayloadLength <= pressureThresholdValue) {
                     moreMessagesAllowed = true;
                     offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
-                } else {
+                } else if (metaPayloadLength > pressureThresholdValue && metaPayloadLength <= DefaultMaxMetadataSize) {
+                    // try to turn on back pressure before max size is reached
+                    moreMessagesAllowed = false;
+                    offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage, offsetMapPayload);
+                    log.warn("Payload size higher than threshold {}, but still lower than max {}. Will write payload, but will " +
+                                    "not allow further messages, in order to allow the offset data to shrink (via succeeding messages).",
+                            pressureThresholdValue, DefaultMaxMetadataSize);
+                } else if (metaPayloadLength > DefaultMaxMetadataSize) {
+                    // exceeded maximum API allowed, strip the payload
                     moreMessagesAllowed = false;
                     offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage); // strip payload
                     log.warn("Offset map data too large (size: {}) to fit in metadata payload - cannot include in commit. " +
                             "Warning: messages might be replayed on rebalance. " +
-                            "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, OffsetMapCodecManager.DefaultMaxMetadataSize);
+                            "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, pressureThresholdValue);
                 }
+
                 partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, moreMessagesAllowed);
                 offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
