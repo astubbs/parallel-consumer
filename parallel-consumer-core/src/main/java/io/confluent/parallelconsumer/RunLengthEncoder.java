@@ -70,16 +70,16 @@ class RunLengthEncoder extends OffsetEncoder {
         };
         ByteBuffer runLengthEncodedByteBuffer = ByteBuffer.allocate(runLengthEncodingIntegers.size() * entryWidth);
 
-        for (final Integer runlength : runLengthEncodingIntegers) {
+        for (final Integer runLength : runLengthEncodingIntegers) {
             switch (version) {
                 case v1 -> {
-                    final short shortCastRunlength = runlength.shortValue();
-                    if (runlength != shortCastRunlength)
-                        throw new RunlengthV1EncodingNotSupported(msg("Runlength too long for Short ({} cast to {})", runlength, shortCastRunlength));
+                    final short shortCastRunlength = runLength.shortValue();
+                    if (runLength != shortCastRunlength)
+                        throw new RunlengthV1EncodingNotSupported(msg("Runlength too long for Short ({} cast to {})", runLength, shortCastRunlength));
                     runLengthEncodedByteBuffer.putShort(shortCastRunlength);
                 }
                 case v2 -> {
-                    runLengthEncodedByteBuffer.putInt(runlength);
+                    runLengthEncodedByteBuffer.putInt(runLength);
                 }
             }
         }
@@ -125,24 +125,15 @@ class RunLengthEncoder extends OffsetEncoder {
     public List<Long> calculateSucceededActualOffsets(long originalBaseOffset) {
         List<Long> successfulOffsets = new ArrayList<>();
         boolean succeeded = false;
-//        int previous = 0;
         long offsetPosition = originalBaseOffset;
-        //for (final Integer run : runLengthEncodingIntegers) {
         for (final int run : runLengthEncodingIntegers) {
             if (succeeded) {
-//                offsetPosition++;
                 for (final Integer integer : Range.range(run)) {
                     long newGoodOffset = offsetPosition + integer;
                     successfulOffsets.add(newGoodOffset);
                 }
             }
-//            else {
-//                offsetPosition = offsetPosition + run;
-//            }
-
-            //
             offsetPosition += run;
-//            previous = run;
             succeeded = !succeeded;
         }
         return successfulOffsets;
