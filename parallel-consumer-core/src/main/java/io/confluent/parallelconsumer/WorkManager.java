@@ -618,11 +618,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     /**
      * Get final offset data, build the the offset map, and replace it in our map of offset data to send
-     *
-     * @param offsetsToSend
-     * @param topicPartitionKey
-     * @param incompleteOffsets
-     * @return
      */
     private void addEncodedOffsets(Map<TopicPartition, OffsetAndMetadata> offsetsToSend,
                                    TopicPartition topicPartitionKey,
@@ -673,10 +668,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                             "Warning: messages might be replayed on rebalance. " +
                             "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, pressureThresholdValue);
                 }
-                if (moreMessagesAllowed)
-                    getPayloadPerformance(topicPartitionKey).onSuccess(offsetWithExtraMap, endOffset);
-                else
-                    getPayloadPerformance(topicPartitionKey).onFailure(offsetWithExtraMap, endOffset);
+                OffsetPayloadPerformanceHistory payloadPerformance = getPayloadPerformance(topicPartitionKey);
+                if (moreMessagesAllowed) {
+                    payloadPerformance.onSuccess(offsetWithExtraMap, endOffset);
+                    boolean prediction = payloadPerformance.canFitCountPlusOne();
+                    log.error("{}", prediction);
+                } else {
+                    payloadPerformance.onFailure(offsetWithExtraMap, endOffset);
+                    boolean prediction = payloadPerformance.canFitCountPlusOne();
+                    log.error("{}", prediction);
+                }
                 partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, moreMessagesAllowed);
                 offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {

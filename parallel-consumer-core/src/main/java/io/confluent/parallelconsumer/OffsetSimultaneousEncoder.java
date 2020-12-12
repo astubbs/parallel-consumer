@@ -85,9 +85,10 @@ class OffsetSimultaneousEncoder {
         this.incompleteOffsets = incompleteOffsets;
 
         long longLength = this.nextExpectedOffset - this.lowWaterMark;
-        length = (int) longLength;
+        length = Math.toIntExact(longLength);
         // sanity
-        if (longLength != length) throw new IllegalArgumentException("Integer overflow");
+        if (longLength != length)
+            throw new IllegalArgumentException("Integer overflow");
 
         initEncoders();
     }
