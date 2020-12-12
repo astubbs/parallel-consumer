@@ -7,23 +7,46 @@ import java.util.Queue;
 
 public class OffsetPayloadPerformanceHistory {
 
+    private static final int MAX_SIZE = 5;
+
     @Value
     static class PayloadHistory {
         long offsetRange;
         int payloadSizeRequired;
     }
 
-    Queue<PayloadHistory> history2;
-    Queue<PayloadHistory> badHistory;
+    private Queue<PayloadHistory> history2;
+    private Queue<PayloadHistory> badHistory;
 
-    Queue<OffsetAndMetadata> history;
+    private Queue<OffsetAndMetadata> history;
+
+    private int count = 0;
+
+    public void count() {
+        count++;
+    }
+
+    public void resetCount() {
+        count = 0;
+    }
+
+    public boolean canFitCountPlusOne() {
+        return predictCanStore(count + 1);
+    }
 
     public void onSuccess(OffsetAndMetadata entry) {
         history.add(entry);
+        evictMaybe();
+    }
+
+    private void evictMaybe() {
+        if(history2.size()>MAX_SIZE)
+            history2.remove();
     }
 
     public void onFailure(final OffsetAndMetadata offsetWithExtraMap) {
         badHistory.add(new PayloadHistory(offsetWithExtraMap, );
+        evictMaybe();
     }
 
     public boolean predictCanStore(int quantity) {

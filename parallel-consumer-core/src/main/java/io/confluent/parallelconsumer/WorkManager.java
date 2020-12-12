@@ -387,8 +387,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // check we have capacity in offset storage to process more messages
                 TopicPartition topicPartition = workContainer.getTopicPartition();
                 boolean notAllowedMoreRecords = !partitionMoreRecordsAllowedToProcess.getOrDefault(topicPartition, true);
-                boolean noSpacePredicted = !predictCanStore(workContainer);
-                if(noSpacePredicted){
+//                boolean noSpacePredicted = !predictCanStore(workContainer);
+                boolean noSpacePredicted = !getPayloadPerformance(topicPartition).canFitCountPlusOne();
+                if (noSpacePredicted) {
                     log.warn("Preemptive pressure kicking in at {}",
                             getPayloadPerformance(topicPartition).getSpaceLeft());
                 }
@@ -406,6 +407,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 boolean alreadySucceeded = !workContainer.isUserFunctionSucceeded();
                 if (workContainer.hasDelayPassed(clock) && workContainer.isNotInFlight() && alreadySucceeded) {
                     log.trace("Taking {} as work", workContainer);
+                    getPayloadPerformance(topicPartition).count();
                     workContainer.takingAsWork();
                     shardWork.add(workContainer);
                 } else {
@@ -606,6 +608,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             }
         }
 
+        partitionPayloadEncodingPerformance.values().forEach(OffsetPayloadPerformanceHistory::resetCount);
+
         log.debug("Scan finished, {} were in flight, {} completed offsets removed, coalesced to {} offset(s) ({}) to be committed",
                 count, removed, offsetsToSend.size(), offsetsToSend);
         return offsetsToSend;
@@ -662,7 +666,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                             "Warning: messages might be replayed on rebalance. " +
                             "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, pressureThresholdValue);
                 }
-                if(moreMessagesAllowed)
+                if (moreMessagesAllowed)
                     getPayloadPerformance(topicPartitionKey).onSuccess(offsetWithExtraMap);
                 else
                     getPayloadPerformance(topicPartitionKey).onFailure(offsetWithExtraMap);
