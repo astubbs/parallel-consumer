@@ -395,10 +395,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 boolean notAllowedMoreRecords = !partitionMoreRecordsAllowedToProcess.getOrDefault(topicPartition, true);
 //                boolean noSpacePredicted = !predictCanStore(workContainer);
 //                boolean noSpacePredicted = !getPayloadPerformance(topicPartition).canFitCountPlusOne();
-                boolean noSpacePredicted = !getPayloadPerformance(topicPartition)
-                        .canFitNewRange(
-                                partitionIncompleteOffsets.getOrDefault(topicPartition, UniSets.of(-1L)).iterator().next(),
-                                partitionOffsetHighestSucceeded.getOrDefault(topicPartition, -1L));
+                NavigableMap<Long, WorkContainer<K, V>> longWorkContainerNavigableMap = partitionCommitQueues.get(topicPartition);
+                Long baseOffset = partitionIncompleteOffsets.getOrDefault(topicPartition, UniSets.of(-1L)).iterator().next();
+                Long highestSucceeded = partitionOffsetHighestSucceeded.getOrDefault(topicPartition, -1L);
+                // todo should be a count of messages, tracked per partition, of how many are inflight for a partition between the low water mark and the highest succeeded
+                long outstandingForPartition = baseOffset - highestSucceeded; // todo this is just an approximation and will be very wrong on heavily compacted topics
+                long quantity = outstandingForPartition + 1;
+                boolean noSpacePredicted = !getPayloadPerformance(topicPartition).predictCanStoreThisMany(Math.toIntExact(quantity));
+//                boolean noSpacePredicted = !getPayloadPerformance(topicPartition).canFitNewRange(baseOffset, highestSucceeded);
                 if (noSpacePredicted) {
                     log.warn("Preemptive pressure kicking in at {}",
                             getPayloadPerformance(topicPartition).getSpaceLeftOverInPreviousRun());

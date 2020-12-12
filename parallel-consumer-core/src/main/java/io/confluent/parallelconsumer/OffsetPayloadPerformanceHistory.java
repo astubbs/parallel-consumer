@@ -21,7 +21,7 @@ public class OffsetPayloadPerformanceHistory {
 
     @Value
     static class PayloadHistory {
-        long offsetRange;
+        long numberOfRecords;
         int payloadSizeRequired;
     }
 
@@ -52,9 +52,9 @@ public class OffsetPayloadPerformanceHistory {
 
     private void addEntry(final OffsetAndMetadata offsetAndMetadata, final long endOffset) {
         long startOffset = offsetAndMetadata.offset();
-        long range = endOffset - startOffset;
+        long numberOfRecords = endOffset - startOffset; // todo fix
         int encodingLengthUsed = offsetAndMetadata.metadata().length();
-        PayloadHistory historyEntry = new PayloadHistory(range, encodingLengthUsed);
+        PayloadHistory historyEntry = new PayloadHistory(numberOfRecords, encodingLengthUsed);
         history.add(historyEntry);
         evictMaybe();
     }
@@ -111,14 +111,14 @@ public class OffsetPayloadPerformanceHistory {
     public double getOffsetsPerCharCurrentPerformance() {
         if (history.isEmpty())
             return Long.MAX_VALUE;
-        final long[] totalOffsets = {0};
+        final long[] totalNumRecords = {0};
         final int[] totalPayloadSizeRequired = {0};
         history.forEach(x -> {
-            totalOffsets[0] += x.offsetRange;
+            totalNumRecords[0] += x.numberOfRecords;
             totalPayloadSizeRequired[0] += x.payloadSizeRequired;
         });
-//        double offsetsPerChar = Math.ceil((double)totalOffsets[0] / totalPayloadSizeRequired[0]);
-        double offsetsPerChar = (double) totalOffsets[0] / totalPayloadSizeRequired[0];
+//        double offsetsPerChar = Math.ceil((double)totalNumRecords[0] / totalPayloadSizeRequired[0]);
+        double offsetsPerChar = (double) totalNumRecords[0] / totalPayloadSizeRequired[0];
         return offsetsPerChar;
     }
 }
