@@ -128,13 +128,13 @@ public class OffsetMapCodecManager<K, V> {
         log.warn("Loaded incomplete offsets from offset metadata {}", incompleteOffsets);
     }
 
-    String makeOffsetMetadataPayload(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
-        String offsetMap = serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, tp, incompleteOffsets);
+    String makeOffsetMetadataPayload(long highestSucceeded, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
+        String offsetMap = serialiseIncompleteOffsetMapToBase64(highestSucceeded, tp, incompleteOffsets);
         return offsetMap;
     }
 
-    String serialiseIncompleteOffsetMapToBase64(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
-        byte[] compressedEncoding = encodeOffsetsCompressed(finalOffsetForPartition, tp, incompleteOffsets);
+    String serialiseIncompleteOffsetMapToBase64(long highestSucceeded, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
+        byte[] compressedEncoding = encodeOffsetsCompressed(tp, highestSucceeded, incompleteOffsets);
         String b64 = OffsetSimpleSerialisation.base64(compressedEncoding);
         return b64;
     }
@@ -147,9 +147,9 @@ public class OffsetMapCodecManager<K, V> {
      * <p>
      * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
      */
-    byte[] encodeOffsetsCompressed(long finalOffsetForPartition, TopicPartition tp, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
+    byte[] encodeOffsetsCompressed(TopicPartition tp, long highestSucceeded, Set<Long> incompleteOffsets) throws EncodingNotSupportedException {
         Long nextExpectedOffset = wm.partitionOffsetHighWaterMarks.get(tp) + 1;
-        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, nextExpectedOffset, incompleteOffsets).invoke();
+        OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(nextExpectedOffset, highestSucceeded, incompleteOffsets).invoke();
         if (forcedCodec.isPresent()) {
             OffsetEncoding forcedOffsetEncoding = forcedCodec.get();
             log.warn("Forcing use of {}, for testing", forcedOffsetEncoding);

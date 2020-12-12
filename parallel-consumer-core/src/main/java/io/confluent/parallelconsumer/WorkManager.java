@@ -625,18 +625,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // TODO potential optimisation: store/compare the current incomplete offsets to the last committed ones, to know if this step is needed or not (new progress has been made) - isdirty?
         boolean offsetEncodingNeeded = !incompleteOffsets.isEmpty();
         if (offsetEncodingNeeded) {
-            long offsetOfNextExpectedMessage;
-            OffsetAndMetadata finalOffsetOnly = offsetsToSend.get(topicPartitionKey);
-            if (finalOffsetOnly == null) {
-                // no new low water mark to commit, so use the last one again
-                offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
-            } else {
-                offsetOfNextExpectedMessage = finalOffsetOnly.offset();
-            }
+            long offsetOfNextExpectedMessage = partitionOffsetHighWaterMarks.get(topicPartitionKey) + 1;
+//            OffsetAndMetadata finalOffsetOnly = offsetsToSend.get(topicPartitionKey);
+//            if (finalOffsetOnly == null) {
+//                // no new low water mark to commit, so use the last one again
+//                offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
+//            } else {
+//                offsetOfNextExpectedMessage = finalOffsetOnly.offset();
+//            }
 
             OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
             try {
-                String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, topicPartitionKey, incompleteOffsets);
+                String offsetMapPayload = om.makeOffsetMetadataPayload(highestSucceeded, topicPartitionKey, incompleteOffsets);
                 int metaPayloadLength = offsetMapPayload.length();
                 boolean moreMessagesAllowed;
                 OffsetAndMetadata offsetWithExtraMap;
