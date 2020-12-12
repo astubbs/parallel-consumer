@@ -296,6 +296,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             // shouldn't be here
             throw new IllegalStateException("No committer configured");
         });
+        supervise();
         committer.commit();
     }
 

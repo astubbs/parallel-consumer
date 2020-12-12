@@ -168,7 +168,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             OffsetMapCodecManager<String, String> om = new OffsetMapCodecManager<>(wmm, consumerSpy);
             Set<Long> collect = firstSucceededRecordRemoved.stream().map(x -> x.offset()).collect(Collectors.toSet());
             OffsetMapCodecManager.forcedCodec = Optional.empty(); // turn off forced
-            String bestPayload = om.makeOffsetMetadataPayload(1, tp, collect);
+            String bestPayload = om.makeOffsetMetadataPayload(1, 0L, tp, collect);
             assertThat(bestPayload).isNotEmpty();
         }
         consumerSpy.commitSync(completedEligibleOffsetsAndRemove);

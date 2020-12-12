@@ -394,10 +394,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 TopicPartition topicPartition = workContainer.getTopicPartition();
                 boolean notAllowedMoreRecords = !partitionMoreRecordsAllowedToProcess.getOrDefault(topicPartition, true);
 //                boolean noSpacePredicted = !predictCanStore(workContainer);
-                boolean noSpacePredicted = !getPayloadPerformance(topicPartition).canFitCountPlusOne();
+//                boolean noSpacePredicted = !getPayloadPerformance(topicPartition).canFitCountPlusOne();
+                boolean noSpacePredicted = !getPayloadPerformance(topicPartition)
+                        .canFitNewRange(
+                                partitionIncompleteOffsets.getOrDefault(topicPartition, UniSets.of(-1L)).iterator().next(),
+                                partitionOffsetHighestSucceeded.getOrDefault(topicPartition, -1L));
                 if (noSpacePredicted) {
                     log.warn("Preemptive pressure kicking in at {}",
-                            getPayloadPerformance(topicPartition).getSpaceLeft());
+                            getPayloadPerformance(topicPartition).getSpaceLeftOverInPreviousRun());
                 }
                 // If the record has been previously attempted, it is already represented in the current offset encoding,
                 // and may in fact be the message holding up the partition so must be retried, in which case we don't want to skip it
@@ -447,14 +451,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public void success(WorkContainer<K, V> wc) {
+        //
         workStateIsDirtyNeedsCommitting.set(true);
+
+        // update as we go
+        updateHighestSucceededOffsetSoFar(wc);
+
         ConsumerRecord<K, V> cr = wc.getCr();
         log.trace("Work success ({}), removing from processing shard queue", wc);
         wc.succeed();
         Object key = computeShardKey(cr);
-
-        // update as we go
-        updateHighestSucceededOffsetSoFar(wc);
 
         // remove from processing queues
         NavigableMap<Long, WorkContainer<K, V>> shard = processingShards.get(key);
@@ -635,25 +641,28 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         boolean offsetEncodingNeeded = !incompleteOffsets.isEmpty();
         if (offsetEncodingNeeded) {
             long offsetOfNextExpectedMessage = partitionOffsetHighWaterMarks.get(topicPartitionKey) + 1;
-//            OffsetAndMetadata finalOffsetOnly = offsetsToSend.get(topicPartitionKey);
-//            if (finalOffsetOnly == null) {
-//                // no new low water mark to commit, so use the last one again
-//                offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
-//            } else {
-//                offsetOfNextExpectedMessage = finalOffsetOnly.offset();
-//            }
+            OffsetAndMetadata finalOffsetOnly = offsetsToSend.get(topicPartitionKey);
+            if (finalOffsetOnly == null) {
+                // no new low water mark to commit, so use the last one again
+                offsetOfNextExpectedMessage = incompleteOffsets.iterator().next(); // first element
+            } else {
+                offsetOfNextExpectedMessage = finalOffsetOnly.offset();
+            }
 
+            OffsetPayloadPerformanceHistory payloadPerformance = getPayloadPerformance(topicPartitionKey);
             OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
             try {
-                String offsetMapPayload = om.makeOffsetMetadataPayload(highestSucceeded, topicPartitionKey, incompleteOffsets);
+                long highestSucceeded = partitionOffsetHighestSucceeded.getOrDefault(topicPartitionKey, -1L);
+                String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, highestSucceeded, topicPartitionKey, incompleteOffsets);
                 int metaPayloadLength = offsetMapPayload.length();
                 boolean moreMessagesAllowed;
                 OffsetAndMetadata offsetWithExtraMap;
 
                 // todo slow
-                ArrayList<Long> list = new ArrayList<>(incompleteOffsets);
-                Collections.sort(list);
-                long endOffset = list.get(list.size() - 1);
+//                ArrayList<Long> list = new ArrayList<>(incompleteOffsets);
+//                Collections.sort(list);
+//                long endOffset = list.get(list.size() - 1);
+                long endOffset = highestSucceeded;
 
                 // todo move
                 double multiplier = 0.8;
@@ -677,15 +686,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                             "Warning: messages might be replayed on rebalance. " +
                             "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, pressureThresholdValue);
                 }
-                OffsetPayloadPerformanceHistory payloadPerformance = getPayloadPerformance(topicPartitionKey);
                 if (moreMessagesAllowed) {
                     payloadPerformance.onSuccess(offsetWithExtraMap, endOffset);
                     boolean prediction = payloadPerformance.canFitCountPlusOne();
-                    log.error("{}", prediction);
+                    boolean prediction2 = payloadPerformance.canFitNewRange(offsetOfNextExpectedMessage, highestSucceeded);
+                    log.error("can fit {}", prediction2);
                 } else {
                     payloadPerformance.onFailure(offsetWithExtraMap, endOffset);
                     boolean prediction = payloadPerformance.canFitCountPlusOne();
-                    log.error("{}", prediction);
+                    boolean prediction2 = payloadPerformance.canFitNewRange(offsetOfNextExpectedMessage, highestSucceeded);
+                    log.error("can fit {}", prediction2);
                 }
                 partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, moreMessagesAllowed);
                 offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
@@ -772,7 +782,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private boolean predictCanStore(TopicPartition tp, int quantity) {
         OffsetPayloadPerformanceHistory perf = getPayloadPerformance(tp);
-        return perf.predictCanStore(quantity);
+        return perf.predictCanStoreThisMore(quantity);
     }
 
     private OffsetPayloadPerformanceHistory getPayloadPerformance(final TopicPartition tp) {

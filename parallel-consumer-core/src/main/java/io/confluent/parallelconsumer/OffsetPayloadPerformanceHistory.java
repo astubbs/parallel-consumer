@@ -38,7 +38,12 @@ public class OffsetPayloadPerformanceHistory {
     }
 
     public boolean canFitCountPlusOne() {
-        return predictCanStore(count + 1);
+        return predictCanStoreThisMore(count + 1);
+    }
+
+    public boolean canFitNewRange(long startOffset, long highestSucceeded) {
+        long length = highestSucceeded - startOffset;
+        return predictCanStoreThisMany(Math.toIntExact(length));
     }
 
     public void onSuccess(OffsetAndMetadata entry, long endOffset) {
@@ -63,23 +68,39 @@ public class OffsetPayloadPerformanceHistory {
         addEntry(entry, endOffset);
     }
 
-    public boolean predictCanStore(int quantity) {
+    public boolean predictCanStoreThisMore(int quantity) {
         if (history.isEmpty())
             return true;
 //        long required = quantity * getOffsetsPerByteCurrentPerformance();
-        long predictedAvailable = getSpaceLeft() * getOffsetsPerByteCurrentPerformance();
+        int remainingChars = getSpaceLeftOverInPreviousRun();
+        var offsetsPerChar = getOffsetsPerCharCurrentPerformance();
+        var predictedAvailable = remainingChars * offsetsPerChar;
         return quantity < predictedAvailable;
     }
 
-    public int getSpaceLeft() {
-        Optional<Integer> previousPayloadHistory = getPreviousPayloadHistory();
-        int previous = (previousPayloadHistory.isEmpty()) ? 0 : previousPayloadHistory.get();
-        int absRemaining = OffsetMapCodecManager.DefaultMaxMetadataSize - previous;
+    public boolean predictCanStoreThisMany(int quantity) {
+        if (history.isEmpty())
+            return true;
+//        long required = quantity * getOffsetsPerByteCurrentPerformance();
+//        int remainingChars = getSpaceLeftOverInPreviousRun();
+        var offsetsPerChar = getOffsetsPerCharCurrentPerformance();
+        var predictedAvailable = getMax() * offsetsPerChar;
+        return quantity < predictedAvailable;
+    }
+
+    public int getSpaceLeftOverInPreviousRun() {
+        Optional<Integer> previousPayloadSize = getPreviousPayloadSizeHistory();
+        int previousSize = (previousPayloadSize.isEmpty()) ? 0 : previousPayloadSize.get();
+        int absRemaining = getMax() - previousSize;
         double remainingOfThreshold = absRemaining * THRESHOLD;
         return (int) remainingOfThreshold;
     }
 
-    private Optional<Integer> getPreviousPayloadHistory() {
+    private int getMax() {
+        return OffsetMapCodecManager.DefaultMaxMetadataSize;
+    }
+
+    private Optional<Integer> getPreviousPayloadSizeHistory() {
         PayloadHistory peek = history.peek();
         return (peek == null) ? Optional.empty() : Optional.of(peek.payloadSizeRequired);
     }
@@ -87,7 +108,7 @@ public class OffsetPayloadPerformanceHistory {
     /**
      * @return (offsets / byte) the current number of messages per byte stored.
      */
-    public long getOffsetsPerByteCurrentPerformance() {
+    public double getOffsetsPerCharCurrentPerformance() {
         if (history.isEmpty())
             return Long.MAX_VALUE;
         final long[] totalOffsets = {0};
@@ -96,7 +117,8 @@ public class OffsetPayloadPerformanceHistory {
             totalOffsets[0] += x.offsetRange;
             totalPayloadSizeRequired[0] += x.payloadSizeRequired;
         });
-        var performance = Math.ceil(totalOffsets[0] / totalPayloadSizeRequired[0]);
-        return (long) performance;
+//        double offsetsPerChar = Math.ceil((double)totalOffsets[0] / totalPayloadSizeRequired[0]);
+        double offsetsPerChar = (double) totalOffsets[0] / totalPayloadSizeRequired[0];
+        return offsetsPerChar;
     }
 }

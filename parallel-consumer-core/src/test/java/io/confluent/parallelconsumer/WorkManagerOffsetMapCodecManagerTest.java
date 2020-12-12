@@ -106,7 +106,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @SneakyThrows
     @Test
     void serialiseCycle() {
-        String serialised = om.serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, tp, incomplete);
+        String serialised = om.serialiseIncompleteOffsetMapToBase64(0L, finalOffsetForPartition, tp, incomplete);
         log.info("Size: {}", serialised.length());
 
         //
@@ -212,7 +212,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @SneakyThrows
     @Test
     void loadCompressedRunLengthEncoding() {
-        byte[] bytes = om.encodeOffsetsCompressed(finalOffsetForPartition, tp, incomplete);
+        byte[] bytes = om.encodeOffsetsCompressed(0L, finalOffsetForPartition, tp, incomplete);
         OffsetMapCodecManager.HighestOffsetAndIncompletes longs = om.decodeCompressedOffsets(finalOffsetForPartition, bytes);
         assertThat(longs.getIncompleteOffsets().toArray()).containsExactly(incomplete.toArray());
     }
@@ -270,7 +270,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @Test
     void largeOffsetMap() {
         wm.raisePartitionHighWaterMark(200L, tp);
-        byte[] bytes = om.encodeOffsetsCompressed(0L, tp, incomplete);
+        byte[] bytes = om.encodeOffsetsCompressed(0L, 0L, tp, incomplete);
         assertThat(bytes.length).as("very small").isLessThan(30);
     }
 
@@ -319,7 +319,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @SneakyThrows
     @Test
     void compressionCycle() {
-        byte[] serialised = om.encodeOffsetsCompressed(finalOffsetForPartition, tp, incomplete);
+        byte[] serialised = om.encodeOffsetsCompressed(0L, finalOffsetForPartition, tp, incomplete);
 
         OffsetMapCodecManager.HighestOffsetAndIncompletes deserialised = om.decodeCompressedOffsets(finalOffsetForPartition, serialised);
 
