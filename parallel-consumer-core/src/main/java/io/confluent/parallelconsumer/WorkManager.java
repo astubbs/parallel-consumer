@@ -137,6 +137,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new HashMap<>();
 
+    Map<TopicPartition, OffsetPayloadPerformanceHistory> partitionPayloadEncodingPerformance = new HashMap<>();
+
     /**
      * Use a private {@link DynamicLoadFactor}, useful for testing.
      */
@@ -341,6 +343,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             return UniLists.of();
         }
 
+        if (!predictCanStore(requestedMaxWorkToRetrieve)) {
+            log.error("Don' think we have the offset space for this many new records {}", requestedMaxWorkToRetrieve);
+        }
+
         // todo this counts all partitions as a whole - this may cause some partitions to starve. need to round robin it?
         int available = getWorkQueuedInShardsCount();
         int extraNeededFromInboxToSatisfy = requestedMaxWorkToRetrieve - available;
@@ -381,10 +387,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 // check we have capacity in offset storage to process more messages
                 TopicPartition topicPartition = workContainer.getTopicPartition();
                 boolean notAllowedMoreRecords = !partitionMoreRecordsAllowedToProcess.getOrDefault(topicPartition, true);
+                boolean noSpacePredicted = !predictCanStore(workContainer);
+                if(noSpacePredicted){
+                    log.warn("Preemptive pressure kicking in at {}",
+                            getPayloadPerformance(topicPartition).getSpaceLeft());
+                }
                 // If the record has been previously attempted, it is already represented in the current offset encoding,
                 // and may in fact be the message holding up the partition so must be retried, in which case we don't want to skip it
                 boolean recordNeverAttempted = !workContainer.hasPreviouslyFailed();
-                if (notAllowedMoreRecords && recordNeverAttempted && workContainer.isNotInFlight()) {
+                if ((notAllowedMoreRecords || noSpacePredicted) && recordNeverAttempted && workContainer.isNotInFlight()) {
                     log.debug("Not allowed more records ({}) for the partition ({}) as set from previous encode run, that this " +
                                     "record ({}) belongs to due to offset encoding back pressure, has never been attemtped before ({}), " +
                                     "not in flight ({}), continuing on to next container in shard.",
@@ -643,7 +654,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     log.warn("Payload size higher than threshold {}, but still lower than max {}. Will write payload, but will " +
                                     "not allow further messages, in order to allow the offset data to shrink (via succeeding messages).",
                             pressureThresholdValue, DefaultMaxMetadataSize);
-                } else if (metaPayloadLength > DefaultMaxMetadataSize) {
+                } else { //  if (metaPayloadLength > DefaultMaxMetadataSize)
                     // exceeded maximum API allowed, strip the payload
                     moreMessagesAllowed = false;
                     offsetWithExtraMap = new OffsetAndMetadata(offsetOfNextExpectedMessage); // strip payload
@@ -651,7 +662,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                             "Warning: messages might be replayed on rebalance. " +
                             "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, pressureThresholdValue);
                 }
-
+                if(moreMessagesAllowed)
+                    getPayloadPerformance(topicPartitionKey).onSuccess(offsetWithExtraMap);
+                else
+                    getPayloadPerformance(topicPartitionKey).onFailure(offsetWithExtraMap);
                 partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, moreMessagesAllowed);
                 offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
@@ -730,4 +744,19 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
         return false;
     }
+
+    private boolean predictCanStore(WorkContainer<K, V> wc) {
+        return predictCanStore(wc.getTopicPartition(), 1);
+    }
+
+    private boolean predictCanStore(TopicPartition tp, int quantity) {
+        OffsetPayloadPerformanceHistory perf = getPayloadPerformance(tp);
+        return perf.predictCanStore(quantity);
+    }
+
+    private OffsetPayloadPerformanceHistory getPayloadPerformance(final TopicPartition tp) {
+        OffsetPayloadPerformanceHistory perf = partitionPayloadEncodingPerformance.getOrDefault(tp, new OffsetPayloadPerformanceHistory());
+        return perf;
+    }
+
 }
