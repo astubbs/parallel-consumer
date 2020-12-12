@@ -15,10 +15,8 @@ public class OffsetPayloadPerformanceHistory {
         int payloadSizeRequired;
     }
 
-    private Queue<PayloadHistory> history2;
-    private Queue<PayloadHistory> badHistory;
+    private Queue<PayloadHistory> history;
 
-    private Queue<OffsetAndMetadata> history;
 
     private int count = 0;
 
@@ -34,19 +32,24 @@ public class OffsetPayloadPerformanceHistory {
         return predictCanStore(count + 1);
     }
 
-    public void onSuccess(OffsetAndMetadata entry) {
-        history.add(entry);
+    public void onSuccess(OffsetAndMetadata entry, long endOffset) {
+        addEntry(entry, endOffset);
+    }
+
+    private void addEntry(final OffsetAndMetadata entry, final long endOffset) {
+        long startOffset = entry.offset();
+        long range = endOffset - startOffset;
+        history.add(new PayloadHistory(range, entry.metadata().length()));
         evictMaybe();
     }
 
     private void evictMaybe() {
-        if(history2.size()>MAX_SIZE)
-            history2.remove();
+        if (history.size() > MAX_SIZE)
+            history.remove();
     }
 
-    public void onFailure(final OffsetAndMetadata offsetWithExtraMap) {
-        badHistory.add(new PayloadHistory(offsetWithExtraMap, );
-        evictMaybe();
+    public void onFailure(final OffsetAndMetadata entry, long endOffset) {
+        addEntry(entry, endOffset);
     }
 
     public boolean predictCanStore(int quantity) {
@@ -60,7 +63,7 @@ public class OffsetPayloadPerformanceHistory {
     }
 
     private int getPreviousPayloadHistory() {
-        return history2.peek().payloadSizeRequired;
+        return history.peek().payloadSizeRequired;
     }
 
     /**
@@ -69,7 +72,7 @@ public class OffsetPayloadPerformanceHistory {
     public long getOffsetsPerByteCurrentPerformance() {
         final long[] totalOffsets = {0};
         final int[] totalPayloadSizeRequired = {0};
-        history2.forEach(x -> {
+        history.forEach(x -> {
             totalOffsets[0] += x.offsetRange;
             totalPayloadSizeRequired[0] += x.payloadSizeRequired;
         });

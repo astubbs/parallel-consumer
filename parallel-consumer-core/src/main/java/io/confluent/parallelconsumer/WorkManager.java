@@ -343,9 +343,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             return UniLists.of();
         }
 
-        if (!predictCanStore(requestedMaxWorkToRetrieve)) {
-            log.error("Don' think we have the offset space for this many new records {}", requestedMaxWorkToRetrieve);
-        }
+        // need to add up all perf to get an average, to see if it can fit without knowing the partition
+//        if (!getPayloadPerformance(tp).predictCanStore(requestedMaxWorkToRetrieve)) {
+//            log.error("Don' think we have the offset space for this many new records {}", requestedMaxWorkToRetrieve);
+//        }
 
         // todo this counts all partitions as a whole - this may cause some partitions to starve. need to round robin it?
         int available = getWorkQueuedInShardsCount();
@@ -644,6 +645,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 int metaPayloadLength = offsetMapPayload.length();
                 boolean moreMessagesAllowed;
                 OffsetAndMetadata offsetWithExtraMap;
+
+                // todo slow
+                ArrayList<Long> list = new ArrayList<>(incompleteOffsets);
+                Collections.sort(list);
+                long endOffset = list.get(list.size() - 1);
+
                 // todo move
                 double multiplier = 0.8;
                 double pressureThresholdValue = DefaultMaxMetadataSize * multiplier;
@@ -667,9 +674,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                             "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {}", metaPayloadLength, pressureThresholdValue);
                 }
                 if (moreMessagesAllowed)
-                    getPayloadPerformance(topicPartitionKey).onSuccess(offsetWithExtraMap);
+                    getPayloadPerformance(topicPartitionKey).onSuccess(offsetWithExtraMap, endOffset);
                 else
-                    getPayloadPerformance(topicPartitionKey).onFailure(offsetWithExtraMap);
+                    getPayloadPerformance(topicPartitionKey).onFailure(offsetWithExtraMap, endOffset);
                 partitionMoreRecordsAllowedToProcess.put(topicPartitionKey, moreMessagesAllowed);
                 offsetsToSend.put(topicPartitionKey, offsetWithExtraMap);
             } catch (EncodingNotSupportedException e) {
