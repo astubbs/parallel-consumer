@@ -140,6 +140,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     Map<TopicPartition, OffsetPayloadPerformanceHistory> partitionPayloadEncodingPerformance = new HashMap<>();
 
     /**
+     * Highest offset which has completed
+     */
+    Map<TopicPartition, Long> partitionOffsetHighestSucceeded = new ConcurrentHashMap<>();
+
+    /**
      * Use a private {@link DynamicLoadFactor}, useful for testing.
      */
     public WorkManager(ParallelConsumerOptions options, org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
@@ -447,6 +452,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         log.trace("Work success ({}), removing from processing shard queue", wc);
         wc.succeed();
         Object key = computeShardKey(cr);
+
+        // update as we go
+        updateHighestSucceededOffsetSoFar(wc);
+
         // remove from processing queues
         NavigableMap<Long, WorkContainer<K, V>> shard = processingShards.get(key);
         long offset = cr.offset();
@@ -769,6 +778,20 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private OffsetPayloadPerformanceHistory getPayloadPerformance(final TopicPartition tp) {
         OffsetPayloadPerformanceHistory perf = partitionPayloadEncodingPerformance.getOrDefault(tp, new OffsetPayloadPerformanceHistory());
         return perf;
+    }
+
+    /**
+     * Update highest Succeeded seen so far
+     */
+    private void updateHighestSucceededOffsetSoFar(final WorkContainer<K, V> work) {
+        //
+        TopicPartition tp = work.getTopicPartition();
+        Long highestCompleted = partitionOffsetHighestSucceeded.getOrDefault(tp, -1L);
+        long thisOffset = work.getCr().offset();
+        if (thisOffset > highestCompleted) {
+            log.trace("Updating highest completed - was: {} now: {}", highestCompleted, thisOffset);
+            partitionOffsetHighestSucceeded.put(tp, thisOffset);
+        }
     }
 
 }
