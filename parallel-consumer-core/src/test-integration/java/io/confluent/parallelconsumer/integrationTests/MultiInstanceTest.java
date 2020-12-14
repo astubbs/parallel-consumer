@@ -20,6 +20,7 @@ import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 
 import java.util.*;
 import java.util.concurrent.Future;
@@ -48,6 +49,7 @@ class MultiInstanceTest extends BrokerIntegrationTest<String, String> {
 
     @SneakyThrows
     @Test
+        // todo multi commit mode, multi partition count, multi instance count? 2,3,10,100?
     void multiInstance() {
         numPartitions = 12;
         String inputName = setupTopic(this.getClass().getSimpleName() + "-input-" + RandomUtils.nextInt());
@@ -78,7 +80,7 @@ class MultiInstanceTest extends BrokerIntegrationTest<String, String> {
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
             waitAtMost(ofSeconds(30))
-//                    .failFast(() -> pc.isClosedOrFailed(), () -> pc.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
+                    .failFast(() -> pcThree.isClosedOrFailed(), () -> pcThree.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .alias(failureMessage)
                     .pollInterval(1, SECONDS)
                     .untilAsserted(() -> {
@@ -105,10 +107,12 @@ class MultiInstanceTest extends BrokerIntegrationTest<String, String> {
         assertThat(producedKeysAcknowledged).hasSameSizeAs(expectedKeys);
     }
 
-    int barId=0;
+    Integer barId = 0;
+
     private ProgressBar run(final int expectedMessageCount, final ParallelEoSStreamProcessor<String, String> pc, List<ConsumerRecord<?, ?>> consumed) {
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
         bar.setExtraMessage(" id: " + barId);
+        pc.setMyId(Optional.of("id: " + barId));
         barId++;
         pc.poll(record -> {
                     processRecord(bar, record, consumed);
@@ -127,7 +131,7 @@ class MultiInstanceTest extends BrokerIntegrationTest<String, String> {
 
     private void processRecord(final ProgressBar bar,
                                final ConsumerRecord<String, String> record,
-                               List<ConsumerRecord<?,?>> consumed) {
+                               List<ConsumerRecord<?, ?>> consumed) {
         // by not having any sleep here, this test really test the overhead of the system
 //                    try {
 //                        Thread.sleep(5);
