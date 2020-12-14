@@ -290,7 +290,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         wm.onPartitionsAssigned(partitions);
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifyNewWorkRegistered();
-        log.info("Assigned {} partitions - that's {} bytes per partition for encoding offset overruns", numberOfAssignedPartitions, OffsetMapCodecManager.DefaultMaxMetadataSize / numberOfAssignedPartitions);
+        log.info("Assigned {} partition(s)", numberOfAssignedPartitions);
     }
 
     /**
