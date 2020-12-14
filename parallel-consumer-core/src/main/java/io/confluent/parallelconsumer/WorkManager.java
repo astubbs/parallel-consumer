@@ -27,6 +27,7 @@ import java.util.function.Consumer;
 
 import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.csid.utils.KafkaUtils.toTP;
+import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.OffsetMapCodecManager.DefaultMaxMetadataSize;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
@@ -143,6 +144,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     Map<TopicPartition, Boolean> partitionMoreRecordsAllowedToProcess = new HashMap<>();
 
     /**
+     * Record the generations of partition asignment, for fencing off invalid work
+     */
+    private Map<TopicPartition, Integer> partitionsAssignmentEpochs = new HashMap<>();
+
+    /**
      * Use a private {@link DynamicLoadFactor}, useful for testing.
      */
     public WorkManager(ParallelConsumerOptions options, org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
@@ -161,13 +167,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+        incrementPartitionAssignmentEpoch(partitions);
+
         // init messages allowed state
         for (final TopicPartition partition : partitions) {
             partitionMoreRecordsAllowedToProcess.putIfAbsent(partition, true);
         }
 
         try {
-            log.debug("onPartitionsAssigned: {}", partitions);
+            log.info("Partitions assigned: {}", partitions);
             Set<TopicPartition> partitionsSet = UniSets.copyOf(partitions);
             OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
             om.loadOffsetMapForPartition(partitionsSet);
@@ -186,8 +194,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+        incrementPartitionAssignmentEpoch(partitions);
+
         try {
-            log.debug("Partitions revoked: {}", partitions);
+            log.info("Partitions revoked: {}", partitions);
             resetOffsetMapAndRemoveWork(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsRevoked", e);
@@ -200,9 +210,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
+        incrementPartitionAssignmentEpoch(partitions);
+
         try {
-            log.warn("Partitions have been lost");
-            log.debug("Lost partitions: {}", partitions);
+            log.info("Lost partitions: {}", partitions);
             resetOffsetMapAndRemoveWork(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsLost", e);
@@ -232,8 +243,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // this all scanning loop could be avoided if we also store a map of unique keys found referenced when a
         // partition is assigned, but that could worst case grow forever
         for (WorkContainer<K, V> work : oldWorkPartitionQueue.values()) {
-            K key = work.getCr().key();
-            this.processingShards.remove(key);
+            Object shardKey = computeShardKey(work.getCr());
+            log.debug("Removing expired work for shard key: {}", shardKey);
+            this.processingShards.remove(shardKey);
         }
     }
 
@@ -281,9 +293,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         } else {
             Object shardKey = computeShardKey(rec);
             long offset = rec.offset();
-            var wc = new WorkContainer<>(rec);
-
             TopicPartition tp = toTP(rec);
+
+            Integer currentPartitionEpoch = partitionsAssignmentEpochs.get(tp);
+            if (currentPartitionEpoch == null) {
+                throw new InternalRuntimeError(msg("Received message for a partition which is not assigned: {}", rec));
+            }
+            var wc = new WorkContainer<>(currentPartitionEpoch, rec);
+
             raisePartitionHighWaterMark(offset, tp);
 
             processingShards.computeIfAbsent(shardKey, (ignore) -> new TreeMap<>()).put(offset, wc);
@@ -385,6 +402,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
                 var workContainer = queueEntry.getValue();
 
+                {
+                    if (checkEpochIsStale(workContainer)) {
+                        log.error("Work is in queue with stale epoch. Was it not removed properly on revoke? {}", workContainer);
+                    }
+                }
+
                 // TODO refactor this and the rest of the partition state monitoring code out
                 // check we have capacity in offset storage to process more messages
                 TopicPartition topicPartition = workContainer.getTopicPartition();
@@ -436,7 +459,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return work;
     }
 
-    public void success(WorkContainer<K, V> wc) {
+    public void onSuccess(WorkContainer<K, V> wc) {
+        log.trace("Processing success...");
         workStateIsDirtyNeedsCommitting.set(true);
         ConsumerRecord<K, V> cr = wc.getCr();
         log.trace("Work success ({}), removing from processing shard queue", wc);
@@ -456,7 +480,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         numberRecordsOutForProcessing--;
     }
 
-    public void failed(WorkContainer<K, V> wc) {
+    public void onFailure(WorkContainer<K, V> wc) {
+        // error occurred, put it back in the queue if it can be retried
+        // if not explicitly retriable, put it back in with an try counter so it can be later given up on
         wc.fail(clock);
         putBack(wc);
     }
@@ -692,6 +718,32 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         });
     }
 
+    /**
+     * Have our partitions been revoked?
+     *
+     * @return true if epoch doesn't match, false if ok
+     */
+    private boolean checkEpochIsStale(final WorkContainer<K, V> workContainer) {
+        TopicPartition topicPartitionKey = workContainer.getTopicPartition();
+
+        Integer currentPartitionEpoch = partitionsAssignmentEpochs.get(topicPartitionKey);
+        int workEpoch = workContainer.getEpoch();
+        if (currentPartitionEpoch != workEpoch) {
+            log.warn("Epoch mismatch {} vs {} for record {} - were partitions lost? Skipping message - it's already assigned to a different consumer (possibly me).",
+                    workEpoch, currentPartitionEpoch, workContainer);
+            return true;
+        }
+        return false;
+    }
+
+    private void incrementPartitionAssignmentEpoch(final Collection<TopicPartition> partitions) {
+        for (final TopicPartition partition : partitions) {
+            int epoch = partitionsAssignmentEpochs.getOrDefault(partition, -1);
+            epoch++;
+            partitionsAssignmentEpochs.put(partition, epoch);
+        }
+    }
+
     public boolean shouldThrottle() {
         return isSufficientlyLoaded();
     }
@@ -740,4 +792,24 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
         return false;
     }
+
+
+    protected void handleFutureResult(WorkContainer<K, V> wc) {
+        // todo need to make sure epoch's match, as partition may have been re-assigned after being revoked see PR #46
+        // partition may be revoked by a different thread (broker poller) - need to synchronise?
+        // https://github.com/confluentinc/parallel-consumer/pull/46 (partition epochs)
+        if (checkEpochIsStale(wc)) {
+            // no op, partition has been revoked
+            log.warn("Dropping work from revoked partition {}", wc);
+            // todo make sure work isn't in queues - should be already removed in on revoke or lost #removeShardsFoundIn
+            return;
+        }
+
+        if (wc.getUserFunctionSucceeded().get()) {
+            onSuccess(wc);
+        } else {
+            onFailure(wc);
+        }
+    }
+
 }

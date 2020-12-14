@@ -791,7 +791,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         try {
             if (workMailBox.isEmpty()) {
                 if (log.isDebugEnabled()) {
-                    log.warn("Blocking poll on work until next scheduled offset commit attempt for {}. active threads: {}, queue: {}",
+                    log.debug("Blocking poll on work until next scheduled offset commit attempt for {}. active threads: {}, queue: {}",
                             timeout, workerPool.getActiveCount(), getWorkerQueueSize());
                 }
                 currentlyPollingWorkCompleteMailBox.getAndSet(true);
@@ -822,7 +822,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         log.trace("Processing drained work {}...", results.size());
         for (var work : results) {
             MDC.put("offset", work.toString());
-            handleFutureResult(work);
+            wm.handleFutureResult(work);
             MDC.clear();
         }
     }
@@ -906,25 +906,6 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         }
         committer.retrieveOffsetsAndCommit();
         lastCommit = Instant.now();
-    }
-
-    protected void handleFutureResult(WorkContainer<K, V> wc) {
-        if (wc.getUserFunctionSucceeded().get()) {
-            onSuccess(wc);
-        } else {
-            onFailure(wc);
-        }
-    }
-
-    private void onFailure(WorkContainer<K, V> wc) {
-        // error occurred, put it back in the queue if it can be retried
-        // if not explicitly retriable, put it back in with an try counter so it can be later given up on
-        wm.failed(wc);
-    }
-
-    protected void onSuccess(WorkContainer<K, V> wc) {
-        log.trace("Processing success...");
-        wm.success(wc);
     }
 
     /**

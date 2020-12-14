@@ -9,7 +9,6 @@ import java.util.Collection;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Handles the incoming mail for {@link WorkManager}.
@@ -58,7 +57,7 @@ public class WorkMailBoxManager<K, V> {
      * <p>
      * Thread safe for use by control and broker poller thread.
      *
-     * @see WorkManager#success
+     * @see WorkManager#onSuccess
      * @see WorkManager#raisePartitionHighWaterMark
      */
     public void registerWork(final ConsumerRecords<K, V> records) {
