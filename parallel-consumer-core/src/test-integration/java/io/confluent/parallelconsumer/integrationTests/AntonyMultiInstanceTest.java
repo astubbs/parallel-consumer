@@ -49,21 +49,21 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
 
     @SneakyThrows
     @Test
-        // todo multi commit mode, multi partition count, multi instance count? 2,3,10,100?
+        // todo multi commit mode, multi partition count, multi instance count? 2,3,10,100? more instances than partitions, more partitions than instances
     void multiInstance() {
         numPartitions = 12;
-        String inputName = setupTopic(this.getClass().getSimpleName() + "-input-" + RandomUtils.nextInt());
+        String inputTopicName = setupTopic(this.getClass().getSimpleName() + "-input");
 
         List<String> expectedKeys = new ArrayList<>();
-        int expectedMessageCount = 1_000_000;
+        int expectedMessageCount = 10_000_000;
         log.info("Producing {} messages before starting test", expectedMessageCount);
 
-        produceMessages(inputName, expectedKeys, expectedMessageCount);
+        produceMessages(inputTopicName, expectedKeys, expectedMessageCount);
 
         // setup
-        ParallelEoSStreamProcessor<String, String> pcOne = buildPc(inputName, expectedMessageCount);
-        ParallelEoSStreamProcessor<String, String> pcTwo = buildPc(inputName, expectedMessageCount);
-        ParallelEoSStreamProcessor<String, String> pcThree = buildPc(inputName, expectedMessageCount);
+        ParallelEoSStreamProcessor<String, String> pcOne = buildPc(inputTopicName, expectedMessageCount);
+        ParallelEoSStreamProcessor<String, String> pcTwo = buildPc(inputTopicName, expectedMessageCount);
+        ParallelEoSStreamProcessor<String, String> pcThree = buildPc(inputTopicName, expectedMessageCount);
 
         // run
         var consumedByOne = Collections.synchronizedList(new ArrayList<ConsumerRecord<?, ?>>());
@@ -79,7 +79,7 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(ofSeconds(30))
+            waitAtMost(ofSeconds(60))
                     .failFast(() -> pcThree.isClosedOrFailed(), () -> pcThree.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .alias(failureMessage)
                     .pollInterval(1, SECONDS)
@@ -104,7 +104,7 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
 
         // sanity
         assertThat(expectedMessageCount).isEqualTo(processedCount.get());
-        assertThat(producedKeysAcknowledged).hasSameSizeAs(expectedKeys);
+//        assertThat(producedKeysAcknowledged).hasSameSizeAs(expectedKeys);
     }
 
     Integer barId = 0;
@@ -129,24 +129,19 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
         producedKeysAcknowledged.add(consumeProduceResult.getIn().key());
     }
 
+    @SneakyThrows
     private void processRecord(final ProgressBar bar,
                                final ConsumerRecord<String, String> record,
                                List<ConsumerRecord<?, ?>> consumed) {
-        // by not having any sleep here, this test really test the overhead of the system
-//                    try {
-//                        Thread.sleep(5);
-//                    } catch (InterruptedException e) {
-//                        e.printStackTrace();
-//                    }
-//                    try {
-//                        // 1/5 chance of taking a long time
-//                        int chance = 10;
-//                        int dice = RandomUtils.nextInt(0, chance);
-//                        if (dice == 0) {
-//                            Thread.sleep(100);
-//                        } else {
-//                            Thread.sleep(RandomUtils.nextInt(3, 20));
-//                        }
+//        try {
+        // 1/5 chance of taking a long time
+//        int chance = 10;
+//        int dice = RandomUtils.nextInt(0, chance);
+//        if (dice == 0) {
+//            Thread.sleep(100);
+//        } else {
+//            Thread.sleep(RandomUtils.nextInt(3, 20));
+//        }
         bar.stepBy(1);
         consumedKeys.add(record.key());
         processedCount.incrementAndGet();
@@ -154,7 +149,8 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
 //        return new ProducerRecord<>(outputName, record.key(), "data");
     }
 
-    private ParallelEoSStreamProcessor<String, String> buildPc(final String inputName, final int expectedMessageCount) {
+    private ParallelEoSStreamProcessor<String, String> buildPc(final String inputName,
+                                                               final int expectedMessageCount) {
         log.debug("Starting test");
 //        KafkaProducer<String, String> newProducer = kcu.createNewProducer(commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER));
 
@@ -171,15 +167,17 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
         pc.subscribe(of(inputName));
 
         // sanity
-        TopicPartition tp = new TopicPartition(inputName, 0);
-        Map<TopicPartition, Long> beginOffsets = newConsumer.beginningOffsets(of(tp));
-        Map<TopicPartition, Long> endOffsets = newConsumer.endOffsets(of(tp));
-        assertThat(endOffsets.get(tp)).isEqualTo(expectedMessageCount);
-        assertThat(beginOffsets.get(tp)).isEqualTo(0L);
+//        TopicPartition tp = new TopicPartition(inputName, 0);
+//        Map<TopicPartition, Long> beginOffsets = newConsumer.beginningOffsets(of(tp));
+//        Map<TopicPartition, Long> endOffsets = newConsumer.endOffsets(of(tp));
+//        assertThat(endOffsets.get(tp)).isEqualTo(expectedMessageCount);
+//        assertThat(beginOffsets.get(tp)).isEqualTo(0L);
         return pc;
     }
 
-    private void produceMessages(final String inputName, final List<String> expectedKeys, final int expectedMessageCount) throws InterruptedException, java.util.concurrent.ExecutionException {
+    private void produceMessages(final String inputName, final List<String> expectedKeys,
+                                 final int expectedMessageCount) throws InterruptedException, java.util.concurrent.ExecutionException {
+        log.info("Producing {} messages to {}", expectedMessageCount, inputName);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
         try (Producer<String, String> kafkaProducer = kcu.createNewProducer(false)) {
             for (int i = 0; i < expectedMessageCount; i++) {
@@ -197,7 +195,10 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
         // make sure we finish sending before next stage
         log.debug("Waiting for broker acks");
         for (Future<RecordMetadata> send : sends) {
-            send.get();
+            RecordMetadata recordMetadata = send.get();
+            boolean b = recordMetadata.hasOffset();
+            assertThat(b).isTrue();
+            long offset = recordMetadata.offset();
         }
         assertThat(sends).hasSize(expectedMessageCount);
     }
