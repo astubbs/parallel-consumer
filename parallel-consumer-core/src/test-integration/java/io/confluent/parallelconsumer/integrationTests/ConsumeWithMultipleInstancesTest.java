@@ -48,7 +48,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * Test running with multiple instances of parallel-consumer consuming from topic with two partitions.
  */
 @Slf4j
-public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<String, String> {
+class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<String, String> {
 
     static final int DEFAULT_MAX_POLL = 500;
     List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
@@ -56,13 +56,13 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
 
     @ParameterizedTest
     @EnumSource(ProcessingOrder.class)
-    public void consumeWithMultipleInstancesPeriodicConsumerSync(ProcessingOrder order) {
+    void consumeWithMultipleInstancesPeriodicConsumerSync(ProcessingOrder order) {
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_SYNC, order);
     }
 
     @ParameterizedTest
     @EnumSource(ProcessingOrder.class)
-    public void consumeWithMultipleInstancesPeriodicConsumerAsync(ProcessingOrder order) {
+    void consumeWithMultipleInstancesPeriodicConsumerAsync(ProcessingOrder order) {
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, order);
     }
 
