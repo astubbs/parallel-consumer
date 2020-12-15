@@ -29,8 +29,7 @@ import java.util.function.Function;
 import static io.confluent.csid.utils.GeneralTestUtils.time;
 import static io.confluent.csid.utils.KafkaUtils.toTP;
 import static io.confluent.csid.utils.Range.range;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.*;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofMillis;
@@ -567,7 +566,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @SneakyThrows
     @Test
     public void processInKeyOrderWorkNotReturnedDoesntBreakCommits() {
-        ParallelConsumerOptions options = ParallelConsumerOptions.builder().ordering(KEY).build();
+        ParallelConsumerOptions options = ParallelConsumerOptions.builder()
+                .commitMode(PERIODIC_CONSUMER_SYNC)
+                .ordering(KEY)
+                .build();
         setupParallelConsumerInstance(options);
         primeFirstRecord();
 
@@ -621,7 +623,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         waitForOneLoopCycle();
 
         //
-        try {  // simpler way of making the bootstrap commit optional in the results, than adding the required barrier
+        try {
+            // simpler way of making the bootstrap commit optional in the results, than adding the required barrier
             // locks to ensure it's existence, which has been tested else where
             assertCommits(of(0, 1), "Only 0 should be committed, as even though 2 is also finished, 1 should be " +
                     "blocking the partition");
