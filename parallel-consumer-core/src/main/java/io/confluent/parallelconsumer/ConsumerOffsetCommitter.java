@@ -7,6 +7,7 @@ import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -14,7 +15,9 @@ import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
+import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 
@@ -138,10 +141,13 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         while (!commitResponded) {
             if (attempts > ARBITRARY_RETRY_LIMIT)
                 throw new InternalRuntimeError("Too many attempts taking commit responses");
-            CommitResponse take = null;
+
             try {
                 log.debug("Waiting on a commit response");
-                take = commitResponseQueue.take(); // blocks, drain until we find our response
+                Duration timeout = ParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
+                CommitResponse take = commitResponseQueue.poll(timeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
+                if (take == null)
+                    throw new InternalRuntimeError(msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest));
                 commitResponded = take.getRequest().getId() == commitRequest.getId();
             } catch (InterruptedException e) {
                 log.debug("Interrupted waiting for commit response", e);
