@@ -4,10 +4,7 @@ package io.confluent.parallelconsumer.integrationTests;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
-import io.confluent.csid.utils.EnumCartesianProductTestSets;
-import io.confluent.csid.utils.ProgressBarUtils;
-import io.confluent.csid.utils.StringUtils;
-import io.confluent.csid.utils.TrimListRepresentation;
+import io.confluent.csid.utils.*;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -31,13 +28,11 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junitpioneer.jupiter.CartesianProductTest;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Properties;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -47,14 +42,14 @@ import static org.awaitility.Awaitility.waitAtMost;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * Test running with multiple instances of parallel-consumer consuming from
- * topic with two partitions.
+ * Test running with multiple instances of parallel-consumer consuming from topic with two partitions.
  */
 @Slf4j
 public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<String, String> {
 
-    public static final int DEFAULT_MAX_POLL = 500;
-    public List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
+    static final int DEFAULT_MAX_POLL = 500;
+    List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
+    AtomicInteger count = new AtomicInteger();
 
     @ParameterizedTest
     @EnumSource(ProcessingOrder.class)
@@ -122,13 +117,18 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
         Assertions.useRepresentation(new TrimListRepresentation());
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
+        ProgressTracker progressTracker = new ProgressTracker(count);
         try {
-            waitAtMost(ofSeconds(120))
+            waitAtMost(ofSeconds(30))
 //                    .failFast(() -> pc1.isClosedOrFailed(), () -> pc1.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .alias(failureMessage)
                     .pollInterval(1, SECONDS)
                     .untilAsserted(() -> {
                         log.trace("Processed-count: {}", consumedKeys.size());
+                        if (progressTracker.hasProgressNotBeenMade()) {
+                            expectedKeys.removeAll(consumedKeys);
+                            throw new Exception("No progress, missing keys: " + expectedKeys);
+                        }
                         SoftAssertions all = new SoftAssertions();
                         all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").containsAll(expectedKeys);
 
@@ -149,6 +149,8 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
         pcExecutor.shutdown();
     }
 
+    int barId = 0;
+
     @Getter
     @RequiredArgsConstructor
     class ParallelConsumerRunnable implements Runnable {
@@ -159,6 +161,7 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
         private final String inputTopic;
         private final ProgressBar bar;
         private ParallelEoSStreamProcessor<String, String> parallelConsumer;
+
 
         @Override
         public void run() {
@@ -174,6 +177,7 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
                     .commitMode(commitMode)
                     .maxConcurrency(1)
                     .build());
+            parallelConsumer.setMyId(Optional.of("id: " + barId));
 
             parallelConsumer.subscribe(of(inputTopic));
 
@@ -184,7 +188,7 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
                         } catch (InterruptedException e) {
                             // ignore
                         }
-
+                        count.incrementAndGet();
                         bar.stepBy(1);
                         consumedKeys.add(record.key());
                     }
