@@ -99,7 +99,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
             return true;
         }
         Duration delay = getDelay(clock);
-        boolean negative = delay.isNegative();
+        boolean negative = delay.isNegative() || delay.isZero();
         return negative;
     }
 
