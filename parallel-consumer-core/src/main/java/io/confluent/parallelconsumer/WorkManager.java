@@ -723,7 +723,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *
      * @return true if epoch doesn't match, false if ok
      */
-    private boolean checkEpochIsStale(final WorkContainer<K, V> workContainer) {
+    boolean checkEpochIsStale(final WorkContainer<K, V> workContainer) {
         TopicPartition topicPartitionKey = workContainer.getTopicPartition();
 
         Integer currentPartitionEpoch = partitionsAssignmentEpochs.get(topicPartitionKey);

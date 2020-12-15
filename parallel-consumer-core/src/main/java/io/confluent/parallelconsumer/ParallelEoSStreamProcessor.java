@@ -922,6 +922,11 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
                 // for each record, construct dispatch to the executor and capture a Future
                 log.trace("Sending work ({}) to pool", work);
                 Future outputRecordFuture = workerPool.submit(() -> {
+                    boolean epochIsStale = wm.checkEpochIsStale(work);
+                    if (epochIsStale) {
+                        log.debug("Skipping message from old generation of assigned work, as epoch doesn't't match current {}", work);
+                        return;
+                    }
                     return userFunctionRunner(usersFunction, callback, work);
                 });
                 work.setFuture(outputRecordFuture);
