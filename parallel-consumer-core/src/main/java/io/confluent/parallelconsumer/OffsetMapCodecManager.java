@@ -100,7 +100,7 @@ public class OffsetMapCodecManager<K, V> {
         Map<TopicPartition, OffsetAndMetadata> committed = null;
         int attempts = 0;
         while (committed == null) {
-            WakeupException lastWakeupException;
+            WakeupException lastWakeupException = null;
             try {
                 committed = consumer.committed(assignment);
             } catch (WakeupException exception) {
