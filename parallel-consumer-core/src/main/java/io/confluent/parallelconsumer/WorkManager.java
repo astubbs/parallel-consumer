@@ -167,6 +167,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+        log.info("Partitions assigned: {}", partitions);
         incrementPartitionAssignmentEpoch(partitions);
 
         // init messages allowed state
@@ -175,9 +176,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
 
         try {
-            log.info("Partitions assigned: {}", partitions);
             Set<TopicPartition> partitionsSet = UniSets.copyOf(partitions);
-            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer);
+            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(this, this.consumer); // todo remove throw away instance creation
             om.loadOffsetMapForPartition(partitionsSet);
         } catch (Exception e) {
             log.error("Error in onPartitionsAssigned", e);
@@ -194,15 +194,19 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
-        incrementPartitionAssignmentEpoch(partitions);
+        log.info("WM Partitions revoked: {}", partitions);
 
         try {
-            log.info("Partitions revoked: {}", partitions);
-            resetOffsetMapAndRemoveWork(partitions);
+            onPartitionsRemoved(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsRevoked", e);
             throw e;
         }
+    }
+
+    private void onPartitionsRemoved(final Collection<TopicPartition> partitions) {
+        incrementPartitionAssignmentEpoch(partitions);
+        resetOffsetMapAndRemoveWork(partitions);
     }
 
     /**
@@ -210,11 +214,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
-        incrementPartitionAssignmentEpoch(partitions);
-
         try {
             log.info("Lost partitions: {}", partitions);
-            resetOffsetMapAndRemoveWork(partitions);
+            onPartitionsRemoved(partitions);
         } catch (Exception e) {
             log.error("Error in onPartitionsLost", e);
             throw e;
@@ -232,6 +234,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 log.trace("Removing empty commit queue");
             }
         }
+        wmbm.onPartitionsRemoved(partitions);
     }
 
     /**
@@ -243,10 +246,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // this all scanning loop could be avoided if we also store a map of unique keys found referenced when a
         // partition is assigned, but that could worst case grow forever
         for (WorkContainer<K, V> work : oldWorkPartitionQueue.values()) {
-            Object shardKey = computeShardKey(work.getCr());
-            log.debug("Removing expired work for shard key: {}", shardKey);
-            this.processingShards.remove(shardKey);
+            removeWorkFromShard(work);
         }
+    }
+
+    private void removeWorkFromShard(final WorkContainer<K, V> work) {
+        Object shardKey = computeShardKey(work.getCr());
+        log.debug("Removing expired work {} for shard key: {}", work, shardKey);
+        this.processingShards.remove(shardKey);
     }
 
     public void registerWork(List<ConsumerRecords<K, V>> records) {
@@ -404,7 +411,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
                 {
                     if (checkEpochIsStale(workContainer)) {
-                        log.error("Work is in queue with stale epoch. Was it not removed properly on revoke? {}", workContainer);
+                        // this state should never happen
+                        log.warn("Work is in queue with stale epoch. Will remove now. Was it not removed properly on revoke? Or are we in a race state? {}", workContainer);
+                        removeWorkFromShard(workContainer);
                     }
                 }
 
@@ -729,7 +738,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         Integer currentPartitionEpoch = partitionsAssignmentEpochs.get(topicPartitionKey);
         int workEpoch = workContainer.getEpoch();
         if (currentPartitionEpoch != workEpoch) {
-            log.warn("Epoch mismatch {} vs {} for record {} - were partitions lost? Skipping message - it's already assigned to a different consumer (possibly me).",
+            log.debug("Epoch mismatch {} vs {} for record {} - were partitions lost? Skipping message - it's already assigned to a different consumer (possibly me).",
                     workEpoch, currentPartitionEpoch, workContainer);
             return true;
         }
@@ -800,7 +809,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // https://github.com/confluentinc/parallel-consumer/pull/46 (partition epochs)
         if (checkEpochIsStale(wc)) {
             // no op, partition has been revoked
-            log.warn("Dropping work from revoked partition {}", wc);
+            log.warn("Work result received, but from an old generation. Dropping work from revoked partition {}", wc);
             // todo make sure work isn't in queues - should be already removed in on revoke or lost #removeShardsFoundIn
             return;
         }

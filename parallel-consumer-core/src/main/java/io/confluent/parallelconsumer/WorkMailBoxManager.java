@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.TopicPartition;
 
 import java.util.Collection;
 import java.util.LinkedList;
@@ -99,5 +100,15 @@ public class WorkMailBoxManager<K, V> {
         }
     }
 
+
+    public void onPartitionsRemoved(final Collection<TopicPartition> removedPartitions) {
+        log.debug("Removing stale work from inbox queues");
+        processInbox();
+        internalFlattenedMailQueue.removeIf(x -> {
+            TopicPartition topicPartition = new TopicPartition(x.topic(), x.partition());
+            boolean recordShouldBeRemoved = removedPartitions.contains(topicPartition);
+            return recordShouldBeRemoved;
+        });
+    }
 
 }
