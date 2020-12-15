@@ -80,7 +80,7 @@ class AntonyMultiInstanceTest extends BrokerIntegrationTest<String, String> {
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
             waitAtMost(ofSeconds(60))
-                    .failFast(() -> pcThree.isClosedOrFailed(), () -> pcThree.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
+//                    .failFast(() -> pcThree.isClosedOrFailed(), () -> pcThree.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .alias(failureMessage)
                     .pollInterval(1, SECONDS)
                     .untilAsserted(() -> {
