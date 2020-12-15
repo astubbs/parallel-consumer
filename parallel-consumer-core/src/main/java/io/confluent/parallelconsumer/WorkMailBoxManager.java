@@ -40,8 +40,6 @@ public class WorkMailBoxManager<K, V> {
      * the Concurrent queue, where this only needs one. Also as we don't expect there to be that many elements in these
      * collections (as they contain large batches of records), the overhead will be small.
      */
-    // TODO when partition state is also refactored, remove Getter
-    @Getter
     private final Queue<ConsumerRecord<K, V>> internalFlattenedMailQueue = new LinkedList<>();
 
     /**
@@ -87,7 +85,7 @@ public class WorkMailBoxManager<K, V> {
     /**
      * Take our inbound messages from the {@link BrokerPollSystem} and add them to our registry.
      */
-    public void processInbox() {
+    public synchronized void processInbox() {
         drainSharedMailbox();
 
         // flatten
@@ -100,8 +98,10 @@ public class WorkMailBoxManager<K, V> {
         }
     }
 
-
-    public void onPartitionsRemoved(final Collection<TopicPartition> removedPartitions) {
+    /**
+     * Remove revoked work from the mailbox
+     */
+    public synchronized void onPartitionsRemoved(final Collection<TopicPartition> removedPartitions) {
         log.debug("Removing stale work from inbox queues");
         processInbox();
         internalFlattenedMailQueue.removeIf(x -> {
@@ -111,4 +111,15 @@ public class WorkMailBoxManager<K, V> {
         });
     }
 
+    public synchronized boolean internalFlattenedMailQueueIsEmpty() {
+        return internalFlattenedMailQueue.isEmpty();
+    }
+
+    public synchronized ConsumerRecord<K, V> internalFlattenedMailQueuePoll() {
+        return internalFlattenedMailQueue.poll();
+    }
+
+    public int internalFlattenedMailQueueSize() {
+        return internalFlattenedMailQueue.size();
+    }
 }

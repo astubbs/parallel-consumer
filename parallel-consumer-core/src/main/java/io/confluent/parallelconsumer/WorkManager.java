@@ -272,14 +272,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         int gap = requestedMaxWorkToRetrieve;
         int taken = 0;
 
-        Queue<ConsumerRecord<K, V>> internalFlattenedMailQueue = wmbm.getInternalFlattenedMailQueue();
-
         log.debug("Will attempt to register the requested {} - {} available in internal mailbox",
-                requestedMaxWorkToRetrieve, internalFlattenedMailQueue.size());
+                requestedMaxWorkToRetrieve, wmbm.internalFlattenedMailQueueSize());
 
         //
-        while (taken < gap && !internalFlattenedMailQueue.isEmpty()) {
-            ConsumerRecord<K, V> poll = internalFlattenedMailQueue.poll();
+        while (taken < gap && !wmbm.internalFlattenedMailQueueIsEmpty()) {
+            ConsumerRecord<K, V> poll = wmbm.internalFlattenedMailQueuePoll();
             boolean takenAsWork = processInbox(poll);
             if (takenAsWork) {
                 taken++;
