@@ -22,10 +22,8 @@ import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.junitpioneer.jupiter.CartesianProductTest;
 
 import java.time.Duration;
 import java.util.*;
@@ -117,7 +115,7 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
         Assertions.useRepresentation(new TrimListRepresentation());
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
-        ProgressTracker progressTracker = new ProgressTracker(count);
+        ProgressTracker progressTracker = new ProgressTracker(count, 1);
         try {
             waitAtMost(ofSeconds(30))
 //                    .failFast(() -> pc1.isClosedOrFailed(), () -> pc1.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
@@ -149,7 +147,7 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
         pcExecutor.shutdown();
     }
 
-    int barId = 0;
+    int instanceId = 0;
 
     @Getter
     @RequiredArgsConstructor
@@ -161,7 +159,6 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
         private final String inputTopic;
         private final ProgressBar bar;
         private ParallelEoSStreamProcessor<String, String> parallelConsumer;
-
 
         @Override
         public void run() {
@@ -177,7 +174,8 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
                     .commitMode(commitMode)
                     .maxConcurrency(1)
                     .build());
-            parallelConsumer.setMyId(Optional.of("id: " + barId));
+            parallelConsumer.setMyId(Optional.of("id: " + instanceId));
+            instanceId++;
 
             parallelConsumer.subscribe(of(inputTopic));
 
