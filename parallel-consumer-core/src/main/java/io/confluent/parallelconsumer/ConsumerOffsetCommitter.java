@@ -144,7 +144,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 take = commitResponseQueue.take(); // blocks, drain until we find our response
                 commitResponded = take.getRequest().getId() == commitRequest.getId();
             } catch (InterruptedException e) {
-                log.debug("Interrupted waiting for commit resposne", e);
+                log.debug("Interrupted waiting for commit response", e);
             }
             attempts++;
         }
