@@ -177,7 +177,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     }
 
     public Duration getTimeInFlight() {
-        if (timeTakenAsWorkMs.isEmpty()) {
+        if (!timeTakenAsWorkMs.isPresent()) {
             return Duration.ZERO;
         }
         long millis = System.currentTimeMillis() - timeTakenAsWorkMs.get();
