@@ -384,6 +384,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         //
         var it = new LoopingResumingIterator<>(iterationResumePoint, processingShards);
 
+        var staleWorkToRemove = new ArrayList<WorkContainer<K, V>>();
+
         //
         for (var shard : it) {
             log.trace("Looking for work on shard: {}", shard.getKey());
@@ -411,7 +413,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     if (checkEpochIsStale(workContainer)) {
                         // this state should never happen
                         log.warn("Work is in queue with stale epoch. Will remove now. Was it not removed properly on revoke? Or are we in a race state? {}", workContainer);
-                        removeWorkFromShard(workContainer);
+                        staleWorkToRemove.add(workContainer);
                     }
                 }
 
@@ -458,6 +460,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 }
             }
             work.addAll(shardWork);
+        }
+
+        // remove found stale work outside of loop
+        for (final WorkContainer<K, V> kvWorkContainer : staleWorkToRemove) {
+            removeWorkFromShard(kvWorkContainer);
         }
 
         log.debug("Got {} records of work. In-flight: {}, Awaiting in commit queues: {}", work.size(), getNumberRecordsOutForProcessing(), getNumberOfEntriesInPartitionQueues());
