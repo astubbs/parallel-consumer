@@ -32,6 +32,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static io.confluent.csid.utils.StringUtils.msg;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -114,9 +115,9 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
 
         // wait for all pre-produced messages to be processed and produced
         Assertions.useRepresentation(new TrimListRepresentation());
-        var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed, within time (expected: {} commit: {} order: {} max poll: {})",
+        var failureMessage = msg("All keys sent to input-topic should be processed, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
-        ProgressTracker progressTracker = new ProgressTracker(count, 1);
+        ProgressTracker progressTracker = new ProgressTracker(count, 5);
         try {
             waitAtMost(ofSeconds(30))
 //                    .failFast(() -> pc1.isClosedOrFailed(), () -> pc1.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
@@ -126,7 +127,7 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
                         log.trace("Processed-count: {}", consumedKeys.size());
                         if (progressTracker.hasProgressNotBeenMade()) {
                             expectedKeys.removeAll(consumedKeys);
-                            throw new Exception("No progress, missing keys: " + expectedKeys);
+                            throw progressTracker.constructError(msg("No progress, missing keys: ", expectedKeys));
                         }
                         SoftAssertions all = new SoftAssertions();
                         all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").containsAll(expectedKeys);
