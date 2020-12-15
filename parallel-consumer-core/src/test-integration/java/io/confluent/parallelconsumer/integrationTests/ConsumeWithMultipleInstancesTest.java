@@ -63,6 +63,7 @@ public class ConsumeWithMultipleInstancesTest extends BrokerIntegrationTest<Stri
 
     @SneakyThrows
     private void runTest(int maxPoll, CommitMode commitMode, ProcessingOrder order) {
+        numPartitions = 2;
         String inputName = setupTopic(this.getClass().getSimpleName() + "-input-" + RandomUtils.nextInt());
 
         // pre-produce messages to input-topic
