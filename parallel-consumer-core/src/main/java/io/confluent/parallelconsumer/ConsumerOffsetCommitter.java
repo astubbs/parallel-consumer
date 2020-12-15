@@ -136,9 +136,9 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         CommitRequest commitRequest = requestCommitInternal();
 
         // wait
-        boolean commitResponded = false;
+        boolean waitingOnCommitResponse = true;
         int attempts = 0;
-        while (!commitResponded) {
+        while (waitingOnCommitResponse) {
             if (attempts > ARBITRARY_RETRY_LIMIT)
                 throw new InternalRuntimeError("Too many attempts taking commit responses");
 
@@ -148,7 +148,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 CommitResponse take = commitResponseQueue.poll(timeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
                 if (take == null)
                     throw new InternalRuntimeError(msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest));
-                commitResponded = take.getRequest().getId() == commitRequest.getId();
+                waitingOnCommitResponse = take.getRequest().getId() != commitRequest.getId();
             } catch (InterruptedException e) {
                 log.debug("Interrupted waiting for commit response", e);
             }
