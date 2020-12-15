@@ -598,7 +598,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         // run main pool loop in thread
         Callable<Boolean> controlTask = () -> {
             Thread controlThread = Thread.currentThread();
-            this.myId.ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
+            addInstanceMDC();
             controlThread.setName("control");
             log.trace("Control task scheduled");
             this.blockableControlThread = controlThread;
@@ -621,6 +621,13 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         Future<Boolean> controlTaskFutureResult = executorService.submit(controlTask);
         this.controlThreadFuture = Optional.of(controlTaskFutureResult);
+    }
+
+    /**
+     * Useful when testing with more than one instance
+     */
+    private void addInstanceMDC() {
+        this.myId.ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
     }
 
     /**
@@ -923,7 +930,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
                 // for each record, construct dispatch to the executor and capture a Future
                 log.trace("Sending work ({}) to pool", work);
                 Future outputRecordFuture = workerPool.submit(() -> {
-                    this.myId.ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
+                    addInstanceMDC();
                     return userFunctionRunner(usersFunction, callback, work);
                 });
                 work.setFuture(outputRecordFuture);
