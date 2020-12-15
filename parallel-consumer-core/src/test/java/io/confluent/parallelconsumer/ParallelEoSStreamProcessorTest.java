@@ -276,9 +276,9 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         parallelConsumer.requestCommitAsap();
 
-        waitForSomeLoopCycles(2);
+        waitForSomeLoopCycles(5); // async commit can be slow - todo change this to event based
 
-        // make sure only base offsets are committed
+        // make sure only base offsets are committed for partition (next expected = 0 and 2 respectively)
 //        assertCommits(of(2));
         assertCommitLists(of(of(), of(2)));
 
