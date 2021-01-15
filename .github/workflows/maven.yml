@@ -30,9 +30,9 @@ jobs:
         architecture: x64
     - name: Show java home
       run: which java
-   - name: Show java version
+    - name: Show java version
       run: java -version
-   - name: Show mvn version
+    - name: Show mvn version
       run: mvn -version
 #    - name: Build with Maven on Java 13
 #      run: mvn -B package --file pom.xml
