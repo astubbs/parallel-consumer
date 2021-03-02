@@ -18,6 +18,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import static io.confluent.csid.utils.KafkaUtils.toTP;
 
@@ -59,6 +60,9 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
      */
     private Duration retryDelay;
 
+    /**
+     * @see ParallelConsumerOptions#getDefaultMessageRetryDelay()
+     */
     @Setter
     static Duration defaultRetryDelay = Duration.ofSeconds(1);
 
@@ -121,10 +125,15 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer> {
     }
 
     public Duration getRetryDelay() {
-        if (retryDelay == null)
-            return defaultRetryDelay;
-        else
-            return retryDelay;
+        var retryDelayProvider = ParallelConsumerOptions.retryDelayProviderStatic;
+        if (retryDelayProvider != null) {
+            return retryDelayProvider.apply(this);
+        } else {
+            if (retryDelay == null)
+                return defaultRetryDelay;
+            else
+                return retryDelay;
+        }
     }
 
     @Override
