@@ -12,6 +12,10 @@ import org.apache.kafka.clients.producer.Producer;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -130,6 +134,22 @@ public class ParallelConsumerOptions<K, V> {
      */
     @Builder.Default
     private final Duration defaultMessageRetryDelay = Duration.ofSeconds(1);
+
+    /**
+     * Warning: Advanced use - to override the hard wired ThreadPoolFactory.
+     * <p>
+     * Make sure to set the max pool size to {@link #getMaxConcurrency()}, and to use a {@link LinkedBlockingQueue} for
+     * the queue implementation.
+     * <p>
+     * See: <a href="https://github.com/confluentinc/parallel-consumer/issues/78">Allow customization of the
+     * ThreadPoolExecutor #78</a>.
+     */
+    @Builder.Default
+    private final Supplier<ThreadPoolExecutor> threadPoolFactory;
+
+    Supplier<ThreadPoolExecutor> getThreadPoolFactory() {
+        return threadPoolFactory;
+    }
 
     public void validate() {
         Objects.requireNonNull(consumer, "A consumer must be supplied");

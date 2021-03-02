@@ -24,6 +24,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import static io.confluent.parallelconsumer.ParallelEoSStreamProcessor.State.*;
@@ -43,7 +44,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor<K, V>, ConsumerRebalanceListener, Closeable {
 
     public static final String MDC_INSTANCE_ID = "pcId";
-    private final ParallelConsumerOptions options;
+    private final ParallelConsumerOptions<K, V> options;
 
     /**
      * Injectable clock for testing
@@ -190,7 +191,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
      *
      * @see ParallelConsumerOptions
      */
-    public ParallelEoSStreamProcessor(ParallelConsumerOptions newOptions) {
+    public ParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions) {
         Objects.requireNonNull(newOptions, "Options must be supplied");
 
         log.info("Confluent Parallel Consumer initialise... Options: {}", newOptions);
@@ -203,8 +204,12 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         checkNotSubscribed(consumer);
         checkAutoCommitIsDisabled(consumer);
 
-        workerPool = new ThreadPoolExecutor(newOptions.getMaxConcurrency(), newOptions.getMaxConcurrency(),
-                0L, MILLISECONDS, new LinkedBlockingQueue<>());
+        if (newOptions.getThreadPoolFactory() == null) {
+            workerPool = new ThreadPoolExecutor(newOptions.getMaxConcurrency(), newOptions.getMaxConcurrency(),
+                    0L, MILLISECONDS, new LinkedBlockingQueue<>());
+        } else {
+            workerPool = newOptions.getThreadPoolFactory().get();
+        }
 
         this.wm = new WorkManager<>(newOptions, consumer, dynamicExtraLoadFactor);
 
