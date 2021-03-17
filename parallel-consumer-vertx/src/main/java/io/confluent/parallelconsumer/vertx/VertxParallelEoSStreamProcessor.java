@@ -19,6 +19,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.utils.Time;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
@@ -130,32 +131,54 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProc
             // send callback
             onSend.accept(send);
 
-            // attach internal handler
-            WorkContainer<K, V> wc = wm.getWorkContainerForRecord(record);
-            wc.setWorkType(VERTX_TYPE);
-
-            send.onSuccess(h -> {
-                log.debug("Vert.x Vertical success");
-                log.trace("Response body: {}", h.bodyAsString());
-                wc.onUserFunctionSuccess();
-                addToMailbox(wc);
-            });
-            send.onFailure(h -> {
-                log.error("Vert.x Vertical fail: {}", h.getMessage());
-                wc.onUserFunctionFailure();
-                addToMailbox(wc);
-            });
-
-            // add plugin callback hook
-            send.onComplete(ar -> {
-                log.trace("Running plugin hook");
-                this.onVertxCompleteHook.ifPresent(Runnable::run);
-            });
+            addVertxHooks(record, send);
 
             return UniLists.of(send);
         };
 
         Consumer<Future<HttpResponse<Buffer>>> noOp = (ignore) -> {
+        }; // don't need it, we attach to vertx futures for callback
+
+        super.supervisorLoop(userFuncWrapper, noOp);
+    }
+
+    private void addVertxHooks(final ConsumerRecord<K, V> record, final Future<?> send) {
+        // attach internal handler
+        WorkContainer<K, V> wc = wm.getWorkContainerForRecord(record);
+        wc.setWorkType(VERTX_TYPE);
+
+        send.onSuccess(h -> {
+            log.debug("Vert.x Vertical success");
+//            log.trace("Response body: {}", h.bodyAsString());
+            wc.onUserFunctionSuccess();
+            addToMailbox(wc);
+        });
+        send.onFailure(h -> {
+            log.error("Vert.x Vertical fail: {}", h.getMessage());
+            wc.onUserFunctionFailure();
+            addToMailbox(wc);
+        });
+
+        // add plugin callback hook
+        send.onComplete(ar -> {
+            log.trace("Running plugin hook");
+            this.onVertxCompleteHook.ifPresent(Runnable::run);
+        });
+    }
+
+    @Override
+    public void vertxFuture(final Function<ConsumerRecord<K, V>, Future<?>> result) {
+
+        Function<ConsumerRecord<K, V>, List<Future<?>>> userFuncWrapper = record -> {
+
+            Future<?> send = carefullyRun(result, record);
+
+            addVertxHooks(record, send);
+
+            return UniLists.of(send);
+        };
+
+        Consumer<Future<?>> noOp = ignore -> {
         }; // don't need it, we attach to vertx futures for callback
 
         super.supervisorLoop(userFuncWrapper, noOp);

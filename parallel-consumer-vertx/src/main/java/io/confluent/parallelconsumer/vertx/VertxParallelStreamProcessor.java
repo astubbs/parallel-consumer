@@ -15,14 +15,16 @@ import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerRecord;
 
+import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * An extension to {@link ParallelEoSStreamProcessor} which uses the <a href="https://vertx.io">Vert.x</a> library and it's non
- * blocking clients to process messages.
+ * An extension to {@link ParallelEoSStreamProcessor} which uses the <a href="https://vertx.io">Vert.x</a> library and
+ * it's non blocking clients to process messages.
  *
  * @param <K>
  * @param <V>
@@ -46,6 +48,8 @@ public interface VertxParallelStreamProcessor<K, V> extends ParallelStreamProces
      *
      * @param requestInfoFunction  a function taking a {@link ConsumerRecord} and returns a {@link
      *                             VertxParallelEoSStreamProcessor.RequestInfo} object
+     * @param onSend
+     * @param onWebRequestComplete
      */
     void vertxHttpReqInfo(Function<ConsumerRecord<K, V>, VertxParallelEoSStreamProcessor.RequestInfo> requestInfoFunction,
                           Consumer<Future<HttpResponse<Buffer>>> onSend,
@@ -56,6 +60,8 @@ public interface VertxParallelStreamProcessor<K, V> extends ParallelStreamProces
      *
      * @param webClientRequestFunction Given the {@link WebClient} and a {@link ConsumerRecord}, return us the {@link
      *                                 HttpRequest}
+     * @param onSend
+     * @param onWebRequestComplete
      */
     void vertxHttpRequest(BiFunction<WebClient, ConsumerRecord<K, V>, HttpRequest<Buffer>> webClientRequestFunction,
                           Consumer<Future<HttpResponse<Buffer>>> onSend,
@@ -74,4 +80,9 @@ public interface VertxParallelStreamProcessor<K, V> extends ParallelStreamProces
      */
     void vertxHttpWebClient(BiFunction<WebClient, ConsumerRecord<K, V>, Future<HttpResponse<Buffer>>> webClientRequestFunction,
                             Consumer<Future<HttpResponse<Buffer>>> onSend);
+
+    /**
+     * todo docs result
+     */
+    void vertxFuture(final Function<ConsumerRecord<K, V>, Future<?>> result);
 }
