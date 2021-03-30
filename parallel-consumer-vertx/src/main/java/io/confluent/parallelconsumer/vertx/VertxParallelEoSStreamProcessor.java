@@ -20,7 +20,7 @@ import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.utils.Time;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
@@ -111,11 +111,73 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProc
      * This thread is only used to dispatch the work to vert.x.
      * <p>
      * TODO optimise thread usage by not using any extra thread here at all - go straight from the control thread to
-     *  vert.x.
+     * vert.x.
      */
     @Override
     protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
         return super.setupWorkerPool(1);
+    }
+
+
+    /**
+     * @deprecated Invalid to use core API from the Vert.x context. Method will be removed in future versions. Either
+     *         use the vertx* methods, or use the core library.
+     */
+    @Deprecated(forRemoval = true, since = "0.3.0.1")
+    @Override
+    public void poll(final Consumer<ConsumerRecord<K, V>> usersVoidConsumptionFunction) {
+        callVanillaApi();
+    }
+
+    /**
+     * Prevent accidental use of core API from vanilla context. This is a band aid until a common ancestor is refactored
+     * so that the core api can be removed from the vert.x module.
+     *
+     * @see ParallelEoSStreamProcessor
+     */
+    private void callVanillaApi() {
+        throw new UnsupportedOperationException("Cannot use core interface from the Vert.x context. " +
+                "If you don't want to use the various vertx* APIs, use the core ParallelConsumer module.");
+    }
+
+    /**
+     * @deprecated Invalid to use core API from the Vert.x context. Method will be removed in future versions. Either
+     *         use the vertx* methods, or use the core library.
+     */
+    @Deprecated(forRemoval = true, since = "0.3.0.1")
+    @Override
+    public void pollAndProduceMany(final Function<ConsumerRecord<K, V>, List<ProducerRecord<K, V>>> userFunction, final Consumer<ConsumeProduceResult<K, V, K, V>> callback) {
+        callVanillaApi();
+    }
+
+    /**
+     * @deprecated Invalid to use core API from the Vert.x context. Method will be removed in future versions. Either
+     *         use the vertx* methods, or use the core library.
+     */
+    @Deprecated(forRemoval = true, since = "0.3.0.1")
+    @Override
+    public void pollAndProduceMany(final Function<ConsumerRecord<K, V>, List<ProducerRecord<K, V>>> userFunction) {
+        callVanillaApi();
+    }
+
+    /**
+     * @deprecated Invalid to use core API from the Vert.x context. Method will be removed in future versions. Either
+     *         use the vertx* methods, or use the core library.
+     */
+    @Deprecated(forRemoval = true, since = "0.3.0.1")
+    @Override
+    public void pollAndProduce(final Function<ConsumerRecord<K, V>, ProducerRecord<K, V>> userFunction) {
+        callVanillaApi();
+    }
+
+    /**
+     * @deprecated Invalid to use core API from the Vert.x context. Method will be removed in future versions. Either
+     *         use the vertx* methods, or use the core library.
+     */
+    @Deprecated(forRemoval = true, since = "0.3.0.1")
+    @Override
+    public void pollAndProduce(final Function<ConsumerRecord<K, V>, ProducerRecord<K, V>> userFunction, final Consumer<ConsumeProduceResult<K, V, K, V>> callback) {
+        callVanillaApi();
     }
 
     @Override
