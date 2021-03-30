@@ -9,7 +9,6 @@ import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.clients.producer.internals.TransactionManager;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.utils.Timer;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -83,7 +82,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     /**
      * Nasty reflection but better than relying on user supplying their config
      *
-     * @see ParallelEoSStreamProcessor#checkAutoCommitIsDisabled
+     * @see AbstractParallelStreamProcessor#checkAutoCommitIsDisabled
      */
     @SneakyThrows
     private boolean getProducerIsTransactional() {

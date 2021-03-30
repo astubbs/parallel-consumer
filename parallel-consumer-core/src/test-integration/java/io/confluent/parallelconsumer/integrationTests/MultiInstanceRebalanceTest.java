@@ -5,10 +5,10 @@ package io.confluent.parallelconsumer.integrationTests;
  */
 
 import io.confluent.csid.utils.*;
+import io.confluent.parallelconsumer.AbstractParallelStreamProcessor;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
@@ -27,14 +27,12 @@ import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
-import java.lang.reflect.Array;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 import static io.confluent.csid.utils.StringUtils.msg;
 import static java.time.Duration.ofSeconds;
@@ -166,7 +164,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         private final ProcessingOrder order;
         private final String inputTopic;
         private final ProgressBar bar;
-        private ParallelEoSStreamProcessor<String, String> parallelConsumer;
+        private AbstractParallelStreamProcessor<String, String> parallelConsumer;
 
         @Override
         public void run() {
@@ -176,7 +174,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
             consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPoll);
             KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
 
-            this.parallelConsumer = new ParallelEoSStreamProcessor<String, String>(ParallelConsumerOptions.<String, String>builder()
+            this.parallelConsumer = new AbstractParallelStreamProcessor<String, String>(ParallelConsumerOptions.<String, String>builder()
                     .ordering(order)
                     .consumer(newConsumer)
                     .commitMode(commitMode)

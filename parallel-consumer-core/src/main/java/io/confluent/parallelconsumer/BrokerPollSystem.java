@@ -22,9 +22,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 
 import static io.confluent.csid.utils.BackportUtils.toSeconds;
-import static io.confluent.parallelconsumer.ParallelEoSStreamProcessor.MDC_INSTANCE_ID;
-import static io.confluent.parallelconsumer.ParallelEoSStreamProcessor.State.closed;
-import static io.confluent.parallelconsumer.ParallelEoSStreamProcessor.State.running;
+import static io.confluent.parallelconsumer.AbstractParallelStreamProcessor.MDC_INSTANCE_ID;
+import static io.confluent.parallelconsumer.AbstractParallelStreamProcessor.State.closed;
+import static io.confluent.parallelconsumer.AbstractParallelStreamProcessor.State.running;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -38,14 +38,14 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private final ConsumerManager<K, V> consumerManager;
 
-    private ParallelEoSStreamProcessor.State state = running;
+    private AbstractParallelStreamProcessor.State state = running;
 
     private Optional<Future<Boolean>> pollControlThreadFuture;
 
     @Getter
     private volatile boolean paused = false;
 
-    private final ParallelEoSStreamProcessor<K, V> pc;
+    private final AbstractParallelStreamProcessor<K, V> pc;
 
     private Optional<ConsumerOffsetCommitter<K, V>> committer = Optional.empty();
 
@@ -59,7 +59,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private final WorkManager<K, V> wm;
 
-    public BrokerPollSystem(ConsumerManager<K, V> consumerMgr, WorkManager<K, V> wm, ParallelEoSStreamProcessor<K, V> pc, final ParallelConsumerOptions options) {
+    public BrokerPollSystem(ConsumerManager<K, V> consumerMgr, WorkManager<K, V> wm, AbstractParallelStreamProcessor<K, V> pc, final ParallelConsumerOptions options) {
         this.wm = wm;
         this.pc = pc;
 
@@ -141,7 +141,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         // make sure everything is committed
         if (isResponsibleForCommits() && !wm.isRecordsAwaitingToBeCommitted()) {
             // transition to closing
-            state = ParallelEoSStreamProcessor.State.closing;
+            state = AbstractParallelStreamProcessor.State.closing;
         } else {
             log.trace("Draining, but work still needs to be committed. Yielding thread to avoid busy wait.");
             try {
@@ -190,9 +190,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     public void drain() {
         // idempotent
-        if (state != ParallelEoSStreamProcessor.State.draining) {
+        if (state != AbstractParallelStreamProcessor.State.draining) {
             log.debug("Signaling poll system to drain, waking up consumer...");
-            state = ParallelEoSStreamProcessor.State.draining;
+            state = AbstractParallelStreamProcessor.State.draining;
             consumerManager.wakeup();
         }
     }
@@ -249,7 +249,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private void transitionToClosing() {
         log.debug("Poller transitioning to closing, waking up consumer");
-        state = ParallelEoSStreamProcessor.State.closing;
+        state = AbstractParallelStreamProcessor.State.closing;
         consumerManager.wakeup();
     }
 

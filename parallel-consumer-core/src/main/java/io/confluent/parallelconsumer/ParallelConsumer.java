@@ -17,11 +17,11 @@ import java.util.regex.Pattern;
  * Asynchronous / concurrent message consumer for Kafka.
  * <p>
  * Currently there is no direct implementation, only the {@link ParallelStreamProcessor} version (see {@link
- * ParallelEoSStreamProcessor}), but there may be in the future.
+ * AbstractParallelStreamProcessor}), but there may be in the future.
  *
  * @param <K> key consume / produce key type
  * @param <V> value consume / produce value type
- * @see ParallelEoSStreamProcessor
+ * @see AbstractParallelStreamProcessor
  * @see #poll(Consumer)
  */
 // end::javadoc[]

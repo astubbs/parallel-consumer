@@ -4,9 +4,8 @@ package io.confluent.parallelconsumer.vertx;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
-import io.confluent.parallelconsumer.DrainingCloseable;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import io.confluent.parallelconsumer.AbstractParallelStreamProcessor;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -21,12 +20,12 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * An extension to {@link ParallelEoSStreamProcessor} which uses the <a href="https://vertx.io">Vert.x</a> library and it's non
+ * An extension to {@link AbstractParallelStreamProcessor} which uses the <a href="https://vertx.io">Vert.x</a> library and it's non
  * blocking clients to process messages.
  *
  * @param <K>
  * @param <V>
- * @see ParallelEoSStreamProcessor
+ * @see AbstractParallelStreamProcessor
  * @see #vertxHttpReqInfo(Function, Consumer, Consumer)
  */
 public interface VertxParallelStreamProcessor<K, V> extends ParallelStreamProcessor<K, V> {

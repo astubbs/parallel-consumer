@@ -144,7 +144,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
 
             try {
                 log.debug("Waiting on a commit response");
-                Duration timeout = ParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
+                Duration timeout = AbstractParallelStreamProcessor.DEFAULT_TIMEOUT;
                 CommitResponse take = commitResponseQueue.poll(timeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
                 if (take == null)
                     throw new InternalRuntimeError(msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest));

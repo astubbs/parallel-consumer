@@ -3,8 +3,8 @@ package io.confluent.parallelconsumer.integrationTests;
 import io.confluent.csid.utils.ProgressBarUtils;
 import io.confluent.csid.utils.StringUtils;
 import io.confluent.csid.utils.TrimListRepresentation;
+import io.confluent.parallelconsumer.AbstractParallelStreamProcessor;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
@@ -58,9 +58,9 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         produceMessages(inputTopicName, expectedKeys, expectedMessageCount);
 
         // setup
-        ParallelEoSStreamProcessor<String, String> pcOne = buildPc(inputTopicName, expectedMessageCount);
-        ParallelEoSStreamProcessor<String, String> pcTwo = buildPc(inputTopicName, expectedMessageCount);
-        ParallelEoSStreamProcessor<String, String> pcThree = buildPc(inputTopicName, expectedMessageCount);
+        AbstractParallelStreamProcessor<String, String> pcOne = buildPc(inputTopicName, expectedMessageCount);
+        AbstractParallelStreamProcessor<String, String> pcTwo = buildPc(inputTopicName, expectedMessageCount);
+        AbstractParallelStreamProcessor<String, String> pcThree = buildPc(inputTopicName, expectedMessageCount);
 
         // run
         var consumedByOne = Collections.synchronizedList(new ArrayList<ConsumerRecord<?, ?>>());
@@ -101,7 +101,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
 
     Integer barId = 0;
 
-    private ProgressBar run(final int expectedMessageCount, final ParallelEoSStreamProcessor<String, String> pc, List<ConsumerRecord<?, ?>> consumed) {
+    private ProgressBar run(final int expectedMessageCount, final AbstractParallelStreamProcessor<String, String> pc, List<ConsumerRecord<?, ?>> consumed) {
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
         bar.setExtraMessage("#" + barId);
         pc.setMyId(Optional.of("id: " + barId));
@@ -141,8 +141,8 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
 //        return new ProducerRecord<>(outputName, record.key(), "data");
     }
 
-    private ParallelEoSStreamProcessor<String, String> buildPc(final String inputName,
-                                                               final int expectedMessageCount) {
+    private AbstractParallelStreamProcessor<String, String> buildPc(final String inputName,
+                                                                    final int expectedMessageCount) {
         log.debug("Starting test");
 //        KafkaProducer<String, String> newProducer = kcu.createNewProducer(commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER));
 
@@ -150,7 +150,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPoll);
         KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
 
-        var pc = new ParallelEoSStreamProcessor<String, String>(ParallelConsumerOptions.<String, String>builder()
+        var pc = new AbstractParallelStreamProcessor<String, String>(ParallelConsumerOptions.<String, String>builder()
                 .ordering(order)
                 .consumer(newConsumer)
                 .commitMode(commitMode)
