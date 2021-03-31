@@ -313,7 +313,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
             raisePartitionHighWaterMark(offset, tp);
 
-            processingShards.computeIfAbsent(shardKey, (ignore) -> new TreeMap<>()).put(offset, wc);
+            processingShards.computeIfAbsent(shardKey, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
 
             partitionCommitQueues.computeIfAbsent(tp, (ignore) -> new ConcurrentSkipListMap<>()).put(offset, wc);
 
