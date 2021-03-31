@@ -111,7 +111,7 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProc
      * This thread is only used to dispatch the work to vert.x.
      * <p>
      * TODO optimise thread usage by not using any extra thread here at all - go straight from the control thread to
-     *  vert.x.
+     * vert.x.
      */
     @Override
     protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
@@ -166,6 +166,9 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProc
 
             // attach internal handler
             WorkContainer<K, V> wc = wm.getWorkContainerForRecord(record);
+            if (wc == null) {
+                log.error("null");
+            }
             wc.setWorkType(VERTX_TYPE);
 
             futureWebResponse.onSuccess(h -> {

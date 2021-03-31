@@ -432,13 +432,13 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
     @SneakyThrows
     public void close(Duration timeout, DrainingMode drainMode) {
         if (state == closed) {
-            log.info("Already closed, checking end state..");
+            log.debug("Already closed, checking end state..");
         } else {
-            log.info("Signaling to close...");
+            log.debug("Signaling to close...");
 
             switch (drainMode) {
                 case DRAIN -> {
-                    log.info("Will wait for all in flight to complete before");
+                    log.debug("Will wait for all in flight to complete before");
                     transitionToDraining();
                 }
                 case DONT_DRAIN -> {
@@ -456,11 +456,11 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
             future.get(toSeconds(timeout), SECONDS); // throws exception if supervisor saw one
         }
 
-        log.info("Close complete.");
+        log.debug("Close complete.");
     }
 
     private void waitForClose(Duration timeout) throws TimeoutException, ExecutionException {
-        log.info("Waiting on closed state...");
+        log.debug("Waiting on closed state...");
         while (!state.equals(closed)) {
             try {
                 Future<Boolean> booleanFuture = this.controlThreadFuture.get();
@@ -599,7 +599,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
 
     protected <R> void supervisorLoop(Function<ConsumerRecord<K, V>, List<R>> userFunction,
                                       Consumer<R> callback) {
-        log.info("Control loop starting up...");
+        log.debug("Control loop starting up...");
 
         if (state != State.unused) {
             throw new IllegalStateException(msg("Invalid state - the consumer cannot be used more than once (current " +
@@ -625,7 +625,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
                     throw failureReason;
                 }
             }
-            log.info("Control loop ending clean (state:{})...", state);
+            log.debug("Control loop ending clean (state:{})...", state);
             return true;
         };
 

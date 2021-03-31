@@ -199,7 +199,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
-        log.info("Partitions revoked: {}", partitions);
+        log.debug("Partitions revoked: {}", partitions);
 
         try {
             onPartitionsRemoved(partitions);

@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.integrationTests.utils;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -100,6 +101,7 @@ public class KafkaClientUtils {
         if (newConsumerGroup) {
             props.put(ConsumerConfig.GROUP_ID_CONFIG, "group-1-" + RandomUtils.nextInt()); // new group
         }
+        props.setProperty("group.initial.rebalance.delay.ms", "0");
         props.putAll(options);
         KafkaConsumer<K, V> kvKafkaConsumer = new KafkaConsumer<>(props);
         log.debug("New consume {}", kvKafkaConsumer);
