@@ -68,6 +68,9 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 
 toc::[]
 
+image::https://asciinema.org/a/404299[align="center",link="https://asciinema.org/a/404299"]
+
+
 == Motivation
 
 === Why would I need this?
