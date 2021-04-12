@@ -70,6 +70,9 @@ It also opens up new use cases like extreme parallelism, external data enrichmen
 
 toc::[]
 
+image::https://asciinema.org/a/404299.svg[link="https://asciinema.org/a/404299"]
+
+
 == Motivation
 
 === Why would I need this?

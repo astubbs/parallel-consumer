@@ -68,7 +68,7 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 
 toc::[]
 
-image::https://asciinema.org/a/404299[align="center",link="https://asciinema.org/a/404299"]
+image::https://asciinema.org/a/404299.svg[link="https://asciinema.org/a/404299"]
 
 
 == Motivation
