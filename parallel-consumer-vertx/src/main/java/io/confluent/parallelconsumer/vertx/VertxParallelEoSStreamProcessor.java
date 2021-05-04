@@ -281,4 +281,27 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProc
         }
     }
 
+    @Override
+    protected boolean isPoolQueueLow() {
+        vertx.eventBus().
+        return super.isPoolQueueLow();
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 }

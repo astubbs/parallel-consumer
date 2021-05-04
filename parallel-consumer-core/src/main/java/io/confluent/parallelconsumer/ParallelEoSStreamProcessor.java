@@ -769,7 +769,7 @@ public class ParallelEoSStreamProcessor<K, V> implements ParallelStreamProcessor
         return options.getMaxConcurrency();
     }
 
-    private boolean isPoolQueueLow() {
+    protected boolean isPoolQueueLow() {
         int queueSize = getWorkerQueueSize();
         int queueTarget = getPoolQueueTarget();
         boolean workAmountBelowTarget = queueSize <= queueTarget;
