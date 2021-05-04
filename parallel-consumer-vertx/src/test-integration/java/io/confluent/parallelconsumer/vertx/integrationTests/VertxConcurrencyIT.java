@@ -57,7 +57,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
 class VertxConcurrencyIT extends BrokerIntegrationTest {
 
     private static ProgressBar bar;
-    static final int expectedMessageCount = 200;
+    static final int expectedMessageCount = 200_000;
 
     public List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
     public AtomicInteger processedCount = new AtomicInteger(0);
@@ -76,7 +76,7 @@ class VertxConcurrencyIT extends BrokerIntegrationTest {
     @BeforeAll
     public static void setupWireMock() {
         WireMockConfiguration options = wireMockConfig().dynamicPort()
-                .containerThreads(expectedMessageCount * 2); // ensure wiremock has enough threads to respond to everything in parallel
+                .containerThreads(500); // ensure wiremock has enough threads to respond to everything in parallel
 
         stubServer = new WireMockServer(options);
         MappingBuilder mappingBuilder = get(urlPathEqualTo("/"))
