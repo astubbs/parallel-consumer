@@ -17,6 +17,7 @@
             <!--            <pattern>%highlight(%-5level) %yellow([%thread]) %blue(\(%file:%line\)) %cyan(#%M) %msg%n</pattern>-->
             <pattern>%d{mm:ss.SSS} %X{pcId} %highlight(%-5level) %yellow([%thread]) %X{offset} %cyan(\(%file:%line#%M\)) %msg%n
             </pattern>
+            <pattern>%msg%n</pattern>
             <!--            <pattern>%highlight(%-5level) %yellow([%thread]) %cyan(\(%logger{36}:%line#%M\))  %msg%n</pattern>-->
         </encoder>
     </appender>
@@ -26,7 +27,9 @@
     </root>
 
     <!-- primary -->
-    <logger name="io.confluent.parallelconsumer" level="info"/>
+    <logger name="io.confluent.parallelconsumer" level="warn"/>
+    <logger name="io.confluent.parallelconsumer.vertx.integrationTests" level="info"/>
+
 <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
 <!--        <logger name="io.confluent.parallelconsumer" level="trace"/>-->
 <!--            <logger name="io.confluent.parallelconsumer.ParallelEoSStreamProcessor" level="trace"/>-->

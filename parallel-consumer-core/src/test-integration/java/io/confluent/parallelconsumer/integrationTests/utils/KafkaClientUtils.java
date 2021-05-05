@@ -73,7 +73,7 @@ public class KafkaClientUtils {
 
     @BeforeEach
     public void open() {
-        log.info("Setting up clients...");
+        log.debug("Setting up clients...");
         consumer = this.createNewConsumer();
         producer = this.createNewProducer(false);
         admin = AdminClient.create(props);

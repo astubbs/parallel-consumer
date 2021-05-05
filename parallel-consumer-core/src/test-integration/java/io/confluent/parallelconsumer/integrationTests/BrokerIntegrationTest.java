@@ -57,7 +57,7 @@ public abstract class BrokerIntegrationTest<K, V> {
     }
 
     @BeforeEach
-    void open() {
+    public void open() {
         kcu.open();
     }
 
