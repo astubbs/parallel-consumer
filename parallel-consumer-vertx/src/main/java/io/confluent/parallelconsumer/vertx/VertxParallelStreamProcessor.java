@@ -3,6 +3,7 @@ package io.confluent.parallelconsumer.vertx;
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
  */
+
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
@@ -38,6 +39,8 @@ public interface VertxParallelStreamProcessor<K, V> extends ParallelStreamProces
      * do the rest.
      * <p>
      * Useful for when the web request is very straight forward.
+     * <p>
+     * WARNING: Your user function must return quickly and not block in any way, otherwise it will block or slow down the submission of jobs to vert.x.
      *
      * @param requestInfoFunction  a function taking a {@link ConsumerRecord} and returns a {@link
      *                             VertxParallelEoSStreamProcessor.RequestInfo} object

@@ -3,6 +3,7 @@ package io.confluent.parallelconsumer.vertx;
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
  */
+
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.WorkContainer;
@@ -115,7 +116,7 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProc
      */
     @Override
     protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
-        return super.setupWorkerPool(1);
+        return super.setupWorkerPool(8);
     }
 
     @Override
@@ -241,7 +242,7 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProc
         // with vertx, a function hasn't succeeded until the inner vertx function has also succeeded
         // no op
         if (isVertxWork(resultsFromUserFunction)) {
-            log.debug("User function success but not adding vertx vertical to mailbox yet");
+            log.debug("User function success but not adding vertx vertical to mailbox until vert.x inner function succeeds");
         } else {
             super.addToMailBoxOnUserFunctionSuccess(wc, resultsFromUserFunction);
         }

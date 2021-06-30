@@ -257,7 +257,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private void removeWorkFromShard(final WorkContainer<K, V> work) {
         Object shardKey = computeShardKey(work.getCr());
         log.debug("Removing expired work {} for shard key: {}", work, shardKey);
-        this.processingShards.remove(shardKey);
+//        this.processingShards.remove(shardKey);
     }
 
     public void registerWork(List<ConsumerRecords<K, V>> records) {
@@ -500,10 +500,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         shard.remove(offset);
         // If using KEY ordering, where the shard key is a message key, garbage collect old shard keys (i.e. KEY ordering we may never see a message for this key again)
         boolean keyOrdering = options.getOrdering().equals(KEY);
-        if (keyOrdering && shard.isEmpty()) {
-            log.trace("Removing empty shard (key: {})", key);
-            processingShards.remove(key);
-        }
+//        if (keyOrdering && shard.isEmpty()) {
+//            log.trace("Removing empty shard (key: {})", key);
+//            processingShards.remove(key);
+//        }
         successfulWorkListeners.forEach((c) -> c.accept(wc)); // notify listeners
         numberRecordsOutForProcessing--;
     }

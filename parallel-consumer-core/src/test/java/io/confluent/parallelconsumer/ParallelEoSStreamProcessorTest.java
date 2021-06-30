@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.confluent.csid.utils.GeneralTestUtils.time;
@@ -244,8 +245,11 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
-    @SneakyThrows
-    public void offsetCommitsAreIsolatedPerPartition(CommitMode commitMode) {
+    void offsetCommitsAreIsolatedPerPartition(CommitMode commitMode) {
+        // test is very complicated to get to work with vert.x thread system, as the event and locking system needed is quite different
+        // todo disable this test for vert.x for now
+//        Assumptions.assumeThat(parallelConsumer).isExactlyInstanceOf(ParallelEoSStreamProcessor.class);
+
         setupParallelConsumerInstance(getBaseOptions(commitMode).toBuilder()
                 .ordering(UNORDERED)
                 .build());
@@ -254,8 +258,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         sendSecondRecord(consumerSpy);
 
         // send messages - 0,1, to one partition and 3,4 to another partition petitions
-        consumerSpy.addRecord(ktu.makeRecord(1, "0", "v2"));
-        consumerSpy.addRecord(ktu.makeRecord(1, "0", "v3"));
+        consumerSpy.addRecord(ktu.makeRecord(1, "0", "v2")); // msg 3
+        consumerSpy.addRecord(ktu.makeRecord(1, "0", "v3")); // msg 4
 
         var msg0Lock = new CountDownLatch(1);
         var msg1Lock = new CountDownLatch(1);
@@ -264,34 +268,35 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         List<CountDownLatch> locks = of(msg0Lock, msg1Lock, msg2Lock, msg3Lock);
 
-        parallelConsumer.poll((ignore) -> {
+        Consumer<ConsumerRecord<String, String>> end_of_message_processing = (ignore) -> {
             int offset = (int) ignore.offset();
             CountDownLatch latchForMsg = locks.get(offset);
             try {
                 latchForMsg.await();
             } catch (InterruptedException e) {
-                // ignore
+                log.warn("Interrupted {}:{} while waiting for lock release: {}", ignore.partition(), ignore.offset(), e.toString());
             }
-        });
+            log.debug("end of message processing {}:{}", ignore.partition(), ignore.offset());
+        };
 
-        // finish processing 1
+        runThingy(end_of_message_processing);
+
+        log.debug("finish processing 1" );
         releaseAndWait(locks, 1);
 
         parallelConsumer.requestCommitAsap();
 
         waitForSomeLoopCycles(5); // async commit can be slow - todo change this to event based
 
-        // make sure only base offsets are committed for partition (next expected = 0 and 2 respectively)
-//        assertCommits(of(2));
+        log.debug("make sure only base offsets are committed for partition (next expected offsets = 0 and 2 respectively for partition 0 and 1)");
         assertCommitLists(of(of(), of(2)));
 
-        // finish 2
+        log.debug("finish 2");
         releaseAndWait(locks, 2);
         parallelConsumer.requestCommitAsap();
         waitForOneLoopCycle();
 
-        // make sure only 2 on it's partition of committed
-//        assertCommits(of(2, 3));
+        log.debug("make sure only 2 on it's partition of committed");
         assertCommitLists(of(of(), of(2, 3)));
 
         // finish 0
@@ -303,7 +308,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         if (isUsingAsyncCommits())
             waitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
 
-        // make sure offset 0 and 1 is committed
+        log.debug("make sure offset 0 and 1 is committed");
         assertCommitLists(of(of(2), of(2, 3)));
 
         // finish 3
@@ -315,6 +320,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         //
         assertCommitLists(of(of(2), of(2, 3, 4)));
+    }
+
+    protected void runThingy(final Consumer<ConsumerRecord<String, String>> end_of_message_processing) {
+        parallelConsumer.poll(end_of_message_processing);
     }
 
     @Test
