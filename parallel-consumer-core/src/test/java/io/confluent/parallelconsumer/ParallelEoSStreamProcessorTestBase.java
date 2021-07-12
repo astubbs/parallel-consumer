@@ -176,7 +176,7 @@ public class ParallelEoSStreamProcessorTestBase {
 
     /**
      * Need to make sure we only use {@link ParallelEoSStreamProcessor#subscribe} methods, and not do manual assignment,
-     * otherwise rebalance listeneres don't fire (because there are never rebalances).
+     * otherwise rebalance listeners don't fire (because there are never rebalances).
      */
     protected void subscribeParallelConsumerAndMockConsumerTo(String topic) {
         List<String> of = of(topic);
