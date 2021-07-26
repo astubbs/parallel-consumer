@@ -18,6 +18,10 @@ import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.clients.producer.internals.TransactionManager;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.InterruptException;
+import org.apache.kafka.common.errors.InvalidProducerEpochException;
+import org.apache.kafka.common.errors.ProducerFencedException;
+import org.apache.kafka.common.errors.UnsupportedVersionException;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -228,10 +232,36 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 if (retryCount > 0) {
                     log.warn("Commit success, but took {} tries.", retryCount);
                 }
-            } catch (Exception e) {
+            }
+            /**
+             * r IllegalStateException  - if no transactional.id has been configured or no transaction has been started
+             * f ProducerFencedException - fatal error indicating another producer with the same transactional.id is active
+             * f UnsupportedVersionException - fatal error indicating the broker does not support transactions (i.e. if its version is lower than 0.11.0.0)
+             * f AuthorizationException - fatal error indicating that the configured transactional.id is not authorized. See the exception for more details
+             * u InvalidProducerEpochException - if the producer has attempted to produce with an old epoch to the partition leader. See the exception for more details
+             * u KafkaException - if the producer has encountered a previous fatal or abortable error, or for any other unexpected error
+             * r? TimeoutException - if the time taken for committing the transaction has surpassed max.block.ms.
+             * r InterruptException - if the thread is interrupted while blocked
+             */
+            // retriable
+            catch (IllegalStateException | InterruptException e) {
                 log.warn("Commit exception, will retry, have tried {} times (see KafkaProducer#commit)", retryCount, e);
                 lastErrorSavedForRethrow = e;
                 retryCount++;
+                // todoo this needs testing - throwing the exception here imediately doesn't fail any tests - need to test retries for certain producer exceptions
+            }
+            // fatal
+            catch (ProducerFencedException | UnsupportedVersionException | InvalidProducerEpochException e) {
+                // InvalidProducerEpochException - could potentially recover from, but it's a bit more
+                // involved - have to abort tx, resend offsets, then try commit again. Could implement if someone is
+                // concerned throwing the toys out of the cot with a fatal abort.
+                log.error("Fatal error committing offsets", e);
+                throw e;
+            }
+            // unknown
+            catch (KafkaException e) {
+                log.error("Unknown error committing offsets", e);
+                throw e;
             }
         }
     }
