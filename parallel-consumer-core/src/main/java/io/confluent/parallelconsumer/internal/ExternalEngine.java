@@ -36,15 +36,37 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
         int rawDelta = maxConcurrency - numberRecordsOutForProcessing;
 
         //
-        int delta = Math.max(0, rawDelta);
-        flog.at(Level.FINE).atMostEvery(1, TimeUnit.SECONDS)
-                .log("Target: %s. Out currently: %s. Will request extra: %s", maxConcurrency, numberRecordsOutForProcessing, delta);
+        int currentFactor = dynamicExtraLoadFactor.getCurrentFactor();
+        int pressured = maxConcurrency * currentFactor;
+        int pressuredDelta = pressured - numberRecordsOutForProcessing;
+
+        //
+        int delta = Math.max(0, pressuredDelta);
+        logger.at(Level.FINE).atMostEvery(1, TimeUnit.SECONDS)
+                .log("Target: %s, pressure: %s, factor: %s. Out: %s, to request: %s", maxConcurrency, pressured, currentFactor, numberRecordsOutForProcessing, delta);
         return delta;
     }
 
     @Override
     protected void checkPressure() {
-        // no-op - as calculateQuantityToRequest does not use a pressure system, unlike the core module
+        int maxConcurrency = getOptions().getMaxConcurrency();
+        boolean moreWorkInQueuesAvailableThatHaveNotBeenPulled = wm.getWorkQueuedInMailboxCount() > maxConcurrency;
+
+//        boolean close = MathUtils.isWithin(wm.getNumberRecordsOutForProcessing(), maxConcurrency, 10);
+        //if ((Math.abs(wm.getNumberRecordsOutForProcessing() - maxConcurrency) > maxConcurrency * 0.1)
+        if (wm.getNumberRecordsOutForProcessing() < (maxConcurrency * 0.9)
+//                && dynamicExtraLoadFactor.isWarmUpPeriodOver()
+                && moreWorkInQueuesAvailableThatHaveNotBeenPulled) {
+
+            boolean steppedUp = dynamicExtraLoadFactor.maybeStepUp();
+
+            if (steppedUp) {
+                log.debug("isPoolQueueLow(): Executor pool queue is not loaded with enough work (queue: {} vs target: {}), stepped up loading factor to {}",
+                        wm.getNumberRecordsOutForProcessing(), maxConcurrency, dynamicExtraLoadFactor.getCurrentFactor());
+            } else if (dynamicExtraLoadFactor.isMaxReached()) {
+                log.warn("isPoolQueueLow(): Max loading factor steps reached: {}/{}", dynamicExtraLoadFactor.getCurrentFactor(), dynamicExtraLoadFactor.getMaxFactor());
+            }
+        }
     }
 
     /**
