@@ -94,8 +94,9 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
 
     protected AtomicReference<Integer> loopCountRef;
 
-    volatile CountDownLatch loopLatchV = new CountDownLatch(0);
-    volatile CountDownLatch controlLoopPauseLatch = new CountDownLatch(0);
+    // todo volatile makes no sense here?
+    CountDownLatch loopLatchV = new CountDownLatch(0);
+    CountDownLatch controlLoopPauseLatch = new CountDownLatch(0);
     protected AtomicReference<Integer> loopCount;
 
     /**

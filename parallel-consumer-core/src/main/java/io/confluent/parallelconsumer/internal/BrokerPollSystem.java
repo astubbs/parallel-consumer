@@ -42,6 +42,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private Optional<Future<Boolean>> pollControlThreadFuture;
 
+    /**
+     * Shared between poller and controller - see public {@link #wakeupIfPaused()}. Single writer (poller), multi reader
+     * (controller). So uses volatile to "solve the visibility problem".
+     */
     @Getter
     private volatile boolean paused = false;
 

@@ -38,6 +38,7 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-examples</module>
+        <module>parallel-consumer-disrupter</module>
     </modules>
 
     <developers>
