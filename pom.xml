@@ -443,6 +443,7 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>animal-sniffer-maven-plugin</artifactId>
+                <version>1.21</version>
                 <executions>
                     <execution>
                         <id>check-java18</id>
@@ -452,7 +453,7 @@
                         </goals>
                         <configuration>
                             <signature>
-                                <groupId>org.codehaus.mojo.signature</groupId>
+                                <groupId>org.codehaus.mosdfsdfjo.signature</groupId>
                                 <artifactId>java18</artifactId>
                                 <version>1.0</version>
                             </signature>
