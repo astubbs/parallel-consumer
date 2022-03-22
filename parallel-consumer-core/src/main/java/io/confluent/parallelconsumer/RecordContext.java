@@ -9,6 +9,7 @@ import lombok.*;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -48,6 +49,10 @@ public class RecordContext<K, V> {
 
     public Optional<Instant> getLastFailureAt() {
         return workContainer.getLastFailedAt();
+    }
+
+    public List<WorkContainer.Failure> getFailureHistory() {
+        return workContainer.getFailureHistory();
     }
 }
 

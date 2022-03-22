@@ -6,10 +6,7 @@ package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.RecordContext;
-import lombok.AccessLevel;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.Setter;
+import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -18,9 +15,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.Temporal;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.Future;
 import java.util.function.Function;
 
@@ -52,15 +47,6 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     private final Clock clock;
 
-    @Getter
-    private int numberOfFailedAttempts = 0;
-
-    @Getter
-    private Optional<Instant> lastFailedAt = Optional.empty();
-
-    @Getter
-    private Optional<Throwable> lastFailureReason;
-
     private boolean inFlight = false;
 
     @Getter
@@ -71,6 +57,35 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     @Setter
     static Duration defaultRetryDelay = Duration.ofSeconds(1);
+
+    public Optional<Instant> getLastFailedAt() {
+        if (failureHistory.isEmpty())
+            return Optional.empty();
+        else
+            return Optional.of(failureHistory.getFirst().getTime());
+    }
+
+    @AllArgsConstructor
+    @Value
+    public static class Failure {
+        Instant time;
+        Throwable cause;
+
+        public Failure(Throwable e) {
+            this.time = Instant.now();
+            this.cause = e;
+        }
+    }
+
+    private final LinkedList<Failure> failureHistory = new LinkedList<>();
+
+    public List<Failure> getFailureHistory() {
+        return Collections.unmodifiableList(failureHistory);
+    }
+
+    public int getNumberOfFailedAttempts() {
+        return failureHistory.size();
+    }
 
     @Getter
     @Setter(AccessLevel.PUBLIC)
@@ -188,9 +203,12 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     private void updateFailureHistory(Throwable cause) {
-        numberOfFailedAttempts++;
-        lastFailedAt = Optional.of(Instant.now(clock));
-        lastFailureReason = Optional.of(cause);
+        Failure e = new Failure(cause);
+        failureHistory.addFirst(e);
+        // todo get limit from options
+        if (failureHistory.size() > 10) {
+            failureHistory.removeLast();
+        }
     }
 
     public boolean isUserFunctionComplete() {
