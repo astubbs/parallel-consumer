@@ -201,7 +201,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
                 OffsetMapCodecManager<String, String> om = new OffsetMapCodecManager<>(consumerSpy);
                 OffsetMapCodecManager.forcedCodec = Optional.empty(); // turn off forced
                 var state = wmm.getPm().getPartitionState(tp);
-                String bestPayload = om.makeOffsetMetadataPayload(1, state);
+                String bestPayload = om.makeOffsetMetadataPayload(state);
                 assertThat(bestPayload).isNotEmpty();
             }
         }

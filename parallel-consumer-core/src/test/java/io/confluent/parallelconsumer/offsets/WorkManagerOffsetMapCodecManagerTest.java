@@ -151,7 +151,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @SneakyThrows
     @Test
     void serialiseCycle() {
-        String serialised = offsetCodecManager.serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, state);
+        String serialised = offsetCodecManager.serialiseIncompleteOffsetMapToBase64(state);
         log.info("Size: {}", serialised.length());
 
         //
@@ -258,7 +258,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @SneakyThrows
     @Test
     void loadCompressedRunLengthEncoding() {
-        byte[] bytes = offsetCodecManager.encodeOffsetsCompressed(finalOffsetForPartition, state);
+        byte[] bytes = offsetCodecManager.encodeOffsetsCompressed(state);
         OffsetMapCodecManager.HighestOffsetAndIncompletes longs = OffsetMapCodecManager.decodeCompressedOffsets(finalOffsetForPartition, bytes);
         assertThat(longs.getIncompleteOffsets().toArray()).containsExactly(incompleteOffsets.toArray());
     }
@@ -317,7 +317,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @Test
     void largeOffsetMap() {
         injectSucceededWorkAtOffset(200); // force system to have seen a high offset
-        byte[] bytes = offsetCodecManager.encodeOffsetsCompressed(0L, state);
+        byte[] bytes = offsetCodecManager.encodeOffsetsCompressed(state);
         int smallestCompressionObserved = 10;
         assertThat(bytes).as("very small")
                 .hasSizeLessThan(smallestCompressionObserved); // arbitrary size expectation based on past observations - expect around 7
@@ -367,7 +367,7 @@ class WorkManagerOffsetMapCodecManagerTest {
     @SneakyThrows
     @Test
     void compressionCycle() {
-        byte[] serialised = offsetCodecManager.encodeOffsetsCompressed(finalOffsetForPartition, state);
+        byte[] serialised = offsetCodecManager.encodeOffsetsCompressed(state);
 
         OffsetMapCodecManager.HighestOffsetAndIncompletes deserialised = OffsetMapCodecManager.decodeCompressedOffsets(finalOffsetForPartition, serialised);
 
