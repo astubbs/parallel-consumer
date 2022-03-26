@@ -14,10 +14,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 
-import java.util.Collections;
-import java.util.NavigableMap;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.stream.Collectors;
@@ -111,6 +108,10 @@ public class PartitionState<K, V> {
         this.offsetHighestSeen = offsetData.getHighestSeenOffset().orElse(-1L);
         this.incompleteOffsets = new ConcurrentSkipListSet<>(offsetData.getIncompleteOffsets());
         this.offsetHighestSucceeded = this.offsetHighestSeen;
+    }
+
+    public PartitionState(TopicPartition tp) {
+        this(tp, OffsetMapCodecManager.HighestOffsetAndIncompletes.of());
     }
 
     private void maybeRaiseHighestSeenOffset(final long offset) {
@@ -230,10 +231,9 @@ public class PartitionState<K, V> {
      */
     public Set<Long> getIncompleteOffsetsBelowHighestSucceeded() {
         long highestSucceeded = getOffsetHighestSucceeded();
-        return Collections.unmodifiableSet(incompleteOffsets.parallelStream()
-                // todo less than or less than and equal?
-                .filter(x -> x < highestSucceeded)
-                .collect(Collectors.toSet()));
+        // todo less than or less than and equal?
+        NavigableSet<Long> raw = incompleteOffsets.headSet(Long.MAX_VALUE, true);
+        return Collections.unmodifiableSet(raw);
     }
 
     public long getOffsetHighestSequentialSucceeded() {

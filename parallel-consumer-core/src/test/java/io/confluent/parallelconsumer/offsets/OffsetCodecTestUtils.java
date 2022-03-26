@@ -22,7 +22,7 @@ public class OffsetCodecTestUtils {
      * <p>
      * o is incomplete
      */
-    static String incompletesToBitmapString(long finalOffsetForPartition, long highestSeen, Set<Long> incompletes) {
+    public static String incompletesToBitmapString(long finalOffsetForPartition, long highestSeen, Set<Long> incompletes) {
         var runLengthString = new StringBuilder();
         Long lowWaterMark = finalOffsetForPartition;
         long end = highestSeen - lowWaterMark;
@@ -37,7 +37,7 @@ public class OffsetCodecTestUtils {
         return runLengthString.toString();
     }
 
-    static String incompletesToBitmapString(long finalOffsetForPartition, PartitionState<?, ?> state) {
+    public static String incompletesToBitmapString(long finalOffsetForPartition, PartitionState<?, ?> state) {
         return incompletesToBitmapString(finalOffsetForPartition,
                 state.getOffsetHighestSeen(), state.getIncompleteOffsetsBelowHighestSucceeded());
     }
@@ -47,7 +47,7 @@ public class OffsetCodecTestUtils {
      * <p>
      * o is incomplete
      */
-    static Set<Long> bitmapStringToIncomplete(final long baseOffset, final String inputBitmapString) {
+    public static Set<Long> bitmapStringToIncomplete(final long baseOffset, final String inputBitmapString) {
         final Set<Long> incompleteOffsets = new HashSet<>();
 
         final long longLength = inputBitmapString.length();
