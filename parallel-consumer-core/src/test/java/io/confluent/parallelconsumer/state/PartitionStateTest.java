@@ -68,11 +68,22 @@ class PartitionStateTest {
         String metadata = offsetAndMetadata.metadata();
         Truth.assertThat(metadata).isNotEmpty();
 
-        List<Long> incompletes = range(workQueued + 1)
-                .without(highestSucceeded)
-                .greater(sequential)
-                .boxed().toList();
-        assertThat(state).hasIncompleteOffsetsBelowHighestSucceeded().containsExactlyElementsIn(incompletes);
+        {
+            List<Long> incompletes = range(highestSucceeded + 1)
+                    .without(highestSucceeded)
+                    .greater(sequential)
+                    .boxed().toList();
+
+            assertThat(state).hasIncompleteOffsetsBelowHighestSucceeded().containsExactlyElementsIn(incompletes);
+        }
+        {
+            List<Long> incompletes = range(workQueued + 1)
+                    .without(highestSucceeded)
+                    .greater(sequential)
+                    .boxed().toList();
+
+            assertThat(state).hasAllIncompleteOffsets().containsExactlyElementsIn(incompletes);
+        }
     }
 
     private void succeed(long offset) {
