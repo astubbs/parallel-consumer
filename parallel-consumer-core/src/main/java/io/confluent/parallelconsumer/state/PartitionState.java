@@ -233,7 +233,8 @@ public class PartitionState<K, V> {
      * @return incomplete offsets which are lower than the highest succeeded
      */
     public Set<Long> getIncompleteOffsetsBelowHighestSucceeded() {
-        long highestSucceeded = getOffsetHighestSucceeded();
+        //todo delete
+//        long highestSucceeded = getOffsetHighestSucceeded();
         // todo less than or less than and equal?
         NavigableSet<Long> raw = incompleteOffsets.headSet(Long.MAX_VALUE, true);
         return Collections.unmodifiableSet(raw);
