@@ -1,18 +1,15 @@
 package io.confluent.parallelconsumer.state;
 
-import io.confluent.csid.utils.TimeUtils;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
+import static io.confluent.parallelconsumer.state.ModelUtils.createWorkFor;
 import static one.util.streamex.LongStreamEx.range;
 
 @Slf4j
@@ -22,23 +19,17 @@ class PartitionStateTest {
     TopicPartition tp = new TopicPartition("myTopic", 0);
 
     PartitionState<String, String> state = new PartitionState<>(tp);
-
-    @Mock
-    ConsumerRecord<String, String> mockCr;
+//
+//    @Mock
+//    ConsumerRecord<String, String> mockCr;
 
     private void injectWorkAtOffset(long offset) {
         WorkContainer<String, String> workContainer = createWorkFor(offset);
         state.addWorkContainer(workContainer);
     }
 
-    private WorkContainer<String, String> createWorkFor(long offset) {
-        WorkContainer<String, String> workContainer = new WorkContainer<>(0, mockCr, null, TimeUtils.getClock());
-        Mockito.doReturn(offset).when(mockCr).offset();
-        return workContainer;
-    }
-
     @Test
-    void thing() {
+    void testBasics() {
         int sequential = 3;
         long highestSucceeded = 10;
         long workQueued = 15;
@@ -59,8 +50,7 @@ class PartitionStateTest {
 
         assertThat(state).hasCommitDataIfDirtyPresent();
 
-        // recursive truth generation not working
-        assertThat(state).getCommitDataIfDirty().getOffset().isEqualTo(sequential + 1L);
+        assertThat(state).getCommitDataIfDirty().getOffset().isEqualTo(sequential + 13L);
         assertThat(state).getCommitDataIfDirty().hasOffsetEqualTo(sequential + 1L);
         assertThat(state).getCommitDataIfDirty().getMetadata().isNotEmpty();
 
