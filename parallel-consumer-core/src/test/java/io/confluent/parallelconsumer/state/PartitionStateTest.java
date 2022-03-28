@@ -1,10 +1,8 @@
 package io.confluent.parallelconsumer.state;
 
-import com.google.common.truth.Truth;
 import io.confluent.csid.utils.TimeUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -51,22 +49,20 @@ class PartitionStateTest {
 
         range(sequential + 1).forEach(this::succeed);
 
-        assertThat(state).hasOffsetHighestSeen().isEqualTo(workQueued);
-        assertThat(state).hasOffsetHighestSucceeded().isEqualTo(highestSucceeded);
+        assertThat(state).getOffsetHighestSeen().isEqualTo(workQueued);
+        assertThat(state).getOffsetHighestSucceeded().isEqualTo(highestSucceeded);
 
-        assertThat(state).hasOffsetHighestSequentialSucceeded().isEqualTo(sequential);
-        assertThat(state).hasNextExpectedPolledOffset().isEqualTo(sequential + 1);
+        assertThat(state).getOffsetHighestSequentialSucceeded().isEqualTo(sequential);
+        assertThat(state).getNextExpectedPolledOffset().isEqualTo(sequential + 1);
 
         assertThat(state).isDirty();
 
         assertThat(state).hasCommitDataIfDirtyPresent();
 
         // recursive truth generation not working
-        OffsetAndMetadata offsetAndMetadata = state.getCommitDataIfDirty().get();
-        long offset = offsetAndMetadata.offset();
-        Truth.assertThat(offset).isEqualTo(sequential + 1);
-        String metadata = offsetAndMetadata.metadata();
-        Truth.assertThat(metadata).isNotEmpty();
+        assertThat(state).getCommitDataIfDirty().getOffset().isEqualTo(sequential + 1L);
+        assertThat(state).getCommitDataIfDirty().hasOffsetEqualTo(sequential + 1L);
+        assertThat(state).getCommitDataIfDirty().getMetadata().isNotEmpty();
 
         {
             List<Long> incompletes = range(highestSucceeded + 1)
@@ -74,7 +70,7 @@ class PartitionStateTest {
                     .greater(sequential)
                     .boxed().toList();
 
-            assertThat(state).hasIncompleteOffsetsBelowHighestSucceeded().containsExactlyElementsIn(incompletes);
+            assertThat(state).getIncompleteOffsetsBelowHighestSucceeded().containsExactlyElementsIn(incompletes);
         }
         {
             List<Long> incompletes = range(workQueued + 1)
@@ -82,7 +78,7 @@ class PartitionStateTest {
                     .greater(sequential)
                     .boxed().toList();
 
-            assertThat(state).hasAllIncompleteOffsets().containsExactlyElementsIn(incompletes);
+            assertThat(state).getAllIncompleteOffsets().containsExactlyElementsIn(incompletes);
         }
     }
 
