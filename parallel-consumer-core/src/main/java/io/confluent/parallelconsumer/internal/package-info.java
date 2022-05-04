@@ -1,0 +1,4 @@
+@ParametersAreNonnullByDefault
+package io.confluent.parallelconsumer.internal;
+
+import javax.annotation.ParametersAreNonnullByDefault;
