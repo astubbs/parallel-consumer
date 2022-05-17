@@ -818,6 +818,7 @@ ParallelEoSStreamProcessorTestBase#DEFAULT_COMMIT_INTERVAL_MAX_MS
 * AsciiDoc
 * CheckStyle
 * CodeGlance
+* EditorConfig
 * Rainbow Brackets
 * SonarLint
 * Lombok
