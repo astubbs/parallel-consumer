@@ -53,8 +53,6 @@ public class CoreApp {
     void run() {
         this.parallelConsumer = setupParallelConsumer();
 
-        postSetup();
-
         // tag::example[]
         parallelConsumer.poll(record ->
                 log.info("Concurrently processing a record: {}", record)

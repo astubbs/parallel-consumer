@@ -20,6 +20,7 @@
     <modules>
         <module>parallel-consumer-example-core</module>
         <module>parallel-consumer-example-streams</module>
+        <module>parallel-consumer-example-connect</module>
         <module>parallel-consumer-example-vertx</module>
         <module>parallel-consumer-example-reactor</module>
     </modules>
