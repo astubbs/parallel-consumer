@@ -14,9 +14,14 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 @UtilityClass
+
+
 public class Java8StreamUtils {
 
-    public static <T> Stream<T> setupStreamFromDeque(ConcurrentLinkedDeque<T> userProcessResultsStream) {
+    public static <T> Stream<T>
+
+
+    setupStreamFromDeque(ConcurrentLinkedDeque<T> userProcessResultsStream) {
         Spliterator<T> spliterator = Spliterators.spliterator(new Iterator<>() {
             @Override
             public boolean hasNext() {
