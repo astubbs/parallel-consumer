@@ -37,7 +37,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
 public class ConnectExampleApp {
 
 
-    private final String inputTopic = "input-topic-" + RandomUtils.nextInt();
+    final String inputTopic = "input-topic-" + RandomUtils.nextInt();
     private final String outputTopic = "output-topic-" + RandomUtils.nextInt();
     private final Converter keyConverter;
     private final Deque<SinkTask> taskQueue = new ArrayDeque<>();
@@ -47,7 +47,8 @@ public class ConnectExampleApp {
     ParallelStreamProcessor<byte[], byte[]> parallelConsumer;
 
     public ConnectExampleApp() {
-        Map<String, String> connProps = Map.of();
+        Map<String, String> connProps = Map.of("name", "pc-connect-test",
+                "connector.class", "org.apache.kafka.connect.file.FileStreamSinkConnector");
         ConnectorConfig connConfig = new ConnectorConfig(plugins, connProps);
         keyConverter = plugins.newConverter(connConfig, WorkerConfig.KEY_CONVERTER_CLASS_CONFIG,
                 Plugins.ClassLoaderUsage.CURRENT_CLASSLOADER);
@@ -65,10 +66,12 @@ public class ConnectExampleApp {
 
     @SuppressWarnings("UnqualifiedFieldAccess")
     void run() {
-//        SinkConnector connector = new FileStreamSinkConnector();
+        SinkConnector fileStreamSinkConnector = new FileStreamSinkConnector();
         SinkConnector connector = new MockSinkConnector();
 
-        List<Map<String, String>> taskConfigs = connector.taskConfigs(10);
+        int concurrency = 3;
+
+        List<Map<String, String>> taskConfigs = fileStreamSinkConnector.taskConfigs(concurrency);
 
 //        onAssigned(sinkTask);
 //        onLost(sinkTask);
@@ -79,7 +82,7 @@ public class ConnectExampleApp {
                 .map(config -> startTask(connector, config))
                 .forEach(this.taskQueue::offer);
 
-        this.parallelConsumer = setupParallelConsumer();
+        this.parallelConsumer = setupParallelConsumer(concurrency);
 
         // tag::example[]
         parallelConsumer.poll(context -> {
@@ -139,19 +142,19 @@ public class ConnectExampleApp {
         }
     }
 
-//    protected void postSetup() {
-//        // ignore
-//    }
+    protected void postSetup() {
+        // no-op
+    }
 
     @SuppressWarnings({"FeatureEnvy"})
-    ParallelStreamProcessor<byte[], byte[]> setupParallelConsumer() {
+    ParallelStreamProcessor<byte[], byte[]> setupParallelConsumer(int concurrency) {
         // tag::exampleSetup[]
         var kafkaConsumer = getKafkaConsumer(); // <1>
         var kafkaProducer = getKafkaProducer();
 
         var options = ParallelConsumerOptions.<byte[], byte[]>builder()
                 .ordering(KEY) // <2>
-                .maxConcurrency(1000) // <3>
+                .maxConcurrency(concurrency) // <3>
                 .consumer(kafkaConsumer)
                 .producer(kafkaProducer)
                 .build();

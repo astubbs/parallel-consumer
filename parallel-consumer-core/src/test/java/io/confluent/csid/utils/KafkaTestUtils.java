@@ -164,7 +164,7 @@ public class KafkaTestUtils {
                 .containsExactlyEntriesOf(expectedMap);
     }
 
-    public static void assertLastCommitIs(final LongPollingMockConsumer<String, String> mockConsumer, final int expected) {
+    public static void assertLastCommitIs(final LongPollingMockConsumer<?, ?> mockConsumer, final int expected) {
         List<Map<TopicPartition, OffsetAndMetadata>> commits = mockConsumer.getCommitHistoryInt();
         Assertions.assertThat(commits).isNotEmpty();
         long offset = (int) commits.get(commits.size() - 1).values().iterator().next().offset();
