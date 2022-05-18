@@ -225,7 +225,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      *
      * @see ParallelConsumerOptions
      */
-    public AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions) {
+    AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions, OffsetCommitter explicitCommitter) {
         Objects.requireNonNull(newOptions, "Options must be supplied");
 
         log.info("Confluent Parallel Consumer initialise... Options: {}", newOptions);
@@ -248,16 +248,25 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         this.brokerPollSubsystem = new BrokerPollSystem<>(consumerMgr, wm, this, newOptions);
 
+        // producer
         if (options.isProducerSupplied()) {
             this.producerManager = Optional.of(new ProducerManager<>(options.getProducer(), consumerMgr, this.wm, options));
+        } else {
+            this.producerManager = Optional.empty();
+        }
+
+        // committer
+        if (explicitCommitter != null) {
+            this.committer = explicitCommitter;
+        } else if (options.isProducerSupplied()) {
             if (options.isUsingTransactionalProducer())
                 this.committer = this.producerManager.get();
             else
                 this.committer = this.brokerPollSubsystem;
         } else {
-            this.producerManager = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
+
     }
 
     private void checkGroupIdConfigured(final org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {

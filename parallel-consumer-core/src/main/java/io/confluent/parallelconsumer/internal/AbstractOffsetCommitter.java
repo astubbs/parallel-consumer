@@ -29,6 +29,7 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
         preAcquireWork();
         try {
             var offsetsToCommit = wm.collectCommitDataForDirtyPartitions();
+            postAcquireWork(offsetsToCommit);
             if (offsetsToCommit.isEmpty()) {
                 log.debug("No offsets ready");
             } else {
@@ -44,6 +45,10 @@ public abstract class AbstractOffsetCommitter<K, V> implements OffsetCommitter {
         } finally {
             postCommit();
         }
+    }
+
+    protected void postAcquireWork(Map<TopicPartition, OffsetAndMetadata> offsetsToCommit) {
+        // default noop
     }
 
     protected void postCommit() {

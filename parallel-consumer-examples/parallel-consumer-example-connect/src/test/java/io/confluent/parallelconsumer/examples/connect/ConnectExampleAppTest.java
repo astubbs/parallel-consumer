@@ -61,6 +61,10 @@ class ConnectExampleAppTest {
         LongPollingMockConsumer<byte[], byte[]> mockConsumer = Mockito.spy(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
         TopicPartition tp = new TopicPartition(inputTopic, 0);
 
+        public ConnectAppUnderTest() {
+            super();
+        }
+
         @Override
         Consumer<byte[], byte[]> getKafkaConsumer() {
             when(mockConsumer.groupMetadata())

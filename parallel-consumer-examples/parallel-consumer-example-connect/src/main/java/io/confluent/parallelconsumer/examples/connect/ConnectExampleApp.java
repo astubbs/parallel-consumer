@@ -5,16 +5,21 @@ package io.confluent.parallelconsumer.examples.connect;
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
-import lombok.Value;
+import io.confluent.parallelconsumer.internal.InternalRuntimeError;
+import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import one.util.streamex.StreamEx;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.connect.file.FileStreamSinkConnector;
 import org.apache.kafka.connect.runtime.ConnectorConfig;
 import org.apache.kafka.connect.runtime.WorkerConfig;
@@ -23,11 +28,18 @@ import org.apache.kafka.connect.sink.SinkConnector;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 import org.apache.kafka.connect.storage.Converter;
-import org.apache.kafka.connect.tools.MockSinkConnector;
 
-import java.util.*;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.function.UnaryOperator;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
@@ -39,16 +51,23 @@ public class ConnectExampleApp {
 
     final String inputTopic = "input-topic-" + RandomUtils.nextInt();
     private final String outputTopic = "output-topic-" + RandomUtils.nextInt();
+    @NonNull
     private final Converter keyConverter;
-    private final Deque<SinkTask> taskQueue = new ArrayDeque<>();
+    private final BlockingQueue<SinkTask> taskQueue = new LinkedBlockingQueue<>();
+    @NonNull
     private final Converter valueConverter;
     private final Plugins plugins = new Plugins(Map.of());
 
     ParallelStreamProcessor<byte[], byte[]> parallelConsumer;
+    private final Duration timeout = Duration.ofSeconds(10);
 
     public ConnectExampleApp() {
-        Map<String, String> connProps = Map.of("name", "pc-connect-test",
-                "connector.class", "org.apache.kafka.connect.file.FileStreamSinkConnector");
+        String stringConverter = "org.apache.kafka.connect.storage.StringConverter";
+        Map<String, String> connProps = Map.of(
+                ConnectorConfig.NAME_CONFIG, "pc-connect-test",
+                ConnectorConfig.CONNECTOR_CLASS_CONFIG, "org.apache.kafka.connect.file.FileStreamSinkConnector",
+                WorkerConfig.KEY_CONVERTER_CLASS_CONFIG, stringConverter,
+                WorkerConfig.VALUE_CONVERTER_CLASS_CONFIG, stringConverter);
         ConnectorConfig connConfig = new ConnectorConfig(plugins, connProps);
         keyConverter = plugins.newConverter(connConfig, WorkerConfig.KEY_CONVERTER_CLASS_CONFIG,
                 Plugins.ClassLoaderUsage.CURRENT_CLASSLOADER);
@@ -66,28 +85,41 @@ public class ConnectExampleApp {
 
     @SuppressWarnings("UnqualifiedFieldAccess")
     void run() {
-        SinkConnector fileStreamSinkConnector = new FileStreamSinkConnector();
-        SinkConnector connector = new MockSinkConnector();
+        SinkConnector connector = new FileStreamSinkConnector();
+//        MockSinkConnector connector = new MockSinkConnector();
+
 
         int concurrency = 3;
 
-        List<Map<String, String>> taskConfigs = fileStreamSinkConnector.taskConfigs(concurrency);
+        List<Map<String, String>> taskConfigs = connector.taskConfigs(concurrency);
 
+        // todo - rebalance
 //        onAssigned(sinkTask);
 //        onLost(sinkTask);
 
-        //            SinkConnectorConfig sinkConfig = new SinkConnectorConfig(plugins, connConfig.originalsStrings());
-
-        StreamEx.of(taskConfigs)
+        var tasks = StreamEx.of(taskConfigs)
                 .map(config -> startTask(connector, config))
-                .forEach(this.taskQueue::offer);
+                .toList();
+        taskQueue.addAll(tasks);
 
-        this.parallelConsumer = setupParallelConsumer(concurrency);
+        UnaryOperator<Map<TopicPartition, OffsetAndMetadata>> pcPreCommitHook = (Map<TopicPartition, OffsetAndMetadata> offsetsToCommit) -> {
+            var adjustedOffsets = StreamEx.of(taskQueue).map(sinkTask -> sinkTask.preCommit(offsetsToCommit)).toList();
+            var collected = new HashMap<TopicPartition, OffsetAndMetadata>();
+            adjustedOffsets.forEach(collected::putAll);
+            return collected;
+        };
+
+        this.parallelConsumer = setupParallelConsumer(concurrency, pcPreCommitHook);
+        postSetup();
+
+        var deserializer = Serdes.String().deserializer();
 
         // tag::example[]
         parallelConsumer.poll(context -> {
-                    log.info("Concurrently processing a context: {}", context);
-                    SinkTask task = aquireSinkTask();
+                    String topic = context.getSingleRecord().topic();
+                    log.info("Concurrently processing a context: k:{} {}", deserializer.deserialize(topic, context.key()), context);
+
+                    SinkTask task = acquireSinkTask();
                     try {
                         var records = context.getConsumerRecordsFlattened();
                         var sinkRecords = StreamEx.of(records)
@@ -95,7 +127,7 @@ public class ConnectExampleApp {
                                 .toList();
                         task.put(sinkRecords);
                     } finally {
-                        this.taskQueue.offer(task);
+                        this.taskQueue.add(task);
                     }
                 }
         );
@@ -103,6 +135,10 @@ public class ConnectExampleApp {
 
 //        stop(file);
     }
+
+//    private List<SinkTask> findTasksForPartitions(Map<TopicPartition, OffsetAndMetadata> offsetsToCommit) {
+//        return taskQueue.stream().collect(Collectors.toList());
+//    }
 
     private SinkRecord convertRecordToSinkRecord(ConsumerRecord<byte[], byte[]> rec) {
         var key = this.keyConverter.toConnectData(rec.topic(), rec.key());
@@ -118,8 +154,17 @@ public class ConnectExampleApp {
 //        sinkTask.open();
     }
 
-    private SinkTask aquireSinkTask() {
-        return this.taskQueue.poll();
+    private SinkTask acquireSinkTask() {
+        try {
+            SinkTask poll = this.taskQueue.poll(timeout.toMillis(), MILLISECONDS);
+            if (poll == null) {
+                throw new InternalRuntimeError("Could not acquire task within timeout {} - possible bug as available tasks should match max concurrent requests for task.", timeout);
+            }
+            return poll;
+        } catch (InterruptedException e) {
+            throw new InternalRuntimeError(e);
+        }
+
     }
 
     private void stop(final FileStreamSinkConnector file) {
@@ -147,7 +192,7 @@ public class ConnectExampleApp {
     }
 
     @SuppressWarnings({"FeatureEnvy"})
-    ParallelStreamProcessor<byte[], byte[]> setupParallelConsumer(int concurrency) {
+    ParallelStreamProcessor<byte[], byte[]> setupParallelConsumer(int concurrency, UnaryOperator<Map<TopicPartition, OffsetAndMetadata>> abstractOffsetCommitter) {
         // tag::exampleSetup[]
         var kafkaConsumer = getKafkaConsumer(); // <1>
         var kafkaProducer = getKafkaProducer();
@@ -159,8 +204,8 @@ public class ConnectExampleApp {
                 .producer(kafkaProducer)
                 .build();
 
-        var eosStreamProcessor =
-                ParallelStreamProcessor.createEosStreamProcessor(options);
+
+        var eosStreamProcessor = new ParallelEoSStreamProcessor<>(options, abstractOffsetCommitter);
 
         eosStreamProcessor.subscribe(of(inputTopic)); // <4>
 
@@ -172,140 +217,5 @@ public class ConnectExampleApp {
         this.parallelConsumer.close();
     }
 
-//    void runPollAndProduce() {
-//        this.parallelConsumer = setupParallelConsumer();
-//
-//        postSetup();
-//
-//        // tag::exampleProduce[]
-//        parallelConsumer.pollAndProduce(context -> {
-//                    var consumerRecord = context.getSingleRecord().getConsumerRecord();
-//                    var result = processBrokerRecord(consumerRecord);
-//                    return new ProducerRecord<>(outputTopic, consumerRecord.key(), result.payload);
-//                }, consumeProduceResult -> {
-//                    log.debug("Message {} saved to broker at offset {}",
-//                            consumeProduceResult.getOut(),
-//                            consumeProduceResult.getMeta().offset());
-//                }
-//        );
-//        // end::exampleProduce[]
-//    }
-
-//    private Result processBrokerRecord(ConsumerRecord<String, String> consumerRecord) {
-//        return new Result("Some payload from " + consumerRecord.value());
-//    }
-
-//    void customRetryDelay() {
-//        // tag::customRetryDelay[]
-//        final double multiplier = 0.5;
-//        final int baseDelaySecond = 1;
-//
-//        ParallelConsumerOptions.<String, String>builder()
-//                .retryDelayProvider(recordContext -> {
-//                    int numberOfFailedAttempts = recordContext.getNumberOfFailedAttempts();
-//                    long delayMillis = (long) (baseDelaySecond * Math.pow(multiplier, numberOfFailedAttempts) * 1000);
-//                    return Duration.ofMillis(delayMillis);
-//                });
-//        // end::customRetryDelay[]
-//    }
-//
-//    void maxRetries() {
-//        ParallelStreamProcessor<String, String> pc = ParallelStreamProcessor.createEosStreamProcessor(null);
-//        // tag::maxRetries[]
-//        final int maxRetries = 10;
-//        final Map<ConsumerRecord<String, String>, Long> retriesCount = new ConcurrentHashMap<>();
-//
-//        pc.poll(context -> {
-//            var consumerRecord = context.getSingleRecord().getConsumerRecord();
-//            Long retryCount = retriesCount.computeIfAbsent(consumerRecord, ignore -> 0L);
-//            if (retryCount < maxRetries) {
-//                processRecord(consumerRecord);
-//                // no exception, so completed - remove from map
-//                retriesCount.remove(consumerRecord);
-//            } else {
-//                log.warn("Retry count {} exceeded max of {} for record {}", retryCount, maxRetries, consumerRecord);
-//                // giving up, remove from map
-//                retriesCount.remove(consumerRecord);
-//            }
-//        });
-//        // end::maxRetries[]
-//    }
-//
-//    private void processRecord(final ConsumerRecord<String, String> record) {
-//        // no-op
-//    }
-//
-//    void circuitBreaker() {
-//        ParallelStreamProcessor<String, String> pc = ParallelStreamProcessor.createEosStreamProcessor(null);
-//        // tag::circuitBreaker[]
-//        final Map<String, Boolean> upMap = new ConcurrentHashMap<>();
-//
-//        pc.poll(context -> {
-//            var consumerRecord = context.getSingleRecord().getConsumerRecord();
-//            String serverId = extractServerId(consumerRecord);
-//            boolean up = upMap.computeIfAbsent(serverId, ignore -> true);
-//
-//            if (!up) {
-//                up = updateStatusOfSever(serverId);
-//            }
-//
-//            if (up) {
-//                try {
-//                    processRecord(consumerRecord);
-//                } catch (CircuitBreakingException e) {
-//                    log.warn("Server {} is circuitBroken, will retry message when server is up. Record: {}", serverId, consumerRecord);
-//                    upMap.put(serverId, false);
-//                }
-//                // no exception, so set server status UP
-//                upMap.put(serverId, true);
-//            } else {
-//                throw new RuntimeException(msg("Server {} currently down, will retry record latter {}", up, consumerRecord));
-//            }
-//        });
-//        // end::circuitBreaker[]
-//    }
-
-//    private boolean updateStatusOfSever(final String serverId) {
-//        return false;
-//    }
-//
-//    private String extractServerId(final ConsumerRecord<String, String> consumerRecord) {
-//        // no-op
-//        return null;
-//    }
-
-//    void batching() {
-//        // tag::batching[]
-//        ParallelStreamProcessor.createEosStreamProcessor(ParallelConsumerOptions.<String, String>builder()
-//                .consumer(getKafkaConsumer())
-//                .producer(getKafkaProducer())
-//                .maxConcurrency(100)
-//                .batchSize(5) // <1>
-//                .build());
-//        parallelConsumer.poll(context -> {
-//            // convert the batch into the payload for our processing
-//            List<String> payload = context.stream()
-//                    .map(this::preparePayload)
-//                    .collect(Collectors.toList());
-//            // process the entire batch payload at once
-//            processBatchPayload(payload);
-//        });
-//        // end::batching[]
-//    }
-
-//    private void processBatchPayload(List<String> batchPayload) {
-//        // example
-//    }
-
-//    private String preparePayload(RecordContext<String, String> rc) {
-//        ConsumerRecord<String, String> consumerRecords = rc.getConsumerRecord();
-//        int failureCount = rc.getNumberOfFailedAttempts();
-//        return msg("{}, {}", consumerRecords, failureCount);
-//    }
-
-    @Value
-    static class Result {
-        String payload;
-    }
 
 }

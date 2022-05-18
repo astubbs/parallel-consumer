@@ -54,8 +54,8 @@ public class CoreApp {
         this.parallelConsumer = setupParallelConsumer();
 
         // tag::example[]
-        parallelConsumer.poll(record ->
-                log.info("Concurrently processing a record: {}", record)
+        parallelConsumer.poll(recordContext ->
+                log.info("Concurrently processing a record: {}", recordContext)
         );
         // end::example[]
     }
