@@ -104,6 +104,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Getter(PROTECTED)
     private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non blocking
 
+    private final UserFunctionRunner<K, V> runner;
+
     /**
      * An inbound message to the controller.
      * <p>
@@ -111,6 +113,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     @Value
     @RequiredArgsConstructor(access = PRIVATE)
+    // todo refactor - this has been extracted in #270
     private static class ControllerEventMessage<K, V> {
         WorkContainer<K, V> workContainer;
         EpochAndRecordsMap<K, V> consumerRecords;
@@ -256,6 +259,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             this.producerManager = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
+
+        this.runner = new UserFunctionRunner<>(this, clock, getProducerManager(), options.getAdminClient());
     }
 
     private void checkGroupIdConfigured(final org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
@@ -771,8 +776,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("Sending work ({}) to pool", batch);
         Future outputRecordFuture = workerThreadPool.submit(() -> {
             addInstanceMDC();
-            UserFunctionRunner<K, V> runner = new UserFunctionRunner<>(this);
-            return runner.runUserFunction(usersFunction, callback, batch);
+            return this.runner.runUserFunction(usersFunction, callback, batch);
         });
         // for a batch, each message in the batch shares the same result
         for (final WorkContainer<K, V> workContainer : batch) {

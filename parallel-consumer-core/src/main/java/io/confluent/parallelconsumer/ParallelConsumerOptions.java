@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.state.WorkContainer;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
+import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.Producer;
@@ -19,6 +20,7 @@ import java.util.function.Function;
 
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static io.confluent.parallelconsumer.ParallelConsumerOptions.TerminalFailureReaction.DLQ;
 
 /**
  * The options for the {@link AbstractParallelEoSStreamProcessor} system.
@@ -42,6 +44,11 @@ public class ParallelConsumerOptions<K, V> {
      * @see ParallelStreamProcessor
      */
     private final Producer<K, V> producer;
+
+    /**
+     * Supplying a producer is only needed for some functions, which will cause an error if used when it's missing.
+     */
+    private final AdminClient adminClient;
 
     /**
      * Path to Managed executor service for Java EE
@@ -228,7 +235,7 @@ public class ParallelConsumerOptions<K, V> {
     public enum TerminalFailureReaction {
         SHUTDOWN,
         SKIP,
-        // DLQ, TODO
+        DLQ
     }
 
     /**
@@ -248,7 +255,16 @@ public class ParallelConsumerOptions<K, V> {
 
         //
         WorkContainer.setDefaultRetryDelay(getDefaultMessageRetryDelay());
+
+        //
+        // todo should admin be required?
+        if (!isProducerSupplied() && getAdminClient() == null && getTerminalFailureReaction() == DLQ) {
+            throw new IllegalArgumentException(msg("Wanting to use DQL failure mode ({}) without supplying a either a Producer or Admin client (both are needed) instance",
+                    getTerminalFailureReaction()));
+        }
+
     }
+
 
     public boolean isUsingTransactionalProducer() {
         return commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER);
