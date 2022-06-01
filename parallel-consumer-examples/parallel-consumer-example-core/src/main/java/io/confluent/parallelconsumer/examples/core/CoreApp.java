@@ -55,6 +55,8 @@ public class CoreApp {
 
         postSetup();
 
+        parallelConsumer.getProderFacade().send(my record);
+
         // tag::example[]
         parallelConsumer.poll(record ->
                 log.info("Concurrently processing a record: {}", record)

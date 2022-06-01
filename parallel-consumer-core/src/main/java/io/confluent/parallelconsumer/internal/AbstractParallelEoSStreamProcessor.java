@@ -5,10 +5,7 @@ package io.confluent.parallelconsumer.internal;
  */
 
 import io.confluent.csid.utils.TimeUtils;
-import io.confluent.parallelconsumer.ConsumerFacade;
-import io.confluent.parallelconsumer.ParallelConsumer;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContextInternal;
+import io.confluent.parallelconsumer.*;
 import io.confluent.parallelconsumer.internal.ConsumerRebalanceHandler.PartitionEventType;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.confluent.parallelconsumer.state.WorkManager;
@@ -61,6 +58,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements org.ap
 
     @Delegate
     private final ConsumerFacade consumerFacade = new ConsumerFacade();
+
+    @Getter
+    private final ProducerFacade<K, V> producerFacade = new ProducerFacade<>();
 
     /**
      * Key for the work container descriptor that will be added to the {@link MDC diagnostic context} while inside a
