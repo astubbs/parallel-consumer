@@ -6,10 +6,7 @@ package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.BrokerPollSystem;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
-import io.confluent.parallelconsumer.internal.InternalRuntimeError;
+import io.confluent.parallelconsumer.internal.*;
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -60,7 +57,7 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     /**
      * Hold the tracking state for each of our managed partitions.
      */
-    private final Map<TopicPartition, PartitionState<K, V>> partitionStates = new ConcurrentHashMap<>();
+    private final Map<ClusterTopicPartition, PartitionState<K, V>> partitionStates = new ConcurrentHashMap<>();
 
     /**
      * Record the generations of partition assignment, for fencing off invalid work.

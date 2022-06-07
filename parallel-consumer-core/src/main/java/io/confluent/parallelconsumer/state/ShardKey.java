@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.KeyIsolation;
+import io.confluent.parallelconsumer.internal.ClusterTopicPartition;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -111,7 +112,7 @@ public class ShardKey {
         /**
          * Isolate all queues from each other, but incorporating both topic name and partition as shard key
          */
-        private final TopicPartition topicPartition;
+        private final ClusterTopicPartition topicPartition;
 
         public KeyIsolated(final ConsumerRecord<?, ?> rec) {
             super(rec);
