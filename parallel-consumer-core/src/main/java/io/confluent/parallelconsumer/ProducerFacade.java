@@ -24,6 +24,7 @@ import java.util.concurrent.Future;
 @SuppressWarnings("ClassWithTooManyMethods")
 @Slf4j
 @RequiredArgsConstructor
+// todo given the methods to expose - doesn't make sense to have a facade for this - everything is not allowed
 public class ProducerFacade<K, V> implements Producer<K, V> {
 
 //    @Delegate
