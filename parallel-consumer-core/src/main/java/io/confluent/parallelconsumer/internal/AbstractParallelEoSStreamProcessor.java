@@ -955,6 +955,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             commitOffsetsThatAreReady();
         }
         updateLastCommitCheckTime();
+
+        Duration timeToBlockFor = calculateTimeUntilNextAction();
+
+        getMyActor().tellLater(controller -> controller.commitOffsetsMaybe(), timeToBlockFor);
     }
 
     private boolean isShouldCommitNow() {

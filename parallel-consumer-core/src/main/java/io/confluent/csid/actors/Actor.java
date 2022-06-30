@@ -9,8 +9,10 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.PriorityQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
@@ -43,6 +45,9 @@ public class Actor<T> implements IActor<T> {
 //    private final BlockingQueue<Callable<Optional<Object>>> actionMailbox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non-blocking
     private final LinkedBlockingQueue<Runnable> actionMailbox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non-blocking
 
+    @Getter
+    private final PriorityQueue<Scheduled> scheduledQueue = new PriorityQueue<>();
+
     @Override
     public void tell(final Consumer<T> action) {
         getActionMailbox().add(() -> action.accept(actor));
@@ -66,6 +71,12 @@ public class Actor<T> implements IActor<T> {
 //        future.newIncompleteFuture();
 
         return task;
+    }
+
+    public void tellLater(Consumer<T> action, Duration when) {
+        Instant atTime = clock.instant().plus(when);
+        Scheduled scheduledAction = new Scheduled(atTime, () -> action.accept(actor), clock);
+        tell(ignore -> scheduledQueue.add(scheduledAction));
     }
 
     // todo only used from one place which is deprecated
@@ -120,11 +131,28 @@ public class Actor<T> implements IActor<T> {
      */
     @SneakyThrows // todo remove
     private void maybeBlockUntilScheduledOrAction(Duration timeout) {
-        var interrupted = getActionMailbox().poll(timeout.toMillis(), MILLISECONDS);
+        Duration timeToBlockFor = lowerOfScheduledOrTimeout(timeout);
+        var interrupted = getActionMailbox().poll(timeToBlockFor.toMillis(), MILLISECONDS);
 
         if (interrupted != null) {
             execute(interrupted);
             processBounded();
+        } else {
+            maybeExecuteScheduled();
+        }
+    }
+
+    private Duration lowerOfScheduledOrTimeout(Duration timeout) {
+        Scheduled task = getScheduledQueue().peek();
+        Instant now = clock.instant();
+        boolean taskIsScheduledBeforeTimeout = task.getWhen().isBefore(now.plus(timeout));
+        return taskIsScheduledBeforeTimeout ? Duration.between(now, task.getWhen()) : timeout;
+    }
+
+    private void maybeExecuteScheduled() {
+        Scheduled task = getScheduledQueue().peek();
+        if (task.isItTimeToRun()) {
+            execute(task.getWhat());
         }
     }
 
@@ -132,4 +160,14 @@ public class Actor<T> implements IActor<T> {
         command.run();
     }
 
+    @Value
+    class Scheduled {
+        Instant when;
+        Runnable what;
+        Clock time;
+
+        public boolean isItTimeToRun() {
+            return time.instant().isAfter(getWhen());
+        }
+    }
 }
