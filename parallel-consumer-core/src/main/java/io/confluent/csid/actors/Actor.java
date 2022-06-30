@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Future;
@@ -150,9 +151,15 @@ public class Actor<T> implements IActor<T> {
     }
 
     private void maybeExecuteScheduled() {
-        Scheduled task = getScheduledQueue().peek();
-        if (task.isItTimeToRun()) {
-            execute(task.getWhat());
+        for (; ; ) {
+            Optional<Scheduled> task = Optional.ofNullable(getScheduledQueue().peek());
+            if (task.isPresent() && task.get().isItTimeToRun()) {
+                Scheduled sanity = getScheduledQueue().poll();// remove it
+                assert (sanity.equals(task)); // todo check
+                execute(task.get().getWhat());
+            } else {
+                break;
+            }
         }
     }
 
