@@ -5,6 +5,7 @@ package io.confluent.parallelconsumer.examples.core;
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
 import io.confluent.parallelconsumer.RecordContext;
 import lombok.Value;
@@ -17,11 +18,13 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -47,7 +50,7 @@ public class CoreApp {
         return new KafkaProducer<>(new Properties());
     }
 
-    ParallelStreamProcessor<String, String> parallelConsumer;
+    ParallelEoSStreamProcessor<String, String> parallelConsumer;
 
     @SuppressWarnings("UnqualifiedFieldAccess")
     void run() {
@@ -55,6 +58,11 @@ public class CoreApp {
 
         postSetup();
 
+        // consumer facade eg
+        var consumer = parallelConsumer.getConsumerFacade();
+        final Set<TopicPartition> assignment = consumer.assignment();
+
+        // producer facade eg
         parallelConsumer.getProderFacade().send(my record);
 
         // tag::example[]
@@ -69,7 +77,7 @@ public class CoreApp {
     }
 
     @SuppressWarnings({"FeatureEnvy", "MagicNumber"})
-    ParallelStreamProcessor<String, String> setupParallelConsumer() {
+    ParallelEoSStreamProcessor<String, String> setupParallelConsumer() {
         // tag::exampleSetup[]
         Consumer<String, String> kafkaConsumer = getKafkaConsumer(); // <1>
         Producer<String, String> kafkaProducer = getKafkaProducer();
@@ -81,7 +89,7 @@ public class CoreApp {
                 .producer(kafkaProducer)
                 .build();
 
-        ParallelStreamProcessor<String, String> eosStreamProcessor =
+        ParallelEoSStreamProcessor<String, String> eosStreamProcessor =
                 ParallelStreamProcessor.createEosStreamProcessor(options);
 
         eosStreamProcessor.subscribe(of(inputTopic)); // <4>

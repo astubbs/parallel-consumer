@@ -4,9 +4,11 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.csid.utils.TimeUtils;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.state.WorkManager;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.SneakyThrows;
@@ -36,6 +38,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 @Slf4j
 public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
+    @Getter(AccessLevel.PUBLIC) // TODO PROTECTED
     private final ConsumerManager<K, V> consumerManager;
 
     private State state = running;
@@ -63,6 +66,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     private static Duration longPollTimeout = Duration.ofMillis(2000);
 
     private final WorkManager<K, V> wm;
+
+    @Getter
+    private final ActorRef<BrokerPollSystem<K, V>> myActor = new ActorRef<>(TimeUtils.getClock(), this);
 
     public BrokerPollSystem(ConsumerManager<K, V> consumerMgr, WorkManager<K, V> wm, AbstractParallelEoSStreamProcessor<K, V> pc, final ParallelConsumerOptions<K, V> options) {
         this.wm = wm;
@@ -115,7 +121,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             while (state != closed) {
                 handlePoll();
 
-                maybeDoCommit();
+                getMyActor().processBounded();
 
                 switch (state) {
                     case draining -> {
@@ -143,7 +149,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
             if (count > 0) {
                 log.trace("Loop: Register work");
-                pc.sendConsumerRecordsEvent(polledRecords);
+                pc.registerWorkAsync(polledRecords);
             }
         }
     }
@@ -316,12 +322,12 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         }
     }
 
-    /**
-     * Will silently skip if not configured with a committer
-     */
-    private void maybeDoCommit() {
-        committer.ifPresent(ConsumerOffsetCommitter::maybeDoCommit);
-    }
+//    /**
+//     * Will silently skip if not configured with a committer
+//     */
+//    private void maybeDoCommit() {
+//        committer.ifPresent(ConsumerOffsetCommitter::maybeDoCommit);
+//    }
 
     /**
      * Wakeup if colling the broker
