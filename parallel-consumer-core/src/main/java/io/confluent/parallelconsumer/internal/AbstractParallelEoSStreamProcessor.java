@@ -143,14 +143,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final AtomicBoolean currentlyPollingWorkCompleteMailBox = new AtomicBoolean();
 
     private final OffsetCommitter committer;
-//
-//    /**
-//     * Used to request a commit asap
-//     *
-//     * @see #requestCommitAsap
-//     */
-//    // todo delete?
-//    private final AtomicBoolean commitCommand = new AtomicBoolean(false);
+
 
     /**
      * Multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} to have in our processing queue, in order to make
@@ -474,6 +467,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
 
         log.debug("Awaiting worker pool termination...");
+        // todo with new actor / interrupt process, is interrupted test still needed? - try remove
         boolean interrupted = true;
         while (interrupted) {
             log.debug("Still interrupted");
@@ -561,17 +555,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         notifySomethingToDo(new Reason(msg));
     }
 
-    /**
-     * Control thread can be blocked waiting for work, but is interruptable. Interrupting it can be useful to inform
-     * that work is available when there was none, to make tests run faster, or to move on to shutting down the {@link
-     * BrokerPollSystem} so that less messages are downloaded and queued.
-     */
-    private void interruptControlThread(Reason reason) {
-        if (blockableControlThread != null) {
-            String msg = msg("Interrupting {} thread in case it's waiting for work", blockableControlThread.getName());
-            blockableControlThread.interrupt(log, new Reason(msg, reason));
-        }
-    }
+//    /**
+//     * Control thread can be blocked waiting for work, but is interruptable. Interrupting it can be useful to inform
+//     * that work is available when there was none, to make tests run faster, or to move on to shutting down the {@link
+//     * BrokerPollSystem} so that fewer messages are downloaded and queued.
+//     */
+//    private void interruptControlThread(Reason reason) {
+//        if (blockableControlThread != null) {
+//            String msg = msg("Interrupting {} thread in case it's waiting for work", blockableControlThread.getName());
+//            blockableControlThread.interrupt(log, new Reason(msg, reason));
+//        }
+//    }
 
     private boolean areMyThreadsDone() {
         if (isEmpty(controlThreadFuture)) {
@@ -952,7 +946,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         //
         Duration effectiveCommitAttemptDelay = getTimeToNextCommitCheck();
-        log.debug("Blocking normally until next commit time of {}", effectiveCommitAttemptDelay);
+        log.debug("Time to block until next action calculated as {}", effectiveCommitAttemptDelay);
         return effectiveCommitAttemptDelay;
     }
 
@@ -980,7 +974,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 //
 //        boolean shouldDoANormalCommit = commitFrequencyOK && !lingerBeneficial;
 //
-//        boolean shouldCommitNow = shouldDoANormalCommit || isCommandedToCommit;
+//        boolean shouldCommitNow = shouldDoANormalCommit;
 //
 //        if (log.isDebugEnabled()) {
 //            log.debug("Should commit this cycle? " +
@@ -1045,15 +1039,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private void commitOffsetsThatAreReady() {
-//        log.debug("Committing offsets that are ready...");
-//        synchronized (commitCommand) {
         log.debug("Committing offsets that are ready...");
         committer.retrieveOffsetsAndCommit();
         updateLastCommitCheckTime();
-//            clearCommitCommand();
         this.lastCommitTime = Instant.now();
-//        }
     }
+
 
     private void updateLastCommitCheckTime() {
         lastCommitCheckTime = Instant.now();
@@ -1134,10 +1125,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     protected void sendWorkResultAsync(WorkContainer<K, V> wc) {
+        log.trace("Sending new work result to controller {}", wc);
         getMyActor().tell(controller -> controller.handleWorkResult(wc));
     }
 
-    public void registerWorkAsync(EpochAndRecordsMap<K, V> polledRecords) {
+    public void sendNewPolledRecordsAsync(EpochAndRecordsMap<K, V> polledRecords) {
+        log.debug("Sending new polled records signal to controller - total partitions: {} records: {}",
+                polledRecords.partitions().size(),
+                polledRecords.count());
         getMyActor().tell(controller -> controller.getWm().registerWork(polledRecords));
     }
 //
@@ -1151,19 +1146,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     /**
      * Early notify of work arrived.
      * <p>
-     * Only wake up the thread if it's sleeping while polling the mail box.
+     * Only wake up the thread if it's sleeping while performing {@link Actor#processBlocking}
      *
-     * @see #processWorkCompleteMailBox
-     * @see #blockableControlThread
+     * @see #processWorkCompleteMailBox //     * @see #blockableControlThread
      */
     public void notifySomethingToDo(Reason reason) {
-        boolean noTransactionInProgress = !producerManager.map(ProducerManager::isTransactionInProgress).orElse(false);
-        if (noTransactionInProgress) {
-            log.trace("Interrupting control thread: Knock knock, wake up! You've got mail (tm)!");
-            interruptControlThread(reason);
-        } else {
-            log.trace("Would have interrupted control thread, but TX in progress");
-        }
+        getMyActor().interruptProcessBlockingMaybe(reason);
+//        boolean noTransactionInProgress = !producerManager.map(ProducerManager::isTransactionInProgress).orElse(false);
+//        if (noTransactionInProgress) {
+//            log.trace("Interrupting control thread: Knock knock, wake up! You've got mail (tm)!");
+//            interruptControlThread(reason);
+//        } else {
+//            log.trace("Would have interrupted control thread, but TX in progress");
+//        }
     }
 
     @Override
@@ -1195,33 +1190,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     // in consumer facade instead?
-    public Future<Void> commitAsync() {
-        return getMyActor().askImmediately(controller -> {
+    public Future<Class> commitAsync() {
+        Future<Class> rFuture = getMyActor().askImmediately(controller -> {
             controller.commitOffsetsThatAreReady();
             return Void.class;
         });
+        return rFuture;
     }
 
-//    /**
-//     * @see #requestCommitAsap
-//     */
-//    private boolean isCommandedToCommit() {
-//        synchronized (commitCommand) {
-//            return this.commitCommand.get();
-//        }
-//    }
-//
-//    /**
-//     * @see #requestCommitAsap
-//     */
-//    private void clearCommitCommand() {
-//        synchronized (commitCommand) {
-//            if (commitCommand.get()) {
-//                log.debug("Command to commit asap received, clearing");
-//                this.commitCommand.set(false);
-//            }
-//        }
-//    }
 
     @Override
     public void pauseIfRunning() {
