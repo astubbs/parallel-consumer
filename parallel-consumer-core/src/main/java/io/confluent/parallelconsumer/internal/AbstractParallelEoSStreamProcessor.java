@@ -143,14 +143,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final AtomicBoolean currentlyPollingWorkCompleteMailBox = new AtomicBoolean();
 
     private final OffsetCommitter committer;
-
-    /**
-     * Used to request a commit asap
-     *
-     * @see #requestCommitAsap
-     */
-    // todo delete?
-    private final AtomicBoolean commitCommand = new AtomicBoolean(false);
+//
+//    /**
+//     * Used to request a commit asap
+//     *
+//     * @see #requestCommitAsap
+//     */
+//    // todo delete?
+//    private final AtomicBoolean commitCommand = new AtomicBoolean(false);
 
     /**
      * Multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} to have in our processing queue, in order to make
@@ -242,6 +242,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         this.rebalanceHandler = new ConsumerRebalanceHandler(this);
 
+        setupCommitSchedule();
+
         if (options.isProducerSupplied()) {
             this.producerManager = Optional.of(new ProducerManager<>(options.getProducer(), consumerMgr, this.wm, options));
             if (options.isUsingTransactionalProducer())
@@ -252,6 +254,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             this.producerManager = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
+    }
+
+    protected void setupCommitSchedule() {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        Runnable sendCommitSignal = () -> getMyActor().tellImmediately(AbstractParallelEoSStreamProcessor::commitOffsetsThatAreReady);
+        scheduler.scheduleAtFixedRate(sendCommitSignal, getTimeBetweenCommits().toMillis(), getTimeBetweenCommits().toMillis(), MILLISECONDS);
     }
 
     private void checkGroupIdConfigured(final org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
@@ -659,11 +667,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("Loop: Process mailbox");
         processWorkCompleteMailBox();
 
-        if (isIdlingOrRunning()) {
-            // offsets will be committed when the consumer has its partitions revoked
-            log.trace("Loop: Maybe commit");
-            commitOffsetsMaybe();
-        }
+//        if (isIdlingOrRunning()) {
+//            // offsets will be committed when the consumer has its partitions revoked
+//            log.trace("Loop: Maybe commit");
+//            commitOffsetsMaybe();
+//        }
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -953,38 +961,42 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
 
-    /**
-     * Conditionally commit offsets to broker
-     */
-    private void commitOffsetsMaybe() {
-        if (isShouldCommitNow()) {
-            commitOffsetsThatAreReady();
-        }
-        updateLastCommitCheckTime();
-    }
+//    /**
+//     * Conditionally commit offsets to broker
+//     */
+//    private void commitOffsetsMaybe() {
+//        if (isShouldCommitNow()) {
+//            commitOffsetsThatAreReady();
+//        }
+//
+//    }
 
-    private boolean isShouldCommitNow() {
-        Duration elapsedSinceLastCommit = this.lastCommitTime == null ? Duration.ofDays(1) : Duration.between(this.lastCommitTime, Instant.now());
+//    private boolean isShouldCommitNow() {
+//        Duration elapsedSinceLastCommit = getElapsedSinceLastCommit();
+//
+//        boolean commitFrequencyOK = elapsedSinceLastCommit.compareTo(timeBetweenCommits) > 0;
+//        boolean lingerBeneficial = lingeringOnCommitWouldBeBeneficial();
+//        boolean isCommandedToCommit = isCommandedToCommit();
+//
+//        boolean shouldDoANormalCommit = commitFrequencyOK && !lingerBeneficial;
+//
+//        boolean shouldCommitNow = shouldDoANormalCommit || isCommandedToCommit;
+//
+//        if (log.isDebugEnabled()) {
+//            log.debug("Should commit this cycle? " +
+//                    "shouldCommitNow? " + shouldCommitNow + " : " +
+//                    "shouldDoANormalCommit? " + shouldDoANormalCommit + ", " +
+//                    "commitFrequencyOK? " + commitFrequencyOK + ", " +
+//                    "lingerBeneficial? " + lingerBeneficial + ", " +
+//                    "isCommandedToCommit? " + isCommandedToCommit
+//            );
+//        }
+//
+//        return shouldCommitNow;
+//    }
 
-        boolean commitFrequencyOK = elapsedSinceLastCommit.compareTo(timeBetweenCommits) > 0;
-        boolean lingerBeneficial = lingeringOnCommitWouldBeBeneficial();
-        boolean isCommandedToCommit = isCommandedToCommit();
-
-        boolean shouldDoANormalCommit = commitFrequencyOK && !lingerBeneficial;
-
-        boolean shouldCommitNow = shouldDoANormalCommit || isCommandedToCommit;
-
-        if (log.isDebugEnabled()) {
-            log.debug("Should commit this cycle? " +
-                    "shouldCommitNow? " + shouldCommitNow + " : " +
-                    "shouldDoANormalCommit? " + shouldDoANormalCommit + ", " +
-                    "commitFrequencyOK? " + commitFrequencyOK + ", " +
-                    "lingerBeneficial? " + lingerBeneficial + ", " +
-                    "isCommandedToCommit? " + isCommandedToCommit
-            );
-        }
-
-        return shouldCommitNow;
+    private Duration getElapsedSinceLastCommit() {
+        return this.lastCommitTime == null ? Duration.ofDays(1) : Duration.between(this.lastCommitTime, Instant.now());
     }
 
     private int getNumberOfUserFunctionsQueued() {
@@ -1033,13 +1045,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private void commitOffsetsThatAreReady() {
+//        log.debug("Committing offsets that are ready...");
+//        synchronized (commitCommand) {
         log.debug("Committing offsets that are ready...");
-        synchronized (commitCommand) {
-            log.debug("Committing offsets that are ready...");
-            committer.retrieveOffsetsAndCommit();
-            clearCommitCommand();
-            this.lastCommitTime = Instant.now();
-        }
+        committer.retrieveOffsetsAndCommit();
+        updateLastCommitCheckTime();
+//            clearCommitCommand();
+        this.lastCommitTime = Instant.now();
+//        }
     }
 
     private void updateLastCommitCheckTime() {
@@ -1177,34 +1190,38 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Useful for testing, but otherwise the close methods will commit and clean up properly.
      */
     public void requestCommitAsap() {
-        String msg = "Registering command to commit next chance";
-        log.debug(msg);
-        synchronized (commitCommand) {
-            this.commitCommand.set(true);
-        }
-        notifySomethingToDo(new Reason(msg));
+        log.debug("Registering command to commit next chance");
+        getMyActor().tell(AbstractParallelEoSStreamProcessor::commitOffsetsThatAreReady);
     }
 
-    /**
-     * @see #requestCommitAsap
-     */
-    private boolean isCommandedToCommit() {
-        synchronized (commitCommand) {
-            return this.commitCommand.get();
-        }
+    // in consumer facade instead?
+    public Future<Void> commitAsync() {
+        return getMyActor().askImmediately(controller -> {
+            controller.commitOffsetsThatAreReady();
+            return Void.class;
+        });
     }
 
-    /**
-     * @see #requestCommitAsap
-     */
-    private void clearCommitCommand() {
-        synchronized (commitCommand) {
-            if (commitCommand.get()) {
-                log.debug("Command to commit asap received, clearing");
-                this.commitCommand.set(false);
-            }
-        }
-    }
+//    /**
+//     * @see #requestCommitAsap
+//     */
+//    private boolean isCommandedToCommit() {
+//        synchronized (commitCommand) {
+//            return this.commitCommand.get();
+//        }
+//    }
+//
+//    /**
+//     * @see #requestCommitAsap
+//     */
+//    private void clearCommitCommand() {
+//        synchronized (commitCommand) {
+//            if (commitCommand.get()) {
+//                log.debug("Command to commit asap received, clearing");
+//                this.commitCommand.set(false);
+//            }
+//        }
+//    }
 
     @Override
     public void pauseIfRunning() {

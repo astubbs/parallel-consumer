@@ -20,6 +20,7 @@ class ActorTest {
     Greeter greeter = new Greeter();
     Actor<Greeter> actor = new Actor<>(TimeUtils.getClock(), greeter);
 
+    // todo get TG working with Greeter class
     @Data
     public static class Greeter {
         public static final String PREFIX = "kiwi-";
@@ -32,11 +33,18 @@ class ActorTest {
 
     @Test
     void tell() {
-        actor.tell(g -> g.setTold(MESSAGE));
+        actor.tell(g -> g.setTold("1"));
+        actor.tell(g -> g.setTold("2"));
         actor.processBounded();
-        //        ManagedTruth.assertThat(greeter). // todo get TG working with Greeter class
-        assertThat(greeter.getTold()).isEqualTo(MESSAGE);
+        assertThat(greeter.getTold()).isEqualTo("2");
+    }
 
+    @Test
+    void tellImmediately() {
+        actor.tell(g -> g.setTold("1"));
+        actor.tellImmediately(g -> g.setTold("2"));
+        actor.processBounded();
+        assertThat(greeter.getTold()).isEqualTo("1");
     }
 
     @SneakyThrows

@@ -16,7 +16,7 @@ import java.util.Deque;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -44,7 +44,7 @@ public class Actor<T> implements IActor<T> {
 //     */
     @Getter(AccessLevel.PROTECTED)
 //    private final BlockingQueue<Callable<Optional<Object>>> actionMailbox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non-blocking
-    private final LinkedBlockingQueue<Runnable> actionMailbox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non-blocking
+    private final LinkedBlockingDeque<Runnable> actionMailbox = new LinkedBlockingDeque<>(); // Thread safe, highly performant, non-blocking
 
     @Override
     public void tell(final Consumer<T> action) {
@@ -54,6 +54,11 @@ public class Actor<T> implements IActor<T> {
 //            action.accept(actor);
 //            return Optional.empty();
 //        });
+    }
+
+    @Override
+    public void tellImmediately(final Consumer<T> action) {
+        getActionMailbox().addFirst(() -> action.accept(actor));
     }
 
     @Override
