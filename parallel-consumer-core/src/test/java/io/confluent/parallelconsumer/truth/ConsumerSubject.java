@@ -19,6 +19,7 @@ import pl.tlinkowski.unij.api.UniSets;
 import javax.annotation.Generated;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 
 import static io.confluent.parallelconsumer.truth.CommitHistorySubject.commitHistories;
 
@@ -54,9 +55,13 @@ public class ConsumerSubject extends ConsumerParentSubject {
         int defaultPartition = 0;
         TopicPartition tp = new TopicPartition(topic.name(), defaultPartition);
         var committed = (Map<TopicPartition, OffsetAndMetadata>) actual.committed(UniSets.of(tp), timeout);
-        OffsetAndMetadata offsets = committed.get(tp);
-        CommitHistory commitHistory = new CommitHistory(UniLists.of(offsets));
-        return check("getCommitHistory(%s)", topic).about(commitHistories()).that(commitHistory);
+        var offsets = Optional.ofNullable(committed.get(tp));
+
+        var history = offsets.isPresent()
+                ? UniLists.of(offsets.get())
+                : UniLists.<OffsetAndMetadata>of();
+
+        return check("getCommitHistory(%s)", topic.name() + ":" + defaultPartition).about(commitHistories()).that(new CommitHistory(history));
     }
 
 //    @Override
