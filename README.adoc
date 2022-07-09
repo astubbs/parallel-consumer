@@ -438,7 +438,7 @@ Where `${project.version}` is the version to be used:
                 .producer(kafkaProducer)
                 .build();
 
-        ParallelStreamProcessor<String, String> eosStreamProcessor =
+        ParallelEoSStreamProcessor<String, String> eosStreamProcessor =
                 ParallelStreamProcessor.createEosStreamProcessor(options);
 
         eosStreamProcessor.subscribe(of(inputTopic)); // <4>
