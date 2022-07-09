@@ -9,7 +9,6 @@ import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
-import org.hamcrest.Matchers;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -20,7 +19,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
 import static one.util.streamex.StreamEx.of;
 import static org.awaitility.Awaitility.await;
-import static org.hamcrest.Matchers.equalTo;
 
 /**
  * Originally created to investigate issue report #184
@@ -33,7 +31,7 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
     void multiTopic(ProcessingOrder order) {
         int numTopics = 3;
         List<NewTopic> multiTopics = getKcu().createTopics(numTopics);
-        int recordsPerTopic = 1;
+        int recordsPerTopic = 10;
         multiTopics.forEach(singleTopic -> sendMessages(singleTopic, recordsPerTopic));
 
         var pc = getKcu().buildPc(order);
@@ -47,8 +45,8 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
         });
 
         // processed
-        int expectedMessagesCount = recordsPerTopic * numTopics;
-        await().untilAtomic(messageProcessedCount, Matchers.is(equalTo(expectedMessagesCount)));
+//        int expectedMessagesCount = recordsPerTopic * numTopics;
+//        await().untilAtomic(messageProcessedCount, Matchers.is(equalTo(expectedMessagesCount)));
 
         // commits
 //        pc.closeWithoutClosingClients();
@@ -56,7 +54,7 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
         pc.requestCommitAsap();
 
         //
-        await().atMost(Duration.ofSeconds(1)).untilAsserted(() -> {
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             multiTopics.forEach(singleTopic -> assertCommit(pc, singleTopic, recordsPerTopic + 1));
         });
     }
@@ -68,9 +66,7 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
     }
 
     private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, NewTopic newTopic, int recordsPerTopic) {
-        var committer = getKcu().getLastConsumerConstructed();
-
-        assertThat(committer)
+        assertThat(pc)
                 .hasCommittedToPartition(newTopic)
                 .offset(recordsPerTopic);
     }
