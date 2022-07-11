@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.integrationTests;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import io.confluent.parallelconsumer.state.ShardKey;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -22,6 +23,9 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Originally created to investigate issue report #184
+ *
+ * @see ShardKey
+ * @see io.confluent.parallelconsumer.state.ShardKeyTest
  */
 @Slf4j
 class MultiTopicTest extends BrokerIntegrationTest<String, String> {
@@ -67,7 +71,7 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
 
     private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, NewTopic newTopic, int recordsPerTopic) {
         assertThat(pc)
-                .hasCommittedToPartition(newTopic)
+                .hasCommittedToAnyAssignedPartitionOf(newTopic)
                 .offset(recordsPerTopic);
     }
 
