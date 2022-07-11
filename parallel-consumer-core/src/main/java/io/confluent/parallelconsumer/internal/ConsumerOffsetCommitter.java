@@ -4,13 +4,12 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.csid.utils.TimeUtils;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.SneakyThrows;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -19,9 +18,14 @@ import org.apache.kafka.common.TopicPartition;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.Future;
+import java.util.Queue;
+import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 
@@ -48,13 +52,14 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     /**
      * Queue of commit requests from other threads
      */
-//    private final Queue<CommitRequest> commitRequestQueue = new ConcurrentLinkedQueue<>();
+    private final Queue<CommitRequest> commitRequestQueue = new ConcurrentLinkedQueue<>();
 
     /**
      * Queue of commit responses, for other threads to block on
      */
-//    private final BlockingQueue<CommitResponse> commitResponseQueue = new LinkedBlockingQueue<>();
-    public ConsumerOffsetCommitter(final ConsumerManager<K, V> newConsumer, final WorkManager<K, V> newWorkManager, ParallelConsumerOptions options) {
+    private final BlockingQueue<CommitResponse> commitResponseQueue = new LinkedBlockingQueue<>();
+
+    public ConsumerOffsetCommitter(final ConsumerManager<K, V> newConsumer, final WorkManager<K, V> newWorkManager, final ParallelConsumerOptions options) {
         super(newConsumer, newWorkManager);
         commitMode = options.getCommitMode();
         commitTimeout = options.getOffsetCommitTimeout();
@@ -70,7 +75,6 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      */
     void commit() {
         if (isOwner()) {
-            // todo why? when am i the owner?
             retrieveOffsetsAndCommit();
         } else if (isSync()) {
             log.debug("Sync commit");
@@ -78,10 +82,9 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
             log.debug("Finished waiting");
         } else {
             // async
-            // we just request the commit
+            // we just request the commit and hope
             log.debug("Async commit to be requested");
-            // experiment with returning na Optional<Future> so this async response can be chained.
-            Future<Class<Void>> ask = commitRequestSend();
+            requestCommitInternal();
         }
     }
 
@@ -123,88 +126,67 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         return Thread.currentThread().equals(owningThread.orElse(null));
     }
 
-//    /**
-//     * Commit request message
-//     */
-//    @Value
-//    public static class CommitRequest {
-//        UUID id = UUID.randomUUID();
-//        long requestedAtMs = System.currentTimeMillis();
-//    }
+    /**
+     * Commit request message
+     */
+    @Value
+    public static class CommitRequest {
+        UUID id = UUID.randomUUID();
+        long requestedAtMs = System.currentTimeMillis();
+    }
 
-//    /**
-//     * Commit response message, linked to a {@link CommitRequest}
-//     */
-//    @Value
-//    public static class CommitResponse {
-//        CommitRequest request;
-//    }
+    /**
+     * Commit response message, linked to a {@link CommitRequest}
+     */
+    @Value
+    public static class CommitResponse {
+        CommitRequest request;
+    }
 
-    @Getter(AccessLevel.PACKAGE) // todo should not be exposed
-    private final ActorRef<ConsumerOffsetCommitter<K, V>> myActor = new ActorRef<>(TimeUtils.getClock(), this);
-
-    // replace with Actors
-    @SneakyThrows // remove
     private void commitAndWait() {
-        // new version
-        Future<Class<Void>> ask = commitRequestSend();
-        log.debug("Waiting on a commit response");
-        @SuppressWarnings("unused")
-        Class<Void> voidClass = ask.get(commitTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        // request
+        CommitRequest commitRequest = requestCommitInternal();
 
-//        // \/ old version!
-//
-//        // request
-//        CommitRequest commitRequest = requestCommitInternal();
-//
-//        // wait
-//        boolean waitingOnCommitResponse = true;
-//        int attempts = 0;
-//        while (waitingOnCommitResponse) {
-//            if (attempts > ARBITRARY_RETRY_LIMIT)
-//                throw new InternalRuntimeError("Too many attempts taking commit responses");
-//
-//            try {
-//                log.debug("Waiting on a commit response");
-//                Duration timeout = AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
-//                CommitResponse take = commitResponseQueue.poll(commitTimeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
-//                if (take == null)
-//                    throw new InternalRuntimeError(msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest));
-//                waitingOnCommitResponse = take.getRequest().getId() != commitRequest.getId();
-//            } catch (InterruptedException e) {
-//                log.debug("Interrupted waiting for commit response", e);
-//            }
-//            attempts++;
-//        }
+        // wait
+        boolean waitingOnCommitResponse = true;
+        int attempts = 0;
+        while (waitingOnCommitResponse) {
+            if (attempts > ARBITRARY_RETRY_LIMIT)
+                throw new InternalRuntimeError("Too many attempts taking commit responses");
+
+            try {
+                log.debug("Waiting on a commit response");
+                Duration timeout = AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
+                CommitResponse take = commitResponseQueue.poll(commitTimeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
+                if (take == null)
+                    throw new InternalRuntimeError(msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest));
+                waitingOnCommitResponse = take.getRequest().getId() != commitRequest.getId();
+            } catch (InterruptedException e) {
+                log.debug("Interrupted waiting for commit response", e);
+            }
+            attempts++;
+        }
     }
 
-    private Future<Class<Void>> commitRequestSend() {
-        return myActor.ask(committer -> {
-            committer.retrieveOffsetsAndCommit();
-            return Void.class;
-        });
+    private CommitRequest requestCommitInternal() {
+        CommitRequest request = new CommitRequest();
+        commitRequestQueue.add(request);
+        consumerMgr.wakeup();
+        return request;
     }
 
-//    private CommitRequest requestCommitInternal() {
-//        CommitRequest request = new CommitRequest();
-//        commitRequestQueue.add(request);
-//        consumerMgr.wakeup();
-//        return request;
-//    }
-
-//    void maybeDoCommit() {
-//        // todo poll mail box instead
-//        CommitRequest poll = commitRequestQueue.poll();
-//        if (poll != null) {
-//            log.debug("Commit requested, performing...");
-//            retrieveOffsetsAndCommit();
-//            // only need to send a response if someone will be waiting
-//            if (isSync()) {
-//                log.debug("Adding commit response to queue...");
-//                commitResponseQueue.add(new CommitResponse(poll));
-//            }
-//        }
-//    }
+    void maybeDoCommit() {
+        CommitRequest poll = commitRequestQueue.poll();
+        if (poll != null) {
+            log.debug("Commit requested, performing...");
+            retrieveOffsetsAndCommit();
+            // only need to send a response if someone will be waiting
+            if (isSync()) {
+                log.debug("Adding commit response to queue...");
+                commitResponseQueue.add(new CommitResponse(poll));
+            }
+        }
+    }
 
     public boolean isSync() {
         return commitMode.equals(PERIODIC_CONSUMER_SYNC);

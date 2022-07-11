@@ -30,7 +30,7 @@ class CoreAppTest {
 
     @SneakyThrows
     @Test
-    void test() {
+    public void test() {
         log.info("Test start");
         CoreAppUnderTest coreApp = new CoreAppUnderTest();
         TopicPartition tp = new TopicPartition(coreApp.inputTopic, 0);
@@ -50,7 +50,7 @@ class CoreAppTest {
 
     @SneakyThrows
     @Test
-    void testPollAndProduce() {
+    public void testPollAndProduce() {
         log.info("Test start");
         CoreAppUnderTest coreApp = new CoreAppUnderTest();
 

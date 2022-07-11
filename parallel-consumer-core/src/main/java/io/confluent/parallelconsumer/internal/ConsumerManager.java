@@ -3,8 +3,6 @@ package io.confluent.parallelconsumer.internal;
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
-import lombok.AccessLevel;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
@@ -24,7 +22,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiredArgsConstructor
 public class ConsumerManager<K, V> {
 
-    @Getter(AccessLevel.PROTECTED)
     private final Consumer<K, V> consumer;
 
     private final AtomicBoolean pollingBroker = new AtomicBoolean(false);
@@ -124,10 +121,6 @@ public class ConsumerManager<K, V> {
         return consumer.assignment();
     }
 
-    public Set<String> subscription() {
-        return getConsumer().subscription();
-    }
-
     public void pause(final Set<TopicPartition> assignment) {
         consumer.pause(assignment);
     }
@@ -143,5 +136,4 @@ public class ConsumerManager<K, V> {
     public void onCommitRequested() {
         this.commitRequested = true;
     }
-
 }

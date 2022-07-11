@@ -4,8 +4,6 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.csid.utils.InterruptibleThread;
-import io.confluent.csid.utils.TimeUtils;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.state.WorkManager;
@@ -14,7 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.MDC;
-import org.slf4j.event.Level;
 
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
@@ -37,7 +34,6 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 @Slf4j
 public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
-    @Getter(AccessLevel.PUBLIC) // TODO PROTECTED
     private final ConsumerManager<K, V> consumerManager;
 
     private State state = running;
@@ -67,9 +63,6 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     // todo remove direct access to WM
     @NonNull
     private final WorkManager<K, V> wm;
-
-    @Getter
-    private final ActorRef<BrokerPollSystem<K, V>> myActor = new ActorRef<>(TimeUtils.getClock(), this);
 
     public BrokerPollSystem(ConsumerManager<K, V> consumerMgr, WorkManager<K, V> wm, AbstractParallelEoSStreamProcessor<K, V> pc, final ParallelConsumerOptions<K, V> options) {
         this.wm = wm;
@@ -122,12 +115,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             while (state != closed) {
                 handlePoll();
 
-
-                getMyActor().processBounded();
-                // todo are two inboxes really needed? one actor to rule them all? can't be single queue otherwise
-                if (committer.isPresent()) {
-                    committer.get().getMyActor().processBounded();
-                }
+                maybeDoCommit();
 
                 switch (state) {
                     case draining -> {
@@ -155,7 +143,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
             if (count > 0) {
                 log.trace("Loop: Register work");
-                pc.sendNewPolledRecordsAsync(polledRecords);
+                pc.registerWork(polledRecords);
             }
         }
     }
@@ -260,7 +248,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                         log.warn("Broker poll control thread not closed cleanly.");
                     }
                 } catch (InterruptedException e) {
-                    InterruptibleThread.logInterrupted(log, Level.DEBUG, "Interrupted waiting for broker poller thread to finish", e);
+                    log.debug("Interrupted waiting for broker poller thread to finish", e);
                 } catch (ExecutionException | TimeoutException e) {
                     log.error("Execution or timeout exception waiting for broker poller thread to finish", e);
                     throw e;
@@ -329,12 +317,12 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         }
     }
 
-//    /**
-//     * Will silently skip if not configured with a committer
-//     */
-//    private void maybeDoCommit() {
-//        committer.ifPresent(ConsumerOffsetCommitter::maybeDoCommit);
-//    }
+    /**
+     * Will silently skip if not configured with a committer
+     */
+    private void maybeDoCommit() {
+        committer.ifPresent(ConsumerOffsetCommitter::maybeDoCommit);
+    }
 
     /**
      * Wakeup if colling the broker
