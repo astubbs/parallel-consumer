@@ -11,6 +11,7 @@ import io.stubbs.truth.generator.UserManagedSubject;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.TopicPartition;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 
@@ -25,6 +26,8 @@ import java.util.Set;
 public class ParallelEoSStreamProcessorSubject extends ParallelEoSStreamProcessorParentSubject
         implements UserManagedMiddleSubject {
 
+    private final Duration timeout = Duration.ofSeconds(10);
+
     protected ParallelEoSStreamProcessorSubject(FailureMetadata failureMetadata,
                                                 ParallelEoSStreamProcessor actual) {
         super(failureMetadata, actual);
@@ -36,6 +39,14 @@ public class ParallelEoSStreamProcessorSubject extends ParallelEoSStreamProcesso
     @SubjectFactoryMethod
     public static Factory<ParallelEoSStreamProcessorSubject, ParallelEoSStreamProcessor> parallelEoSStreamProcessors() {
         return ParallelEoSStreamProcessorSubject::new;
+    }
+
+    public ConsumerSubject getConsumer() {
+        return check("getConsumer()").about(ConsumerSubject.consumers()).that(actual.getConsumerFacade());
+    }
+
+    public CommitHistorySubject hasCommittedToPartition(NewTopic topic) {
+        return getConsumer().hasCommittedToPartition(topic);
     }
 
     public CommitHistorySubject hasCommittedToAnyAssignedPartitionOf(NewTopic newTopic) {
