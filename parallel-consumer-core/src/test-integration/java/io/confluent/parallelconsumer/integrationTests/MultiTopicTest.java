@@ -10,6 +10,8 @@ import io.confluent.parallelconsumer.state.ShardKey;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -18,8 +20,10 @@ import org.junit.jupiter.params.provider.EnumSource;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
 import static one.util.streamex.StreamEx.of;
@@ -35,7 +39,6 @@ import static org.hamcrest.CoreMatchers.equalTo;
 @Slf4j
 class MultiTopicTest extends BrokerIntegrationTest<String, String> {
 
-    //    @SneakyThrows
     @ParameterizedTest
     @EnumSource(ProcessingOrder.class)
     void multiTopic(ProcessingOrder order) {
@@ -63,17 +66,32 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
         // commits
         pc.requestCommitAsap();
         log.info("commit msg sent");
+        pc.close();
 
         //
+        Consumer<?, ?> assertingConsumer = kcu.createNewConsumer(false);
         await().atMost(Duration.ofSeconds(10))
-                .failFast(pc::isClosedOrFailed)
+//                .failFast(pc::isClosedOrFailed)
                 .untilAsserted(() -> {
-                    assertCommit(pc, new HashSet<>(multiTopics), recordsPerTopic);
+                    assertSeparateConsumerCommit(assertingConsumer, new HashSet<>(multiTopics), recordsPerTopic);
+//                    assertCommit(pc, new HashSet<>(multiTopics), recordsPerTopic);
 //                    multiTopics.forEach(singleTopic -> assertCommit(pc, singleTopic, recordsPerTopic));
                 });
         log.info("Offsets committed");
     }
 
+    /**
+     * Can't get committed offsets from PC wrapped consumer, so force commit by closing PC, then create new consumer
+     * with same group id, and assert what offsets are told are committed.
+     * <p>
+     * When consumer-interface #XXX is merged, could just poll PC directly (see commented out assertCommit below).
+     */
+    private void assertSeparateConsumerCommit(Consumer<?, ?> assertingConsumer, HashSet<NewTopic> topics, int expectedOffset) {
+        Set<TopicPartition> partitions = topics.stream().map(newTopic -> new TopicPartition(newTopic.name(), 0)).collect(Collectors.toSet());
+        Map<TopicPartition, OffsetAndMetadata> committed = assertingConsumer.committed(partitions);
+        var partitionSubjects = assertThat(assertingConsumer).hasCommittedToPartition(topics);
+        partitionSubjects.forEach((topicPartition, commitHistorySubject) -> commitHistorySubject.atLeastOffset(expectedOffset));
+    }
 
     @SneakyThrows
     private void sendMessages(NewTopic newTopic, int recordsPerTopic) {
