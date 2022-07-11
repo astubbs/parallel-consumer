@@ -9,10 +9,7 @@ import io.confluent.csid.utils.TimeUtils;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.state.WorkManager;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.SneakyThrows;
+import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -67,6 +64,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     @Getter
     private static Duration longPollTimeout = Duration.ofMillis(2000);
 
+    // todo remove direct access to WM
+    @NonNull
     private final WorkManager<K, V> wm;
 
     @Getter
@@ -123,7 +122,12 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             while (state != closed) {
                 handlePoll();
 
+
                 getMyActor().processBounded();
+                // todo are two inboxes really needed? one actor to rule them all? can't be single queue otherwise
+                if (committer.isPresent()) {
+                    committer.get().getMyActor().processBounded();
+                }
 
                 switch (state) {
                     case draining -> {
@@ -343,8 +347,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     /**
      * Pause polling from the underlying Kafka Broker.
      * <p>
-     * Note: If the poll system is currently not in state {@link io.confluent.parallelconsumer.internal.State#running
-     * running}, calling this method will be a no-op.
+     * Note: If the poll system is currently not in state
+     * {@link io.confluent.parallelconsumer.internal.State#running running}, calling this method will be a no-op.
      * </p>
      */
     public void pausePollingAndWorkRegistrationIfRunning() {
@@ -359,8 +363,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     /**
      * Resume polling from the underlying Kafka Broker.
      * <p>
-     * Note: If the poll system is currently not in state {@link io.confluent.parallelconsumer.internal.State#paused
-     * paused}, calling this method will be a no-op.
+     * Note: If the poll system is currently not in state
+     * {@link io.confluent.parallelconsumer.internal.State#paused paused}, calling this method will be a no-op.
      * </p>
      */
     public void resumePollingAndWorkRegistrationIfPaused() {

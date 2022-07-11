@@ -59,6 +59,8 @@ public class ActorRef<T> implements IActor<T>, Executor {
 //        Callable<Optional<R>> task = () -> Optional.of(action.apply(actor));
         FutureTask<R> task = new FutureTask<>(() -> action.apply(actor));
 //        getActionMailbox().add((Callable) task);
+
+        // should actor throw invalid state if actor is "closed" or "terminated"?
         getActionMailbox().add(task);
 
 // how to use CompletableFuture instead?

@@ -8,6 +8,8 @@ import io.confluent.csid.utils.TimeUtils;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.state.WorkManager;
+import lombok.AccessLevel;
+import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
@@ -34,6 +36,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     /**
      * Chosen arbitrarily - retries should never be needed, if they are it's an invalid state
      */
+    // todo delete
     private static final int ARBITRARY_RETRY_LIMIT = 50;
 
     private final CommitMode commitMode;
@@ -77,6 +80,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
             // async
             // we just request the commit
             log.debug("Async commit to be requested");
+            // experiment with returning na Optional<Future> so this async response can be chained.
             Future<Class<Void>> ask = commitRequestSend();
         }
     }
@@ -136,6 +140,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
 //        CommitRequest request;
 //    }
 
+    @Getter(AccessLevel.PACKAGE) // todo should not be exposed
     private final ActorRef<ConsumerOffsetCommitter<K, V>> myActor = new ActorRef<>(TimeUtils.getClock(), this);
 
     // replace with Actors

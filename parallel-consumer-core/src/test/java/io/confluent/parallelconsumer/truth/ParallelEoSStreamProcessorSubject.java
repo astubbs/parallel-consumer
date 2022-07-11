@@ -9,6 +9,10 @@ import io.stubbs.truth.generator.SubjectFactoryMethod;
 import io.stubbs.truth.generator.UserManagedMiddleSubject;
 import io.stubbs.truth.generator.UserManagedSubject;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.TopicPartition;
+
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Main Subject for the class under test.
@@ -35,6 +39,15 @@ public class ParallelEoSStreamProcessorSubject extends ParallelEoSStreamProcesso
     }
 
     public CommitHistorySubject hasCommittedToAnyAssignedPartitionOf(NewTopic newTopic) {
+        isNotNull();
+        ConsumerFacade consumer = actual.getConsumerFacade();
+        return check("getConsumerFacade()")
+                .about(ConsumerSubject.consumers())
+                .that(consumer)
+                .hasCommittedToPartition(newTopic);
+    }
+
+    public Map<TopicPartition, CommitHistorySubject> hasCommittedToAnyAssignedPartitionOf(Set<NewTopic> newTopic) {
         isNotNull();
         ConsumerFacade consumer = actual.getConsumerFacade();
         return check("getConsumerFacade()")

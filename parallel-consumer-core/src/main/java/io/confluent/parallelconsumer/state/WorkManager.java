@@ -11,6 +11,7 @@ import io.confluent.parallelconsumer.internal.BrokerPollSystem;
 import io.confluent.parallelconsumer.internal.DynamicLoadFactor;
 import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -21,6 +22,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.lang.Boolean.TRUE;
 import static lombok.AccessLevel.PUBLIC;
@@ -43,14 +45,17 @@ import static lombok.AccessLevel.PUBLIC;
 @Slf4j
 public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
+    @NonNull
     @Getter
     private final ParallelConsumerOptions<K, V> options;
 
     // todo make private
+    @NonNull
     @Getter(PUBLIC)
     final PartitionStateManager<K, V> pm;
 
     // todo make private
+    @NonNull
     @Getter(PUBLIC)
     private final ShardManager<K, V> sm;
 
@@ -60,6 +65,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * <p>
      * We use it here as well to make sure we have a matching number of messages in queues available.
      */
+    @NonNull
     private final DynamicLoadFactor dynamicLoadFactor;
 
     @Getter
@@ -71,23 +77,24 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     @Getter(PUBLIC)
     private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new ArrayList<>();
 
-    public WorkManager(ParallelConsumerOptions<K, V> options, org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
+    public WorkManager(ParallelConsumerOptions<K, V> options, Supplier<org.apache.kafka.clients.consumer.Consumer<K, V>> consumer) {
         this(options, consumer, new DynamicLoadFactor(), TimeUtils.getClock());
     }
 
     /**
      * Use a private {@link DynamicLoadFactor}, useful for testing.
      */
-    public WorkManager(ParallelConsumerOptions<K, V> options, org.apache.kafka.clients.consumer.Consumer<K, V> consumer, Clock clock) {
-        this(options, consumer, new DynamicLoadFactor(), clock);
+    public WorkManager(ParallelConsumerOptions<K, V> options, Supplier<org.apache.kafka.clients.consumer.Consumer<K, V>> facadeSupplier, Clock clock) {
+        this(options, facadeSupplier, new DynamicLoadFactor(), clock);
     }
 
-    public WorkManager(final ParallelConsumerOptions<K, V> newOptions, final org.apache.kafka.clients.consumer.Consumer<K, V> consumer,
-                       final DynamicLoadFactor dynamicExtraLoadFactor, Clock clock) {
+    public WorkManager(ParallelConsumerOptions<K, V> newOptions,
+                       Supplier<org.apache.kafka.clients.consumer.Consumer<K, V>> facadeSupplier,
+                       DynamicLoadFactor dynamicExtraLoadFactor, Clock clock) {
         this.options = newOptions;
         this.dynamicLoadFactor = dynamicExtraLoadFactor;
         this.sm = new ShardManager<>(options, this, clock);
-        this.pm = new PartitionStateManager<>(consumer, sm, options, clock);
+        this.pm = new PartitionStateManager<>(facadeSupplier, sm, options, clock);
     }
 
     /**
@@ -212,7 +219,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     /**
      * @return true if there's enough messages downloaded from the broker already to satisfy the pipeline, false if more
-     * should be downloaded (or pipelined in the Consumer)
+     *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
         return getNumberOfWorkQueuedInShardsAwaitingSelection() > (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();

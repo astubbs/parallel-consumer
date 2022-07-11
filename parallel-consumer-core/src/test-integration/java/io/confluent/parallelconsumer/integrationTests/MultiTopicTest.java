@@ -10,16 +10,21 @@ import io.confluent.parallelconsumer.state.ShardKey;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.TopicPartition;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
 import static one.util.streamex.StreamEx.of;
 import static org.awaitility.Awaitility.await;
+import static org.hamcrest.CoreMatchers.equalTo;
 
 /**
  * Originally created to investigate issue report #184
@@ -30,9 +35,12 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 class MultiTopicTest extends BrokerIntegrationTest<String, String> {
 
+    //    @SneakyThrows
     @ParameterizedTest
     @EnumSource(ProcessingOrder.class)
     void multiTopic(ProcessingOrder order) {
+        // possible to remove dependency on consumer facade?
+
         int numTopics = 3;
         List<NewTopic> multiTopics = getKcu().createTopics(numTopics);
         int recordsPerTopic = 10;
@@ -49,18 +57,21 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
         });
 
         // processed
-//        int expectedMessagesCount = recordsPerTopic * numTopics;
-//        await().untilAtomic(messageProcessedCount, Matchers.is(equalTo(expectedMessagesCount)));
+        var integer = recordsPerTopic * numTopics;
+        await().untilAtomic(messageProcessedCount, Matchers.is(equalTo(integer)));
 
         // commits
-//        pc.closeWithoutClosingClients();
-//        pc.close();
         pc.requestCommitAsap();
+        log.info("commit msg sent");
 
         //
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            multiTopics.forEach(singleTopic -> assertCommit(pc, singleTopic, recordsPerTopic + 1));
-        });
+        await().atMost(Duration.ofSeconds(10))
+                .failFast(pc::isClosedOrFailed)
+                .untilAsserted(() -> {
+                    assertCommit(pc, new HashSet<>(multiTopics), recordsPerTopic);
+//                    multiTopics.forEach(singleTopic -> assertCommit(pc, singleTopic, recordsPerTopic));
+                });
+        log.info("Offsets committed");
     }
 
 
@@ -69,10 +80,22 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
         getKcu().produceMessages(newTopic.name(), recordsPerTopic);
     }
 
-    private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, NewTopic newTopic, int recordsPerTopic) {
+    private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, NewTopic newTopic, int expectedOffset) {
+        log.error("Current check: topic {} committed {}",
+                newTopic.name(),
+                pc.getConsumerFacade().committed(new TopicPartition(newTopic.name(), 0)));
         assertThat(pc)
                 .hasCommittedToAnyAssignedPartitionOf(newTopic)
-                .offset(recordsPerTopic);
+                .offset(expectedOffset);
+    }
+
+    private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, Set<NewTopic> newTopic, int expectedOffset) {
+//        log.error("Current check: topic {} committed {}",
+//                newTopic,
+//                pc.getConsumerFacade().committed(newTopic));
+
+        var partitionSubjects = assertThat(pc).hasCommittedToAnyAssignedPartitionOf(newTopic);
+        partitionSubjects.forEach((topicPartition, commitHistorySubject) -> commitHistorySubject.atLeastOffset(expectedOffset));
     }
 
 }
