@@ -26,7 +26,6 @@ import java.util.stream.Collectors;
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
 import static one.util.streamex.StreamEx.of;
 import static org.awaitility.Awaitility.await;
-import static org.hamcrest.Matchers.equalTo;
 
 /**
  * Originally created to investigate issue report #184
@@ -36,9 +35,12 @@ import static org.hamcrest.Matchers.equalTo;
 @Slf4j
 class MultiTopicTest extends BrokerIntegrationTest<String, String> {
 
+    //    @SneakyThrows
     @ParameterizedTest
     @EnumSource(ProcessingOrder.class)
     void multiTopic(ProcessingOrder order) {
+        // possible to remove dependency on consumer facade?
+
         int numTopics = 3;
         List<NewTopic> multiTopics = getKcu().createTopics(numTopics);
         int recordsPerTopic = 1;
@@ -60,14 +62,24 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
 
         // commits
         pc.requestCommitAsap();
-        pc.close();
+//        pc.close();
+        log.info("commit msg sent");
 
         //
-        Consumer<?, ?> assertingConsumer = kcu.createNewConsumer(false);
+        // old way with new consumer
+//        Consumer<?, ?> assertingConsumer = kcu.createNewConsumer(false);
+//        await().atMost(Duration.ofSeconds(10))
+//                .untilAsserted(() -> {
+//                    assertSeparateConsumerCommit(assertingConsumer, new HashSet<>(multiTopics), recordsPerTopic);
+//                });
+
+        // new way with facade
         await().atMost(Duration.ofSeconds(10))
+                .failFast(pc::isClosedOrFailed)
                 .untilAsserted(() -> {
-                    assertSeparateConsumerCommit(assertingConsumer, new HashSet<>(multiTopics), recordsPerTopic);
+                    assertCommit(pc, new HashSet<>(multiTopics), recordsPerTopic);
                 });
+        log.info("Offsets committed");
     }
 
     /**
@@ -89,6 +101,23 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
         getKcu().produceMessages(newTopic.name(), recordsPerTopic);
     }
 
+    private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, NewTopic newTopic, int expectedOffset) {
+        log.error("Current check: topic {} committed {}",
+                newTopic.name(),
+                pc.getConsumerFacade().committed(new TopicPartition(newTopic.name(), 0)));
+        assertThat(pc)
+                .hasCommittedToAnyAssignedPartitionOf(newTopic)
+                .offset(expectedOffset);
+    }
+
+    private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, Set<NewTopic> newTopic, int expectedOffset) {
+//        log.error("Current check: topic {} committed {}",
+//                newTopic,
+//                pc.getConsumerFacade().committed(newTopic));
+
+        var partitionSubjects = assertThat(pc).hasCommittedToAnyAssignedPartitionOf(newTopic);
+        partitionSubjects.forEach((topicPartition, commitHistorySubject) -> commitHistorySubject.atLeastOffset(expectedOffset));
+    }
 // depends on merge of features/consumer-interface branch
 //    private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, NewTopic newTopic, int recordsPerTopic) {
 //        var committer = getKcu().getLastConsumerConstructed();
