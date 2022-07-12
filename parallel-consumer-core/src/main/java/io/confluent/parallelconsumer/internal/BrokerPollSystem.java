@@ -122,6 +122,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
 
                 maybeDoCommit();
+                // todo are two inboxes really needed? one actor to rule them all? can't be single queue otherwise
+                if (committer.isPresent()) {
+                    committer.get().getMyActor().processBounded();
+                }
 
                 switch (state) {
                     case draining -> {
