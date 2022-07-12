@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 /**
  * @author Antony Stubbs
  * @see ShardKey
+ * @see io.confluent.parallelconsumer.integrationTests.MultiTopicTest
  */
 class ShardKeyTest {
 
