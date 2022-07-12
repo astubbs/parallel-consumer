@@ -111,12 +111,9 @@ class MultiTopicTest extends BrokerIntegrationTest<String, String> {
     }
 
     private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, Set<NewTopic> newTopic, int expectedOffset) {
-//        log.error("Current check: topic {} committed {}",
-//                newTopic,
-//                pc.getConsumerFacade().committed(newTopic));
-
-        var partitionSubjects = assertThat(pc).hasCommittedToAnyAssignedPartitionOf(newTopic);
-        partitionSubjects.forEach((topicPartition, commitHistorySubject) -> commitHistorySubject.atLeastOffset(expectedOffset));
+        assertThat(pc).hasCommittedToAnyAssignedPartitionOf(newTopic)
+                .forEach((topicPartition, partitionCommits) ->
+                        partitionCommits.atLeastOffset(expectedOffset));
     }
 // depends on merge of features/consumer-interface branch
 //    private void assertCommit(final ParallelEoSStreamProcessor<String, String> pc, NewTopic newTopic, int recordsPerTopic) {
