@@ -14,10 +14,7 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Optional;
 import java.util.PriorityQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Future;
-import java.util.concurrent.FutureTask;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -33,7 +30,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 @ToString
 @EqualsAndHashCode
 @RequiredArgsConstructor
-public class Actor<T> implements IActor<T> {
+public class Actor<T> implements IActor<T>, Executor {
 
     private final Clock clock;
 
@@ -64,6 +61,8 @@ public class Actor<T> implements IActor<T> {
 //        Callable<Optional<R>> task = () -> Optional.of(action.apply(actor));
         FutureTask<R> task = new FutureTask<>(() -> action.apply(actor));
 //        getActionMailbox().add((Callable) task);
+
+        // should actor throw invalid state if actor is "closed" or "terminated"?
         getActionMailbox().add(task);
 
 // how to use CompletableFuture instead?
@@ -73,6 +72,8 @@ public class Actor<T> implements IActor<T> {
 
         return task;
     }
+
+//    private final ScheduledExecutorService timer;
 
     public void tellLater(Consumer<T> action, Duration when) {
         Instant atTime = clock.instant().plus(when);
@@ -120,7 +121,7 @@ public class Actor<T> implements IActor<T> {
      *
      * @param timeout
      */
-    public void processBlocking(Duration timeout) {
+    public void processBlocking(Duration timeout) throws InterruptedException {
         processBounded();
         maybeBlockUntilScheduledOrAction(timeout);
     }
@@ -130,8 +131,7 @@ public class Actor<T> implements IActor<T> {
      *
      * @param timeout
      */
-    @SneakyThrows // todo remove
-    private void maybeBlockUntilScheduledOrAction(Duration timeout) {
+    private void maybeBlockUntilScheduledOrAction(final Duration timeout) throws InterruptedException {
         Duration timeToBlockFor = lowerOfScheduledOrTimeout(timeout);
         var interrupted = getActionMailbox().poll(timeToBlockFor.toMillis(), MILLISECONDS);
 
@@ -163,7 +163,8 @@ public class Actor<T> implements IActor<T> {
         }
     }
 
-    private void execute(@NonNull final Runnable command) {
+    @Override
+    public void execute(@NonNull final Runnable command) {
         command.run();
     }
 
