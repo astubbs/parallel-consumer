@@ -5,12 +5,14 @@ package io.confluent.parallelconsumer.sanity;
  */
 
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class InterruptionTests {
+@Slf4j
+class InterruptionTests {
 
     /**
      * Verify behaviour of 0 vs 1 timeout on {@link Object@wait}. Original test timeout of 5ms was too small, sometimes
@@ -20,7 +22,7 @@ public class InterruptionTests {
     @Timeout(value = 1, unit = SECONDS)
     @SneakyThrows
     @Test
-    public void waitOnZeroCausesInfiniteWait() {
+    void waitOnZeroCausesInfiniteWait() {
         Object lock = new Object();
         try {
             synchronized (lock) {
@@ -28,7 +30,7 @@ public class InterruptionTests {
                 // lock.wait(0); // zero causes it to wait forever
             }
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            log.debug("", e);
         }
     }
 }

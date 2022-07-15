@@ -4,6 +4,7 @@ import com.google.common.truth.FailureMetadata;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessorChildSubject;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessorParentSubject;
+import io.confluent.parallelconsumer.internal.InternalRuntimeError;
 import io.stubbs.truth.generator.SubjectFactoryMethod;
 import io.stubbs.truth.generator.UserManagedMiddleSubject;
 import io.stubbs.truth.generator.UserManagedSubject;
@@ -19,9 +20,7 @@ import java.time.Duration;
  */
 @UserManagedSubject(ParallelEoSStreamProcessor.class)
 public class ParallelEoSStreamProcessorSubject extends ParallelEoSStreamProcessorParentSubject
-        implements UserManagedMiddleSubject {
-
-    private final Duration timeout = Duration.ofSeconds(10);
+        implements UserManagedMiddleSubject<ParallelEoSStreamProcessor> {
 
     protected ParallelEoSStreamProcessorSubject(FailureMetadata failureMetadata,
                                                 ParallelEoSStreamProcessor actual) {
@@ -37,10 +36,10 @@ public class ParallelEoSStreamProcessorSubject extends ParallelEoSStreamProcesso
     }
 
     public CommitHistorySubject hasCommittedToAnyAssignedPartitionOf(String topicName) {
-        return null;
+        throw new InternalRuntimeError("");
     }
 
     public void hasCommittedToAnything(int offset) {
-
+        throw new InternalRuntimeError("");
     }
 }
