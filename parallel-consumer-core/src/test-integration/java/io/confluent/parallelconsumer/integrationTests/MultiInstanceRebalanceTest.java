@@ -12,6 +12,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +28,6 @@ import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.internal.StandardComparisonStrategy;
 import org.awaitility.Awaitility;
 import org.awaitility.core.TerminalFailureException;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -89,10 +89,10 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * Tests with very large numbers of parallel consumer instances to try to reproduce state and concurrency issues
      * (#188, #189).
      * <p>
-     * This test takes some time, but seems required in order to expose some race conditions without syntehticly
-     * creatign them.
+     * This test takes some time, but seems required in order to expose some race conditions without synthetically
+     * creating them.
      */
-    @Disabled
+//    @Disabled
     @Test
     void largeNumberOfInstances() {
         numPartitions = 80;
@@ -100,6 +100,15 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         int expectedMessageCount = 500000;
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED, expectedMessageCount,
                 numberOfPcsToRun, 0.3, 1);
+    }
+
+    @Test
+    void largeNumberOfInstancesIssue397() {
+        numPartitions = 60;
+        int numberOfPcsToRun = 3;
+        int expectedMessageCount = 500_000;
+        runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED, expectedMessageCount,
+                numberOfPcsToRun, 1.0, 1);
     }
 
     ProgressBar overallProgress;
@@ -147,6 +156,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         log.info("Running first instance of pc");
         int expectedMessageCountPerPC = expectedMessageCount / numberOfPcsToRun;
         ParallelConsumerRunnable pc1 = new ParallelConsumerRunnable(maxPoll, commitMode, order, inputName, expectedMessageCountPerPC, pollDelayMs);
+        pc1.setMaxConcurrency(25);
         pcExecutor.submit(pc1);
 
         // Wait for first consumer to consume messages, also effectively waits for the group.initial.rebalance.delay.ms (3s by default)
@@ -337,6 +347,10 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         private ParallelEoSStreamProcessor<String, String> parallelConsumer;
         private boolean started = false;
 
+        @Setter
+        @Getter
+        private int maxConcurrency = 10; // old default is 10
+
         @ToString.Exclude
         private final Queue<String> consumedKeys = new ConcurrentLinkedQueue<>();
 
@@ -369,7 +383,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                     .ordering(order)
                     .consumer(newConsumer)
                     .commitMode(commitMode)
-                    .maxConcurrency(10)
+                    .maxConcurrency(getMaxConcurrency())
                     .build());
 
 
