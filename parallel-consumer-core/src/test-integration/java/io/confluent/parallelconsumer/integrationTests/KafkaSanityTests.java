@@ -26,7 +26,6 @@ import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-//@Isolated
 @Slf4j
 public class KafkaSanityTests extends BrokerIntegrationTest<String, String> {
 
