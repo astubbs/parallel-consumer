@@ -215,8 +215,12 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
 //        }
 
         ProgressTracker progressTracker = new ProgressTracker(processedCount, null, defaultTimeout);
-        var failureMessage = msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
-                expectedMessageCount, commitMode, order, maxPoll);
+        var failureMessage = msg("All keys sent to input-topic should be processed and produced, within duration of {} (expected: {} commit: {} order: {} max poll: {})",
+                defaultTimeout,
+                expectedMessageCount,
+                commitMode,
+                order,
+                maxPoll);
         try {
             waitAtMost(defaultTimeout)
                     .failFast("PC died, check logs.", () ->
