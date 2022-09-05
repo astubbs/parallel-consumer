@@ -236,15 +236,12 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
 //                                    return pc.getFailureCause();
 //                                else
 //                                    return new TerminalFailureException(msg("Too many messages? processedCount.get() {} > expectedMessageCount {}",
-//                                            producedCount.get(), expectedMessageCount)); // needs fail-fast feature in 4.0.4 // TODO link
+//                                            producedCount.get(), expectedMessageCount)); // needs fail-fast feature in 4.0.4
 //                            })
                     .alias(failureMessage)
                     .untilAsserted(() -> {
                         log.trace("Processed-count: {}, Produced-count: {}", processedCount.get(), producedCount.get());
                         int delta = producedCount.get() - processedCount.get();
-                        if (delta == numThreads && progressTracker.getRounds().get() > 1) {
-                            log.error("Here we go fishy...");
-                        }
 
                         //
                         progressTracker.checkForProgressExceptionally();
@@ -252,7 +249,7 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
                         //
                         SoftAssertions all = new SoftAssertions();
                         all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").hasSameSizeAs(expectedKeys);
-                        all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are produced ok ").hasSameSizeAs(expectedKeys);
+                        all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are also produced to broker ok ").hasSameSizeAs(expectedKeys);
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
