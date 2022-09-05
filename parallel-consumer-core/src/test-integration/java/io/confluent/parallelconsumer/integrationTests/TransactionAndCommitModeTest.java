@@ -3,6 +3,7 @@ package io.confluent.parallelconsumer.integrationTests;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import com.google.common.truth.Truth;
 import io.confluent.csid.utils.EnumCartesianProductTestSets;
 import io.confluent.csid.utils.ProgressBarUtils;
 import io.confluent.csid.utils.ProgressTracker;
@@ -127,7 +128,7 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
 
         // pre-produce messages to input-topic
-        List<String> expectedKeys = new ArrayList<>();
+        List<String> keysSentToTopic = new ArrayList<>();
         log.info("Producing {} messages before starting test", expectedMessageCount);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
         try (Producer<String, String> kafkaProducer = kcu.createNewProducer(false)) {
@@ -139,10 +140,14 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
                     }
                 });
                 sends.add(send);
-                expectedKeys.add(key);
+                keysSentToTopic.add(key);
             }
             log.debug("Finished sending test data");
         }
+
+        // sanity
+        Truth.assertWithMessage("keys sent matches count").that(keysSentToTopic).hasSize(expectedMessageCount);
+
         // make sure we finish sending before next stage
         log.debug("Waiting for broker acks");
         for (Future<RecordMetadata> send : sends) {
@@ -188,6 +193,7 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         AtomicInteger processedCount = new AtomicInteger(0);
         AtomicInteger producedCount = new AtomicInteger(0);
 
+        // setup PC processing
         pc.pollAndProduce(record -> {
                     log.debug("Polled {}", record.offset());
                     consumedKeys.add(record.key());
@@ -248,16 +254,16 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
 
                         //
                         SoftAssertions all = new SoftAssertions();
-                        all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").hasSameSizeAs(expectedKeys);
-                        all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are also produced to broker ok ").hasSameSizeAs(expectedKeys);
+                        all.assertThat(new ArrayList<>(consumedKeys)).as("all expected are consumed").hasSameSizeAs(keysSentToTopic);
+                        all.assertThat(new ArrayList<>(producedKeysAcknowledged)).as("all consumed are also produced to broker ok ").hasSameSizeAs(keysSentToTopic);
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
-            log.info("Expected keys (size {})", expectedKeys.size());
+            log.info("Expected keys (size {})", keysSentToTopic.size());
             log.info("Consumed keys ack'd (size {})", consumedKeys.size());
             log.info("Produced keys (size {})", producedKeysAcknowledged.size());
-            expectedKeys.removeAll(consumedKeys);
-            log.error("Missing keys from consumed: {}", expectedKeys);
+            keysSentToTopic.removeAll(consumedKeys);
+            log.error("Missing keys from consumed: {}", keysSentToTopic);
             fail(failureMessage + "\n" + e.getMessage());
         }
 
@@ -269,7 +275,7 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
 
         // sanity
         assertThat(expectedMessageCount).isEqualTo(processedCount.get());
-        assertThat(producedKeysAcknowledged).hasSameSizeAs(expectedKeys);
+        assertThat(producedKeysAcknowledged).hasSameSizeAs(keysSentToTopic);
         // todo performance: tighten up progress check (<2)
         assertThat(progressTracker.getHighestRoundCountSeen()).isLessThan(40);
         bar.close();
