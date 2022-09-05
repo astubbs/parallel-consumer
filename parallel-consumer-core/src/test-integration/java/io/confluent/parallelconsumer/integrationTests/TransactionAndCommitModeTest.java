@@ -189,15 +189,15 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         AtomicInteger producedCount = new AtomicInteger(0);
 
         pc.pollAndProduce(record -> {
-            log.debug("Polled {}", record.offset());
-            consumedKeys.add(record.key());
+                    log.debug("Polled {}", record.offset());
+                    consumedKeys.add(record.key());
                     processedCount.incrementAndGet();
                     return new ProducerRecord<>(outputName, record.key(), "data");
                 }, consumeProduceResult -> {
                     log.debug("Produced {}", consumeProduceResult.getOut());
-            producedCount.incrementAndGet();
-            producedKeysAcknowledged.add(consumeProduceResult.getIn().key());
-            bar.step();
+                    producedCount.incrementAndGet();
+                    producedKeysAcknowledged.add(consumeProduceResult.getIn().key());
+                    bar.step();
                 }
         );
 
@@ -219,10 +219,14 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
             waitAtMost(defaultTimeout)
-                    // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
-                    .failFast("PC died, check logs.",
-                            () -> pc.isClosedOrFailed() // needs fail-fast feature in 4.0.4 - https://github.com/awaitility/awaitility/pull/193
-                                    || producedCount.get() > expectedMessageCount)
+                    .failFast("PC died, check logs.", () ->
+                            (
+                                    pc.isClosedOrFailed()
+                                            || producedCount.get() > expectedMessageCount // received too many
+                            )
+                    )
+// dynamic reason support still waiting https://github.com/awaitility/awaitility/issues/240
+// original:  https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
 //                            () -> {
 //                                if (pc.isClosedOrFailed())
 //                                    return pc.getFailureCause();
@@ -248,11 +252,11 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
-            log.debug("Expected keys (size {})", expectedKeys.size());
-            log.debug("Consumed keys ack'd (size {})", consumedKeys.size());
-            log.debug("Produced keys (size {})", producedKeysAcknowledged.size());
+            log.info("Expected keys (size {})", expectedKeys.size());
+            log.info("Consumed keys ack'd (size {})", consumedKeys.size());
+            log.info("Produced keys (size {})", producedKeysAcknowledged.size());
             expectedKeys.removeAll(consumedKeys);
-            log.info("Missing keys from consumed: {}", expectedKeys);
+            log.error("Missing keys from consumed: {}", expectedKeys);
             fail(failureMessage + "\n" + e.getMessage());
         }
 
