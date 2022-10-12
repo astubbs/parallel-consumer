@@ -12,6 +12,10 @@ import java.nio.ByteBuffer;
 
 /**
  * Base OffsetEncoder
+ * <p>
+ * todo docs
+ *
+ * @author Antony Stubbs
  */
 @Slf4j
 public abstract class OffsetEncoder {
@@ -35,7 +39,7 @@ public abstract class OffsetEncoder {
     abstract int getEncodedSize();
 
     boolean quiteSmall() {
-        return this.getEncodedSize() < OffsetSimultaneousEncoder.LARGE_INPUT_MAP_SIZE_THRESHOLD;
+        return this.getEncodedSize() < OffsetSimultaneousEncoder.LARGE_ENCODED_SIZE_THRESHOLD_BYTES;
     }
 
     byte[] compress() throws IOException {

@@ -9,11 +9,16 @@ import java.nio.ByteBuffer;
 import static io.confluent.parallelconsumer.offsets.OffsetEncoding.ByteArray;
 import static io.confluent.parallelconsumer.offsets.OffsetEncoding.ByteArrayCompressed;
 
+/**
+ * todo docs
+ *
+ * @author Antony Stubbs
+ */
 public class ByteBufferEncoder extends OffsetEncoder {
 
     private final ByteBuffer bytesBuffer;
 
-    public ByteBufferEncoder(final int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
+    public ByteBufferEncoder(long length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
         super(offsetSimultaneousEncoder);
         this.bytesBuffer = ByteBuffer.allocate(1 + length);
     }
