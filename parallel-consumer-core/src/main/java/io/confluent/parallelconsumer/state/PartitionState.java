@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer.state;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.parallelconsumer.Offsets.Offset;
 import io.confluent.parallelconsumer.internal.BrokerPollSystem;
 import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.PCModule;
@@ -96,7 +97,7 @@ public class PartitionState<K, V> {
      *         storage
      */
     @NonNull
-    private ConcurrentSkipListMap<Long, Optional<ConsumerRecord<K, V>>> incompleteOffsets;
+    private ConcurrentSkipListMap<Offset, Optional<ConsumerRecord<K, V>>> incompleteOffsets;
 
     /**
      * Marks whether any {@link WorkContainer}s have been added yet or not. Used for some initial poll analysis.
@@ -173,7 +174,7 @@ public class PartitionState<K, V> {
 
         this.incompleteOffsets = new ConcurrentSkipListMap<>();
         offsetData.getIncompleteOffsets()
-                .forEach(offset -> incompleteOffsets.put(offset, Optional.empty()));
+                .forEach(offset -> incompleteOffsets.put(Offset.of(offset), Optional.empty()));
 
         this.offsetHighestSucceeded = this.offsetHighestSeen; // by definition, as we only encode up to the highest seen offset (inclusive)
     }
@@ -295,7 +296,7 @@ public class PartitionState<K, V> {
         maybeRaiseHighestSeenOffset(offset);
 
         // idempotently add the offset to our incompletes track - if it was already there from loading our metadata on startup, there is no affect
-        incompleteOffsets.put(offset, Optional.of(record));
+        incompleteOffsets.put(Offset.of(offset), Optional.of(record));
     }
 
 
