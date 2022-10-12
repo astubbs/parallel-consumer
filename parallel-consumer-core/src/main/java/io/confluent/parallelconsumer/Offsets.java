@@ -46,5 +46,9 @@ public class Offsets {
     @Value
     public static class Offset {
         long value;
+
+        public static Offset of(Long offset) {
+            return new Offset(offset);
+        }
     }
 }
