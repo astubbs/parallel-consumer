@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.PCModule;
 import io.confluent.parallelconsumer.offsets.NoEncodingPossibleException;
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
+import io.confluent.parallelconsumer.offsets.OffsetSimultaneousEncoder;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
@@ -51,6 +52,11 @@ public class PartitionState<K, V> {
     @NonNull
     @Getter
     private final TopicPartition tp;
+
+    /**
+     * Stateful continuous encoder
+     */
+    private OffsetSimultaneousEncoder offsetSimultaneousEncoder;
 
     /**
      * Offsets beyond the highest committable offset (see {@link #getOffsetHighestSequentialSucceeded()}) which haven't
@@ -227,10 +233,12 @@ public class PartitionState<K, V> {
         updateHighestSucceededOffsetSoFar(offset);
 
         setDirty();
+
+        encodeWorkResult(true, offset);
     }
 
     public void onFailure(WorkContainer<K, V> work) {
-        // no-op
+        encodeWorkResult(false, work.getOffset());
     }
 
     /**
@@ -628,6 +636,38 @@ public class PartitionState<K, V> {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Make encoders add new work result to their encodings
+     * <p>
+     * todo refactor to offset manager?
+     */
+    private void encodeWorkResult(final boolean offsetComplete, final long offset) {
+        long lowWaterMark = getOffsetHighestSequentialSucceeded();
+        Long highestCompleted = getOffsetHighestSucceeded();
+
+        long nextExpectedOffsetFromBroker = lowWaterMark + 1;
+
+        // give encoders chance to truncate
+        offsetSimultaneousEncoder.maybeReinitialise(nextExpectedOffsetFromBroker, highestCompleted);
+
+        if (offset <= nextExpectedOffsetFromBroker) {
+            // skip - nothing to encode
+            return;
+        }
+
+        long relativeOffset = offset - nextExpectedOffsetFromBroker;
+        if (relativeOffset < 0) {
+//            throw new InternalRuntimeError(msg("Relative offset negative {}", relativeOffset));
+            log.trace("Offset {} now below low water mark {}, no need to encode", offset, lowWaterMark);
+            return;
+        }
+
+        if (offsetComplete)
+            offsetSimultaneousEncoder.encodeCompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
+        else
+            offsetSimultaneousEncoder.encodeIncompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
     }
 
 }

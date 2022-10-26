@@ -153,6 +153,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // notify listeners
         successfulWorkListeners.forEach(c -> c.accept(wc));
 
+        //
+        encodeWorkResult(true, wc);
+
+        //
         numberRecordsOutForProcessing--;
     }
 
@@ -170,6 +174,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         wc.endFlight();
         pm.onFailure(wc);
         sm.onFailure(wc);
+
         numberRecordsOutForProcessing--;
     }
 
@@ -272,4 +277,5 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public boolean isDirty() {
         return pm.isDirty();
     }
+
 }

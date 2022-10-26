@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.Getter;
+import lombok.SneakyThrows;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
@@ -32,7 +33,7 @@ import static io.confluent.parallelconsumer.state.PartitionState.KAFKA_OFFSET_AB
  */
 @Slf4j
 @ToString(onlyExplicitlyIncluded = true)
-public class OffsetSimultaneousEncoder {
+public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     /**
      * Size threshold in bytes after which compressing the encodings will be compared, as it seems to be typically worth
@@ -44,6 +45,15 @@ public class OffsetSimultaneousEncoder {
      * Size threshold to notice particularly large input maps.
      */
     public static final int LARGE_INPUT_MAP_SIZE = 2_000;
+
+    /**
+     * The highest committable offset - the next expected offset to be returned by the broker. So by definition, this
+     * index in our offset map we're encoding, is always incomplete.
+     */
+    @Getter
+    private long baseOffset;
+
+    private long highestSucceeded;
 
     /**
      * The offsets which have not yet been fully completed and can't have their offset committed - only used to test
@@ -218,7 +228,7 @@ public class OffsetSimultaneousEncoder {
      * <p>
      *  TODO VERY large offset ranges is slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
      */
-    public OffsetSimultaneousEncoder invoke() {
+    public OffsetSimultaneousEncoder oldIinvoke() {
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffsetToCommit, getEndOffsetExclusive());
         log.trace("Incompletes are: {}", this.incompleteOffsets);
 
@@ -300,6 +310,166 @@ public class OffsetSimultaneousEncoder {
         result.put(best.encoding.magicByte);
         result.put(best.data);
         return result.array();
+    }
+
+
+    @Override
+    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
+        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
+//        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
+//            return;
+
+        for (final OffsetEncoder encoder : activeEncoders) {
+            encoder.encodeIncompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
+        }
+    }
+
+    @Override
+    public void encodeCompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
+        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
+//        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
+//            return;
+
+        for (final OffsetEncoder encoder : activeEncoders) {
+            try {
+                encoder.encodeCompleteOffset(baseOffset, relativeOffset, currentHighestCompleted);
+            } catch (EncodingNotSupportedException e) {
+                encoder.disable(e);
+            }
+        }
+    }
+
+    private void preCheck(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+        maybeReinitialise(baseOffset, currentHighestCompleted);
+    }
+
+    @Override
+    public void maybeReinitialise(final long currentBaseOffset, final long currentHighestCompleted) {
+        boolean reinitialise = false;
+
+        long newLength = currentHighestCompleted - currentBaseOffset;
+//        if (originalLength != newLength) {
+////        if (this.highestSuceeded != currentHighestCompleted) {
+//            log.debug("Length of Bitset changed {} to {}",
+//                    originalLength, newLength);
+//            reinitialise = true;
+//        }
+
+        if (this.baseOffset < currentBaseOffset) {
+            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to truncate",
+                    this.baseOffset, currentBaseOffset);
+            reinitialise = true;
+        }
+
+        if (currentBaseOffset < this.baseOffset)
+            throw new InternalRuntimeError(msg("New base offset {} smaller than previous {}", currentBaseOffset, baseOffset));
+
+        this.highestSucceeded = currentHighestCompleted; // always track, change has no impact on me
+        this.length = initLength(currentBaseOffset, highestSucceeded);
+
+        if (reinitialise) {
+            initialise(currentBaseOffset, currentHighestCompleted);
+        }
+
+        reinitEncoders(currentBaseOffset, currentHighestCompleted);
+    }
+
+//    private void mabeyAddEncodersIfMissing() {
+//        if (encoders.isEmpty()) {
+//            this.addEncodersMaybe();
+//        }
+//    }
+
+    private boolean preEncodeCheckCanSkip(final long currentBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+//        checkConditionsHaventChanged(currentBaseOffset, currentHighestCompleted);
+
+        return checkIfEncodingNeededBasedOnLowWater(relativeOffset);
+    }
+
+//    private void checkConditionsHaventChanged(final long currentBaseOffset, final long currentHighestCompleted) {
+//        boolean reinitialise = false;
+//
+//        if (this.highestSuceeded != currentHighestCompleted) {
+//            log.debug("Next expected offset from broker {} has moved to {} - need to reset encoders",
+//                    this.highestSuceeded, currentHighestCompleted);
+//            reinitialise = true;
+//        }
+//
+//        if (this.baseOffset != currentBaseOffset) {
+//            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to reset encoders",
+//                    this.baseOffset, currentBaseOffset);
+//            reinitialise = true;
+//        }
+//
+//        if (reinitialise) {
+//            initialise(currentBaseOffset, currentHighestCompleted);
+//        }
+//    }
+
+    //todo remove don't think this is ever possible, or throw exception
+    private boolean checkIfEncodingNeededBasedOnLowWater(final long relativeOffset) {
+        // only encode if this work is above the low water mark
+        return relativeOffset <= 0;
+    }
+
+    /**
+     * @return the packed size of the best encoder, or 0 if no encodings have been performed / needed
+     */
+    @SneakyThrows
+    @Override
+    public int getEncodedSize() {
+//        if (noEncodingRequiredSoFar) {
+//            return 0;
+//        } else {
+//            OffsetEncoder peek = sortedEncoders.peek();
+//            return peek.getEncodedSize();
+//        }
+        throw new InternalRuntimeError("");
+    }
+
+    @Override
+    public byte[] getEncodedBytes() {
+        return new byte[0];
+    }
+
+    @Override
+    public int getEncodedSizeEstimate() {
+        if (isNoEncodingNeeded() || length < 1) {
+            return 0;
+        } else {
+            if (OffsetMapCodecManager.forcedCodec.isPresent()) {
+                OffsetEncoding offsetEncoding = OffsetMapCodecManager.forcedCodec.get();
+                // todo - this is rubbish
+                OffsetEncoderBase offsetEncoderBase = sortedEncoders.stream().filter(x -> x.getEncodingType().equals(offsetEncoding)).findFirst().get();
+                return offsetEncoderBase.getEncodedSizeEstimate();
+            } else {
+                if (sortedEncoders.isEmpty()) {
+                    throw new InternalRuntimeError("No encoders");
+                }
+                Collections.sort(sortedEncoders);
+                OffsetEncoderBase smallestEncoder = sortedEncoders.get(0);
+                int smallestSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
+                log.debug("Currently estimated smallest codec is {}, needing {} bytes",
+                        smallestEncoder.getEncodingType(), smallestSizeEstimate);
+                return smallestSizeEstimate;
+            }
+        }
+    }
+
+    private boolean isNoEncodingNeeded() {
+        return length < 1;
+    }
+
+    public Object getSmallestCodec() {
+        Collections.sort(sortedEncoders);
+        if (sortedEncoders.isEmpty())
+            throw new InternalRuntimeError("No encoders");
+        return sortedEncoders.get(0);
+    }
+
+    @Override
+    public String toString() {
+        return msg("{} nextExpected: {}, highest succeeded: {}, encoders:{}", getClass().getSimpleName(), baseOffset, highestSucceeded, activeEncoders);
     }
 
 }
