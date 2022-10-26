@@ -148,6 +148,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         // update as we go
         pm.onSuccess(wc);
+
+        // todo move to chain off partition state
         sm.onSuccess(wc);
 
         // notify listeners

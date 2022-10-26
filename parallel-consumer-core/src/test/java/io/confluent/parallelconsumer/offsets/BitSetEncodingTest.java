@@ -44,7 +44,7 @@ class BitSetEncodingTest {
 
         // before serialisation
         {
-            assertThat(bs.getBitSet().stream().toArray()).containsExactly(1, 2, 3, 5, 9);
+            assertThat(bs.toArray()).containsExactly(1L, 2L, 3L, 5L, 9L);
         }
 
         // after serialisation

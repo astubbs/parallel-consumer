@@ -1,5 +1,7 @@
 package io.confluent.parallelconsumer.offsets;
 
+import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
+
 public interface OffsetEncoderContract {
 
     /**
@@ -25,6 +27,11 @@ public interface OffsetEncoderContract {
      */
     int getEncodedSizeEstimate();
 
-    void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) throws EncodingNotSupportedException;
+    void ensureCapacity(EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch);
+
+    /**
+     * todo docs
+     */
+//    void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) throws EncodingNotSupportedException;
 
 }

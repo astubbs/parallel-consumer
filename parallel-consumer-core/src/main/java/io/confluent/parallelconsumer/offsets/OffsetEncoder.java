@@ -144,6 +144,10 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
         log.debug("Disabling {}, {}", this.getEncodingType(), e.getMessage(), e);
     }
 
+    /**
+     * todo docs
+     */
+// todo sanity check this works - missed on events while disabled?
     public void enable() {
         disabled = false;
     }

@@ -5,8 +5,8 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import io.confluent.csid.utils.Range;
+import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.ToString;
@@ -155,54 +155,57 @@ class RunLengthEncoder extends OffsetEncoder {
 
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        encodeRunLength(false, baseOffset, relativeOffset);
+//        encodeRunLength(false, baseOffset, relativeOffset);
+        //no-op
+        //Entries being added should always be complete, as the range by definition starts out incomplete. We never add incompletes because things never transition from complete to incomplete.");
     }
 
     @Override
     public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        maybeReinitialise(newBaseOffset, currentHighestCompleted);
+//        maybeReinitialise(newBaseOffset, currentHighestCompleted);
 
-        encodeRunLength(true, newBaseOffset, relativeOffset);
+//        encodeRunLength(true, newBaseOffset, relativeOffset);
+        encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(newBaseOffset, relativeOffset);
     }
 
-    @Override
-    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) {
-        boolean reinitialise = false;
-
-        long newLength = currentHighestCompleted - newBaseOffset;
-//        if (originalLength != newLength) {
-////        if (this.highestSuceeded != currentHighestCompleted) {
-//            log.debug("Length of Bitset changed {} to {}",
-//                    originalLength, newLength);
+//    @Override
+//    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) {
+//        boolean reinitialise = false;
+//
+//        long newLength = currentHighestCompleted - newBaseOffset;
+////        if (originalLength != newLength) {
+//////        if (this.highestSuceeded != currentHighestCompleted) {
+////            log.debug("Length of Bitset changed {} to {}",
+////                    originalLength, newLength);
+////            reinitialise = true;
+////        }
+//
+//        if (originalBaseOffset != newBaseOffset) {
+//            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work",
+//                    this.originalBaseOffset, newBaseOffset);
 //            reinitialise = true;
 //        }
+//
+//        if (newBaseOffset < originalBaseOffset)
+//            throw new InternalRuntimeException("");
+//
+//        if (reinitialise) {
+//            reinitialise(newBaseOffset, currentHighestCompleted);
+//        }
+//    }
 
-        if (originalBaseOffset != newBaseOffset) {
-            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work",
-                    this.originalBaseOffset, newBaseOffset);
-            reinitialise = true;
-        }
-
-        if (newBaseOffset < originalBaseOffset)
-            throw new InternalRuntimeException("");
-
-        if (reinitialise) {
-            reinitialise(newBaseOffset, currentHighestCompleted);
-        }
-    }
-
-    private void reinitialise(final long newBaseOffset, final long currentHighestCompleted) {
-//        long longDelta = newBaseOffset - originalBaseOffset;
-//        int baseDelta = JavaUtils.safeCast(longDelta);
-        truncateRunlengthsV2(newBaseOffset);
-
-
-//        currentRunLengthCount = 0;
-//        previousRelativeOffsetFromBase = 0;
-//        previousRunLengthState = false;
-
-        enable();
-    }
+//    private void reinitialise(final long newBaseOffset, final long currentHighestCompleted) {
+////        long longDelta = newBaseOffset - originalBaseOffset;
+////        int baseDelta = JavaUtils.safeCast(longDelta);
+//        truncateRunlengthsV2(newBaseOffset);
+//
+//
+////        currentRunLengthCount = 0;
+////        previousRelativeOffsetFromBase = 0;
+////        previousRunLengthState = false;
+//
+//        enable();
+//    }
 
     NavigableSet<RunLengthEntry> runLengthOffsetPairs = new TreeSet<>();
 //
@@ -369,14 +372,32 @@ class RunLengthEncoder extends OffsetEncoder {
     }
 
     @Override
+    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
+        final long offsetRange = recordsAndEpoch.calculateOffsetRange();
+        switch (version) {
+            case v1 -> {
+                if (offsetRange > Short.MAX_VALUE) {
+                    disable(new RunLengthV1EncodingNotSupported(msg("v1 doesn't support large enough offsets {} vs {}", offsetRange, Short.MAX_VALUE)));
+                }
+            }
+            case v2 -> {
+                if (offsetRange > Integer.MAX_VALUE) {
+                    disable(new RunLengthV2EncodingNotSupported(msg("v2 doesn't support large offsets {} vs {}", offsetRange, Integer.MAX_VALUE)));
+                }
+            }
+        }
+    }
+
+    @Override
     public byte[] getEncodedBytes() {
         return encodedBytes.get();
     }
 
-    private void encodeRunLength(final boolean currentIsComplete, final long newBaseOffset, final long relativeOffsetFromBase) {
-        segmentOrCombinePreviousEntryIfNeeded(currentIsComplete, newBaseOffset, relativeOffsetFromBase);
-    }
+//    private void encodeRunLength(final boolean currentIsComplete, final long newBaseOffset, final long relativeOffsetFromBase) {
+//        encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(currentIsComplete, newBaseOffset, relativeOffsetFromBase);
+//    }
 
+    @Deprecated
     private void encodeRunLengthOld(final boolean currentIsComplete, final long newBaseOffset, final int relativeOffsetFromBase) {
         boolean segmented = injectGapsWithIncomplete(currentIsComplete, newBaseOffset, relativeOffsetFromBase);
         if (segmented)
@@ -425,10 +446,13 @@ class RunLengthEncoder extends OffsetEncoder {
         return entry;
     }
 
+    @Deprecated
     private boolean injectGapsWithIncomplete(final boolean currentIsComplete, final long newBaseOffset, final int relativeOffsetFromBase) {
-        boolean segmented = segmentOrCombinePreviousEntryIfNeeded(currentIsComplete, newBaseOffset, relativeOffsetFromBase);
-        if (segmented)
-            return true;
+//        boolean segmented = encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(currentIsComplete, newBaseOffset, relativeOffsetFromBase);
+        boolean segmented = false; // TODO
+
+//        if (segmented)
+//            return true;
 
 //        boolean bothThisRecordAndPreviousRecordAreComplete = previousRunLengthState && currentIsComplete;
 //        if (bothThisRecordAndPreviousRecordAreComplete) {
@@ -468,10 +492,15 @@ class RunLengthEncoder extends OffsetEncoder {
         return segmented;
     }
 
-    private boolean segmentOrCombinePreviousEntryIfNeeded(final boolean currentIsComplete, final long newBaseOffset, final long relativeOffsetFromBase) {
-        if (!currentIsComplete) {
-            throw new InternalRuntimeException("Entries being added should always be complete, as the range by definition starts out incomplete. We never add incompletes because things never transition from complete to incomplete.");
-        }
+    /**
+     * todo docs
+     */
+    // todo renmr
+    private boolean encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(final long newBaseOffset, final long relativeOffsetFromBase) {
+//        if (!currentIsComplete) {
+//            throw new InternalRuntimeException("Entries being added should always be complete, as the range by definition starts out incomplete. We never add incompletes because things never transition from complete to incomplete.");
+//        }
+
         RunLengthEntry intersectingWith = runLengthOffsetPairs.floor(new RunLengthEntry(newBaseOffset + relativeOffsetFromBase));
         if (intersectingWith == null) {
             // first entry

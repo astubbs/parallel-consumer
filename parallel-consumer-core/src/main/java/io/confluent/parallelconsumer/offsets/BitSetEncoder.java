@@ -2,8 +2,9 @@ package io.confluent.parallelconsumer.offsets;
 
 import io.confluent.csid.utils.MathUtils;
 import io.confluent.csid.utils.StringUtils;
+import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.ToString;
@@ -12,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.util.BitSet;
+import java.util.List;
 import java.util.Optional;
 
 import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
@@ -53,8 +55,8 @@ public class BitSetEncoder extends OffsetEncoder {
 //    private ByteBuffer wrappedBitsetBytesBuffer;
 
     // todo use a different structure that can resize dynamically?
-    @Getter
-    BitSet bitSet = new BitSet();
+    @Getter(AccessLevel.PRIVATE)
+    BitSetFragmentCollection bitSet = new BitSetFragmentCollection();
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
@@ -65,6 +67,7 @@ public class BitSetEncoder extends OffsetEncoder {
     public BitSetEncoder(long baseOffset, long length, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) throws BitSetEncodingNotSupportedException {
         super(baseOffset, offsetSimultaneousEncoder, newVersion);
 
+        // todo no op?
         reinitialise(baseOffset, length);
     }
 
@@ -175,12 +178,12 @@ public class BitSetEncoder extends OffsetEncoder {
 
     @Override
     public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) throws BitSetEncodingNotSupportedException {
-        try {
-            // should not be rebuilding bitset every time a work container changes state
-            maybeReinitialise(newBaseOffset, currentHighestCompleted);
-        } catch (EncodingNotSupportedException e) {
-            this.disable(e);
-        }
+//        try {
+//            // should not be rebuilding bitset every time a work container changes state
+//            maybeReinitialise(newBaseOffset, currentHighestCompleted);
+//        } catch (EncodingNotSupportedException e) {
+//            this.disable(e);
+//        }
 
         log.trace("Relative offset set {}", relativeOffset);
         try {
@@ -202,62 +205,68 @@ public class BitSetEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
-        boolean reinitialise = false;
-
-        long newLength = currentHighestCompleted - newBaseOffset;
-        if (originalLength != newLength) {
-//        if (this.highestSucceeded != currentHighestCompleted) {
-            log.debug("Length of Bitset changed {} to {}",
-                    originalLength, newLength);
-            reinitialise = true;
-        }
-
-        if (originalBaseOffset != newBaseOffset) {
-            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to shift bitset right",
-                    this.originalBaseOffset, newBaseOffset);
-            reinitialise = true;
-        }
-
-        if (newBaseOffset < originalBaseOffset)
-            throw new InternalRuntimeException("Base offset moved backwards from " + originalBaseOffset + " to " + newBaseOffset);
-
-        if (reinitialise) {
-            reinitialise(newBaseOffset, newLength);
-        }
-
+    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
+        this.bitSet.ensureCapacity(recordsAndEpoch);
     }
 
+//    @Override
+//    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
+//        boolean shouldReinitialise = false;
+//
+//        long newLength = currentHighestCompleted - newBaseOffset;
+//        if (originalLength != newLength) {
+////        if (this.highestSucceeded != currentHighestCompleted) {
+//            log.debug("Length of Bitset changed {} to {}",
+//                    originalLength, newLength);
+//            shouldReinitialise = true;
+//        }
+//
+//        if (originalBaseOffset != newBaseOffset) {
+//            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to shift bitset right",
+//                    this.originalBaseOffset, newBaseOffset);
+//            shouldReinitialise = true;
+//        }
+//
+//        if (newBaseOffset < originalBaseOffset)
+//            throw new InternalRuntimeException("Base offset moved backwards from " + originalBaseOffset + " to " + newBaseOffset);
+//
+//        if (shouldReinitialise) {
+//            reinitialise(newBaseOffset, newLength);
+//        }
+//
+//    }
+
+    // todo inline?
+    // todo chain bitset fragments after each other, instead of rebuilding
     private void reinitialise(final long newBaseOffset, final long newLength) throws BitSetEncodingNotSupportedException {
-        if (newLength == -1) {
-            log.debug("Nothing to encode, highest successful offset one behind out starting point");
-            bitSet = new BitSet();
-            this.originalLength = toIntExact(newLength);
-            return;
-        } else if (newLength < -2) {
-            throw new InternalRuntimeException("Invalid state - highest successful too far behind starting point");
-        }
-
-        long baseDelta = newBaseOffset - originalBaseOffset;
-        // truncate at new relative delta
-
-        int endIndex = toIntExact(baseDelta + originalLength + 1);
-        int startIndex = (int) baseDelta;
-        BitSet truncated = this.bitSet.get(startIndex, endIndex);
-        this.bitSet = new BitSet(toIntExact(newLength));
-        this.bitSet.or(truncated); // fill with old values
-
-//        bitSet = new BitSet(length);
-
-        this.originalLength = toIntExact(newLength);
-
-        // TODO throws away whats returned
-        constructWrappedByteBuffer(toIntExact(newLength), this.version);
-
-//            this.bitSet = new BitSet((int) newLength);
-
-
-        enable();
+//        if (newLength == -1) {
+//            log.debug("Nothing to encode, highest successful offset one behind out starting point");
+//            bitSet = new BitSetFragmentCollection();
+//            this.originalLength = toIntExact(newLength);
+//        } else if (newLength < -2) {
+//            throw new InternalRuntimeException("Invalid state - highest successful too far behind starting point");
+//        } else {
+//            long baseDelta = newBaseOffset - originalBaseOffset;
+//            // truncate at new relative delta
+//
+//            int endIndex = toIntExact(baseDelta + originalLength + 1);
+//            int startIndex = (int) baseDelta;
+//            BitSet truncated = this.bitSet.get(startIndex, endIndex);
+//            this.bitSet = new BitSet(toIntExact(newLength));
+//            this.bitSet.or(truncated); // fill with old values
+//
+////        bitSet = new BitSet(length);
+//
+//            this.originalLength = toIntExact(newLength);
+//
+//            // TODO throws away whats returned ??
+////            constructWrappedByteBuffer(toIntExact(newLength), this.version);
+//
+////            this.bitSet = new BitSet((int) newLength);
+//
+//
+//            enable();
+//        }
     }
 
     private int getLengthEntryBytes() {
@@ -272,4 +281,12 @@ public class BitSetEncoder extends OffsetEncoder {
         return this.encodedBytes.get();
     }
 
+    /**
+     * Like BitSet#stream(), but with relative offsets. Slow for large sets - useful for testing.
+     *
+     * @see BitSet#stream()
+     */
+    public List<Long> toArray() {
+        return this.getBitSet().toArray();
+    }
 }

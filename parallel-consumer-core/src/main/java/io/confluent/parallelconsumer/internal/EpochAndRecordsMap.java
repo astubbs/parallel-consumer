@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.csid.utils.JavaUtils;
 import io.confluent.parallelconsumer.state.PartitionStateManager;
 import lombok.NonNull;
 import lombok.Value;
@@ -12,6 +13,8 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
 
 import java.util.*;
+
+import static io.confluent.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
 
 /**
  * For tagging polled records with our epoch
@@ -66,6 +69,28 @@ public class EpochAndRecordsMap<K, V> {
         @NonNull TopicPartition topicPartition;
         @NonNull Long epochOfPartitionAtPoll;
         @NonNull List<ConsumerRecord<K, V>> records;
+
+        public long getLastOffset() {
+            var last = JavaUtils.getLast(records);
+            if (last.isPresent()) {
+                return last.get().offset();
+            } else {
+                return KAFKA_OFFSET_ABSENCE;
+            }
+        }
+
+        public long calculateOffsetRange() {
+            return getLastOffset() - getFirstOffset();
+        }
+
+        private long getFirstOffset() {
+            var first = JavaUtils.getFirst(records);
+            if (first.isPresent()) {
+                return first.get().offset();
+            } else {
+                return KAFKA_OFFSET_ABSENCE;
+            }
+        }
     }
 
 }

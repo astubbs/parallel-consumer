@@ -57,7 +57,7 @@ public class PartitionState<K, V> {
     /**
      * Stateful continuous encoder
      */
-    private OffsetSimultaneousEncoder offsetSimultaneousEncoder;
+    private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
 
     /**
      * Offsets beyond the highest committable offset (see {@link #getOffsetHighestSequentialSucceeded()}) which haven't
@@ -173,6 +173,13 @@ public class PartitionState<K, V> {
         this.partitionsAssignmentEpoch = newEpoch;
 
         initStateFromOffsetData(offsetData);
+
+        // merge list to set branch
+        final SortedSet<Long> sortedOffsetsSet = new TreeSet<>(offsetData.getIncompleteOffsets());
+
+        offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE,
+                KAFKA_OFFSET_ABSENCE,
+                sortedOffsetsSet);
     }
 
     private void initStateFromOffsetData(OffsetMapCodecManager.HighestOffsetAndIncompletes offsetData) {
@@ -272,6 +279,9 @@ public class PartitionState<K, V> {
         maybeTruncateOrPruneTrackedOffsets(recordsAndEpoch);
 
         //
+        ensureEncoderCapacity(recordsAndEpoch);
+
+        //
         long epochOfInboundRecords = recordsAndEpoch.getEpochOfPartitionAtPoll();
         List<ConsumerRecord<K, V>> recordPollBatch = recordsAndEpoch.getRecords();
         for (var aRecord : recordPollBatch) {
@@ -283,6 +293,10 @@ public class PartitionState<K, V> {
             }
         }
 
+    }
+
+    private void ensureEncoderCapacity(EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
+        offsetSimultaneousEncoder.ensureCapacity(recordsAndEpoch);
     }
 
     /**
@@ -645,13 +659,14 @@ public class PartitionState<K, V> {
      * todo refactor to offset manager?
      */
     private void encodeWorkResult(final boolean offsetComplete, final long offset) {
-        long lowWaterMark = getOffsetHighestSequentialSucceeded();
+        long highestSequentialSucceeded = getOffsetHighestSequentialSucceeded();
         Long highestCompleted = getOffsetHighestSucceeded();
 
-        long nextExpectedOffsetFromBroker = lowWaterMark + 1;
+        long nextExpectedOffsetFromBroker = highestSequentialSucceeded + 1;
 
-        // give encoders chance to truncate
-        offsetSimultaneousEncoder.maybeReinitialise(nextExpectedOffsetFromBroker, highestCompleted);
+// cannot reset for every result, must reset one demand by truncating views of underlying data
+//        // give encoders chance to truncate
+//        offsetSimultaneousEncoder.maybeReinitialise(nextExpectedOffsetFromBroker, highestCompleted);
 
         if (offset <= nextExpectedOffsetFromBroker) {
             // skip - nothing to encode
@@ -661,7 +676,7 @@ public class PartitionState<K, V> {
         long relativeOffset = offset - nextExpectedOffsetFromBroker;
         if (relativeOffset < 0) {
 //            throw new InternalRuntimeError(msg("Relative offset negative {}", relativeOffset));
-            log.trace("Offset {} now below low water mark {}, no need to encode", offset, lowWaterMark);
+            log.trace("Offset {} now below low water mark {}, no need to encode", offset, highestSequentialSucceeded);
             return;
         }
 

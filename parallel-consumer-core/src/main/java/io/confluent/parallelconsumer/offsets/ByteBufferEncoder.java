@@ -4,7 +4,7 @@ package io.confluent.parallelconsumer.offsets;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
+import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import lombok.ToString;
 
 import java.nio.ByteBuffer;
@@ -87,9 +87,15 @@ public class ByteBufferEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) {
-        throw new InternalRuntimeException("Na");
+    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
+        final long requiredCapacity = recordsAndEpoch.calculateOffsetRange();
+        if (bytesBuffer.capacity() < requiredCapacity) {
+            // copy byte buffer into bigger one
+            final ByteBuffer newBuffer = ByteBuffer.allocate(Math.toIntExact(requiredCapacity));
+            newBuffer.put(bytesBuffer.array());
+        }
     }
+
 
     @Override
     public byte[] getEncodedBytes() {

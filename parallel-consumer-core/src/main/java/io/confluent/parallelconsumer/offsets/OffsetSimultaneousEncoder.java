@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.offsets;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.WorkManager;
@@ -125,6 +126,10 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         this.activeEncoders = initEncoders();
     }
 
+    public OffsetSimultaneousEncoder(int baseOffsetToCommit, long highestSucceededOffset) {
+        this(baseOffsetToCommit, highestSucceededOffset, new TreeSet<>());
+    }
+
     /**
      * The difference between the base offset (the offset to be committed) and the highest seen offset.
      */
@@ -238,8 +243,8 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffsetToCommit, getEndOffsetExclusive());
         log.trace("Incompletes are: {}", this.incompleteOffsets);
 
-        if (true)
-            throw new IllegalStateException("Not implemented");
+//        if (true)
+//            throw new IllegalStateException("Not implemented");
 
         //
         log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffsetToCommit, getEndOffsetExclusive(), getlengthBetweenBaseAndHighOffset());
@@ -324,7 +329,7 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
-        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
+//        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
 //        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
 //            return;
 
@@ -335,7 +340,7 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public void encodeCompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) throws EncodingNotSupportedException {
-        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
+//        preCheck(baseOffset, relativeOffset, currentHighestCompleted);
 //        if (preEncodeCheckCanSkip(baseOffset, relativeOffset, currentHighestCompleted))
 //            return;
 
@@ -350,40 +355,49 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         // todo only throw exception if now encoder could encode
     }
 
-    private void preCheck(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        maybeReinitialise(baseOffset, currentHighestCompleted);
-    }
+//    /**
+//     * todo docs
+//     */
+//    private void preCheck(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
+//        maybeReinitialise(baseOffset, currentHighestCompleted);
+//    }
 
-    @Override
-    public void maybeReinitialise(final long currentBaseOffset, final long currentHighestCompleted) {
-        boolean reinitialise = false;
-
-        long newLength = currentHighestCompleted - currentBaseOffset;
-//        if (originalLength != newLength) {
-////        if (this.highestSuceeded != currentHighestCompleted) {
-//            log.debug("Length of Bitset changed {} to {}",
-//                    originalLength, newLength);
+//    @Override
+//    public void maybeReinitialise(final long newBaseOffset, final long currentHighestCompleted) {
+//        boolean reinitialise = false;
+//
+//        long newLength = currentHighestCompleted - newBaseOffset;
+////        if (originalLength != newLength) {
+//////        if (this.highestSuceeded != currentHighestCompleted) {
+////            log.debug("Length of Bitset changed {} to {}",
+////                    originalLength, newLength);
+////            reinitialise = true;
+////        }
+//
+//        if (this.baseOffset < newBaseOffset) {
+//            log.debug("Base offset {} has moved up to {} - new continuous blocks of successful work - need to truncate",
+//                    this.baseOffset, newBaseOffset);
 //            reinitialise = true;
 //        }
+//
+//        if (newBaseOffset < this.baseOffset)
+//            throw new InternalRuntimeException(msg("New base offset {} smaller than previous {}", newBaseOffset, baseOffset));
+//
+//        this.highestSucceeded = currentHighestCompleted; // always track, change has no impact on me
+////        this.length = initLength(newBaseOffset, highestSucceeded);
+//
+//        if (reinitialise) {
+//            initialise(newBaseOffset, currentHighestCompleted);
+//        }
+//
+//        reinitEncoders(newBaseOffset, currentHighestCompleted);
+//    }
 
-        if (this.baseOffset < currentBaseOffset) {
-            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work - need to truncate",
-                    this.baseOffset, currentBaseOffset);
-            reinitialise = true;
-        }
-
-        if (currentBaseOffset < this.baseOffset)
-            throw new InternalRuntimeException(msg("New base offset {} smaller than previous {}", currentBaseOffset, baseOffset));
-
-        this.highestSucceeded = currentHighestCompleted; // always track, change has no impact on me
-//        this.length = initLength(currentBaseOffset, highestSucceeded);
-
-        if (reinitialise) {
-            initialise(currentBaseOffset, currentHighestCompleted);
-        }
-
-        reinitEncoders(currentBaseOffset, currentHighestCompleted);
-    }
+    /**
+     * todo docs
+     * <p>
+     * doesn't do much, just high low and high fields
+     */
 
     //todo can remove sync?
     private synchronized void initialise(final long currentBaseOffset, long currentHighestCompleted) {
@@ -397,19 +411,22 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             log.debug("~Large input map size: {} (start: {} end: {})", getlengthBetweenBaseAndHighOffset(), this.baseOffset, this.highestSucceeded);
         }
     }
-
-    private void reinitEncoders(final long currentBaseOffset, final long currentHighestCompleted) {
-        log.debug("Reinitialise all encoders");
-        for (final OffsetEncoder encoder : activeEncoders) {
-            try {
-                encoder.maybeReinitialise(currentBaseOffset, currentHighestCompleted);
-            } catch (EncodingNotSupportedException a) {
-                log.debug("Cannot use {} encoder with new base {} and highest {}: {}",
-                        encoder.getClass().getSimpleName(), currentBaseOffset, currentHighestCompleted, a.getMessage());
-                encoder.disable(a);
-            }
-        }
-    }
+//
+//    /**
+//     * Reset the encoder
+//     */
+//    private void reinitEncoders(final long currentBaseOffset, final long currentHighestCompleted) {
+//        log.debug("Reinitialise all encoders");
+//        for (final OffsetEncoder encoder : activeEncoders) {
+//            try {
+//                encoder.maybeReinitialise(currentBaseOffset, currentHighestCompleted);
+//            } catch (EncodingNotSupportedException a) {
+//                log.debug("Cannot use {} encoder with new base {} and highest {}: {}",
+//                        encoder.getClass().getSimpleName(), currentBaseOffset, currentHighestCompleted, a.getMessage());
+//                encoder.disable(a);
+//            }
+//        }
+//    }
 
 //    private void mabeyAddEncodersIfMissing() {
 //        if (encoders.isEmpty()) {
@@ -497,6 +514,11 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
                 }
             }
         }
+    }
+
+    @Override
+    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
+        activeEncoders.forEach(x -> x.ensureCapacity(recordsAndEpoch));
     }
 
     private boolean isNoEncodingNeeded() {
