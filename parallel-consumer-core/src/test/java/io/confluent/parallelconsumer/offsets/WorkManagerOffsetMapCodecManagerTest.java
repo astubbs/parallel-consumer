@@ -335,7 +335,8 @@ class WorkManagerOffsetMapCodecManagerTest {
 
             var offsets = bitmapStringToIncomplete(finalOffsetForPartition, inputString);
 
-            OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highestSucceeded, offsets).invoke();
+            OffsetSimultaneousEncoder simultaneousEncoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highestSucceeded, offsets)
+                    .oldIinvoke();
             byte[] byteByte = simultaneousEncoder.getEncodingMap().get(ByteArray);
             byte[] bitsBytes = simultaneousEncoder.getEncodingMap().get(BitSet);
 
@@ -359,7 +360,7 @@ class WorkManagerOffsetMapCodecManagerTest {
         int nextExpectedOffset = 0;
         var incompletes = bitmapStringToIncomplete(nextExpectedOffset, input);
         OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(nextExpectedOffset, highestSucceeded, incompletes);
-        encoder.invoke();
+        encoder.oldIinvoke();
         byte[] pack = encoder.packSmallest();
 
         //
@@ -408,7 +409,7 @@ class WorkManagerOffsetMapCodecManagerTest {
 
         //
         OffsetSimultaneousEncoder encoder = new OffsetSimultaneousEncoder(finalOffsetForPartition, highestSeen, inputIncompletes);
-        encoder.invoke();
+        encoder.oldIinvoke();
 
         // test all encodings created
         for (final EncodedOffsetPair encoding : encoder.sortedEncodings) {

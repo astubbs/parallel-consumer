@@ -90,7 +90,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         OffsetSimultaneousEncoder.compressionForced = true;
 
         //
-        encoder.invoke();
+        encoder.oldIinvoke();
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //
@@ -350,7 +350,7 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         OffsetSimultaneousEncoder.compressionForced = true;
 
         //
-        encoder.invoke();
+        encoder.oldIinvoke();
         Map<OffsetEncoding, byte[]> encodingMap = encoder.getEncodingMap();
 
         //

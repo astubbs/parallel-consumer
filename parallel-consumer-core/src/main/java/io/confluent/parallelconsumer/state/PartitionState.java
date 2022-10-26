@@ -7,6 +7,7 @@ package io.confluent.parallelconsumer.state;
 import io.confluent.parallelconsumer.internal.BrokerPollSystem;
 import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.PCModule;
+import io.confluent.parallelconsumer.offsets.EncodingNotSupportedException;
 import io.confluent.parallelconsumer.offsets.NoEncodingPossibleException;
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
 import io.confluent.parallelconsumer.offsets.OffsetSimultaneousEncoder;
@@ -238,7 +239,7 @@ public class PartitionState<K, V> {
     }
 
     public void onFailure(WorkContainer<K, V> work) {
-        encodeWorkResult(false, work.getOffset());
+        encodeWorkResult(false, work.offset());
     }
 
     /**
@@ -664,10 +665,19 @@ public class PartitionState<K, V> {
             return;
         }
 
-        if (offsetComplete)
-            offsetSimultaneousEncoder.encodeCompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
-        else
-            offsetSimultaneousEncoder.encodeIncompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
+        try {
+            if (offsetComplete) {
+                offsetSimultaneousEncoder.encodeCompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
+            } else {
+                offsetSimultaneousEncoder.encodeIncompleteOffset(nextExpectedOffsetFromBroker, relativeOffset, highestCompleted);
+            }
+            // encoding succeeded, update allowed more records flag
+            setAllowedMoreRecords(true);
+        } catch (EncodingNotSupportedException e) {
+            log.warn("Encoding not supported with any encoder for offset {} (relative offset {})", offset, relativeOffset);
+            // encoding failed, update allowed more records flag
+            setAllowedMoreRecords(false);
+        }
     }
 
 }

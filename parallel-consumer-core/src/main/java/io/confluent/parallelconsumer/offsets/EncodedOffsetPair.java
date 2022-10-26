@@ -33,8 +33,10 @@ import static io.confluent.parallelconsumer.offsets.OffsetSimpleSerialisation.de
 public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
 
     public static final Comparator<EncodedOffsetPair> SIZE_COMPARATOR = Comparator.comparingInt(x -> x.data.capacity());
+
     @Getter
     OffsetEncoding encoding;
+
     @Getter
     ByteBuffer data;
 

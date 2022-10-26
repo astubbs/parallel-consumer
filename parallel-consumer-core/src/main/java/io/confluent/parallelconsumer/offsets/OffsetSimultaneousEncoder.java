@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.offsets;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.internal.InternalRuntimeException;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.Getter;
@@ -102,6 +103,7 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * The encoders to run. Concurrent so we can remove encoders while traversing.
      */
     private final ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> activeEncoders;
+    private final List<OffsetEncoder> sortedEncoders = new ArrayList<>();
 
     public OffsetSimultaneousEncoder(long baseOffsetToCommit, long highestSucceededOffset, SortedSet<Long> incompleteOffsets) {
         this.baseOffsetToCommit = baseOffsetToCommit;
@@ -172,6 +174,8 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         newEncoders.add(new RunLengthEncoder(baseOffsetToCommit, this, v1));
         newEncoders.add(new RunLengthEncoder(baseOffsetToCommit, this, v2));
 
+        sortedEncoders.addAll(newEncoders);
+
         return newEncoders;
     }
 
@@ -228,9 +232,14 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
      * <p>
      *  TODO VERY large offset ranges is slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
      */
+    // todo rename / delete? only for tests?
+    @Deprecated
     public OffsetSimultaneousEncoder oldIinvoke() {
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffsetToCommit, getEndOffsetExclusive());
         log.trace("Incompletes are: {}", this.incompleteOffsets);
+
+        if (true)
+            throw new IllegalStateException("Not implemented");
 
         //
         log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffsetToCommit, getEndOffsetExclusive(), getlengthBetweenBaseAndHighOffset());
@@ -337,6 +346,8 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
                 encoder.disable(e);
             }
         }
+
+        // todo only throw exception if now encoder could encode
     }
 
     private void preCheck(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
@@ -362,16 +373,42 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         }
 
         if (currentBaseOffset < this.baseOffset)
-            throw new InternalRuntimeError(msg("New base offset {} smaller than previous {}", currentBaseOffset, baseOffset));
+            throw new InternalRuntimeException(msg("New base offset {} smaller than previous {}", currentBaseOffset, baseOffset));
 
         this.highestSucceeded = currentHighestCompleted; // always track, change has no impact on me
-        this.length = initLength(currentBaseOffset, highestSucceeded);
+//        this.length = initLength(currentBaseOffset, highestSucceeded);
 
         if (reinitialise) {
             initialise(currentBaseOffset, currentHighestCompleted);
         }
 
         reinitEncoders(currentBaseOffset, currentHighestCompleted);
+    }
+
+    //todo can remove sync?
+    private synchronized void initialise(final long currentBaseOffset, long currentHighestCompleted) {
+        log.trace("Initialising {},{}", currentBaseOffset, currentHighestCompleted);
+        this.baseOffset = currentBaseOffset;
+        this.highestSucceeded = currentHighestCompleted;
+
+//        this.length = initLength(currentBaseOffset, highestSucceeded);
+
+        if (getlengthBetweenBaseAndHighOffset() > LARGE_INPUT_MAP_SIZE) {
+            log.debug("~Large input map size: {} (start: {} end: {})", getlengthBetweenBaseAndHighOffset(), this.baseOffset, this.highestSucceeded);
+        }
+    }
+
+    private void reinitEncoders(final long currentBaseOffset, final long currentHighestCompleted) {
+        log.debug("Reinitialise all encoders");
+        for (final OffsetEncoder encoder : activeEncoders) {
+            try {
+                encoder.maybeReinitialise(currentBaseOffset, currentHighestCompleted);
+            } catch (EncodingNotSupportedException a) {
+                log.debug("Cannot use {} encoder with new base {} and highest {}: {}",
+                        encoder.getClass().getSimpleName(), currentBaseOffset, currentHighestCompleted, a.getMessage());
+                encoder.disable(a);
+            }
+        }
     }
 
 //    private void mabeyAddEncodersIfMissing() {
@@ -424,7 +461,7 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 //            OffsetEncoder peek = sortedEncoders.peek();
 //            return peek.getEncodedSize();
 //        }
-        throw new InternalRuntimeError("");
+        throw new InternalRuntimeException("");
     }
 
     @Override
@@ -434,37 +471,43 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     @Override
     public int getEncodedSizeEstimate() {
-        if (isNoEncodingNeeded() || length < 1) {
+        if (isNoEncodingNeeded() || getlengthBetweenBaseAndHighOffset() < 1) {
             return 0;
         } else {
             if (OffsetMapCodecManager.forcedCodec.isPresent()) {
                 OffsetEncoding offsetEncoding = OffsetMapCodecManager.forcedCodec.get();
                 // todo - this is rubbish
-                OffsetEncoderBase offsetEncoderBase = sortedEncoders.stream().filter(x -> x.getEncodingType().equals(offsetEncoding)).findFirst().get();
+                OffsetEncoder offsetEncoderBase = activeEncoders
+                        .stream()
+                        .filter(x -> x.getEncodingType().equals(offsetEncoding))
+                        .findFirst()
+                        .get();
                 return offsetEncoderBase.getEncodedSizeEstimate();
             } else {
-                if (sortedEncoders.isEmpty()) {
-                    throw new InternalRuntimeError("No encoders");
+                if (sortedEncodings.isEmpty()) {
+                    // todo handle exception
+                    throw new InternalRuntimeException("No encoders");
+                } else {
+                    Collections.sort(sortedEncoders);
+                    OffsetEncoder smallestEncoder = sortedEncoders.get(0);
+                    int smallestSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
+                    log.debug("Currently estimated smallest codec is {}, needing {} bytes",
+                            smallestEncoder.getEncodingType(), smallestSizeEstimate);
+                    return smallestSizeEstimate;
                 }
-                Collections.sort(sortedEncoders);
-                OffsetEncoderBase smallestEncoder = sortedEncoders.get(0);
-                int smallestSizeEstimate = smallestEncoder.getEncodedSizeEstimate();
-                log.debug("Currently estimated smallest codec is {}, needing {} bytes",
-                        smallestEncoder.getEncodingType(), smallestSizeEstimate);
-                return smallestSizeEstimate;
             }
         }
     }
 
     private boolean isNoEncodingNeeded() {
-        return length < 1;
+        return getlengthBetweenBaseAndHighOffset() < 1;
     }
 
     public Object getSmallestCodec() {
-        Collections.sort(sortedEncoders);
-        if (sortedEncoders.isEmpty())
-            throw new InternalRuntimeError("No encoders");
-        return sortedEncoders.get(0);
+//        Collections.sort(sortedEncoders);
+        if (sortedEncodings.isEmpty())
+            throw new InternalRuntimeException("No encoders");
+        return sortedEncodings.first();
     }
 
     @Override

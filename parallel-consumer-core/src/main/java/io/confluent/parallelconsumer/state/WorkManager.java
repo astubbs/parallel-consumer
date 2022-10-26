@@ -154,9 +154,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         successfulWorkListeners.forEach(c -> c.accept(wc));
 
         //
-        encodeWorkResult(true, wc);
-
-        //
         numberRecordsOutForProcessing--;
     }
 

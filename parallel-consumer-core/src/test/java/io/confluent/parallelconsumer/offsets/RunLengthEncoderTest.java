@@ -234,7 +234,7 @@ class RunLengthEncoderTest {
         OffsetSimultaneousEncoder offsetSimultaneousEncoder
                 = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE, overflowedValue - 1, incompletes);
 
-        offsetSimultaneousEncoder.invoke();
+        offsetSimultaneousEncoder.oldIinvoke();
 
         final Map<OffsetEncoding, byte[]> encodingMap = offsetSimultaneousEncoder.getEncodingMap();
 

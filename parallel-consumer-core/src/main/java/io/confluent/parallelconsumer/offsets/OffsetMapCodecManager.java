@@ -208,7 +208,7 @@ public class OffsetMapCodecManager<K, V> {
         OffsetSimultaneousEncoder simultaneousEncoder = null;
         try {
             simultaneousEncoder = new OffsetSimultaneousEncoder(baseOffsetForPartition, highestSucceeded, incompleteOffsets);
-            simultaneousEncoder.invoke();
+            simultaneousEncoder.oldIinvoke();
         } catch (Exception e) {
             throw new InternalRuntimeException("Error encoding offsets", e);
         }
