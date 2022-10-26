@@ -1,5 +1,10 @@
 package io.confluent.parallelconsumer.offsets;
 
+import io.confluent.csid.utils.MathUtils;
+import io.confluent.csid.utils.StringUtils;
+import io.confluent.parallelconsumer.internal.InternalRuntimeException;
+import io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
+import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -9,8 +14,8 @@ import java.nio.ByteBuffer;
 import java.util.BitSet;
 import java.util.Optional;
 
-import static io.confluent.csid.utils.JavaUtils.safeCast;
-import static io.confluent.parallelconsumer.OffsetEncoding.*;
+import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
+import static java.lang.Math.toIntExact;
 
 /**
  * Encodes a range of offsets, from an incompletes collection into a BitSet.
@@ -36,31 +41,29 @@ import static io.confluent.parallelconsumer.OffsetEncoding.*;
 @Slf4j
 public class BitSetEncoder extends OffsetEncoder {
 
-
-    @ToString.Include
-    private static final Version DEFAULT_VERSION = Version.v2;
-
     /**
      * {@link BitSet} only supports {@link Integer#MAX_VALUE) bits
      */
     public static final Integer MAX_LENGTH_ENCODABLE = Integer.MAX_VALUE;
 
+    private static final Version DEFAULT_VERSION = Version.v2;
+
     @ToString.Include
     private int originalLength;
 //    private ByteBuffer wrappedBitsetBytesBuffer;
 
+    // todo use a different structure that can resize dynamically?
+    @Getter
     BitSet bitSet = new BitSet();
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
-    public BitsetEncoder(long baseOffset, int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) throws BitSetEncodingNotSupportedException {
+    public BitSetEncoder(long baseOffset, long length, OffsetSimultaneousEncoder offsetSimultaneousEncoder) throws BitSetEncodingNotSupportedException {
         this(baseOffset, length, offsetSimultaneousEncoder, DEFAULT_VERSION);
     }
 
-    public BitsetEncoder(long baseOffset, int length, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) throws BitSetEncodingNotSupportedException {
-        super(baseOffset, offsetSimultaneousEncoder);
-
-        this.version = newVersion;
+    public BitSetEncoder(long baseOffset, long length, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) throws BitSetEncodingNotSupportedException {
+        super(baseOffset, offsetSimultaneousEncoder, newVersion);
 
         reinitialise(baseOffset, length);
     }
@@ -90,7 +93,7 @@ public class BitSetEncoder extends OffsetEncoder {
         final ByteBuffer wrappedBitSetBytesBuffer = ByteBuffer.allocate(wrappedBufferLength);
 
         // bitset doesn't serialise it's set capacity, so we have to as the unused capacity actually means something
-        wrappedBitSetBytesBuffer.putInt(Math.toIntExact(bitsetEntriesRequired));
+        wrappedBitSetBytesBuffer.putInt(toIntExact(bitsetEntriesRequired));
 
         return wrappedBitSetBytesBuffer;
     }
@@ -132,16 +135,20 @@ public class BitSetEncoder extends OffsetEncoder {
         };
     }
 
-    @Override
-    public void encodeIncompleteOffset(final long newBaseOffset, final int relativeOffset) {
-        // noop - bitset defaults to 0's (`unset`)
-    }
-
-    @Override
-    public void encodeCompletedOffset(final long newBaseOffset, final int relativeOffset) {
-        log.trace("Relative offset set {}", relativeOffset);
-        bitSet.set(relativeOffset);
-    }
+//    @Override
+//    public void encodeIncompleteOffset(final long newBaseOffset, final long relativeOffset) throws EncodingNotSupportedException {
+//        // noop - bitset defaults to 0's (`unset`)
+//    }
+//
+//    @Override
+//    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset) throws EncodingNotSupportedException {
+//        log.trace("Relative offset set {}", relativeOffset);
+//        try {
+//            bitSet.set(Math.toIntExact(relativeOffset));
+//        } catch (IndexOutOfBoundsException e) {
+//            throw new BitSetEncodingNotSupportedException(StringUtils.msg("BitSetEncoder can't encode offset {} as it's too large for the bitset. (max: {})", relativeOffset, MAX_LENGTH_ENCODABLE), e);
+//        }
+//    }
 
     @SneakyThrows
     @Override
@@ -149,7 +156,7 @@ public class BitSetEncoder extends OffsetEncoder {
         final byte[] bitSetArray = this.bitSet.toByteArray();
         ByteBuffer wrappedBitsetBytesBuffer = constructWrappedByteBuffer(originalLength, version);
         if (wrappedBitsetBytesBuffer.remaining() < bitSetArray.length)
-            throw new InternalRuntimeError("Not enough space in byte array");
+            throw new InternalRuntimeException("Not enough space in byte array");
         try {
             wrappedBitsetBytesBuffer.put(bitSetArray);
         } catch (BufferOverflowException e) {
@@ -160,32 +167,27 @@ public class BitSetEncoder extends OffsetEncoder {
         this.encodedBytes = Optional.of(array);
         return array;
     }
-//
-//    @Override
-//    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
-//        super(baseOffset, relativeOffset);
-//    }
-//
-//    @Override
-//    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
-//        super(baseOffset, relativeOffset);
-//    }
 
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
         // noop - bitset defaults to 0's (`unset`)
-
     }
 
     @Override
-    public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+    public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) throws BitSetEncodingNotSupportedException {
         try {
+            // should not be rebuilding bitset every time a work container changes state
             maybeReinitialise(newBaseOffset, currentHighestCompleted);
         } catch (EncodingNotSupportedException e) {
             this.disable(e);
         }
 
-        encodeCompletedOffset(newBaseOffset, safeCast(relativeOffset));
+        log.trace("Relative offset set {}", relativeOffset);
+        try {
+            bitSet.set(Math.toIntExact(relativeOffset));
+        } catch (IndexOutOfBoundsException e) {
+            throw new BitSetEncodingNotSupportedException(StringUtils.msg("BitSetEncoder can't encode offset {} as it's too large for the bitset. (max: {})", relativeOffset, MAX_LENGTH_ENCODABLE), e);
+        }
     }
 
     @Override
@@ -218,7 +220,7 @@ public class BitSetEncoder extends OffsetEncoder {
         }
 
         if (newBaseOffset < originalBaseOffset)
-            throw new InternalRuntimeError("");
+            throw new InternalRuntimeException("Base offset moved backwards from " + originalBaseOffset + " to " + newBaseOffset);
 
         if (reinitialise) {
             reinitialise(newBaseOffset, newLength);
@@ -230,27 +232,27 @@ public class BitSetEncoder extends OffsetEncoder {
         if (newLength == -1) {
             log.debug("Nothing to encode, highest successful offset one behind out starting point");
             bitSet = new BitSet();
-            this.originalLength = Math.toIntExact(newLength);
+            this.originalLength = toIntExact(newLength);
             return;
         } else if (newLength < -2) {
-            throw new InternalRuntimeError("Invalid state - highest successful too far behind starting point");
+            throw new InternalRuntimeException("Invalid state - highest successful too far behind starting point");
         }
 
         long baseDelta = newBaseOffset - originalBaseOffset;
         // truncate at new relative delta
 
-        int endIndex = safeCast(baseDelta + originalLength + 1);
+        int endIndex = toIntExact(baseDelta + originalLength + 1);
         int startIndex = (int) baseDelta;
         BitSet truncated = this.bitSet.get(startIndex, endIndex);
-        this.bitSet = new BitSet(safeCast(newLength));
+        this.bitSet = new BitSet(toIntExact(newLength));
         this.bitSet.or(truncated); // fill with old values
 
 //        bitSet = new BitSet(length);
 
-        this.originalLength = Math.toIntExact(newLength);
+        this.originalLength = toIntExact(newLength);
 
         // TODO throws away whats returned
-        constructWrappedByteBuffer(safeCast(newLength), this.version);
+        constructWrappedByteBuffer(toIntExact(newLength), this.version);
 
 //            this.bitSet = new BitSet((int) newLength);
 

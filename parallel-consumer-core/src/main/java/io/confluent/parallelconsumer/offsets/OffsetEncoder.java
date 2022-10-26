@@ -23,7 +23,7 @@ import java.nio.ByteBuffer;
  */
 @ToString(onlyExplicitlyIncluded = true)
 @Slf4j
-abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<OffsetEncoderBase> {
+abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<OffsetEncoder> {
 
     /**
      * Implementation version of the encoding
@@ -42,32 +42,35 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
     @ToString.Include
     protected long originalBaseOffset;
 
-    public OffsetEncoderBase(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder) {
+    public OffsetEncoder(final long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder, OffsetEncoding.Version version) {
         this.originalBaseOffset = baseOffset;
         this.offsetSimultaneousEncoder = offsetSimultaneousEncoder;
+        this.version = version;
     }
 
     protected abstract OffsetEncoding getEncodingType();
 
     protected abstract OffsetEncoding getEncodingTypeCompressed();
 
-    public abstract void encodeIncompleteOffset(final long newBaseOffset, final int relativeOffset);
-
-    public abstract void encodeCompletedOffset(final long newBaseOffset, final int relativeOffset);
+//    @Override
+//    public abstract void encodeIncompleteOffset(final long newBaseOffset, final long relativeOffset) throws EncodingNotSupportedException;
+//
+//    @Override
+//    public abstract void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset) throws EncodingNotSupportedException;
 
     abstract byte[] serialise() throws EncodingNotSupportedException;
 
     public abstract int getEncodedSize();
 
     boolean quiteSmall() {
-        return this.getEncodedSize() < OffsetSimultaneousEncoder.LARGE_INPUT_MAP_SIZE_THRESHOLD;
+        return this.getEncodedSize() < OffsetSimultaneousEncoder.LARGE_ENCODED_SIZE_THRESHOLD_BYTES;
     }
 
     byte[] compress() throws IOException {
         return OffsetSimpleSerialisation.compressZstd(this.getEncodedBytes());
     }
 
-    void registerSerialisedDataIfEnabled() { //throws EncodingNotSupportedException {
+    void registerSerialisedDataIfEnabled() throws EncodingNotSupportedException {
         if (!disabled) {
             final byte[] bytes;
             try {
@@ -88,7 +91,7 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
         int encodedSizeEstimate = getEncodedSizeEstimate();
         int length = bytes.length;
         log.debug("Registering {}, with actual size {} vs estimate {}", type, length, encodedSizeEstimate);
-        offsetSimultaneousEncoder.sortedEncodingData.add(new EncodedOffsetData(type, ByteBuffer.wrap(bytes)));
+        offsetSimultaneousEncoder.sortedEncodings.add(new EncodedOffsetPair(type, ByteBuffer.wrap(bytes)));
         offsetSimultaneousEncoder.encodingMap.put(type, bytes);
     }
 
@@ -98,8 +101,6 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
         final OffsetEncoding encodingType = this.getEncodingTypeCompressed();
         this.registerSerialisedData(encodingType, compressed);
     }
-
-    public abstract byte[] getEncodedBytes();
 
 //    @Override
 //    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
@@ -134,7 +135,7 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
      * @see #getEncodedSize()
      */
     @Override
-    public int compareTo(final OffsetEncoderBase e) {
+    public int compareTo(final OffsetEncoder e) {
         return Integer.compare(this.getEncodedSizeEstimate(), e.getEncodedSizeEstimate());
     }
 

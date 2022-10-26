@@ -5,6 +5,8 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import io.confluent.csid.utils.Range;
+import io.confluent.parallelconsumer.internal.InternalRuntimeException;
+import io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.ToString;
@@ -13,9 +15,10 @@ import lombok.extern.slf4j.Slf4j;
 import java.nio.ByteBuffer;
 import java.util.*;
 
-import static io.confluent.csid.utils.JavaUtils.safeCast;
 import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.OffsetEncoding.*;
+import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
+import static java.lang.Math.toIntExact;
+
 
 /**
  * RunLength encoder that leverages the nature of this system.
@@ -52,8 +55,7 @@ class RunLengthEncoder extends OffsetEncoder {
     private static final Version DEFAULT_VERSION = Version.v2;
 
     public RunLengthEncoder(long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) {
-        super(baseOffset, offsetSimultaneousEncoder);
-        version = newVersion;
+        super(baseOffset, offsetSimultaneousEncoder, newVersion);
 
         init();
     }
@@ -87,15 +89,15 @@ class RunLengthEncoder extends OffsetEncoder {
         };
     }
 
-    @Override
-    public void encodeIncompleteOffset(final long newBaseOffset, final int relativeOffset) {
-        encodeRunLength(false, newBaseOffset, relativeOffset);
-    }
-
-    @Override
-    public void encodeCompletedOffset(final long newBaseOffset, final int relativeOffset) {
-        encodeRunLength(true, newBaseOffset, relativeOffset);
-    }
+//    @Override
+//    public void encodeIncompleteOffset(final long newBaseOffset, final long relativeOffset) {
+//        encodeRunLength(false, newBaseOffset, relativeOffset);
+//    }
+//
+//    @Override
+//    public void encodeCompletedOffset(final long newBaseOffset, final long relativeOffset) {
+//        encodeRunLength(true, newBaseOffset, relativeOffset);
+//    }
 
     @Override
     public byte[] serialise() throws EncodingNotSupportedException {
@@ -113,7 +115,7 @@ class RunLengthEncoder extends OffsetEncoder {
                 case v1 -> {
                     final short shortCastRunlength = run.shortValue();
                     if (run != shortCastRunlength)
-                        throw new RunlengthV1EncodingNotSupported(msg("Runlength too long for Short ({} cast to {})", run, shortCastRunlength));
+                        throw new RunLengthV1EncodingNotSupported(msg("Runlength too long for Short ({} cast to {})", run, shortCastRunlength));
                     runLengthEncodedByteBuffer.putShort(shortCastRunlength);
                 }
                 case v2 -> {
@@ -150,28 +152,17 @@ class RunLengthEncoder extends OffsetEncoder {
             case v2 -> Integer.BYTES;
         };
     }
-//
-//    @Override
-//    public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset) {
-//asdf
-//    }
-//
-//    @Override
-//    public void encodeCompletedOffset(final long baseOffset, final long relativeOffset) {
-//asdf
-//    }
 
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        // noop
+        encodeRunLength(false, baseOffset, relativeOffset);
     }
-
 
     @Override
     public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
         maybeReinitialise(newBaseOffset, currentHighestCompleted);
 
-        encodeCompletedOffset(newBaseOffset, safeCast(relativeOffset));
+        encodeRunLength(true, newBaseOffset, relativeOffset);
     }
 
     @Override
@@ -193,7 +184,7 @@ class RunLengthEncoder extends OffsetEncoder {
         }
 
         if (newBaseOffset < originalBaseOffset)
-            throw new InternalRuntimeError("");
+            throw new InternalRuntimeException("");
 
         if (reinitialise) {
             reinitialise(newBaseOffset, currentHighestCompleted);
@@ -234,14 +225,14 @@ class RunLengthEncoder extends OffsetEncoder {
             this(startOffset, null);
         }
 
-        public RunLengthEntry(final long startOffset, final Integer runLength) {
+        public RunLengthEntry(final long startOffset, final Long runLength) throws ArithmeticException {
             if (startOffset < 0) {
                 throw new IllegalArgumentException(msg("Bad start offset {}", startOffset, runLength));
             }
             this.startOffset = startOffset;
 //            this.succeeded = succeeded;
             if (runLength != null)
-                setRunLength(runLength);
+                setRunLength(Math.toIntExact(runLength));
         }
 
         public void setRunLength(final int runLength) {
@@ -262,7 +253,7 @@ class RunLengthEncoder extends OffsetEncoder {
             return startOffset + runLength;
         }
 
-        public int getRelativeStartOffsetFromBase(final long baseOffset) {
+        public long getRelativeStartOffsetFromBase(final long baseOffset) {
             return Math.toIntExact(startOffset - baseOffset);
         }
 
@@ -301,7 +292,7 @@ class RunLengthEncoder extends OffsetEncoder {
 
             RunLengthEntry intersectionRunLength = runLengthOffsetPairs.floor(new RunLengthEntry(newBaseOffset));
             if (intersectionRunLength == null)
-                throw new InternalRuntimeError("Couldn't find interception point");
+                throw new InternalRuntimeException("Couldn't find interception point");
             else if (newBaseOffset > intersectionRunLength.getEndOffsetInclusive()) {
                 // there is no intersection as the new base offset is a point beyond what our run lengths encode
                 // remove all
@@ -309,7 +300,7 @@ class RunLengthEncoder extends OffsetEncoder {
             } else {
                 // truncate intersection run length
                 long adjustedRunLength = intersectionRunLength.runLength - (newBaseOffset - intersectionRunLength.startOffset);
-                intersectionRunLength.setRunLength(safeCast(adjustedRunLength));
+                intersectionRunLength.setRunLength(toIntExact(adjustedRunLength));
 
                 // truncate all runlengths before intersection point
                 NavigableSet<RunLengthEntry> toTruncateFromSet = runLengthOffsetPairs.headSet(intersectionRunLength, false);
@@ -351,7 +342,7 @@ class RunLengthEncoder extends OffsetEncoder {
             }
             index++;
         }
-        if (adjustedRunLength == -1) throw new InternalRuntimeError("Couldn't find interception point");
+        if (adjustedRunLength == -1) throw new InternalRuntimeException("Couldn't find interception point");
         List<Integer> integers = runLengthEncodingIntegers.subList(index, runLengthEncodingIntegers.size());
         integers.set(0, adjustedRunLength); // overwrite with adjusted
 
@@ -382,7 +373,7 @@ class RunLengthEncoder extends OffsetEncoder {
         return encodedBytes.get();
     }
 
-    private void encodeRunLength(final boolean currentIsComplete, final long newBaseOffset, final int relativeOffsetFromBase) {
+    private void encodeRunLength(final boolean currentIsComplete, final long newBaseOffset, final long relativeOffsetFromBase) {
         segmentOrCombinePreviousEntryIfNeeded(currentIsComplete, newBaseOffset, relativeOffsetFromBase);
     }
 
@@ -398,7 +389,7 @@ class RunLengthEncoder extends OffsetEncoder {
 
         if (currentOffsetMatchesOurRunLengthState) {
 //            currentRunLengthCount++; // no gap case
-            int dynamicPrevious = getPreviousRelativeOffset(safeCast(newBaseOffset) + relativeOffsetFromBase);
+            int dynamicPrevious = getPreviousRelativeOffset(toIntExact(newBaseOffset) + relativeOffsetFromBase);
             int dynamicPrevious2 = getPreviousRelativeOffset2(newBaseOffset, relativeOffsetFromBase) - 1;
             int delta = relativeOffsetFromBase - previousRelativeOffsetFromBase;
             int delta2 = relativeOffsetFromBase - dynamicPrevious2;
@@ -416,12 +407,12 @@ class RunLengthEncoder extends OffsetEncoder {
     /**
      * @return the added entry
      */
-    private RunLengthEntry addRunLength(final long newBaseOffset, final int runLength, final int relativeOffsetFromBase) {
+    private RunLengthEntry addRunLength(final long newBaseOffset, final long runLength, final long relativeOffsetFromBase) throws ArithmeticException {
         // v1
 //        runLengthEncodingIntegers.add(runLength);
 
         // v2
-        int offset = safeCast(newBaseOffset + relativeOffsetFromBase);
+        int offset = toIntExact(newBaseOffset + relativeOffsetFromBase);
 //        if (!runLengthOffsetPairs.isEmpty()) {
 //            RunLengthEntry previous = runLengthOffsetPairs.last();
 //            if (previous != null && offset != previous.getEndOffsetInclusive() + 1)
@@ -430,7 +421,7 @@ class RunLengthEncoder extends OffsetEncoder {
         RunLengthEntry entry = new RunLengthEntry(offset, runLength);
         boolean containedAlready = !runLengthOffsetPairs.add(entry);
         if (containedAlready)
-            throw new InternalRuntimeError(msg("Already contained a run for offset {}", offset));
+            throw new InternalRuntimeException(msg("Already contained a run for offset {}", offset));
         return entry;
     }
 
@@ -444,11 +435,11 @@ class RunLengthEncoder extends OffsetEncoder {
         int differenceold = relativeOffsetFromBase - previousRelativeOffsetFromBase - 1;
         int previousOffsetOld = previousRelativeOffsetFromBase - 1;
 
-        int previousRelativeOffset = getPreviousRelativeOffset(safeCast(newBaseOffset) + relativeOffsetFromBase);
+        int previousRelativeOffset = getPreviousRelativeOffset(toIntExact(newBaseOffset) + relativeOffsetFromBase);
         int previousRelativeOffset2 = getPreviousRelativeOffset2(newBaseOffset, relativeOffsetFromBase);
 
-        RunLengthEntry dynamicPrevious = runLengthOffsetPairs.floor(new RunLengthEntry(safeCast(newBaseOffset + relativeOffsetFromBase)));
-        int previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - safeCast(newBaseOffset + currentRunLengthCount);
+        RunLengthEntry dynamicPrevious = runLengthOffsetPairs.floor(new RunLengthEntry(toIntExact(newBaseOffset + relativeOffsetFromBase)));
+        int previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - toIntExact(newBaseOffset + currentRunLengthCount);
 
         // difference Between This Relative Offset And Previous Run Length Entry In Run Length Sequence
         int difference = relativeOffsetFromBase - previousOffset;
@@ -477,9 +468,9 @@ class RunLengthEncoder extends OffsetEncoder {
         return segmented;
     }
 
-    private boolean segmentOrCombinePreviousEntryIfNeeded(final boolean currentIsComplete, final long newBaseOffset, final int relativeOffsetFromBase) {
+    private boolean segmentOrCombinePreviousEntryIfNeeded(final boolean currentIsComplete, final long newBaseOffset, final long relativeOffsetFromBase) {
         if (!currentIsComplete) {
-            throw new InternalRuntimeError("Entries being added should always be complete, as the range by definition starts out incomplete. We never add incompletes because things never transition from complete to incomplete.");
+            throw new InternalRuntimeException("Entries being added should always be complete, as the range by definition starts out incomplete. We never add incompletes because things never transition from complete to incomplete.");
         }
         RunLengthEntry intersectingWith = runLengthOffsetPairs.floor(new RunLengthEntry(newBaseOffset + relativeOffsetFromBase));
         if (intersectingWith == null) {
@@ -513,21 +504,22 @@ class RunLengthEncoder extends OffsetEncoder {
                 runLengthOffsetPairs.remove(previous);
                 runLengthOffsetPairs.remove(intersectingWith);
                 runLengthOffsetPairs.remove(next);
-                runLengthOffsetPairs.add(new RunLengthEntry(intersectingWith.startOffset, newRun));
+                runLengthOffsetPairs.add(new RunLengthEntry(intersectingWith.startOffset, (long) newRun));
             } else {
 
                 // remove the old entry which must have been incompletes
                 boolean missing = !runLengthOffsetPairs.remove(intersectingWith);
                 if (missing)
-                    throw new InternalRuntimeError("Cant find element that previously existed");
+                    throw new InternalRuntimeException("Cant find element that previously existed");
 
                 int newRunCumulative = 1;
-                Integer offsetStartRelative = null;
+
+                Long offsetStartRelative = null;
 
                 // create the three to replace the intersected node - 1 incomplete, 1 complete (this one), 1 incomplete
-                int firstRun = safeCast(offset - intersectingWith.startOffset);
-                Integer middleRelativeOffset = null;
-                int firstRelativeOffset = intersectingWith.getRelativeStartOffsetFromBase(originalBaseOffset);
+                int firstRun = toIntExact(offset - intersectingWith.startOffset);
+                Long middleRelativeOffset = null;
+                long firstRelativeOffset = intersectingWith.getRelativeStartOffsetFromBase(originalBaseOffset);
 
                 if (firstRun > 0) {
                     // large gap to fill
@@ -550,7 +542,7 @@ class RunLengthEncoder extends OffsetEncoder {
                     middleRelativeOffset = firstRelativeOffset;
 
                 if (next != null) {
-                    int gapUpward = next.getRelativeStartOffsetFromBase(newBaseOffset) - middleRelativeOffset;
+                    long gapUpward = next.getRelativeStartOffsetFromBase(newBaseOffset) - middleRelativeOffset;
                     if (gapUpward > 1) {
                         // there is a large gap between this success and the next
                         // add this single entry now then, and then add gap filler
@@ -564,7 +556,7 @@ class RunLengthEncoder extends OffsetEncoder {
                         RunLengthEntry middle = addRunLength(newBaseOffset, newRunCumulative, offsetStartRelative);
 
                         // add incomplete filler
-                        int lastRange = safeCast(intersectingWith.getEndOffsetInclusive() - offset);
+                        int lastRange = toIntExact(intersectingWith.getEndOffsetInclusive() - offset);
                         if (lastRange > 0) {
                             addRunLength(newBaseOffset, lastRange, middleRelativeOffset + 1);
 //                        int fillerStart = middle.getRelativeEndOffsetFromBase(newBaseOffset);
@@ -583,7 +575,7 @@ class RunLengthEncoder extends OffsetEncoder {
                             offsetStartRelative = next.getRelativeStartOffsetFromBase(newBaseOffset) - 1; // shift left one place if not already established
                         RunLengthEntry end = addRunLength(newBaseOffset, newRunCumulative, offsetStartRelative);
                     } else {
-                        throw new InternalRuntimeError("Invalid gap {}", gapUpward);
+                        throw InternalRuntimeException.msg("Invalid gap {}", gapUpward);
                     }
                 }
             }
@@ -596,17 +588,17 @@ class RunLengthEncoder extends OffsetEncoder {
         return segmented;
     }
 
-    private void checkGapDownward(final long newBaseOffset, final int relativeOffsetFromBase) {
+    private void checkGapDownward(final long newBaseOffset, final long relativeOffsetFromBase) {
         // extending the range
         // is there a gap?
         RunLengthEntry previous = runLengthOffsetPairs.floor(new RunLengthEntry(newBaseOffset + relativeOffsetFromBase));
         int previousRelativeEnd = previous.getRelativeEndOffsetFromBase(originalBaseOffset);
-        int gap = relativeOffsetFromBase - previousRelativeEnd;
+        long gap = relativeOffsetFromBase - previousRelativeEnd;
         if (gap > 1) {
             // extend and fill gap
             // add incompletes
             int newRelativeOffset = previousRelativeEnd + 1;
-            int run = gap - 1;
+            long run = gap - 1;
 //            int gapEntryPosition = previous.getRelativeStartOffsetFromBase(newBaseOffset);
             RunLengthEntry addedGapFiller = addRunLength(newBaseOffset, run, newRelativeOffset);
             // add this
@@ -617,22 +609,22 @@ class RunLengthEncoder extends OffsetEncoder {
             int newExtendedRunLength = toCombineWithCurrent.getRunLength() + 1;
             toCombineWithCurrent.setRunLength(newExtendedRunLength);
         } else if (gap == 0) {
-            throw new InternalRuntimeError("Invalid gap {}", gap);
+            throw InternalRuntimeException.msg("Invalid gap {}", gap);
         } else {
-            throw new InternalRuntimeError("Invalid gap {}", gap);
+            throw InternalRuntimeException.msg("Invalid gap {}", gap);
         }
     }
 
     private int getPreviousRelativeOffset(final int offset) {
         RunLengthEntry dynamicPrevious = runLengthOffsetPairs.floor(new RunLengthEntry(offset));
-        int previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - safeCast(originalBaseOffset);
+        int previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - toIntExact(originalBaseOffset);
         return previousOffset;
     }
 
     private int getPreviousRelativeOffset2(final long newBaseOffset, final int offset) {
         RunLengthEntry dynamicPrevious = runLengthOffsetPairs.floor(new RunLengthEntry(offset));
-        int previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - safeCast(originalBaseOffset);
-        return previousOffset - safeCast(newBaseOffset + currentRunLengthCount);
+        int previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - toIntExact(originalBaseOffset);
+        return previousOffset - toIntExact(newBaseOffset + currentRunLengthCount);
     }
 
     /**
@@ -648,7 +640,8 @@ class RunLengthEncoder extends OffsetEncoder {
             int run = n.getRunLength();
             if (succeeded) {
 //                offsetPosition++;
-                for (final Integer integer : Range.range(run)) {
+                //todo avoid slow loop?
+                for (Integer integer : Range.range(run).listAsIntegers()) {
                     long newGoodOffset = offsetPosition + integer;
                     successfulOffsets.add(newGoodOffset);
                 }

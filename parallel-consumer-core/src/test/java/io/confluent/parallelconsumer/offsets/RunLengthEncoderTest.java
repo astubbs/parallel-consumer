@@ -46,31 +46,39 @@ class RunLengthEncoderTest {
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE, 0L, incompletes);
 
         {
-            RunLengthEncoder rl = new RunLengthEncoder(offsetSimultaneousEncoder, v2);
+            long base = 0;
+            RunLengthEncoder rl = new RunLengthEncoder(base, offsetSimultaneousEncoder, v2);
 
-            rl.encodeIncompleteOffset(0); // 1
-            rl.encodeCompletedOffset(1); // 3
-            rl.encodeCompletedOffset(2);
-            rl.encodeCompletedOffset(3);
-            rl.encodeIncompleteOffset(4); // 1
-            rl.encodeCompletedOffset(5); // 1
-            rl.encodeIncompleteOffset(6); // 3
-            rl.encodeIncompleteOffset(7);
-            rl.encodeIncompleteOffset(8);
-            rl.encodeCompletedOffset(9); // 1
-            rl.encodeIncompleteOffset(10); // 1
+            addStandardData(rl);
 
-            rl.addTail();
+//            rl.addTail();
 
             // before serialisation
             {
                 assertThat(rl.getRunLengthEncodingIntegers()).containsExactlyElementsOf(runs);
 
-                List<Long> calculatedCompletedOffsets = rl.calculateSucceededActualOffsets(0);
+                List<Long> calculatedCompletedOffsets = rl.calculateSucceededActualOffsets();
 
                 assertThat(calculatedCompletedOffsets).containsExactlyElementsOf(completes);
             }
         }
+    }
+
+    private static void addStandardData(RunLengthEncoder rl) {
+        long base = 0;
+        long highest = 9;
+
+        rl.encodeIncompleteOffset(base, 0, highest); // 1
+        rl.encodeCompleteOffset(base, 1, highest); // 3
+        rl.encodeCompleteOffset(base, 2, highest);
+        rl.encodeCompleteOffset(base, 3, highest);
+        rl.encodeIncompleteOffset(base, 4, highest); // 1
+        rl.encodeCompleteOffset(base, 5, highest); // 1
+        rl.encodeIncompleteOffset(base, 6, highest); // 3
+        rl.encodeIncompleteOffset(base, 7, highest);
+        rl.encodeIncompleteOffset(base, 8, highest);
+        rl.encodeCompleteOffset(base, 9, highest); // 1
+        rl.encodeIncompleteOffset(base, 10, highest); // 1
     }
 
 
@@ -87,19 +95,11 @@ class RunLengthEncoderTest {
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE, 0L, incompletes);
 
         {
-            RunLengthEncoder rl = new RunLengthEncoder(offsetSimultaneousEncoder, v2);
+            long base = 0;
 
-            rl.encodeIncompleteOffset(0); // 1
-            rl.encodeCompletedOffset(1); // 3
-            rl.encodeCompletedOffset(2);
-            rl.encodeCompletedOffset(3);
-            rl.encodeIncompleteOffset(4); // 1
-            rl.encodeCompletedOffset(5); // 1
-            rl.encodeIncompleteOffset(6); // 3
-            rl.encodeIncompleteOffset(7);
-            rl.encodeIncompleteOffset(8);
-            rl.encodeCompletedOffset(9); // 1
-            rl.encodeIncompleteOffset(10); // 1
+            RunLengthEncoder rl = new RunLengthEncoder(base, offsetSimultaneousEncoder, v2);
+
+            addStandardData(rl);
 
             // after serialisation
             {
@@ -131,25 +131,29 @@ class RunLengthEncoderTest {
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE, 0L, incompletes);
 
         {
-            RunLengthEncoder rl = new RunLengthEncoder(offsetSimultaneousEncoder, v2);
 
-            rl.encodeIncompleteOffset(0);
-            rl.encodeCompletedOffset(1);
+            long base = 0;
+            long highest = 9;
+
+            RunLengthEncoder rl = new RunLengthEncoder(base, offsetSimultaneousEncoder, v2);
+
+            rl.encodeIncompleteOffset(base, 0, highest);
+            rl.encodeCompleteOffset(base, 1, highest);
             // gap completes at 2
-            rl.encodeCompletedOffset(3);
-            rl.encodeCompletedOffset(4);
-            rl.encodeCompletedOffset(5);
-            rl.encodeIncompleteOffset(6);
+            rl.encodeCompleteOffset(base, 3, highest);
+            rl.encodeCompleteOffset(base, 4, highest);
+            rl.encodeCompleteOffset(base, 5, highest);
+            rl.encodeIncompleteOffset(base, 6, highest);
             // gap incompletes at 7
-            rl.encodeIncompleteOffset(8);
-            rl.encodeCompletedOffset(9);
-            rl.encodeIncompleteOffset(10);
+            rl.encodeIncompleteOffset(base, 8, highest);
+            rl.encodeCompleteOffset(base, 9, highest);
+            rl.encodeIncompleteOffset(base, 10, highest);
 
-            rl.addTail();
+//            rl.addTail();
 
             assertThat(rl.getRunLengthEncodingIntegers()).containsExactlyElementsOf(runs);
 
-            List<Long> calculatedCompletedOffsets = rl.calculateSucceededActualOffsets(0);
+            List<Long> calculatedCompletedOffsets = rl.calculateSucceededActualOffsets();
 
             assertThat(calculatedCompletedOffsets).containsExactlyElementsOf(completes);
         }
@@ -168,34 +172,29 @@ class RunLengthEncoderTest {
 
         var incompletes = UniSets.of(0L, 4L, 6L, 7L, 8L, 10L, overflowedValue).stream().collect(toTreeSet());
         var completes = UniSets.of(1, 2, 3, 5, 9).stream().map(x -> (long) x).collect(toTreeSet());
+        final long highestSucceededOffset = overflowedValue - 1;
         OffsetSimultaneousEncoder offsetSimultaneousEncoder
-                = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE, overflowedValue - 1, incompletes);
+                = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE, highestSucceededOffset, incompletes);
 
         {
             final OffsetEncoding.Version versionsToTest = v2;
-            testRunLength(overflowedValue, offsetSimultaneousEncoder, versionToTest);
+            testRunLength(overflowedValue, offsetSimultaneousEncoder, versionToTest, highestSucceededOffset);
         }
     }
 
-    private static void testRunLength(long overflowedValue, OffsetSimultaneousEncoder offsetSimultaneousEncoder, OffsetEncoding.Version versionsToTest) throws EncodingNotSupportedException {
-        RunLengthEncoder rl = new RunLengthEncoder(offsetSimultaneousEncoder, versionsToTest);
+    private static void testRunLength(long overflowedValue,
+                                      OffsetSimultaneousEncoder offsetSimultaneousEncoder,
+                                      OffsetEncoding.Version versionsToTest,
+                                      long currentHighestCompleteOffset) throws EncodingNotSupportedException {
+        RunLengthEncoder rl = new RunLengthEncoder(0L, offsetSimultaneousEncoder, versionsToTest);
 
-        rl.encodeIncompleteOffset(0); // 1
-        rl.encodeCompletedOffset(1); // 3
-        rl.encodeCompletedOffset(2);
-        rl.encodeCompletedOffset(3);
-        rl.encodeIncompleteOffset(4); // 1
-        rl.encodeCompletedOffset(5); // 1
-        rl.encodeIncompleteOffset(6); // 3
-        rl.encodeIncompleteOffset(7);
-        rl.encodeIncompleteOffset(8);
-        rl.encodeCompletedOffset(9); // 1
-        rl.encodeIncompleteOffset(10); // 1
+        addStandardData(rl);
+
 
         // inject overflow offset
         var errorAssertion = Assertions.assertThatThrownBy(() -> {
             for (var relativeOffset : Range.range(11, overflowedValue)) {
-                rl.encodeCompletedOffset(relativeOffset);
+                rl.encodeCompleteOffset(0l, relativeOffset, currentHighestCompleteOffset);
             }
         });
 

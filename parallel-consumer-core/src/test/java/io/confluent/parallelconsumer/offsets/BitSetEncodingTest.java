@@ -24,19 +24,23 @@ class BitSetEncodingTest {
         var completes = UniLists.of(1, 2, 3, 5, 9).stream().map(x -> (long) x).collect(toTreeSet());
         OffsetSimultaneousEncoder offsetSimultaneousEncoder = new OffsetSimultaneousEncoder(-1, 0L, incompletes);
         int length = 11;
-        BitSetEncoder bs = new BitSetEncoder(length, offsetSimultaneousEncoder, v2);
+        BitSetEncoder bs = new BitSetEncoder(0, length, offsetSimultaneousEncoder, v2);
 
-        bs.encodeIncompleteOffset(0);
-        bs.encodeCompletedOffset(1);
-        bs.encodeCompletedOffset(2);
-        bs.encodeCompletedOffset(3);
-        bs.encodeIncompleteOffset(4);
-        bs.encodeCompletedOffset(5);
-        bs.encodeIncompleteOffset(6);
-        bs.encodeIncompleteOffset(7);
-        bs.encodeIncompleteOffset(8);
-        bs.encodeCompletedOffset(9);
-        bs.encodeIncompleteOffset(10);
+        long base = 0;
+        long highest = 9;
+
+
+        bs.encodeIncompleteOffset(base, 0, highest);
+        bs.encodeCompleteOffset(base, 1, highest);
+        bs.encodeCompleteOffset(base, 2, highest);
+        bs.encodeCompleteOffset(base, 3, highest);
+        bs.encodeIncompleteOffset(base, 4, highest);
+        bs.encodeCompleteOffset(base, 5, highest);
+        bs.encodeIncompleteOffset(base, 6, highest);
+        bs.encodeIncompleteOffset(base, 7, highest);
+        bs.encodeIncompleteOffset(base, 8, highest);
+        bs.encodeCompleteOffset(base, 9, highest);
+        bs.encodeIncompleteOffset(base, 10, highest);
 
         // before serialisation
         {
