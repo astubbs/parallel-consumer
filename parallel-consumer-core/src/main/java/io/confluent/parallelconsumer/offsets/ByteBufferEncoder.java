@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer.offsets;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import lombok.ToString;
 
 import java.nio.ByteBuffer;
@@ -87,8 +86,8 @@ public class ByteBufferEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
-        final long requiredCapacity = recordsAndEpoch.calculateOffsetRange();
+    public void ensureCapacity(final long base, final long highest) {
+        final long requiredCapacity = highest - base;
         if (bytesBuffer.capacity() < requiredCapacity) {
             // copy byte buffer into bigger one
             final ByteBuffer newBuffer = ByteBuffer.allocate(Math.toIntExact(requiredCapacity));

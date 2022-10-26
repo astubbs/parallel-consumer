@@ -3,7 +3,7 @@ package io.confluent.parallelconsumer.offsets;
 import lombok.ToString;
 
 import java.util.BitSet;
-import java.util.stream.Stream;
+import java.util.stream.LongStream;
 
 /**
  * A wrapper of {@link java.util.BitSet} which enables us to virtually truncate the starting offset up.
@@ -18,7 +18,9 @@ public class BitSetFragment {
     private final long highOffsetInclusive;
 
     /**
-     * The wrapped bitset
+     * The wrapped bitset.
+     * <p>
+     * todo Each should have a window that fits perfectly so our indexes line up.
      */
     private final BitSet wrapped;
 
@@ -60,9 +62,16 @@ public class BitSetFragment {
      *
      * @see BitSet#stream()
      */
-    public Stream<Long> stream() {
+    public LongStream stream() {
         return this.wrapped.stream().boxed()
                 // to absolute offset
-                .map(bitsetIndex -> Math.addExact(bitsetIndex, lowOffset));
+                .mapToLong(bitsetIndex -> {
+                    final long actualOffset = Math.addExact(bitsetIndex, lowOffset);
+                    return actualOffset;
+                });
+    }
+
+    public boolean offsetWithinRange(long offset) {
+        return offset >= lowOffset && offset <= highOffsetInclusive;
     }
 }

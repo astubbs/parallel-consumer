@@ -279,7 +279,7 @@ public class PartitionState<K, V> {
         maybeTruncateOrPruneTrackedOffsets(recordsAndEpoch);
 
         //
-        ensureEncoderCapacity(recordsAndEpoch);
+        ensureEncoderCapacity(recordsAndEpoch.getFirstOffset(), recordsAndEpoch.getLastOffset());
 
         //
         long epochOfInboundRecords = recordsAndEpoch.getEpochOfPartitionAtPoll();
@@ -295,8 +295,8 @@ public class PartitionState<K, V> {
 
     }
 
-    private void ensureEncoderCapacity(EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
-        offsetSimultaneousEncoder.ensureCapacity(recordsAndEpoch);
+    public void ensureEncoderCapacity(long base, long highest) {
+        offsetSimultaneousEncoder.ensureCapacity(base, highest);
     }
 
     /**

@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.offsets;
 
 import com.google.common.truth.Truth;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.WorkManager;
@@ -45,6 +46,7 @@ import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Optional.of;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 // todo refactor - remove tests which use hard coded state vs dynamic state - #compressionCycle, #selialiseCycle, #runLengthEncoding, #loadCompressedRunLengthRncoding
 @Slf4j
@@ -76,7 +78,8 @@ class WorkManagerOffsetMapCodecManagerTest {
      */
     long highestSucceeded = 4;
 
-    PartitionState<String, String> state = new PartitionState<>(0, module, tp, new OffsetMapCodecManager.HighestOffsetAndIncompletes(of(highestSucceeded), incompleteOffsets));
+    PartitionState<String, String> state = new PartitionState<>(0, module, tp,
+            new OffsetMapCodecManager.HighestOffsetAndIncompletes(of(highestSucceeded), incompleteOffsets));
 
     @Mock
     ConsumerRecord<String, String> mockCr;
@@ -88,6 +91,12 @@ class WorkManagerOffsetMapCodecManagerTest {
 
     private void injectSucceededWorkAtOffset(long offset) {
         Mockito.doReturn(offset).when(mockCr).offset();
+
+        var recordsAndEpoch = mock(EpochAndRecordsMap.RecordsAndEpoch.class);
+        Mockito.doReturn(offset).when(recordsAndEpoch).getLastOffset();
+
+        state.ensureEncoderCapacity(0l, offset);
+
         state.addNewIncompleteRecord(mockCr);
         state.onSuccess(offset); // in this case the highest seen is also the highest succeeded
     }

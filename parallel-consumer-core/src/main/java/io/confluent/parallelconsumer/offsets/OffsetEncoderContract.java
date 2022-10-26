@@ -1,7 +1,5 @@
 package io.confluent.parallelconsumer.offsets;
 
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
-
 public interface OffsetEncoderContract {
 
     /**
@@ -27,7 +25,7 @@ public interface OffsetEncoderContract {
      */
     int getEncodedSizeEstimate();
 
-    void ensureCapacity(EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch);
+    void ensureCapacity(long base, long highest);
 
     /**
      * todo docs

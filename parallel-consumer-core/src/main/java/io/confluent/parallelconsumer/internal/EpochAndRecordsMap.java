@@ -6,8 +6,8 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.csid.utils.JavaUtils;
 import io.confluent.parallelconsumer.state.PartitionStateManager;
-import lombok.NonNull;
-import lombok.Value;
+import lombok.*;
+import lombok.experimental.FieldDefaults;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -64,7 +64,11 @@ public class EpochAndRecordsMap<K, V> {
                 .sum();
     }
 
-    @Value
+    @Getter
+    @FieldDefaults(makeFinal = false, level = AccessLevel.PRIVATE)
+    @AllArgsConstructor
+    @ToString
+    @EqualsAndHashCode
     public class RecordsAndEpoch {
         @NonNull TopicPartition topicPartition;
         @NonNull Long epochOfPartitionAtPoll;
@@ -83,7 +87,7 @@ public class EpochAndRecordsMap<K, V> {
             return getLastOffset() - getFirstOffset();
         }
 
-        private long getFirstOffset() {
+        public long getFirstOffset() {
             var first = JavaUtils.getFirst(records);
             if (first.isPresent()) {
                 return first.get().offset();

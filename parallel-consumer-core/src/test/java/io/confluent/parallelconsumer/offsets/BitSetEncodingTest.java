@@ -60,4 +60,66 @@ class BitSetEncodingTest {
             assertThat(result.getIncompleteOffsets()).containsExactlyInAnyOrderElementsOf(incompletes);
         }
     }
+
+
+    @SneakyThrows
+    @Test
+    void general() {
+        long highest = 0L;
+        long base = 0;
+
+        BitSetEncoder o = new BitSetEncoder(0, 0, new OffsetSimultaneousEncoder(0, 0L));
+
+        // offset 0 is missing
+
+        highest++;
+        o.encodeCompleteOffset(base, highest, highest);
+        {
+            long[] actual = o.bitSet.stream().toArray();
+            assertThat(actual).doesNotContain(0).contains(1);
+        }
+
+        {
+            highest++;
+            o.encodeCompleteOffset(base, highest, highest);
+            long[] actual = o.bitSet.stream().toArray();
+            assertThat(actual).doesNotContain(0).contains(1, 2);
+        }
+
+
+        {
+            highest++;
+            highest++;
+            o.encodeCompleteOffset(base, highest, highest);
+            long[] actual = o.bitSet.stream().toArray();
+            assertThat(actual).doesNotContain(0).contains(1, 2, 4);
+        }
+    }
+
+
+    @SneakyThrows
+    @Test
+    void maybeReinitalise() {
+        long highest = 0L;
+        long base = 0;
+
+        BitSetEncoder o = new BitSetEncoder(0, 0, new OffsetSimultaneousEncoder(0, 0L));
+
+        //
+        o.encodeCompleteOffset(base, 0, highest);
+
+        highest++;
+        o.encodeCompleteOffset(base, highest, highest);
+        {
+            long[] actual = o.bitSet.stream().toArray();
+            assertThat(actual).contains(1);
+        }
+
+        {
+            highest++;
+            //o.maybeReinitialise(base, highest);
+            long[] actual = o.bitSet.stream().toArray();
+            assertThat(actual).as("still contains it's information").contains(1);
+        }
+    }
 }

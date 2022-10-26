@@ -5,7 +5,6 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import io.confluent.csid.utils.Range;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -372,8 +371,8 @@ class RunLengthEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
-        final long offsetRange = recordsAndEpoch.calculateOffsetRange();
+    public void ensureCapacity(final long base, final long highest) {
+        final long offsetRange = highest - base;
         switch (version) {
             case v1 -> {
                 if (offsetRange > Short.MAX_VALUE) {

@@ -2,7 +2,6 @@ package io.confluent.parallelconsumer.offsets;
 
 import io.confluent.csid.utils.MathUtils;
 import io.confluent.csid.utils.StringUtils;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -67,14 +66,16 @@ public class BitSetEncoder extends OffsetEncoder {
     public BitSetEncoder(long baseOffset, long length, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) throws BitSetEncodingNotSupportedException {
         super(baseOffset, offsetSimultaneousEncoder, newVersion);
 
+        ensureCapacity(baseOffset, length);
+
         // todo no op?
         reinitialise(baseOffset, length);
     }
 
-    private ByteBuffer constructWrappedByteBuffer(long length, Version newVersion) throws BitSetEncodingNotSupportedException {
+    private ByteBuffer constructWrappedByteBuffer(long bitsetEntriesRequired, Version newVersion) throws BitSetEncodingNotSupportedException {
         return switch (newVersion) {
-            case v1 -> initV1(length);
-            case v2 -> initV2(length);
+            case v1 -> initV1(bitsetEntriesRequired);
+            case v2 -> initV2(bitsetEntriesRequired);
         };
     }
 
@@ -157,7 +158,7 @@ public class BitSetEncoder extends OffsetEncoder {
     @Override
     public byte[] serialise() {
         final byte[] bitSetArray = this.bitSet.toByteArray();
-        ByteBuffer wrappedBitsetBytesBuffer = constructWrappedByteBuffer(originalLength, version);
+        ByteBuffer wrappedBitsetBytesBuffer = constructWrappedByteBuffer(calculateTotalOffsetEntries(), version);
         if (wrappedBitsetBytesBuffer.remaining() < bitSetArray.length)
             throw new InternalRuntimeException("Not enough space in byte array");
         try {
@@ -171,6 +172,10 @@ public class BitSetEncoder extends OffsetEncoder {
         return array;
     }
 
+    private long calculateTotalOffsetEntries() {
+        return this.bitSet.calculateTotalOffsetEntries();
+    }
+
     @Override
     public void encodeIncompleteOffset(final long baseOffset, final long relativeOffset, final long currentHighestCompleted) {
         // noop - bitset defaults to 0's (`unset`)
@@ -178,6 +183,8 @@ public class BitSetEncoder extends OffsetEncoder {
 
     @Override
     public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) throws BitSetEncodingNotSupportedException {
+        ensureCapacity(newBaseOffset, relativeOffset);
+
 //        try {
 //            // should not be rebuilding bitset every time a work container changes state
 //            maybeReinitialise(newBaseOffset, currentHighestCompleted);
@@ -187,7 +194,7 @@ public class BitSetEncoder extends OffsetEncoder {
 
         log.trace("Relative offset set {}", relativeOffset);
         try {
-            bitSet.set(Math.toIntExact(relativeOffset));
+            bitSet.set(newBaseOffset, relativeOffset);
         } catch (IndexOutOfBoundsException e) {
             throw new BitSetEncodingNotSupportedException(StringUtils.msg("BitSetEncoder can't encode offset {} as it's too large for the bitset. (max: {})", relativeOffset, MAX_LENGTH_ENCODABLE), e);
         }
@@ -205,8 +212,8 @@ public class BitSetEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
-        this.bitSet.ensureCapacity(recordsAndEpoch);
+    public void ensureCapacity(final long base, final long highest) {
+        this.bitSet.ensureCapacity(base, highest);
     }
 
 //    @Override

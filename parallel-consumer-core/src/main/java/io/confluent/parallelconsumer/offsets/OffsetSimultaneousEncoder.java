@@ -6,7 +6,6 @@ package io.confluent.parallelconsumer.offsets;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.WorkManager;
@@ -259,6 +258,9 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             // range index (relativeOffset) is used as we don't actually encode offsets, we encode the relative offset from the base offset
             final long actualOffset = this.baseOffsetToCommit + relativeOffset;
             final boolean isIncomplete = this.incompleteOffsets.contains(actualOffset);
+
+            activeEncoders.forEach(encoder -> encoder.ensureCapacity(baseOffset, relativeOffset));
+
             activeEncoders.forEach(encoder -> {
                 try {
                     if (isIncomplete) {
@@ -517,8 +519,8 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     }
 
     @Override
-    public void ensureCapacity(final EpochAndRecordsMap.RecordsAndEpoch recordsAndEpoch) {
-        activeEncoders.forEach(x -> x.ensureCapacity(recordsAndEpoch));
+    public void ensureCapacity(final long base, final long highest) {
+        activeEncoders.forEach(x -> x.ensureCapacity(base, highest));
     }
 
     private boolean isNoEncodingNeeded() {
