@@ -56,7 +56,7 @@ public class OffsetSimultaneousEncoder {
      * The lowest committable offset
      */
     @ToString.Include
-    private final long lowWaterMark;
+    private final long baseOffsetToCommit;
 
     /**
      * The difference between the base offset (the offset to be committed) and the highest seen offset.
@@ -98,7 +98,7 @@ public class OffsetSimultaneousEncoder {
     private final ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> activeEncoders;
 
     public OffsetSimultaneousEncoder(long baseOffsetToCommit, long highestSucceededOffset, SortedSet<Long> incompleteOffsets) {
-        this.lowWaterMark = baseOffsetToCommit;
+        this.baseOffsetToCommit = baseOffsetToCommit;
         this.incompleteOffsets = incompleteOffsets;
 
         //
@@ -108,7 +108,7 @@ public class OffsetSimultaneousEncoder {
 
         highestSucceededOffset = maybeRaiseOffsetHighestSucceeded(baseOffsetToCommit, highestSucceededOffset);
 
-        lengthBetweenBaseAndHighOffset = highestSucceededOffset - this.lowWaterMark + 1;
+        lengthBetweenBaseAndHighOffset = highestSucceededOffset - this.baseOffsetToCommit + 1;
 
         if (lengthBetweenBaseAndHighOffset < 0) {
             // sanity check
@@ -151,7 +151,7 @@ public class OffsetSimultaneousEncoder {
     private ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> initEncoders() {
         ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> newEncoders = ConcurrentHashMap.newKeySet();
         if (lengthBetweenBaseAndHighOffset > LARGE_INPUT_MAP_SIZE) {
-            log.trace("Relatively large input map size: {} (start: {} end: {})", lengthBetweenBaseAndHighOffset, lowWaterMark, getEndOffsetExclusive());
+            log.trace("Relatively large input map size: {} (start: {} end: {})", lengthBetweenBaseAndHighOffset, baseOffsetToCommit, getEndOffsetExclusive());
         }
 
         addBitsetEncoder(newEncoders, v1);
@@ -176,7 +176,7 @@ public class OffsetSimultaneousEncoder {
      * The end offset (exclusive)
      */
     private long getEndOffsetExclusive() {
-        return lowWaterMark + lengthBetweenBaseAndHighOffset;
+        return baseOffsetToCommit + lengthBetweenBaseAndHighOffset;
     }
 
     /**
@@ -218,21 +218,26 @@ public class OffsetSimultaneousEncoder {
      *  TODO VERY large offests ranges are slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
      */
     public OffsetSimultaneousEncoder invoke() {
-        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", lowWaterMark, getEndOffsetExclusive());
+        log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", baseOffsetToCommit, getEndOffsetExclusive());
         log.trace("Incompletes are: {}", this.incompleteOffsets);
 
         //
-        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.lowWaterMark, getEndOffsetExclusive(), lengthBetweenBaseAndHighOffset);
+        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffsetToCommit, getEndOffsetExclusive(), lengthBetweenBaseAndHighOffset);
         /*
          * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
          *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
          *  the entire range. So when BitSet can't be used, the encoding would be potentially a lot faster as RunLength
          *  didn't need the whole loop.
          */
+
+        activeEncoders.forEach(encoder -> {
+            encoder.encode(baseOffsetToCommit, lengthBetweenBaseAndHighOffset, incompleteOffsets);
+        });
+
         Range relativeOffsetsLongRange = range(lengthBetweenBaseAndHighOffset);
         relativeOffsetsLongRange.forEach(relativeOffset -> {
             // range index (relativeOffset) is used as we don't actually encode offsets, we encode the relative offset from the base offset
-            final long actualOffset = this.lowWaterMark + relativeOffset;
+            final long actualOffset = this.baseOffsetToCommit + relativeOffset;
             final boolean isIncomplete = this.incompleteOffsets.contains(actualOffset);
             activeEncoders.forEach(encoder -> {
                 try {

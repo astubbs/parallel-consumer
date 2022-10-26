@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.SortedSet;
 
 
 /**
@@ -74,4 +75,6 @@ public abstract class OffsetEncoder {
     }
 
     protected abstract byte[] getEncodedBytes();
+
+    public abstract void encode(long baseOffsetToCommit, long lengthBetweenBaseAndHighOffset, SortedSet<Long> incompleteOffsets);
 }

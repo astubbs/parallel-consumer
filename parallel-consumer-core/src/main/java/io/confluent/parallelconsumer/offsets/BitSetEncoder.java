@@ -16,6 +16,7 @@ import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.util.BitSet;
 import java.util.Optional;
+import java.util.SortedSet;
 
 import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
 
@@ -180,6 +181,10 @@ public class BitSetEncoder extends OffsetEncoder {
     @Override
     protected byte[] getEncodedBytes() {
         return this.encodedBytes.get();
+    }
+
+    @Override
+    public void encode(final long baseOffsetToCommit, final long lengthBetweenBaseAndHighOffset, final SortedSet<Long> incompleteOffsets) {
     }
 
 }
