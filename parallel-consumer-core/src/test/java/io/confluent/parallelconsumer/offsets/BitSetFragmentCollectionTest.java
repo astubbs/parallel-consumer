@@ -85,7 +85,7 @@ class BitSetFragmentCollectionTest {
         bsfc.set(0L, 2L);
         assertThat(bsfc).hasToArray().containsExactly(2L);
         assertThat(bsfc).hasBaseOffsetEqualTo(0L);
-        BitSetFragment baseFragment = bsfc.getBaseFragment();
+        BitSetFragment baseFragment = bsfc.getBaseFragment().get();
 //        assertThat(baseFragment).
 
         bsfc.set(1L, 3L);

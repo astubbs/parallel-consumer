@@ -7,10 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.BitSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
@@ -50,6 +47,7 @@ public class BitSetFragmentCollection {
      * will allow for more effective packing of BitSet fragments.
      */
     public void ensureCapacity(long base, long newHighestSeen) throws BitSetEncodingNotSupportedException {
+        maybeTruncate(base);
         if (newHighestSeen > getHighestOffsetCanStore()) {
             increaseCapacity(newHighestSeen);
         }
@@ -118,11 +116,17 @@ public class BitSetFragmentCollection {
      * <p>
      * If the  {@code newBaseOffset} is higher than the current base, then the underlying bitset will be truncated.
      *
-     * @param newBaseOffset the current base offset that the bitset must start encoding from
-     * @param offset        the absolute kafka offset to set positive
+     * @param newBaseOffset  the current base relativeOffset that the bitset must start encoding from
+     * @param relativeOffset the absolute kafka relativeOffset to set positive
      */
-    public void set(long newBaseOffset, long offset) throws BitSetEncodingNotSupportedException {
-        log.trace("Setting offset {} with base offset {}", offset, newBaseOffset);
+    public void set(long newBaseOffset, long relativeOffset) throws BitSetEncodingNotSupportedException {
+        var offset = newBaseOffset + relativeOffset;
+        log.trace("Setting offset {}, relativeOffset {} with base offset {}",
+                offset,
+                relativeOffset,
+                newBaseOffset);
+
+
         // must ensure capacity before truncating, in case truncation mark is over capacity
         ensureCapacity(newBaseOffset, offset);
 
@@ -133,7 +137,7 @@ public class BitSetFragmentCollection {
         if (bsf.isPresent()) {
             bsf.get().set(offset);
         } else {
-            throw new IllegalStateException("No fragment found for offset " + offset);
+            throw new IllegalStateException("No fragment found for relativeOffset " + relativeOffset);
         }
     }
 
@@ -197,9 +201,15 @@ public class BitSetFragmentCollection {
      * todo docs
      */
     public long calculateTotalOffsetsRepresented() {
-        final long low = getBaseFragment().getVirtualBaseOffsetView();
-        final long high = getHighestFragmentCache().getHighestSucceededOffset();
-        return high - low + 1;
+        if (fragments.isEmpty()) {
+            return 0;
+        } else {
+            final Optional<BitSetFragment> baseFragment = getBaseFragment();
+            //noinspection OptionalGetWithoutIsPresent
+            final long low = baseFragment.get().getVirtualBaseOffsetView(); // checked if fragments is empty above
+            final long high = getHighestFragmentCache().getHighestSucceededOffset();
+            return high - low + 1;
+        }
     }
 
     /**
@@ -217,11 +227,18 @@ public class BitSetFragmentCollection {
      */
     // visible from protected for TG generation
     public long getBaseOffset() {
-        return getBaseFragment().getVirtualBaseOffsetView();
+        final Optional<BitSetFragment> baseFragment = getBaseFragment();
+        return baseFragment.map(BitSetFragment::getVirtualBaseOffsetView)
+                .orElse(PartitionState.KAFKA_OFFSET_ABSENCE);
     }
 
-    protected BitSetFragment getBaseFragment() {
-        return fragments.values().iterator().next();
+    protected Optional<BitSetFragment> getBaseFragment() {
+        final Iterator<BitSetFragment> iterator = fragments.values().iterator();
+        if (iterator.hasNext()) {
+            return Optional.of(iterator.next());
+        } else {
+            return Optional.empty();
+        }
     }
 
     public int getNumberOfFragments() {
