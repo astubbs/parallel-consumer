@@ -145,6 +145,11 @@ public class BitSetFragmentCollection {
      * Virtual truncation, O(1) operation.
      */
     private void maybeTruncate(long newBaseOffset) {
+        if (fragments.isEmpty()) {
+            // nothing to do
+            return;
+        }
+
         if (newBaseOffset > getBaseOffset()) {
             // find new active fragment based in new base offset
             Optional<BitSetFragment> newActiveFragment = findFragmentForAbsoluteOffset(newBaseOffset);
