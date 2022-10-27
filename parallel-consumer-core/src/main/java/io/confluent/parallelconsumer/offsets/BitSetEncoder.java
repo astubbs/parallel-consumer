@@ -162,22 +162,20 @@ public class BitSetEncoder extends OffsetEncoder {
     @Override
     public byte[] serialise() {
         final byte[] bitSetArray = this.bitSet.toByteArray();
-        ByteBuffer wrappedBitsetBytesBuffer = constructWrappedByteBuffer(calculateTotalOffsetEntries(), version);
+        var bitsetEntriesRequired = bitSet.calculateTotalOffsetsRepresented();
+        ByteBuffer wrappedBitsetBytesBuffer = constructWrappedByteBuffer(bitsetEntriesRequired, version);
         if (wrappedBitsetBytesBuffer.remaining() < bitSetArray.length)
             throw new InternalRuntimeException("Not enough space in byte array");
         try {
+            // todo use ByteBuffer source instead of pre serialising the entire array
             wrappedBitsetBytesBuffer.put(bitSetArray);
         } catch (BufferOverflowException e) {
-            log.error("{}", e);
+            log.error("Error writing byte array to ByteBuffer", e);
             throw e;
         }
         final byte[] array = wrappedBitsetBytesBuffer.array();
         this.encodedBytes = Optional.of(array);
         return array;
-    }
-
-    private long calculateTotalOffsetEntries() {
-        return this.bitSet.calculateTotalOffsetEntries();
     }
 
     @Override

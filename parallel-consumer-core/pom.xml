@@ -136,6 +136,7 @@
                         <class>io.confluent.parallelconsumer.offsets.OffsetEncoding</class>
                         <class>io.confluent.parallelconsumer.offsets.BitSetFragmentCollection</class>
                         <class>io.confluent.parallelconsumer.offsets.BitSetFragment</class>
+                        <class>io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes</class>
                     </classes>
                     <legacyClasses>
                         <!-- todo check legacy is recursive -->

@@ -47,13 +47,15 @@ class BitSetEncodingTest {
             assertThat(bs.toList()).containsExactly(1L, 2L, 3L, 5L, 9L);
         }
 
-        // after serialisation
+        // after deserialization
         {
             byte[] raw = bs.serialise();
-
             byte[] wrapped = offsetSimultaneousEncoder.packEncoding(new EncodedOffsetPair(OffsetEncoding.BitSetV2, ByteBuffer.wrap(raw)));
 
+            // now deserialize and read
             OffsetMapCodecManager.HighestOffsetAndIncompletes result = OffsetMapCodecManager.decodeCompressedOffsets(0, wrapped);
+
+//            ManagedTruth.assertTruth(result).hasHighestOffset(10L);
 
             assertThat(result.getHighestSeenOffset()).contains(10L);
 

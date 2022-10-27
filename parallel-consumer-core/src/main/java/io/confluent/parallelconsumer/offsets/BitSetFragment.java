@@ -48,7 +48,12 @@ public class BitSetFragment {
      */
     @ToString.Include
     @Getter(AccessLevel.PROTECTED)
-    private final long highOffsetInclusive;
+    private final long highestOffsetInclusiveContainable;
+
+    /**
+     * todo docs
+     */
+    private long highestSucceededOffsetCache;
 
     /**
      * The wrapped bitset.
@@ -58,18 +63,18 @@ public class BitSetFragment {
     @ToString.Include
     private final BitSet wrappedBitset;
 
-    public BitSetFragment(final long baseOffset, final long highOffsetInclusive) throws BitSetEncodingNotSupportedException {
+    public BitSetFragment(final long baseOffset, final long highestOffsetInclusiveContainable) throws BitSetEncodingNotSupportedException {
         this.virtualBaseOffsetView = baseOffset;
         this.offsetBitsetStartsAt = baseOffset;
-        var rangeNeeded = highOffsetInclusive - baseOffset;
+        var rangeNeeded = highestOffsetInclusiveContainable - baseOffset;
         try {
             var capacity = Math.toIntExact(rangeNeeded);
             var roundedUp = roundUpToDivisibleByByte(capacity);
             var capacityToUse = Math.max(roundedUp, MIN_FRAGMENT_SIZE_BITS);
-            this.highOffsetInclusive = capacityToUse + baseOffset - 1;
+            this.highestOffsetInclusiveContainable = capacityToUse + baseOffset - 1;
             this.wrappedBitset = new BitSet(capacityToUse);
         } catch (ArithmeticException e) {
-            throw new BitSetEncodingNotSupportedException("Unable to encode offset range " + baseOffset + " to " + highOffsetInclusive + " as it is too large for a BitSet");
+            throw new BitSetEncodingNotSupportedException("Unable to encode offset range " + baseOffset + " to " + highestOffsetInclusiveContainable + " as it is too large for a BitSet");
         }
     }
 
@@ -82,21 +87,23 @@ public class BitSetFragment {
     /**
      * How many offsets it can represent
      */
-    public long relativeOffsetRangeSize() {
-        return highOffsetInclusive - virtualBaseOffsetView + MIN_FRAGMENT_SIZE_BITS;
+    public long relativeOffsetStorableRangeSize() {
+        return highestOffsetInclusiveContainable - virtualBaseOffsetView;
     }
 
     /**
      * @see BitSet#set(int)
      */
     public void set(long offset) throws BitSetEncodingNotSupportedException {
-        if (offset < virtualBaseOffsetView || offset > highOffsetInclusive) {
+        if (offset < virtualBaseOffsetView || offset > highestOffsetInclusiveContainable) {
             throw new BitSetEncodingNotSupportedException("Offset " + offset + " is lower than the lowest offset in this fragment " + virtualBaseOffsetView);
         }
 
         long bitsetIndexToSetPositive = offset - offsetBitsetStartsAt;
+
         try {
             wrappedBitset.set(Math.toIntExact(bitsetIndexToSetPositive));
+            highestSucceededOffsetCache = offset;
         } catch (ArithmeticException e) {
             throw new BitSetEncodingNotSupportedException("Unable to encode offset " + offset + " as it is too large for a BitSet");
         }
@@ -106,7 +113,7 @@ public class BitSetFragment {
      * Highest possible offset representable
      */
     public long getHighestOffsetCanStore() {
-        return highOffsetInclusive;
+        return highestOffsetInclusiveContainable;
     }
 
     /**
@@ -144,7 +151,8 @@ public class BitSetFragment {
      */
     public byte[] toByteArray() {
         var index = getBitsetIndexFromOffset(virtualBaseOffsetView);
-        return wrappedBitset.get(index, getBitsetIndexFromOffset(highOffsetInclusive)).toByteArray();
+        final BitSet bitsetView = wrappedBitset.get(index, getBitsetIndexFromOffset(highestOffsetInclusiveContainable));
+        return bitsetView.toByteArray();
     }
 
     /**
@@ -155,7 +163,7 @@ public class BitSetFragment {
     }
 
     public boolean offsetWithinRange(long offset) {
-        return offset >= virtualBaseOffsetView && offset <= highOffsetInclusive;
+        return offset >= virtualBaseOffsetView && offset <= highestOffsetInclusiveContainable;
     }
 
     /**
@@ -179,6 +187,15 @@ public class BitSetFragment {
      * todo docs
      */
     public long getNumberOfOffsetsCanStore() {
-        return getHighOffsetInclusive() - getVirtualBaseOffsetView() + 1;
+        return getHighestOffsetInclusiveContainable() - getVirtualBaseOffsetView() + 1;
+    }
+
+    public long calculateTotalOffsetsRepresented() {
+        final long highestSetBit = getHighestSucceededOffset();
+        return highestSetBit - virtualBaseOffsetView;
+    }
+
+    protected long getHighestSucceededOffset() {
+        return highestSucceededOffsetCache;
     }
 }

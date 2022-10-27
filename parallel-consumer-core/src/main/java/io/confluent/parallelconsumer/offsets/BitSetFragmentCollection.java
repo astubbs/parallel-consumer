@@ -70,7 +70,7 @@ public class BitSetFragmentCollection {
         highestFragmentCache = newFragment;
 
         // add to the collection
-        final long highOffsetOfFragment = highestFragmentCache.getHighOffsetInclusive();
+        final long highOffsetOfFragment = highestFragmentCache.getHighestOffsetInclusiveContainable();
         var newFragmentKey = new MyHighestOffset(highOffsetOfFragment);
         fragments.put(newFragmentKey, highestFragmentCache);
     }
@@ -101,7 +101,7 @@ public class BitSetFragmentCollection {
 
     private long calculateTotalFragmentSize() {
         return fragments.values().stream()
-                .mapToLong(BitSetFragment::relativeOffsetRangeSize)
+                .mapToLong(BitSetFragment::relativeOffsetStorableRangeSize)
                 .sum();
     }
 
@@ -196,10 +196,10 @@ public class BitSetFragmentCollection {
     /**
      * todo docs
      */
-    public long calculateTotalOffsetEntries() {
-        return this.fragments.values().stream()
-                .mapToLong(BitSetFragment::relativeOffsetRangeSize)
-                .sum();
+    public long calculateTotalOffsetsRepresented() {
+        final long low = getBaseFragment().getVirtualBaseOffsetView();
+        final long high = getHighestFragmentCache().getHighestSucceededOffset();
+        return high - low;
     }
 
     /**
