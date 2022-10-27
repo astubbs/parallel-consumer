@@ -55,7 +55,7 @@ public class BitSetEncoder extends OffsetEncoder {
 
     // todo use a different structure that can resize dynamically?
     @Getter(AccessLevel.PRIVATE)
-    BitSetFragmentCollection bitSet = new BitSetFragmentCollection();
+    private final BitSetFragmentCollection bitSet;
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
@@ -66,7 +66,11 @@ public class BitSetEncoder extends OffsetEncoder {
     public BitSetEncoder(long baseOffset, long length, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) throws BitSetEncodingNotSupportedException {
         super(baseOffset, offsetSimultaneousEncoder, newVersion);
 
-        ensureCapacity(baseOffset, length);
+        try {
+            bitSet = new BitSetFragmentCollection(baseOffset, length);
+        } catch (EncodingNotSupportedException e) {
+            throw new BitSetEncodingNotSupportedException(e);
+        }
 
         // todo no op?
         reinitialise(baseOffset, length);
@@ -183,7 +187,11 @@ public class BitSetEncoder extends OffsetEncoder {
 
     @Override
     public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) throws BitSetEncodingNotSupportedException {
-        ensureCapacity(newBaseOffset, relativeOffset);
+        try {
+            ensureCapacity(newBaseOffset, relativeOffset);
+        } catch (EncodingNotSupportedException e) {
+            throw new BitSetEncodingNotSupportedException(e);
+        }
 
 //        try {
 //            // should not be rebuilding bitset every time a work container changes state
@@ -212,7 +220,7 @@ public class BitSetEncoder extends OffsetEncoder {
     }
 
     @Override
-    public void ensureCapacity(final long base, final long highest) {
+    public void ensureCapacity(final long base, final long highest) throws EncodingNotSupportedException {
         this.bitSet.ensureCapacity(base, highest);
     }
 
@@ -293,7 +301,21 @@ public class BitSetEncoder extends OffsetEncoder {
      *
      * @see BitSet#stream()
      */
-    public List<Long> toArray() {
+    public List<Long> toList() {
         return this.getBitSet().toArray();
+    }
+
+    /**
+     * @return boxed wrapper of the underlying bitset
+     */
+    public Long[] toBoxedArray() {
+        return toList().toArray(new Long[0]);
+    }
+
+    /**
+     * @return primitive array of the underlying bitset
+     */
+    public long[] toArray() {
+        return getBitSet().stream().toArray();
     }
 }

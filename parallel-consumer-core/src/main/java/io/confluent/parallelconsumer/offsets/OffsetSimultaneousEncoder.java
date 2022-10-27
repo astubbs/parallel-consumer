@@ -259,7 +259,14 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
             final long actualOffset = this.baseOffsetToCommit + relativeOffset;
             final boolean isIncomplete = this.incompleteOffsets.contains(actualOffset);
 
-            activeEncoders.forEach(encoder -> encoder.ensureCapacity(baseOffset, relativeOffset));
+            activeEncoders.forEach(encoder -> {
+                try {
+                    encoder.ensureCapacity(baseOffset, relativeOffset);
+                } catch (EncodingNotSupportedException e) {
+                    log.debug("Cannot encode {} : {}", encoder.getClass().getSimpleName(), e.getMessage());
+                    encoder.disable(e);
+                }
+            });
 
             activeEncoders.forEach(encoder -> {
                 try {
@@ -519,8 +526,19 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     }
 
     @Override
-    public void ensureCapacity(final long base, final long highest) {
-        activeEncoders.forEach(x -> x.ensureCapacity(base, highest));
+    public void ensureCapacity(final long base, final long highest) throws EncodingNotSupportedException {
+        for (OffsetEncoder x : activeEncoders) {
+            try {
+                x.ensureCapacity(base, highest);
+            } catch (EncodingNotSupportedException e) {
+                log.debug("Cannot use {} encoder with new base {} and highest {}: {}",
+                        x.getClass().getSimpleName(), base, highest, e.getMessage());
+                x.disable(e);
+            }
+        }
+        if (activeEncoders.stream().filter(x -> x.canEncoderBeUsed()).count() < 1) {
+            throw new EncodingNotSupportedException("No encoders available");
+        }
     }
 
     private boolean isNoEncodingNeeded() {

@@ -25,7 +25,7 @@ public interface OffsetEncoderContract {
      */
     int getEncodedSizeEstimate();
 
-    void ensureCapacity(long base, long highest);
+    void ensureCapacity(long base, long highest) throws EncodingNotSupportedException;
 
     /**
      * todo docs

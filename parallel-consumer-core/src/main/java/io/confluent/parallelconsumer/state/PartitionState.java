@@ -279,7 +279,12 @@ public class PartitionState<K, V> {
         maybeTruncateOrPruneTrackedOffsets(recordsAndEpoch);
 
         //
-        ensureEncoderCapacity(recordsAndEpoch.getFirstOffset(), recordsAndEpoch.getLastOffset());
+        try {
+            ensureEncoderCapacity(recordsAndEpoch.getFirstOffset(), recordsAndEpoch.getLastOffset());
+        } catch (EncodingNotSupportedException e) {
+            // todo test this
+            log.warn("No encoding available for this partition, ensuring capacity failed", e);
+        }
 
         //
         long epochOfInboundRecords = recordsAndEpoch.getEpochOfPartitionAtPoll();
@@ -295,7 +300,7 @@ public class PartitionState<K, V> {
 
     }
 
-    public void ensureEncoderCapacity(long base, long highest) {
+    public void ensureEncoderCapacity(long base, long highest) throws EncodingNotSupportedException {
         offsetSimultaneousEncoder.ensureCapacity(base, highest);
     }
 

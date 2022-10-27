@@ -89,13 +89,14 @@ class WorkManagerOffsetMapCodecManagerTest {
         injectSucceededWorkAtOffset(highestSucceeded);
     }
 
+    @SneakyThrows
     private void injectSucceededWorkAtOffset(long offset) {
         Mockito.doReturn(offset).when(mockCr).offset();
 
         var recordsAndEpoch = mock(EpochAndRecordsMap.RecordsAndEpoch.class);
         Mockito.doReturn(offset).when(recordsAndEpoch).getLastOffset();
 
-        state.ensureEncoderCapacity(0l, offset);
+        state.ensureEncoderCapacity(0L, offset);
 
         state.addNewIncompleteRecord(mockCr);
         state.onSuccess(offset); // in this case the highest seen is also the highest succeeded

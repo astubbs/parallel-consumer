@@ -44,7 +44,7 @@ class BitSetEncodingTest {
 
         // before serialisation
         {
-            assertThat(bs.toArray()).containsExactly(1L, 2L, 3L, 5L, 9L);
+            assertThat(bs.toList()).containsExactly(1L, 2L, 3L, 5L, 9L);
         }
 
         // after serialisation
@@ -75,14 +75,14 @@ class BitSetEncodingTest {
         highest++;
         o.encodeCompleteOffset(base, highest, highest);
         {
-            long[] actual = o.bitSet.stream().toArray();
+            long[] actual = o.toArray();
             assertThat(actual).doesNotContain(0).contains(1);
         }
 
         {
             highest++;
             o.encodeCompleteOffset(base, highest, highest);
-            long[] actual = o.bitSet.stream().toArray();
+            long[] actual = o.toArray();
             assertThat(actual).doesNotContain(0).contains(1, 2);
         }
 
@@ -91,7 +91,7 @@ class BitSetEncodingTest {
             highest++;
             highest++;
             o.encodeCompleteOffset(base, highest, highest);
-            long[] actual = o.bitSet.stream().toArray();
+            long[] actual = o.toArray();
             assertThat(actual).doesNotContain(0).contains(1, 2, 4);
         }
     }
@@ -111,14 +111,14 @@ class BitSetEncodingTest {
         highest++;
         o.encodeCompleteOffset(base, highest, highest);
         {
-            long[] actual = o.bitSet.stream().toArray();
+            long[] actual = o.toArray();
             assertThat(actual).contains(1);
         }
 
         {
             highest++;
             //o.maybeReinitialise(base, highest);
-            long[] actual = o.bitSet.stream().toArray();
+            long[] actual = o.toArray();
             assertThat(actual).as("still contains it's information").contains(1);
         }
     }
