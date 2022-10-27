@@ -162,7 +162,7 @@ public class BitSetEncoder extends OffsetEncoder {
     @Override
     public byte[] serialise() {
         final byte[] bitSetArray = this.bitSet.toByteArray();
-        var bitsetEntriesRequired = bitSet.calculateTotalOffsetsRepresented();
+        var bitsetEntriesRequired = bitSet.calculateTotalOffsetsRepresented() + 1;
         ByteBuffer wrappedBitsetBytesBuffer = constructWrappedByteBuffer(bitsetEntriesRequired, version);
         if (wrappedBitsetBytesBuffer.remaining() < bitSetArray.length)
             throw new InternalRuntimeException("Not enough space in byte array");

@@ -199,7 +199,7 @@ public class BitSetFragmentCollection {
     public long calculateTotalOffsetsRepresented() {
         final long low = getBaseFragment().getVirtualBaseOffsetView();
         final long high = getHighestFragmentCache().getHighestSucceededOffset();
-        return high - low;
+        return high - low + 1;
     }
 
     /**
