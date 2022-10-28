@@ -352,6 +352,12 @@ public class RunLengthEncoder extends OffsetEncoder {
         public void extendUpByOne() {
             long newExtendedRunLength = getRunLength() + 1;
             setRunLength(newExtendedRunLength);
+
+            // maybe we can merge with the next entry?
+            RunLengthEntry nextHigher = positiveRunLengths.higher(this);
+            if (nextHigher != null) {
+                maybeMerge(nextHigher);
+            }
         }
 
         /**
@@ -365,6 +371,13 @@ public class RunLengthEncoder extends OffsetEncoder {
             setRunLength(newExtendedRunLength);
             // move the start offset down 1
             absoluteStartOffset--;
+
+            // maybe we can merge with the previous entry?
+            // maybe we can merge with the next entry?
+            RunLengthEntry nextHigher = positiveRunLengths.lower(this);
+            if (nextHigher != null) {
+                nextHigher.maybeMerge(this);
+            }
         }
 
         private void mergeWithHigher(RunLengthEntry higherNeigh) {
@@ -522,29 +535,41 @@ public class RunLengthEncoder extends OffsetEncoder {
             int myEndOffset = getRelativeEndOffsetFromBase(originalBaseOffset);
             var newOffset = newBaseOffset + relativeOffsetFromBase;
 
-
             // extending the range
             // is there a gap?
-            long gapSizeBetweenEntries = newOffset - getAbsoluteStartOffset();
+            var isAboveUs = newOffset > absoluteStartOffset;
+
+            long gapBelow = getAbsoluteStartOffset() - newOffset;
+            long gapAbove = newOffset - getEndOffsetInclusive();
+
 //            long gapSizeBetweenEntries = relativeOffsetFromBase - myEndOffset;
-            if (gapSizeBetweenEntries > 1 || gapSizeBetweenEntries < -1) {
-                // real gap exists, add in an entry of incomplete to fill the gap, and append the new entry
-
-
-// we don't track negatives
-//                // add new negatives entry
-//                int newRelativeOffset = myEndOffset + 1;
-//                long run = gapSizeBetweenEntries - 1;
-//                addRunLength(newBaseOffset, run, newRelativeOffset);
-
-
-                // add new positive run entry
-                addRunLength(newBaseOffset, 1, relativeOffsetFromBase);
-            } else if (gapSizeBetweenEntries == 1 || gapSizeBetweenEntries == -1) {
-                // there's no gap between this and last completed, so merge entries
-                extend(gapSizeBetweenEntries);
+            final boolean neighbourAboveAdjacent = isAboveUs && gapAbove == 1;
+            if (neighbourAboveAdjacent) {
+                extendUpByOne();
             } else {
-                throw InternalRuntimeException.msg("Invalid gap between entries {}", gapSizeBetweenEntries);
+                final boolean neighbourBelowAdjacent = !isAboveUs && gapBelow == 1;
+
+                if (neighbourBelowAdjacent) {
+                    extendDownByOne();
+                } else {
+                    final boolean neighbourNotAdjacent = gapAbove > 1 || gapBelow > 1;
+                    if (neighbourNotAdjacent) {
+                        // real gap exists, add in an entry of incomplete to fill the gap, and append the new entry
+
+
+                        // we don't track negatives
+                        //                // add new negatives entry
+                        //                int newRelativeOffset = myEndOffset + 1;
+                        //                long run = gapSizeBetweenEntries - 1;
+                        //                addRunLength(newBaseOffset, run, newRelativeOffset);
+
+
+                        // add new positive run entry
+                        addRunLength(newBaseOffset, 1, relativeOffsetFromBase);
+                    } else {
+                        throw InternalRuntimeException.msg("Invalid gap between entries above {} or below {}", gapAbove, gapBelow);
+                    }
+                }
             }
         }
 
@@ -563,25 +588,6 @@ public class RunLengthEncoder extends OffsetEncoder {
             return false;
         }
 
-        private void extend(long gapSizeBetweenEntries) {
-            if (gapSizeBetweenEntries >= 1) {
-                extendUpByOne();
-                // maybe we can merge with the next entry?
-                RunLengthEntry nextHigher = positiveRunLengths.higher(this);
-                if (nextHigher != null) {
-                    maybeMerge(nextHigher);
-                }
-            } else {
-                extendDownByOne();
-                // maybe we can merge with the previous entry?
-                // maybe we can merge with the next entry?
-                RunLengthEntry nextHigher = positiveRunLengths.lower(this);
-                if (nextHigher != null) {
-                    nextHigher.maybeMerge(this);
-                }
-            }
-        }
-
         /**
          * As negatives aren't tracked, we derive it
          */
@@ -595,6 +601,7 @@ public class RunLengthEncoder extends OffsetEncoder {
                 return this.absoluteStartOffset - lowerPositive.getEndOffsetInclusive() - 1;
             }
         }
+
     }
 
     /**

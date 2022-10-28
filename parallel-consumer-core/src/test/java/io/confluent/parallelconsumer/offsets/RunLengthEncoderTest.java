@@ -792,6 +792,9 @@ class RunLengthEncoderTest {
                 of(4, 3));
     }
 
+    /**
+     * todo docs what does thick mean?
+     */
     @Test
     void segmentTestThick() {
         RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
