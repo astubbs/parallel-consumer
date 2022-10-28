@@ -548,11 +548,37 @@ public class RunLengthEncoder extends OffsetEncoder {
             }
         }
 
+        /**
+         * Candidate should always be higher
+         */
+        boolean maybeMerge(RunLengthEntry mergeCandidate) {
+            boolean runLengthsAreNowAdjacent = this.getAbsoluteStartOffset() + this.getRunLength() == mergeCandidate.getAbsoluteStartOffset();
+            if (runLengthsAreNowAdjacent) {
+                // extend to cover
+                this.setRunLength(this.getRunLength() + mergeCandidate.getRunLength());
+                // delete
+                getPositiveRunLengths().remove(mergeCandidate);
+                return true;
+            }
+            return false;
+        }
+
         private void extend(long gapSizeBetweenEntries) {
             if (gapSizeBetweenEntries >= 1) {
                 extendUpByOne();
+                // maybe we can merge with the next entry?
+                RunLengthEntry nextHigher = positiveRunLengths.higher(this);
+                if (nextHigher != null) {
+                    maybeMerge(nextHigher);
+                }
             } else {
                 extendDownByOne();
+                // maybe we can merge with the previous entry?
+                // maybe we can merge with the next entry?
+                RunLengthEntry nextHigher = positiveRunLengths.lower(this);
+                if (nextHigher != null) {
+                    nextHigher.maybeMerge(this);
+                }
             }
         }
 
@@ -824,17 +850,17 @@ public class RunLengthEncoder extends OffsetEncoder {
         } else {
             long absoluteOffset = newBaseOffset + relativeOffsetFromBase;
             // todo change from >= to < - as it can never be equal, so let's honour that
+
+            // see if neighbour is below
             RunLengthEntry neighbour = getLowerNeighbour(absoluteOffset);
 
-            if (neighbour != null) {
-                return neighbour.ingestNewPositiveNeighbourEntry(newBaseOffset, relativeOffsetFromBase);
-            } else {
-                // neighbour must be higher
+            if (neighbour == null) {
+                // neighbour must be above - so we're inserting a lower run length than the lowest existing one
                 neighbour = positiveRunLengths.ceiling(new RunLengthEntry(absoluteOffset));
 //                neighbour = addRunLength(newBaseOffset, 1, relativeOffsetFromBase);
-                return neighbour.ingestNewPositiveNeighbourEntry(newBaseOffset, relativeOffsetFromBase);
-//                return higher.ingestNewPositiveEntry(newBaseOffset, relativeOffsetFromBase);
             }
+
+            return neighbour.ingestNewPositiveNeighbourEntry(newBaseOffset, relativeOffsetFromBase);
         }
     }
 
