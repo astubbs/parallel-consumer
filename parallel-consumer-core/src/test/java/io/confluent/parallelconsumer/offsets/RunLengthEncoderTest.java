@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.offsets;
 
 import com.google.common.truth.Truth;
 import io.confluent.csid.utils.Range;
+import io.confluent.parallelconsumer.Offsets;
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import io.confluent.parallelconsumer.offsets.RunLengthEncoder.RunLengthEntry;
 import lombok.SneakyThrows;
@@ -558,8 +559,8 @@ class RunLengthEncoderTest {
                 of(6, 10),
                 of(6, 1, 3, 1));
 
-        assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getStartOffset).extracting(Long::intValue).containsExactly(0, 6, 7, 10);
-        assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getRunLength).containsExactly(6L, 1L, 3L, 1L);
+        assertThat(rl.calculateFullRunLengthEntries()).extracting(RunLengthEntry::getStartOffset).extracting(Long::intValue).containsExactly(0, 6, 7, 10);
+        assertThat(rl.calculateFullRunLengthEntries()).extracting(RunLengthEntry::getRunLength).containsExactly(6L, 1L, 3L, 1L);
         assertThat(rl.calculateSucceededActualOffsets()).extracting(Long::intValue).containsExactly(6, 10);
     }
 
@@ -617,15 +618,16 @@ class RunLengthEncoderTest {
     }
 
     private void assertOffsetsAndRuns(final RunLengthEncoder rl, List<Integer> goodOffsets, List<Integer> runs) {
-        List<Long> expectedLongRuns = runs.stream().map(Long::valueOf).collect(Collectors.toList());
+        assertOffsetsAndRuns(rl, Offsets.fromInts(goodOffsets), runs.stream().map(Integer::longValue).collect(Collectors.toList()));
+    }
 
-        assertThat(rl.calculateBothRunLengths())
+    private void assertOffsetsAndRuns(final RunLengthEncoder rl, Offsets goodOffsets, List<Long> expectedLongRuns) {
+        assertThat(rl.calculateFullRunLengths())
                 .as("run lengths")
                 .containsExactlyElementsOf(expectedLongRuns);
 
         assertThat(rl.calculateSucceededActualOffsets()).as("succeeded Offsets")
-                .extracting(Long::intValue)
-                .containsExactlyElementsOf(goodOffsets);
+                .containsExactlyElementsOf(goodOffsets.getRawOffsets());
     }
 
     /**

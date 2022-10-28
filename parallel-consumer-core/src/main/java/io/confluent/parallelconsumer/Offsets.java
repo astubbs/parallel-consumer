@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import lombok.Getter;
 import lombok.ToString;
 import lombok.Value;
 import lombok.experimental.Delegate;
@@ -18,6 +19,7 @@ import java.util.stream.Collectors;
 @ToString
 public class Offsets {
 
+    @Getter
     @Delegate
     private final List<Long> rawOffsets;
 
@@ -38,6 +40,10 @@ public class Offsets {
 
     public static Offsets fromArray(long... rawOffsetsIn) {
         return new Offsets(Arrays.stream(rawOffsetsIn).boxed().collect(Collectors.toList()));
+    }
+
+    public static Offsets fromInts(List<Integer> goodOffsets) {
+        return new Offsets(goodOffsets.stream().map(Long::valueOf).collect(Collectors.toList()));
     }
 
     /**
