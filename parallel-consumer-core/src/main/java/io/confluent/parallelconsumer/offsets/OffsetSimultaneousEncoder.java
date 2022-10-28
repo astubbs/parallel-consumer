@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.WorkManager;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.ToString;
@@ -101,8 +102,12 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
     /**
      * The encoders to run. Concurrent so we can remove encoders while traversing.
+     * <p>
+     * // todo don't remove, only disable?
      */
+    @Getter(AccessLevel.PROTECTED)
     private final ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> activeEncoders;
+
     private final List<OffsetEncoder> sortedEncoders = new ArrayList<>();
 
     public OffsetSimultaneousEncoder(long baseOffsetToCommit, long highestSucceededOffset, SortedSet<Long> incompleteOffsets) {
@@ -289,6 +294,33 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
 
         return this;
     }
+
+    public void serializeAllEncoders() {
+        throw new UnsupportedOperationException("Not implemented");
+//        sortedEncodingData.clear();
+//        List<OffsetEncoderBase> toRemove = new ArrayList<>();
+//        for (OffsetEncoderBase encoder : encoders) {
+//            //            try {
+//            encoder.registerSerialisedDataIfEnabled();
+//            //            } catch (EncodingNotSupportedException e) {
+//            //                log.debug("Removing {} encoder, not supported ({})", encoder.getEncodingType().description(), e.getMessage());
+//            //                toRemove.add(encoder);
+//            //            }
+//        }
+//        encoders.removeAll(toRemove);
+//
+//        // compressed versions
+//        // sizes over LARGE_INPUT_MAP_SIZE_THRESHOLD bytes seem to benefit from compression
+//        boolean noEncodingsAreSmallEnough = encoders.stream().noneMatch(OffsetEncoder::quiteSmall);
+//        boolean noEncodingsAreSmallEnough = encoders.stream().noneMatch(OffsetEncoderBase::quiteSmall);
+//        if (noEncodingsAreSmallEnough || compressionForced) {
+//            encoders.forEach(OffsetEncoder::registerCompressed);
+//            encoders.forEach(OffsetEncoderBase::registerCompressed);
+//        }
+//
+//        log.debug("Encoding results: {}", sortedEncodingData);
+    }
+
 
     private void registerEncodings(final Set<? extends OffsetEncoder> encoders) {
         List<OffsetEncoder> toRemove = new ArrayList<>();

@@ -26,15 +26,34 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static io.confluent.csid.utils.JavaUtils.toTreeSet;
+import static io.confluent.parallelconsumer.ManagedTruth.assertTruth;
 import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
 import static io.confluent.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
 import static javax.lang.model.type.TypeKind.INT;
 import static javax.lang.model.type.TypeKind.SHORT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.params.provider.EnumSource.Mode.INCLUDE;
+import static org.mockito.Mockito.mock;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 class RunLengthEncoderTest {
+
+    @Test
+    void genesisCaseComplete() {
+        var rle = new RunLengthEncoder(0L, mock(OffsetSimultaneousEncoder.class), v2);
+        rle.encodeCompleteOffset(0L, 1L, 0L);
+        final List<Long> longs = rle.calculateSucceededActualOffsets();
+        assertTruth(longs).containsExactly(1L);
+    }
+
+    @Test
+    void genesisCaseIncomplete() {
+        var rle = new RunLengthEncoder(0L, mock(OffsetSimultaneousEncoder.class), v2);
+        rle.encodeIncompleteOffset(0L, 1L, 0L);
+        assertTruth(rle).getRunLengthEncodingIntegers().isEmpty();
+        final List<Long> longs = rle.calculateSucceededActualOffsets();
+        assertTruth(longs).isEmpty();
+    }
 
     /**
      * Check that run length supports gaps in the source partition - i.e. compacted topics where offsets aren't strictly
@@ -52,7 +71,7 @@ class RunLengthEncoderTest {
             long base = 0;
             RunLengthEncoder rl = new RunLengthEncoder(base, offsetSimultaneousEncoder, v2);
 
-            addStandardData(rl);
+            addSharedTestData(rl);
 
 //            rl.addTail();
 
@@ -67,7 +86,7 @@ class RunLengthEncoderTest {
         }
     }
 
-    private static void addStandardData(RunLengthEncoder rl) {
+    private static void addSharedTestData(RunLengthEncoder rl) {
         long base = 0;
         long highest = 9;
 
@@ -83,7 +102,6 @@ class RunLengthEncoderTest {
         rl.encodeCompleteOffset(base, 9, highest); // 1
         rl.encodeIncompleteOffset(base, 10, highest); // 1
     }
-
 
     /**
      * Check that run length supports gaps in the source partition - i.e. compacted topics where offsets aren't strictly
@@ -102,7 +120,7 @@ class RunLengthEncoderTest {
 
             RunLengthEncoder rl = new RunLengthEncoder(base, offsetSimultaneousEncoder, v2);
 
-            addStandardData(rl);
+            addSharedTestData(rl);
 
             // after serialisation
             {
@@ -191,7 +209,7 @@ class RunLengthEncoderTest {
                                       long currentHighestCompleteOffset) throws EncodingNotSupportedException {
         RunLengthEncoder rl = new RunLengthEncoder(0L, offsetSimultaneousEncoder, versionsToTest);
 
-        addStandardData(rl);
+        addSharedTestData(rl);
 
 
         // inject overflow offset
@@ -344,12 +362,12 @@ class RunLengthEncoderTest {
 
             encodePattern(rl, base);
 
-            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getStartOffset).extracting(Long::intValue).containsExactly(10, 12, 14, 15, 17, 20, 21, 24);
+            assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getStartOffset).extracting(Long::intValue).containsExactly(10, 12, 14, 15, 17, 20, 21, 24);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(12L, 13L, 15L, 16L, 20L, 24L, 25L, 26L, 27L);
 
             rl.truncateRunlengthsV2(22);
 
-            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(2, 4);
+            assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getRunLength).containsExactly(2L, 4L);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(24L, 25L, 26L, 27L);
         }
 
@@ -360,7 +378,7 @@ class RunLengthEncoderTest {
 
             rl.truncateRunlengthsV2(4);
 
-            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(1, 2, 3, 1, 3, 4);
+            assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getRunLength).containsExactly(1L, 2L, 3L, 1L, 3L, 4L);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(5L, 6L, 10L, 14L, 15L, 16L, 17L);
         }
 
@@ -371,7 +389,7 @@ class RunLengthEncoderTest {
 
             rl.truncateRunlengthsV2(8);
 
-            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(2, 1, 3, 4);
+            assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getRunLength).containsExactly(2L, 1L, 3L, 4L);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(10L, 14L, 15L, 16L, 17L);
         }
 
@@ -383,7 +401,7 @@ class RunLengthEncoderTest {
 
             rl.truncateRunlengthsV2(9);
 
-            assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(1, 1, 3, 4);
+            assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getRunLength).containsExactly(1L, 1L, 3L, 4L);
             assertThat(rl.calculateSucceededActualOffsets()).containsExactly(10L, 14L, 15L, 16L, 17L);
         }
     }
@@ -450,7 +468,7 @@ class RunLengthEncoderTest {
 //        rl.addTail();
         rl.truncateRunlengthsV2(2);
 
-        assertThat(rl.runLengthOffsetPairs).isEmpty();
+        assertThat(rl.getPositiveRunLengths()).isEmpty();
         assertThat(rl.calculateSucceededActualOffsets()).isEmpty();
     }
 
@@ -492,7 +510,7 @@ class RunLengthEncoderTest {
     }
 
     /**
-     * Segmentation of existing entry on out of order arrival
+     * Simple segmentation of existing entry on out-of-order arrival.
      * <p>
      * Scenarios:
      * <p>
@@ -528,19 +546,20 @@ class RunLengthEncoderTest {
     void segmentTestOne() {
         RunLengthEncoder rl = new RunLengthEncoder(0, new OffsetSimultaneousEncoder(0, 1L), OffsetEncoding.Version.v2);
 
+        // add a positive entry with a big jump from base
         rl.encodeCompleteOffset(0, 10, 10);
         assertOffsetsAndRuns(rl,
                 of(10), // offsets
                 of(10, 1)); // runs
 
-        // middle offset out of order
+        // add a positive entry, but it's out of order, bisecting the existing negative run-length entry
         rl.encodeCompleteOffset(0, 6, 10);
         assertOffsetsAndRuns(rl,
                 of(6, 10),
                 of(6, 1, 3, 1));
 
-        assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getStartOffset).extracting(Long::intValue).containsExactly(0, 6, 7, 10);
-        assertThat(rl.runLengthOffsetPairs).extracting(RunLengthEntry::getRunLength).containsExactly(6, 1, 3, 1);
+        assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getStartOffset).extracting(Long::intValue).containsExactly(0, 6, 7, 10);
+        assertThat(rl.getPositiveRunLengths()).extracting(RunLengthEntry::getRunLength).containsExactly(6L, 1L, 3L, 1L);
         assertThat(rl.calculateSucceededActualOffsets()).extracting(Long::intValue).containsExactly(6, 10);
     }
 
@@ -598,15 +617,15 @@ class RunLengthEncoderTest {
     }
 
     private void assertOffsetsAndRuns(final RunLengthEncoder rl, List<Integer> goodOffsets, List<Integer> runs) {
-        assertThat(rl.runLengthOffsetPairs)
+        List<Long> expectedLongRuns = runs.stream().map(Long::valueOf).collect(Collectors.toList());
+
+        assertThat(rl.calculateBothRunLengths())
                 .as("run lengths")
-                .extracting(RunLengthEntry::getRunLength)
-                .containsExactlyElementsOf(runs);
+                .containsExactlyElementsOf(expectedLongRuns);
 
         assertThat(rl.calculateSucceededActualOffsets()).as("succeeded Offsets")
                 .extracting(Long::intValue)
                 .containsExactlyElementsOf(goodOffsets);
-
     }
 
     /**
