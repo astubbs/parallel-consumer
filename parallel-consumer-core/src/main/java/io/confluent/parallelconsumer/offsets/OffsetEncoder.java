@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer.offsets;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.SneakyThrows;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -15,9 +16,11 @@ import java.nio.ByteBuffer;
 /**
  * Base OffsetEncoder
  * <p>
- * When encoding offset data beyond the low water mark, we only need to record information up until the highest
- * succeeded offset, as any beyond (because they have failed or haven't suceeded yet) we can treat as though we've never
- * seen them when we come across them again.
+ * When encoding offset data beyond the low water-mark, we only need to record information up until the highest
+ * succeeded offset, as any beyond (because they have failed or haven't succeeded yet) we can treat as though we've
+ * never seen them when we come across them again.
+ * <p>
+ * A record should always assume to be positive unless informed otherwise (to support offset gaps i.e. compaction).
  *
  * @see WorkManager
  */

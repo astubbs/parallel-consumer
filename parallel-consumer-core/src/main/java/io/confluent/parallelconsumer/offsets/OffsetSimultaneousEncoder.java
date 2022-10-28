@@ -55,6 +55,7 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
     @Getter
     private long baseOffset;
 
+    // todo audit against highestSucceededOffset
     private long highestSucceeded;
 
     /**
@@ -253,29 +254,30 @@ public class OffsetSimultaneousEncoder implements OffsetEncoderContract {
         //
         log.debug("Encode loop offset start,end: [{},{}] length: {}", this.baseOffsetToCommit, getEndOffsetExclusive(), getlengthBetweenBaseAndHighOffset());
         /*
-         * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
+         * todo refactor this loop into the encoders (or sequential vs non-sequential encoders) as RunLength doesn't need
          *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
          *  the entire range. So when BitSet can't be used, the encoding would be potentially a lot faster as RunLength
          *  didn't need the whole loop.
          */
+
+        activeEncoders.forEach(encoder -> {
+            try {
+                encoder.ensureCapacity(baseOffset, highestSucceeded);
+            } catch (EncodingNotSupportedException e) {
+                log.debug("Cannot encode {} : {}", encoder.getClass().getSimpleName(), e.getMessage());
+                encoder.disable(e);
+            }
+        });
+
         Range relativeOffsetsLongRange = range(getlengthBetweenBaseAndHighOffset());
         relativeOffsetsLongRange.forEach(relativeOffset -> {
             // range index (relativeOffset) is used as we don't actually encode offsets, we encode the relative offset from the base offset
             final long actualOffset = this.baseOffsetToCommit + relativeOffset;
-            final boolean isIncomplete = this.incompleteOffsets.contains(actualOffset);
+            final boolean isATrackedIncomplete = this.incompleteOffsets.contains(actualOffset);
 
             activeEncoders.forEach(encoder -> {
                 try {
-                    encoder.ensureCapacity(baseOffset, relativeOffset);
-                } catch (EncodingNotSupportedException e) {
-                    log.debug("Cannot encode {} : {}", encoder.getClass().getSimpleName(), e.getMessage());
-                    encoder.disable(e);
-                }
-            });
-
-            activeEncoders.forEach(encoder -> {
-                try {
-                    if (isIncomplete) {
+                    if (isATrackedIncomplete) {
                         log.trace("Found an incomplete offset {}", actualOffset);
                         encoder.encodeIncompleteOffset(this.baseOffsetToCommit, relativeOffset, highestSucceededOffset);
                     } else {

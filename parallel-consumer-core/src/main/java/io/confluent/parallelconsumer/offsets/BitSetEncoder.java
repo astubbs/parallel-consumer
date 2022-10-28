@@ -19,6 +19,15 @@ import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
 import static java.lang.Math.toIntExact;
 
 /**
+ * // todo We have to assume if we're not informed that something is incomplete, then it is either succeeded or doesn't
+ * exist. So the default state of the BitSet needs to be succeeded (or doesn't exist). Because we can't choose BitSet to
+ * start filled with 1's, we have to invert the meaning of a 1 in the bitset. So for us now, a 0 is positive and 1 is
+ * negative.
+ * <p>
+ * // non continuous achieves this, because at serialization time, it iterates over the entire possible offset range, and
+ * if an offset is not explicitly negative, it's serialised as positive.
+ *
+ * <p>
  * Encodes a range of offsets, from an incompletes collection into a BitSet.
  * <p>
  * Highly efficient when the completion status is random.

@@ -324,6 +324,10 @@ public class PartitionState<K, V> {
 
         // idempotently add the offset to our incompletes track - if it was already there from loading our metadata on startup, there is no affect
         incompleteOffsets.put(offset, Optional.of(record));
+
+        // inform encoder of new work
+        // todo remove
+//        encodeWorkResult(false, offset);
     }
 
 

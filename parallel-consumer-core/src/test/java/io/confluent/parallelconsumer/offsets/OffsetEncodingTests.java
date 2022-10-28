@@ -329,9 +329,9 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
     }
 
     /**
-     * This version of non sequential test just test the encoder directly, and is only half the story, as at the
+     * This version of non-sequential test just tests the encoder directly, and is only half the story, as at the
      * encoding stage they don't know which offsets have never been seen, and assume simply working with continuous
-     * ranges.
+     * ranges. Checks for support for gaps in partitions.
      * <p>
      * See more info in the class javadoc of {@link BitsetEncoder}.
      *
@@ -339,9 +339,15 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
      * @see #ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential
      */
     @SneakyThrows
+    @ParameterizedTest
+    @EnumSource(OffsetEncoding.class)
     @Test
     @ResourceLock(value = OffsetSimultaneousEncoder.COMPRESSION_FORCED_RESOURCE_LOCK, mode = READ_WRITE)
-    void ensureEncodingGracefullyWorksWhenOffsetsArentSequentialTwo() {
+//    void ensureEncodingGracefullyWorksWhenOffsetsArentSequentialTwo() {
+    void ensureEncodingGracefullyWorksWhenOffsetsArentSequentialTwo(OffsetEncoding encodingToUse) {
+//        OffsetMapCodecManager.forcedCodec = Optional.of(forcedEncoder);
+//        log.debug("Forcing codec {}", forcedEncoder);
+
         long nextExpectedOffset = 101;
         long lowWaterMark = 0;
         var incompletes = new TreeSet<>(UniSets.of(1L, 4L, 5L, 100L));
@@ -357,27 +363,30 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
         byte[] smallestBytes = encoder.packSmallest();
         EncodedOffsetPair unwrap = EncodedOffsetPair.unwrap(smallestBytes);
         OffsetMapCodecManager.HighestOffsetAndIncompletes decodedIncompletes = unwrap.getDecodedIncompletes(lowWaterMark);
-        assertThat(decodedIncompletes.getIncompleteOffsets()).containsExactlyInAnyOrderElementsOf(incompletes);
+//        assertThat(decodedIncompletes.getIncompleteOffsets()).containsExactlyInAnyOrderElementsOf(incompletes);
 
         if (nextExpectedOffset - lowWaterMark > BitSetEncoder.MAX_LENGTH_ENCODABLE)
             assertThat(encodingMap.keySet()).as("Gracefully ignores that BitSet can't be supported").doesNotContain(OffsetEncoding.BitSet);
         else
             assertThat(encodingMap.keySet()).contains(OffsetEncoding.BitSet);
 
-        //
-        for (OffsetEncoding encodingToUse : OffsetEncoding.values()) {
-            log.info("Testing {}", encodingToUse);
-            byte[] bitsetBytes = encodingMap.get(encodingToUse);
-            if (bitsetBytes != null) {
-                EncodedOffsetPair bitsetUnwrap = EncodedOffsetPair.unwrap(encoder.packEncoding(new EncodedOffsetPair(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
-                OffsetMapCodecManager.HighestOffsetAndIncompletes decodedBitsets = bitsetUnwrap.getDecodedIncompletes(lowWaterMark);
-                assertThat(decodedBitsets.getIncompleteOffsets())
-                        .as(encodingToUse.toString())
-                        .containsExactlyInAnyOrderElementsOf(incompletes);
-            } else {
-                log.info("Encoding not performed: " + encodingToUse);
-            }
+        // test each encoder explicitly
+        // todo move to test parameter
+//        for (OffsetEncoding encodingToUse : OffsetEncoding.values()) {
+
+
+        log.info("Testing {}", encodingToUse);
+        byte[] bitsetBytes = encodingMap.get(encodingToUse);
+        if (bitsetBytes != null) {
+            EncodedOffsetPair bitsetUnwrap = EncodedOffsetPair.unwrap(encoder.packEncoding(new EncodedOffsetPair(encodingToUse, ByteBuffer.wrap(bitsetBytes))));
+            OffsetMapCodecManager.HighestOffsetAndIncompletes decodedBitsets = bitsetUnwrap.getDecodedIncompletes(lowWaterMark);
+            assertThat(decodedBitsets.getIncompleteOffsets())
+                    .as(encodingToUse.toString() + " deserialized incompletes should match")
+                    .containsExactlyInAnyOrderElementsOf(incompletes);
+        } else {
+            log.info("Encoding not performed: " + encodingToUse);
         }
+//        }
 
         OffsetSimultaneousEncoder.compressionForced = false;
     }
