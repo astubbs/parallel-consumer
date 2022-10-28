@@ -39,6 +39,7 @@ import static java.lang.Math.toIntExact;
 @Slf4j
 public class RunLengthEncoder extends OffsetEncoder {
 
+    public static final int LARGE_NUMER_OF_RUN_LENGTHS = 2_000;
     /**
      * The current run length being counted / built
      */
@@ -67,7 +68,7 @@ public class RunLengthEncoder extends OffsetEncoder {
      * structure trivial as we don't need to do any segmenting.
      */
     @Getter(AccessLevel.PROTECTED)
-    private final NavigableSet<RunLengthEntry> positiveRunLengths = new TreeSet<>();
+    private NavigableSet<RunLengthEntry> positiveRunLengths = new TreeSet<>();
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
@@ -614,8 +615,8 @@ public class RunLengthEncoder extends OffsetEncoder {
         // else nothing to truncate
         if (!positiveRunLengths.isEmpty()) {
 
-            if (positiveRunLengths.size() > 2_000) {
-                log.debug("length: {}", runLengthEncodingIntegers.size());
+            if (positiveRunLengths.size() > LARGE_NUMER_OF_RUN_LENGTHS) {
+                log.debug("Number of positive entries: {}", positiveRunLengths.size());
             }
 //
 //        {
@@ -626,21 +627,32 @@ public class RunLengthEncoder extends OffsetEncoder {
 //                throw new RuntimeException("");
 //        }
 
-            RunLengthEntry intersectionRunLength = positiveRunLengths.floor(new RunLengthEntry(newBaseOffset));
-            if (intersectionRunLength == null)
-                throw new InternalRuntimeException("Couldn't find interception point");
-            else if (newBaseOffset > intersectionRunLength.getEndOffsetInclusive()) {
+            // entries any higher, start at a higher offset than our target
+            RunLengthEntry highestEntryThatCouldContainTarget = positiveRunLengths.floor(new RunLengthEntry(newBaseOffset));
+            var highestEntry = positiveRunLengths.last();
+            if (highestEntryThatCouldContainTarget == null)
+                throw new InternalRuntimeException("Couldn't find interception point, and no entries below the base");
+            else if (newBaseOffset > highestEntry.getEndOffsetInclusive()) {
+                // special case
                 // there is no intersection as the new base offset is a point beyond what our run lengths encode
                 // remove all
                 positiveRunLengths.clear();
             } else {
-                // truncate intersection run length
-                long adjustedRunLength = intersectionRunLength.runLength - (newBaseOffset - intersectionRunLength.absoluteStartOffset);
-                intersectionRunLength.setRunLength(toIntExact(adjustedRunLength));
+                if (highestEntryThatCouldContainTarget.contains(newBaseOffset)) {
+                    // truncate intersection run length
+                    long adjustedRunLength = highestEntryThatCouldContainTarget.runLength - (newBaseOffset - highestEntryThatCouldContainTarget.absoluteStartOffset);
+                    highestEntryThatCouldContainTarget.setRunLength(toIntExact(adjustedRunLength));
 
-                // truncate all run-lengths before intersection point
-                NavigableSet<RunLengthEntry> toTruncateFromSet = positiveRunLengths.headSet(intersectionRunLength, false);
-                toTruncateFromSet.clear();
+                    // truncate all run-lengths before intersection point
+                    NavigableSet<RunLengthEntry> toTruncateFromSet = positiveRunLengths.headSet(highestEntryThatCouldContainTarget, false);
+                    toTruncateFromSet.clear();
+                } else {
+                    // there is no intersection as the positive run doesn't reach up to the new target
+                    // remove it, and all less than
+//                    positiveRunLengths.remove(highestEntryThatCouldContainTarget);
+                    positiveRunLengths = positiveRunLengths.tailSet(highestEntryThatCouldContainTarget, false);
+                }
+
             }
 //
 //        {
@@ -652,7 +664,7 @@ public class RunLengthEncoder extends OffsetEncoder {
 //        }
         }
 
-        //
+        // move the base up
         this.originalBaseOffset = newBaseOffset;
     }
 
