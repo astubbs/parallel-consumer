@@ -5,6 +5,8 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import io.confluent.parallelconsumer.state.WorkManager;
+import lombok.AccessLevel;
+import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +44,7 @@ abstract class OffsetEncoder implements OffsetEncoderContract, Comparable<Offset
      * The highest committable offset - the next expected offset to be returned by the broker. So by definition, this
      * index in our offset map we're encoding, is always incomplete.
      */
+    @Getter(AccessLevel.PROTECTED)
     @ToString.Include
     protected long originalBaseOffset;
 

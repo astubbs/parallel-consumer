@@ -4,17 +4,15 @@ package io.confluent.parallelconsumer.offsets;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.csid.utils.JavaUtils;
 import io.confluent.csid.utils.Range;
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import lombok.AccessLevel;
-import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -43,54 +41,51 @@ import static java.lang.Math.toIntExact;
 public class RunLengthEncoder extends OffsetEncoder {
 
     public static final int LARGE_NUMER_OF_RUN_LENGTHS = 2_000;
-    /**
-     * The current run length being counted / built
-     */
-    @ToString.Include
-    private long currentRunLengthCount;
 
-    /**
-     * todo docs
-     */
-    private int previousRelativeOffsetFromBase;
+//    /**
+//     * The current run length being counted / built
+//     */
+//    @ToString.Include
+//    private long currentRunLengthCount;
 
-    /**
-     * todo docs
-     */
-    private boolean previousRunLengthState;
+//    /**
+//     * todo docs
+//     */
+//    private int previousRelativeOffsetFromBase;
 
-    /**
-     * Stores all the run lengths
-     */
-    @Deprecated//?
+//    /**
+//     * todo docs
+//     */
+//    private boolean previousRunLengthState;
+
+//    /**
+//     * Stores all the run lengths
+//     */
+//    @Deprecated//?
+//    @Getter
+//    private List<Integer> runLengthEncodingIntegers;
+
     @Getter
-    private List<Integer> runLengthEncodingIntegers;
-
-    /**
-     * Only need to track positive run lengths, negatives can be derived. This makes iteratively building the run length
-     * structure trivial as we don't need to do any segmenting.
-     */
-    @Getter(AccessLevel.PROTECTED)
-    private NavigableSet<RunLengthEntry> allRunLengths = new TreeSet<>();
+    private final RunLengthSequence runLengthSequence = new RunLengthSequence();
 
     private Optional<byte[]> encodedBytes = Optional.empty();
 
-    private static final Version DEFAULT_VERSION = Version.v2;
+//    private static final Version DEFAULT_VERSION = Version.v2;
 
     public RunLengthEncoder(long baseOffset, OffsetSimultaneousEncoder offsetSimultaneousEncoder, Version newVersion) {
         super(baseOffset, offsetSimultaneousEncoder, newVersion);
 
-        init();
+//        init();
     }
-
-    private void init() {
-        // todo delete
-        runLengthEncodingIntegers = new ArrayList<>();
-
-        currentRunLengthCount = 0;
-        previousRelativeOffsetFromBase = 0;
-        previousRunLengthState = false;
-    }
+//
+//    private void init() {
+//        // todo delete
+//        runLengthEncodingIntegers = new ArrayList<>();
+//
+////        currentRunLengthCount = 0;
+//        previousRelativeOffsetFromBase = 0;
+//        previousRunLengthState = false;
+//    }
 
 //    private void reset() {
 //        log.debug("Resetting");
@@ -129,12 +124,12 @@ public class RunLengthEncoder extends OffsetEncoder {
 
         int entryWidth = getEntryWidth();
 
-        ByteBuffer runLengthEncodedByteBuffer = ByteBuffer.allocate(getSize() * entryWidth);
+        ByteBuffer runLengthEncodedByteBuffer = ByteBuffer.allocate(getRunLengthSequence().getSize() * entryWidth);
 
         // for (final Integer run : getRunLengthEncodingIntegers()) {
 //        for (final RunLengthEntry n : getSerializeViewOnData()) {
         getSerializeViewOnData().forEach(n -> {
-            Long runLength = n.runLength;
+            Long runLength = n.getRunLength();
             switch (version) {
                 case v1 -> {
                     final short shortCastRunLength = runLength.shortValue();
@@ -157,19 +152,11 @@ public class RunLengthEncoder extends OffsetEncoder {
         return array;
     }
 
-    /**
-     * todo docs
-     *
-     * @return
-     */
-    private Stream<RunLengthEntry> getSerializeViewOnData() {
-        return getAllRunLengths().stream().map(RunLengthEntry::maybeInFlatOverMissing);
-    }
-
-
-    private int getSize() {
-        //return runLengthEncodingIntegers.size();
-        return allRunLengths.size();
+    private int getEntryWidth() {
+        return switch (version) {
+            case v1 -> Short.BYTES;
+            case v2 -> Integer.BYTES;
+        };
     }
 
 //    /**
@@ -185,31 +172,34 @@ public class RunLengthEncoder extends OffsetEncoder {
 //        }
 //    }
 
-    private int getEntryWidth() {
-        return switch (version) {
-            case v1 -> Short.BYTES;
-            case v2 -> Integer.BYTES;
-        };
+    /**
+     * For serializing, we encode missing data as succeeded, because explicitly negative offsets get explicitly tracked
+     * upon reloading - and we may never receive those offsets. New versions of the ingestion pipeline though check for
+     * missing offsets in polled batch and truncate the data - so this may not be required, however consistent with
+     * existing serialization formats.
+     *
+     * @see RunLengthEntry#maybeInFlatOverMissing
+     * @see io.confluent.parallelconsumer.state.PartitionState#maybeTruncateOrPruneTrackedOffsets
+     */
+    // visible for testing
+    protected Stream<RunLengthEntry> getSerializeViewOnData() {
+        var serializedView = new RunLengthSequence();
+        return getRunLengthSequence().stream().map(n -> n.maybeInFlatOverMissing(serializedView));
+    }
+
+    @Override
+    public int getEncodedSize() {
+        return encodedBytes.get().length;
     }
 
     @Override
     public void encodeIncompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
-        maybeTruncateBase(newBaseOffset, currentHighestCompleted);
+//        maybeTruncateBase(newBaseOffset, currentHighestCompleted);
 //        encodeRunLength(false, baseOffset, relativeOffset);
 //        //no-op
 //        //Entries being added should always be complete, as the range by definition starts out incomplete. We never add incompletes because things never transition from complete to incomplete.");
 
-        encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(newBaseOffset, relativeOffset, RunLengthEntry.OffsetState.INCOMPLETE);
-    }
-
-    @Override
-    public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
-//        maybeReinitialise(newBaseOffset, currentHighestCompleted);
-
-//        encodeRunLength(true, newBaseOffset, relativeOffset);
-        maybeTruncateBase(newBaseOffset, currentHighestCompleted);
-
-        encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(newBaseOffset, relativeOffset, RunLengthEntry.OffsetState.SUCCEEDED);
+        getRunLengthSequence().encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(newBaseOffset, relativeOffset, currentHighestCompleted, RunLengthEntry.OffsetState.INCOMPLETE);
     }
 
 //    /**
@@ -233,706 +223,24 @@ public class RunLengthEncoder extends OffsetEncoder {
 //        return bothRunLengths;
 //    }
 
-    /**
-     * Returns the negative and positive run-lengths by calculating the implicit negative entries. Gaps in data mean the
-     * offsets are missing from the source partition, and so should be marked as succeeded.
-     * <p>
-     * Warning: Marks missing data as incomplete - NOT SUCCEEDED, as serialisation requires
-     */
-    public List<Long> calculateFullRelativeRunLengthsForTesting() {
-//        List<Long> bothRunLengths = new ArrayList<>();
-//        long currentOffsetExpected = 0L;
-//
-//        for (RunLengthEntry runLength : getAllRunLengths()) {
-//            if (currentOffsetExpected != runLength.getAbsoluteStartOffset()) {
-//                // make missing data as incomplete
-////                var missingData = new RunLengthEntry(currentOffsetExpected, runLength.getAbsoluteStartOffset(), RunLengthEntry.OffsetState.SUCCEEDED);
-//                final long sizeOfGapOfMissingData = runLength.getAbsoluteStartOffset() - currentOffsetExpected;
-//                bothRunLengths.add(sizeOfGapOfMissingData);
-//            }
-//
-//            bothRunLengths.add(runLength.getRunLength());
-//
-//            currentOffsetExpected = runLength.getEndOffsetInclusive() + 1;
-//        }
-//        return bothRunLengths;
+    @Override
+    public void encodeCompleteOffset(final long newBaseOffset, final long relativeOffset, final long currentHighestCompleted) {
+//        maybeReinitialise(newBaseOffset, currentHighestCompleted);
 
-        return calculateFullRunLengthEntriesForTesting().stream()
-                .mapToLong(RunLengthEntry::getRunLength)
-                .boxed().collect(Collectors.toList());
-    }
+//        encodeRunLength(true, newBaseOffset, relativeOffset);
+//        maybeTruncateBase(newBaseOffset, currentHighestCompleted);
 
-    /**
-     * Returns the negative and positive run-lengths by calculating the implicit negative entries, for testing.
-     * <p>
-     * Warning: Marks missing data as incomplete - NOT SUCCEEDED, as serialisation requires
-     */
-    public List<RunLengthEntry> calculateFullRunLengthEntriesForTesting() {
-        List<RunLengthEntry> bothRunLengths = new ArrayList<>();
-        long currentOffsetExpected = originalBaseOffset;
-        for (RunLengthEntry runLength : getAllRunLengths()) {
-            if (currentOffsetExpected != runLength.getAbsoluteStartOffset()) {
-                // make missing data as incomplete
-                final long sizeOfGapOfMissingData = runLength.getAbsoluteStartOffset() - currentOffsetExpected;
-                var missingData = new RunLengthEntry(currentOffsetExpected, sizeOfGapOfMissingData, RunLengthEntry.OffsetState.INCOMPLETE);
-                bothRunLengths.add(missingData);
-            }
-
-//            // negative
-//            final Long negativeLength = runLengthEntry.getNegativeNeighbourRunLength();
-//            final long negativeStart = runLengthEntry.absoluteStartOffset - negativeLength;
-//            bothRunLengths.add(new RunLengthEntry(negativeStart, negativeLength, isSuccedded));
-//
-//            Optional<Long> negativeNeighbourRunLength = runLengthEntry.getNegativeNeighbourRunLength();
-//            if (negativeNeighbourRunLength.isPresent()) {
-//                bothRunLengths.add(negativeNeighbourRunLength.get());
-//            }
-
-            // positive
-            bothRunLengths.add(runLength);
-
-            //
-            currentOffsetExpected = runLength.getEndOffsetInclusive() + 1;
-        }
-
-        // remove the run if it's negative, as we throw away these entries for serialisation
-        final Optional<RunLengthEntry> maybeLast = JavaUtils.getLast(bothRunLengths);
-        if (maybeLast.isPresent()) {
-            final RunLengthEntry last = maybeLast.get();
-            if (last.isNegative()) {
-                bothRunLengths.remove(bothRunLengths.size() - 1);
-            }
-        }
-
-        return bothRunLengths;
-    }
-
-    private long getGenesisRunLength() {
-        return (long) getAllRunLengths().first().runLength;
-    }
-
-    public void maybeTruncateBase(final long newBaseOffset, final long currentHighestCompleted) {
-        boolean reinitialise = false;
-
-        if (originalBaseOffset != newBaseOffset) {
-            log.debug("Base offset {} has moved to {} - new continuous blocks of successful work",
-                    this.originalBaseOffset, newBaseOffset);
-            reinitialise = true;
-        }
-
-        if (reinitialise) {
-            reinitialise(newBaseOffset, currentHighestCompleted);
-        }
-    }
-
-    private void reinitialise(final long newBaseOffset, final long currentHighestCompleted) {
-//        long longDelta = newBaseOffset - originalBaseOffset;
-//        int baseDelta = JavaUtils.safeCast(longDelta);
-        truncateRunLengthsV2(newBaseOffset);
-
-
-//        currentRunLengthCount = 0;
-//        previousRelativeOffsetFromBase = 0;
-//        previousRunLengthState = false;
-
-        enable();
-    }
-
-
-    /**
-     * todo docs
-     */
-    @ToString
-    @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-    class RunLengthEntry implements Comparable<RunLengthEntry> {
-
-        /**
-         * todo docs
-         */
-        @Getter
-        @EqualsAndHashCode.Include
-        private long absoluteStartOffset;
-
-        /**
-         * The length of this run
-         */
-        @Getter
-        private Long runLength;
-
-        @Getter
-        private final OffsetState offsetState;
-
-        public RunLengthEntry(long newBaseOffset) {
-            // todo - state is ignored for use as key - code smell
-            this(newBaseOffset, null);
-        }
-
-        public boolean isSucceeded() {
-            return getOffsetState() == OffsetState.SUCCEEDED;
-        }
-
-        /**
-         * todo docs
-         *
-         * @return
-         */
-        public RunLengthEntry maybeInFlatOverMissing() {
-            if (isSucceeded()) {
-                // merge with potential adjacent missing
-                long expandedLength = runLength + getHigherNeighbour().getAbsoluteStartOffset();
-                return new RunLengthEntry(absoluteStartOffset, expandedLength, OffsetState.INCOMPLETE);
-            } else {
-                return this;
-            }
-        }
-
-        public boolean isNegative() {
-            return getOffsetState() == OffsetState.INCOMPLETE;
-        }
-
-        enum OffsetState {
-            SUCCEEDED,
-            INCOMPLETE;
-
-            public OffsetState invert() {
-                return switch (this) {
-                    case SUCCEEDED -> INCOMPLETE;
-                    case INCOMPLETE -> SUCCEEDED;
-                };
-            }
-        }
-
-//        @Getter
-//        private boolean succeeded;
-
-        /**
-         * todo docs - what does it mean to have a run-length entry with no run length? a run-length of one?
-         */
-        public RunLengthEntry(final long absoluteStartOffset, final OffsetState state) {
-            this(absoluteStartOffset, 1L, state);
-        }
-
-        public RunLengthEntry(final long absoluteStartOffset, final Long runLength, final OffsetState state) throws ArithmeticException {
-            this.offsetState = state;
-            if (absoluteStartOffset < 0) {
-                throw new IllegalArgumentException(msg("Bad start offset {}", absoluteStartOffset, runLength));
-            }
-            this.absoluteStartOffset = absoluteStartOffset;
-//            this.succeeded = succeeded;
-            if (runLength != null)
-                setRunLength(Math.toIntExact(runLength));
-        }
-
-        public void setRunLength(final long runLength) {
-            if (runLength < 1) {
-                throw new IllegalArgumentException(msg("Cannot have a run-length of {}", runLength));
-            }
-            this.runLength = runLength;
-        }
-
-        /**
-         * Inclusive end offset of the range this entry represents
-         */
-        public long getEndOffsetInclusive() {
-            return absoluteStartOffset + runLength - 1;
-        }
-
-        public long getEndOffsetExclusive() {
-            return absoluteStartOffset + runLength;
-        }
-
-        public long getRelativeStartOffsetFromBase(final long baseOffset) {
-            return Math.toIntExact(absoluteStartOffset - baseOffset);
-        }
-
-        /**
-         * todo docs
-         */
-        public int getRelativeEndOffsetFromBase(final long baseOffset) {
-            return Math.toIntExact(getRelativeStartOffsetFromBase(baseOffset) + runLength - 1);
-        }
-
-        @Override
-        public int compareTo(final RunLengthEncoder.RunLengthEntry o) {
-            return Long.compare(absoluteStartOffset, o.absoluteStartOffset);
-        }
-
-        /**
-         * @param absoluteOffset the offset to test
-         * @return true if the absolute offset is within the range of this entry
-         */
-        public boolean contains(long absoluteOffset) {
-            return absoluteOffset >= absoluteStartOffset && absoluteOffset < getEndOffsetExclusive();
-        }
-
-        /**
-         * Extend this entry by one, can be used to merge a neighbour that's of size 1.
-         */
-        public void extendUpByOne() {
-            long newExtendedRunLength = getRunLength() + 1;
-            setRunLength(newExtendedRunLength);
-
-            // maybe we can merge with the next entry?
-            maybeMergeWithHigherNeighbour();
-        }
-
-        /**
-         * Extend this entry by one, can be used to merge a neighbour that's of size 1.
-         */
-        public void extendDownByOne() {
-            // extend the run length
-            long newExtendedRunLength = getRunLength() + 1;
-            setRunLength(newExtendedRunLength);
-            // move the start offset down 1
-            absoluteStartOffset--;
-
-            // maybe we can merge with the previous entry?
-            RunLengthEntry nextLower = getLowerNeighbour();
-            if (nextLower != null) {
-                nextLower.maybeMergeWithHigherNeighbour();
-            }
-        }
-
-        /**
-         * Candidate should always be higher
-         *
-         * @return true if merged
-         */
-        boolean maybeMergeWithHigherNeighbour() {
-            var mergeCandidate = getHigherNeighbour();
-            if (mergeCandidate == null) {
-                return false;
-            }
-
-            boolean runLengthsAreNowAdjacent = isAdjacentTo(mergeCandidate);
-            boolean statesAreEqual = mergeCandidate.hasSameStateAs(this);
-            if (runLengthsAreNowAdjacent && statesAreEqual) {
-                // extend to cover
-                this.setRunLength(this.getRunLength() + mergeCandidate.getRunLength());
-                // delete
-                getAllRunLengths().remove(mergeCandidate);
-                return true;
-            }
-            return false;
-        }
-
-        private boolean isAdjacentTo(RunLengthEntry mergeCandidate) {
-            return getEndOffsetInclusive() + 1 == mergeCandidate.getAbsoluteStartOffset();
-        }
-
-        private boolean hasSameStateAs(RunLengthEntry target) {
-            if (target == null) return false;
-            return getOffsetState() == target.getOffsetState();
-        }
-
-//        private void mergeWithHigher(RunLengthEntry higherNeigh) {
-//            // extend my run length to include theirs
-//            long newExtendedRunLength = getRunLength() + higherNeigh.getRunLength();
-//            setRunLength(newExtendedRunLength);
-//
-//            // remove them
-//            getAllRunLengths().remove(higherNeigh);
-//        }
-
-        private RunLengthEntry getLowerNeighbour() {
-            return allRunLengths.lower(this);
-        }
-
-        private RunLengthEntry getHigherNeighbour() {
-            return allRunLengths.higher(this);
-        }
-
-        public boolean ingestNewNeighbourEntry(long newBaseOffset, long relativeOffsetFromBase, final OffsetState state) {
-            long absoluteOffset = newBaseOffset + relativeOffsetFromBase;
-
-// can never contain - no segmenting
-            if (contains(absoluteOffset)) {
-                // new offset state collides with an existing entry
-                return segmentOrMergeEntryBy(newBaseOffset, relativeOffsetFromBase);
-            } else {
-                // new entry higher than any existing
-                addNewNeighbour(newBaseOffset, relativeOffsetFromBase, state);
-                // need to merge in both directions
-                return false;
-            }
-        }
-
-        /**
-         * New positive is within our range, so we need to segment ourselves.
-         */
-        private boolean segmentOrMergeEntryBy(long newBaseOffset, long relativeOffsetFromBase) {
-            boolean segmented;
-            long absoluteOffset = newBaseOffset + relativeOffsetFromBase;
-
-            var closestExistingEntry = this;
-            RunLengthEntry nextHigher = allRunLengths.higher(closestExistingEntry);
-
-            segmented = true;
-
-//            if (closestExistingEntry.runLength == 1) {
-//                // we're the only entry in the range, so we can just extend ourselves
-//                mergeThreeEntries(closestExistingEntry, nextHigher);
-//            } else {
-            // we're not the only entry in the range, so we need to split ourselves
-            split(newBaseOffset, relativeOffsetFromBase, absoluteOffset, closestExistingEntry, nextHigher);
-//            }
-            return segmented;
-        }
-
-        /**
-         * Split the existing entry into three
-         */
-        private void split(long newBaseOffset, long relativeOffsetFromBase, long absoluteOffset, RunLengthEntry closestExistingEntry, RunLengthEntry nextHigher) {
-            var low = newBaseOffset - this.getAbsoluteStartOffset();
-            var offset = newBaseOffset + relativeOffsetFromBase;
-
-            if (low > 0) {
-                // we need to split the lower part
-                var lower = new RunLengthEntry(newBaseOffset, this.getOffsetState());
-                allRunLengths.add(lower);
-
-                // give a chance to merge
-                lower.getLowerNeighbour().maybeMergeWithHigherNeighbour();
-            }
-
-            // we need to split the middle part
-            var middle = new RunLengthEntry(newBaseOffset, 1L, getOffsetState().invert());
-            allRunLengths.add(middle);
-
-            // we need to split the upper part
-            var high = offset - getEndOffsetInclusive();
-            if (high > 0) {
-                // we need to split the upper part
-                var upperRun = getEndOffsetInclusive() - newBaseOffset;
-                var upper = new RunLengthEntry(newBaseOffset + 1, this.getOffsetState());
-                allRunLengths.add(upper);
-
-                // give a chance to merge
-                upper.maybeMergeWithHigherNeighbour();
-            }
-
-            // remove myself
-            allRunLengths.remove(this);
-        }
-
-        /**
-         * todo docs
-         */
-        private void splitOld(long newBaseOffset, long relativeOffsetFromBase, long absoluteOffset, RunLengthEntry closestExistingEntry, RunLengthEntry nextHigher) {
-            OffsetState state = null; // delete me
-
-            // remove the old entry which must have been incompletes
-            boolean missing = !allRunLengths.remove(closestExistingEntry);
-            if (missing)
-                throw new InternalRuntimeException("Cant find element that previously existed");
-
-            long newRunCumulative = 1;
-
-            Long offsetStartRelative = null;
-
-            // create the three to replace the intersected node - 1 incomplete, 1 complete (this one), 1 incomplete
-            int firstRun = toIntExact(absoluteOffset - closestExistingEntry.absoluteStartOffset);
-            Long middleRelativeOffset = null;
-            long firstRelativeOffset = closestExistingEntry.getRelativeStartOffsetFromBase(originalBaseOffset);
-
-            if (firstRun > 0) {
-                // large gap to fill
-//                RunLengthEntry runLengthEntry = new RunLengthEntry(closestExistingEntry.startOffset, firstRun);
-                RunLengthEntry first = addRunLength(newBaseOffset, firstRun, firstRelativeOffset, state);
-                middleRelativeOffset = first.getRelativeStartOffsetFromBase(originalBaseOffset) + first.runLength;
-            } else {
-                // combine with the neighbor as there's no gap
-                // check for a lower neighbour
-                RunLengthEntry previous = allRunLengths.lower(closestExistingEntry);
-                if (previous != null && previous.getEndOffsetExclusive() == absoluteOffset) {
-                    // lower neighbor connects - combine
-                    newRunCumulative = newRunCumulative + previous.runLength;
-                    offsetStartRelative = previous.getRelativeStartOffsetFromBase(newBaseOffset);
-                    allRunLengths.remove(previous);
-                }
-            }
-
-            if (middleRelativeOffset == null)
-                middleRelativeOffset = firstRelativeOffset;
-
-            if (nextHigher != null) {
-                long gapUpward = nextHigher.getRelativeStartOffsetFromBase(newBaseOffset) - middleRelativeOffset;
-                if (gapUpward > 1) {
-                    // there is a large gap between this success and the nextHigher
-                    // add this single entry now then, and then add gap filler
-//                    if (offsetStartRelative == null)
-//                        offsetStartRelative = nextHigher.getRelativeStartOffsetFromBase(newBaseOffset) - 1; // shift left one place
-//                    newRunCumulative = newRunCumulative + 1;
-
-                    if (offsetStartRelative == null)
-                        offsetStartRelative = relativeOffsetFromBase;
-
-                    RunLengthEntry middle = addRunLength(newBaseOffset, newRunCumulative, offsetStartRelative, state);
-
-                    // add incomplete filler
-                    int lastRange = toIntExact(closestExistingEntry.getEndOffsetInclusive() - absoluteOffset);
-                    if (lastRange > 0) {
-                        addRunLength(newBaseOffset, lastRange, middleRelativeOffset + 1, state);
-//                        int fillerStart = middle.getRelativeEndOffsetFromBase(newBaseOffset);
-//                        int use = (fillerStart != middleRelativeOffset + 1)?
-//                        if (fillerStart != middleRelativeOffset + 1) {
-//                            log.trace("");
-//                        }
-//                        addRunLength(newBaseOffset, lastRange, fillerStart);
-                    }
-                } else if (gapUpward == 1) {
-                    // combine with upper
-                    newRunCumulative = newRunCumulative + nextHigher.runLength; // expand
-//                nextHigher.setRunLength(newRunLength);
-                    allRunLengths.remove(nextHigher);
-                    if (offsetStartRelative == null)
-                        offsetStartRelative = nextHigher.getRelativeStartOffsetFromBase(newBaseOffset) - 1; // shift left one place if not already established
-                    RunLengthEntry end = addRunLength(newBaseOffset, newRunCumulative, offsetStartRelative, state);
-                } else {
-                    throw InternalRuntimeException.msg("Invalid gap {}", gapUpward);
-                }
-            }
-        }
-
-//        private void mergeThreeEntries(RunLengthEntry closestExistingEntry, RunLengthEntry nextHigher) {
-//            // simple path
-//            // single bad entry to be replaced, but with 1 new entry and 2 good entry neighbors - combine all three
-//            RunLengthEntry previous = allRunLengths.lower(closestExistingEntry);
-//            var newRun = 0L;
-//            if (previous != null) {
-//                var runDown = previous.runLength;
-//                newRun = newRun + runDown;
-//            }
-//            var runUp = nextHigher.runLength;
-//            newRun = newRun + 1 + runUp;
-//
-//            // remove the 3 entries
-//            allRunLengths.remove(previous);
-//            allRunLengths.remove(closestExistingEntry);
-//            allRunLengths.remove(nextHigher);
-//
-//            allRunLengths.add(new RunLengthEntry(closestExistingEntry.absoluteStartOffset, newRun, isSucceeded));
-//        }
-
-
-        /**
-         * New positive doesn't with us, so we need to add a new entry
-         */
-        private void addNewNeighbour(final long newBaseOffset, final long relativeOffsetFromBase, final OffsetState state) {
-//            int myEndOffset = getRelativeEndOffsetFromBase(originalBaseOffset);
-//            var newOffset = newBaseOffset + relativeOffsetFromBase;
-//
-//            // extending the range
-//            // is there a gap?
-//            var isAboveUs = newOffset > absoluteStartOffset;
-//
-//            // gap analysis
-//            long gapBelow = getAbsoluteStartOffset() - newOffset;
-//            long gapAbove = newOffset - getEndOffsetInclusive();
-////            long gapSizeBetweenEntries = relativeOffsetFromBase - myEndOffset;
-//            final boolean newNeighbourAboveWouldBeAdjacent = isAboveUs && gapAbove == 1;
-//            final boolean newNeighbourBelowWouldBeAdjacent = !isAboveUs && gapBelow == 1;
-//            final boolean neighbourNotAdjacent = gapAbove > 1 || gapBelow > 1;
-
-
-            Optional<Long> maybeAdjacentScore = calculateAdjacencyScore(newBaseOffset, relativeOffsetFromBase, state);
-
-            if (maybeAdjacentScore.isPresent()) {
-                // pre merge the new state without adding the new entry - this isn't actually needed, as we need to solve for merging after adding run lengths generally anyway
-                long adjacentScore = maybeAdjacentScore.get();
-                if (adjacentScore == 1) {
-                    extendUpByOne();
-                } else if (adjacentScore == -1) {
-                    extendDownByOne();
-                }
-            } else {
-                // neighbour is not directly adjacent
-                // add new run entry
-                addRunLength(newBaseOffset, 1, relativeOffsetFromBase, state);
-                // would need to add the merge check call here if we were not doing it before adding the new entry
-            }
-
-//            if (newNeighbourAboveWouldBeAdjacent) {
-//                final RunLengthEntry higherNeighbour = getHigherNeighbour();
-//                boolean statusMatchAbove = hasSameStateAs(higherNeighbour);
-//                if (statusMatchAbove) {
-//                    extendUpByOne();
-//                }
-//            } else if (newNeighbourBelowWouldBeAdjacent) {
-//                boolean statusMatchBelow = hasSameStateAs(getLowerNeighbour());
-//                if (statusMatchBelow) {
-//                    extendDownByOne();
-//                }
-//            } else if (neighbourNotAdjacent) {
-//                // neighbour is not directly adjacent
-//                // add new run entry
-//                addRunLength(newBaseOffset, 1, relativeOffsetFromBase, state);
-//            } else {
-//                throw InternalRuntimeException.msg("Invalid gap between entries above {} or below {}", gapAbove, gapBelow);
-//            }
-        }
-
-        private Optional<Long> calculateAdjacencyScore(long newBaseOffset, long relativeOffsetFromBase, OffsetState newNeighbourState) {
-//            int myEndOffset = getRelativeEndOffsetFromBase(originalBaseOffset);
-            var newOffset = newBaseOffset + relativeOffsetFromBase;
-
-            // extending the range
-            // is there a gap?
-            var isAboveUs = newOffset > absoluteStartOffset;
-
-            // gap analysis
-            long gapBelow = getAbsoluteStartOffset() - newOffset;
-            long gapAbove = newOffset - getEndOffsetInclusive();
-//            long gapSizeBetweenEntries = relativeOffsetFromBase - myEndOffset;
-            final boolean newNeighbourAboveWouldBeAdjacent = isAboveUs && gapAbove == 1;
-            final boolean newNeighbourBelowWouldBeAdjacent = !isAboveUs && gapBelow == 1;
-//            final boolean neighbourNotAdjacent = gapAbove > 1 || gapBelow > 1;
-
-            if (newNeighbourAboveWouldBeAdjacent) {
-//                final RunLengthEntry higherNeighbour = getHigherNeighbour();
-//                boolean statusMatchAbove = hasSameStateAs(higherNeighbour);
-//                boolean statusMatchAbove = ;
-                if (hasSameStateAs(newNeighbourState)) {
-                    return Optional.of(1L);
-                }
-            } else if (newNeighbourBelowWouldBeAdjacent) {
-//                boolean statusMatchBelow = hasSameStateAs(getLowerNeighbour());
-//                if (statusMatchBelow) {
-                if (hasSameStateAs(newNeighbourState)) {
-                    return Optional.of(-1L);
-                }
-//            } else if (neighbourNotAdjacent) {
-            }
-
-            // neighbour is not directly adjacent, or states don't match
-            return Optional.empty();
-        }
-
-        private boolean hasSameStateAs(OffsetState newNeighbourState) {
-            return newNeighbourState == getOffsetState();
-        }
-
-        /**
-         * As negatives aren't tracked, we derive it
-         */
-        // todo delete?
-        public Long getNegativeNeighbourRunLength() {
-            final RunLengthEntry lowerPositive = getAllRunLengths().lower(this);
-            if (lowerPositive == null) {
-                // this run length is the start, so derive the genesis negative run-length
-                // means we are the first entry
-                return getAbsoluteStartOffset() - originalBaseOffset;
-            } else {
-                return this.absoluteStartOffset - lowerPositive.getEndOffsetInclusive() - 1;
-            }
-        }
-    }
-
-    /**
-     * For each run entry, see if it's below the base, if it is, drop it. Find the first run length that intersects with
-     * the new base, and truncate it. Finish.
-     * <p>
-     * Uses cached positions, so it doesn't have to search
-     */
-    void truncateRunLengthsV2(final long newBaseOffset) {
-        // else nothing to truncate
-        if (!allRunLengths.isEmpty()) {
-
-            if (allRunLengths.size() > LARGE_NUMER_OF_RUN_LENGTHS) {
-                log.debug("Number of positive entries: {}", allRunLengths.size());
-            }
-//
-//        {
-//            // sanity
-//            RunLengthEntry first = runLengthOffsetPairs.first();
-//            RunLengthEntry second = runLengthOffsetPairs.higher(first);
-//            if (first.getEndOffsetInclusive() + 1 != second.startOffset)
-//                throw new RuntimeException("");
-//        }
-
-            // entries any higher, start at a higher offset than our target
-            RunLengthEntry highestEntryThatCouldContainTarget = allRunLengths.floor(new RunLengthEntry(newBaseOffset)
-            );
-            var highestEntry = allRunLengths.last();
-            if (highestEntryThatCouldContainTarget == null)
-                throw new InternalRuntimeException("Couldn't find interception point, and no entries below the base");
-            else if (newBaseOffset > highestEntry.getEndOffsetInclusive()) {
-                // special case
-                // there is no intersection as the new base offset is a point beyond what our run lengths encode
-                // remove all
-                allRunLengths.clear();
-            } else {
-                if (highestEntryThatCouldContainTarget.contains(newBaseOffset)) {
-                    // truncate intersection run length
-                    long adjustedRunLength = highestEntryThatCouldContainTarget.runLength - (newBaseOffset - highestEntryThatCouldContainTarget.absoluteStartOffset);
-                    highestEntryThatCouldContainTarget.setRunLength(toIntExact(adjustedRunLength));
-
-                    // truncate all run-lengths before intersection point
-                    NavigableSet<RunLengthEntry> toTruncateFromSet = allRunLengths.headSet(highestEntryThatCouldContainTarget, false);
-                    toTruncateFromSet.clear();
-                } else {
-                    // there is no intersection as the positive run doesn't reach up to the new target
-                    // remove it, and all less than
-//                    positiveRunLengths.remove(highestEntryThatCouldContainTarget);
-                    allRunLengths = allRunLengths.tailSet(highestEntryThatCouldContainTarget, false);
-                }
-
-            }
-//
-//        {
-//            // sanity
-//            RunLengthEntry first = runLengthOffsetPairs.first();
-//            RunLengthEntry second = runLengthOffsetPairs.higher(first);
-//            if (first.getEndOffsetInclusive() + 1 != second.startOffset)
-//                throw new RuntimeException("");
-//        }
-        }
-
-        // move the base up
-        this.originalBaseOffset = newBaseOffset;
-    }
-
-    /**
-     * For each run entry, see if it's below the base, if it is, drop it. Find the first run length that intersects with
-     * the new base, and truncate it. Finish.
-     */
-    void truncateRunlengths(final int newBaseOffset) {
-        int currentOffset = 0;
-        if (runLengthEncodingIntegers.size() > 1000) {
-            log.info("length: {}", runLengthEncodingIntegers.size());
-        }
-        int index = 0;
-        int adjustedRunLength = -1;
-        for (Integer aRunLength : runLengthEncodingIntegers) {
-            currentOffset = currentOffset + aRunLength;
-            if (currentOffset <= newBaseOffset) {
-                // drop from new collection
-            } else {
-                // found first intersection - truncate
-                adjustedRunLength = currentOffset - newBaseOffset;
-                break; // done
-            }
-            index++;
-        }
-        if (adjustedRunLength == -1) throw new InternalRuntimeException("Couldn't find interception point");
-        List<Integer> integers = runLengthEncodingIntegers.subList(index, runLengthEncodingIntegers.size());
-        integers.set(0, adjustedRunLength); // overwrite with adjusted
-
-        // swap
-        this.runLengthEncodingIntegers = integers;
-
-        //
-        this.originalBaseOffset = newBaseOffset;
+        getRunLengthSequence().encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(newBaseOffset, relativeOffset, currentHighestCompleted, RunLengthEntry.OffsetState.SUCCEEDED);
     }
 
     @Override
-    public int getEncodedSize() {
-        return encodedBytes.get().length;
+    public byte[] getEncodedBytes() {
+        return encodedBytes.get();
     }
 
     @Override
     public int getEncodedSizeEstimate() {
-        int numEntries = getSize();
+        int numEntries = getRunLengthSequence().getSize();
 //        if (currentRunLengthCount > 0)
 //            numEntries = numEntries + 1;
         int entryWidth = getEntryWidth();
@@ -957,9 +265,54 @@ public class RunLengthEncoder extends OffsetEncoder {
         }
     }
 
-    @Override
-    public byte[] getEncodedBytes() {
-        return encodedBytes.get();
+    /**
+     * todo docs
+     */
+    public List<Long> calculateFullRelativeRunLengthsForTestingWithMissingAsIncomplete() {
+        List<Long> bothRunLengths = new ArrayList<>();
+        long currentOffsetExpected = 0L;
+
+        for (RunLengthEntry runLength : getRunLengthSequence()) {
+            if (currentOffsetExpected != runLength.getAbsoluteStartOffset()) {
+                // make missing data as incomplete
+//                var missingData = new RunLengthEntry(currentOffsetExpected, runLength.getAbsoluteStartOffset(), RunLengthEntry.OffsetState.SUCCEEDED);
+                final long sizeOfGapOfMissingData = runLength.getAbsoluteStartOffset() - currentOffsetExpected;
+                bothRunLengths.add(sizeOfGapOfMissingData);
+            }
+
+            bothRunLengths.add(runLength.getRunLength());
+
+            currentOffsetExpected = runLength.getEndOffsetInclusive() + 1;
+        }
+        return bothRunLengths;
+    }
+
+    /**
+     * Returns the negative and positive run-lengths by calculating the implicit negative entries. Gaps in data mean the
+     * offsets are missing from the source partition, and so should be marked as succeeded.
+     * <p>
+     * Warning: Marks missing data as incomplete - NOT SUCCEEDED, as serialisation requires
+     */
+    public List<Long> calculateFullRelativeRunLengthsForTesting() {
+//        List<Long> bothRunLengths = new ArrayList<>();
+//        long currentOffsetExpected = 0L;
+//
+//        for (RunLengthEntry runLength : getAllRunLengths()) {
+//            if (currentOffsetExpected != runLength.getAbsoluteStartOffset()) {
+//                // make missing data as incomplete
+////                var missingData = new RunLengthEntry(currentOffsetExpected, runLength.getAbsoluteStartOffset(), RunLengthEntry.OffsetState.SUCCEEDED);
+//                final long sizeOfGapOfMissingData = runLength.getAbsoluteStartOffset() - currentOffsetExpected;
+//                bothRunLengths.add(sizeOfGapOfMissingData);
+//            }
+//
+//            bothRunLengths.add(runLength.getRunLength());
+//
+//            currentOffsetExpected = runLength.getEndOffsetInclusive() + 1;
+//        }
+//        return bothRunLengths;
+        return getRunLengthSequence().runLengthsWithTrailingNegativePrunedAndMissingAsIncomplete().stream()
+                .mapToLong(RunLengthEntry::getRunLength)
+                .boxed().collect(Collectors.toList());
     }
 
 //    private void encodeRunLength(final boolean currentIsComplete, final long newBaseOffset, final long relativeOffsetFromBase) {
@@ -994,33 +347,6 @@ public class RunLengthEncoder extends OffsetEncoder {
 //        previousRelativeOffsetFromBase = relativeOffsetFromBase;
     }
 
-    /**
-     * Adds a new run-length entry
-     * <p>
-     * //     * , automatically switching between positive and negative run lengths depending on the //     * current
-     * head entry (this is implicitly encoded by the nature of the run length - the runs always alternate //     *
-     * negative to positive)
-     *
-     * @return the added entry
-     */
-// todo consider moving to entry class?
-    private RunLengthEntry addRunLength(final long newBaseOffset, final long runLength, final long relativeOffsetFromBase, final RunLengthEntry.OffsetState state) throws ArithmeticException {
-        // v1
-//        runLengthEncodingIntegers.add(runLength);
-
-        // v2
-        int offset = toIntExact(newBaseOffset + relativeOffsetFromBase);
-//        if (!runLengthOffsetPairs.isEmpty()) {
-//            RunLengthEntry previous = runLengthOffsetPairs.last();
-//            if (previous != null && offset != previous.getEndOffsetInclusive() + 1)
-//                throw new IllegalArgumentException(msg("Can't add a run length offset {} that's not continuous from previous {}", offset, previous));
-//        }
-        RunLengthEntry entry = new RunLengthEntry(offset, runLength, state);
-        boolean containedAlready = !allRunLengths.add(entry);
-        if (containedAlready)
-            throw new InternalRuntimeException(msg("Error adding new entry - already contained a run for offset {}", offset));
-        return entry;
-    }
 
 //    @Deprecated
 //    private boolean injectGapsWithIncomplete(final boolean currentIsComplete, final long newBaseOffset, final int relativeOffsetFromBase) {
@@ -1068,65 +394,12 @@ public class RunLengthEncoder extends OffsetEncoder {
 //        return segmented;
 //    }
 
-    /**
-     * todo docs
-     */
-// todo rename
-    private boolean encodeCompleteAndSegmentOrCombinePreviousEntryIfNeeded(final long newBaseOffset, final long relativeOffsetFromBase, final RunLengthEntry.OffsetState state) {
-//        if (!currentIsComplete) {
-//            throw new InternalRuntimeException("Entries being added should always be complete, as the range by definition starts out incomplete. We never add incompletes because things never transition from complete to incomplete.");
-//        }
 
-//        if (closestLessThan == null) {
-        if (getAllRunLengths().isEmpty()) {
-            // genesis case
-
-// we don't track negatives
-//            // first entry
-//            // first derive the genesis incompletes, as we don't explicitly encode them when they're "performed"
-//            addRunLength(newBaseOffset, relativeOffsetFromBase, 0);
-//            // then add the first completed run-length of one
-
-            addRunLength(newBaseOffset, 1, relativeOffsetFromBase, state);
-            // we didn't segment any existing entries
-            return false;
-        } else {
-            long absoluteOffset = newBaseOffset + relativeOffsetFromBase;
-            // todo change from >= to < - as it can never be equal, so let's honour that
-
-            // see if neighbour is below
-            RunLengthEntry neighbour = getLowerNeighbour(absoluteOffset);
-
-            if (neighbour == null) {
-                // neighbour must be above - so we're inserting a lower run length than the lowest existing one
-                neighbour = allRunLengths.ceiling(new RunLengthEntry(absoluteOffset, state));
-//                neighbour = addRunLength(newBaseOffset, 1, relativeOffsetFromBase);
-            }
-
-            return neighbour.ingestNewNeighbourEntry(newBaseOffset, relativeOffsetFromBase, state);
-        }
-    }
-
-
-    private RunLengthEntry getLowerNeighbour(long absoluteOffset) {
-        return allRunLengths.lower(new RunLengthEntry(absoluteOffset));
-    }
-
-    private RunLengthEntry getHigherNeighbour(long absoluteOffset) {
-        return allRunLengths.higher(new RunLengthEntry(absoluteOffset));
-    }
-
-    private long getPreviousRelativeOffset(final int offset) {
-        RunLengthEntry dynamicPrevious = allRunLengths.floor(new RunLengthEntry(offset));
-        long previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - toIntExact(originalBaseOffset);
-        return previousOffset;
-    }
-
-    private long getPreviousRelativeOffset2(final long newBaseOffset, final int offset) {
-        RunLengthEntry dynamicPrevious = allRunLengths.floor(new RunLengthEntry(offset));
-        long previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - toIntExact(originalBaseOffset);
-        return previousOffset - toIntExact(newBaseOffset + currentRunLengthCount);
-    }
+//    private long getPreviousRelativeOffset2(final long newBaseOffset, final int offset) {
+//        RunLengthEntry dynamicPrevious = allRunLengths.floor(new RunLengthEntry(offset));
+//        long previousOffset = (dynamicPrevious == null) ? 0 : dynamicPrevious.runLength - toIntExact(originalBaseOffset);
+//        return previousOffset - toIntExact(newBaseOffset + currentRunLengthCount);
+//    }
 
     /**
      * @return the offsets which are succeeded
@@ -1137,7 +410,7 @@ public class RunLengthEncoder extends OffsetEncoder {
 //        int previous = 0;
         long offsetPosition = originalBaseOffset;
         //for (final Integer run : runLengthEncodingIntegers) {
-        for (final RunLengthEntry runLengthEntry : allRunLengths) {
+        for (final RunLengthEntry runLengthEntry : runLengthSequence) {
 //            if (successfulOffsets.isEmpty()) {
 //                // genesis negative
 //            }
@@ -1163,43 +436,16 @@ public class RunLengthEncoder extends OffsetEncoder {
         return successfulOffsets;
     }
 
-    /**
-     * O(n) - only for testing
-     *
-     * @return the offsets which are succeeded
-     */
-    public List<Long> calculateSucceededActualOffsets() {
-        List<Long> successfulOffsets = new ArrayList<>();
-//        boolean succeeded = true;
-//        int previous = 0;
-//        long offsetPosition = originalBaseOffset;
-        //for (final Integer run : runLengthEncodingIntegers) {
-        for (final RunLengthEntry runLengthEntry : allRunLengths) {
-
-            if (runLengthEntry.isSucceeded()) {
-//                long run = runLengthEntry.getRunLength();
-//            if (succeeded) {
-                long offsetPosition = runLengthEntry.getAbsoluteStartOffset();
-//                //todo avoid slow loop?
-                RunLengthEntry lowerNeighbour = runLengthEntry.getLowerNeighbour();
-//                final long targetRange = runLengthEntry.getAbsoluteStartOffset() - lowerNeighbour.getEndOffsetInclusive();
-                final long targetRange = runLengthEntry.getRunLength();
-                for (Integer relativeIndex : Range.range(targetRange).listAsIntegers()) {
-                    long newGoodOffset = offsetPosition + relativeIndex;
-                    successfulOffsets.add(newGoodOffset);
-                }
-            }
-
-//            } else {
-//                offsetPosition = offsetPosition + run;
-//            }
-
-            //
-//            offsetPosition += run;
-//            previous = run;
-//            succeeded = !succeeded;
-        }
-        return successfulOffsets;
+    @Deprecated
+    public void truncateRunlengths(int i) {
+        getRunLengthSequence().truncateRunLengthsV2(i);
     }
 
+    public List<Long> calculateSucceededActualOffsets() {
+        return getRunLengthSequence().calculateSucceededActualOffsets();
+    }
+
+    public void truncateRunLengthsV2(int i) {
+        truncateRunLengthsV2(i);
+    }
 }

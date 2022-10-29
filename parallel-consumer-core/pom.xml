@@ -139,6 +139,8 @@
                         <class>io.confluent.parallelconsumer.offsets.BitSetFragment</class>
                         <!--                        <class>io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes</class>-->
                         <class>io.confluent.parallelconsumer.offsets.RunLengthEncoder</class>
+                        <class>io.confluent.parallelconsumer.offsets.RunLengthSequence</class>
+                        <class>io.confluent.parallelconsumer.offsets.RunLengthEntry</class>
                     </classes>
                     <legacyClasses>
                         <!-- todo check legacy is recursive -->
