@@ -4,6 +4,7 @@ package io.confluent.csid.utils;
  * Copyright (C) 2020 Confluent, Inc.
  */
 
+import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.experimental.UtilityClass;
 
 import java.util.Iterator;
@@ -16,6 +17,11 @@ import java.util.stream.StreamSupport;
 @UtilityClass
 public class Java8StreamUtils {
 
+    /**
+     * @deprecated Use {@link ParallelEoSStreamProcessor} instead, will be removed in future major release. If you have
+     *         a use case, please file an issue.
+     */
+    @Deprecated
     public static <T> Stream<T> setupStreamFromDeque(ConcurrentLinkedDeque<T> userProcessResultsStream) {
         Spliterator<T> spliterator = Spliterators.spliterator(new Iterator<>() {
             @Override

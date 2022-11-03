@@ -13,7 +13,13 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+
+/**
+ * @deprecated Use {@link ParallelEoSStreamProcessor} instead, will be removed in future major release. If you have a
+ *         use case, please file an issue.
+ */
 @Slf4j
+@Deprecated
 public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProcessor<K, V> implements JStreamParallelStreamProcessor<K, V> {
 
     private final Stream<ConsumeProduceResult<K, V, K, V>> stream;
