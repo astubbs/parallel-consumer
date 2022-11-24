@@ -240,22 +240,34 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
 
         //
         lazyMaybeBeginTransaction(); // if not using a produce flow or if no records sent yet, a tx will need to be started here (as no records are being produced)
-        try {
-            producerWrapper.sendOffsetsToTransaction(offsetsToSend, groupMetadata);
-        } catch (ProducerFencedException | CommitFailedException e) {
-            // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
-            //  see APIException#fillInStackTrace
-            throw new InternalRuntimeException("Error sending offsets to transaction, cannot recover - Producer needs to be reinitialised", e);
+
+        var retrySettings = options.getRetrySettings();
+        var sendOffsetsRetryCount = 0;
+        while (true) {
+            try {
+                producerWrapper.sendOffsetsToTransaction(offsetsToSend, groupMetadata);
+                log.debug("Transactional offset commit successful, retried {}", sendOffsetsRetryCount);
+                break;
+            } catch (ProducerFencedException | CommitFailedException e) {
+                // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
+                //  see APIException#fillInStackTrace
+                throw new InternalRuntimeException("Error sending offsets to transaction, cannot recover - Producer needs to be reinitialised", e);
+            } catch (TimeoutException e) {
+                if (retrySettings.isFailFastOrRetryExhausted(sendOffsetsRetryCount)) {
+                    throw new PCCommitFailedException(msg("Failed to send offsets to transaction after {} retries", sendOffsetsRetryCount));
+                }
+                log.warn("Timeout sending offsets to transaction, retrying");
+            }
+            sendOffsetsRetryCount++;
         }
 
         // see {@link KafkaProducer#commit} this can be interrupted and is safe to retry
         boolean committed = false;
         int retryCount = 0;
-        int arbitrarilyChosenLimitForArbitraryErrorSituation = 200;
         Exception lastErrorSavedForRethrow = null;
         while (!committed) {
-            if (retryCount > arbitrarilyChosenLimitForArbitraryErrorSituation) {
-                String msg = msg("Retired too many times ({} > limit of {}), giving up. See error above.", retryCount, arbitrarilyChosenLimitForArbitraryErrorSituation);
+            if (retrySettings.isFailFastOrRetryExhausted(retryCount)) {
+                String msg = msg("Retired committing transaction too many times ({} > limit of {}), giving up. See error above.", retryCount, retrySettings.getMaxRetries());
                 log.error(msg, lastErrorSavedForRethrow);
                 throw new InternalRuntimeException(msg, lastErrorSavedForRethrow);
             }
@@ -269,8 +281,14 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                         if (producerWrapper.isTransactionCompleting()) {
                             // try wait again
                             commitTransaction();
+                            log.debug("Transactional offset commit successful (retry {})", retryCount);
                         }
-                        boolean transactionModeIsReady = lastErrorSavedForRethrow == null || !lastErrorSavedForRethrow.getMessage().contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
+
+                        commitTransaction();
+
+                        // todo resolve
+                        var errorMessageForInvalidStateTransition = lastErrorSavedForRethrow.getMessage().contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
+                        boolean transactionModeIsReady = lastErrorSavedForRethrow == null || errorMessageForInvalidStateTransition;
                         if (transactionModeIsReady) {
                             // try again
                             log.error("Transaction was already in READY state - tx completed between interrupt and retry");
@@ -278,6 +296,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                     } else {
                         // happy path
                         commitTransaction();
+                        log.debug("Transactional offset commit successful (retry {})", retryCount);
                     }
                 }
 
