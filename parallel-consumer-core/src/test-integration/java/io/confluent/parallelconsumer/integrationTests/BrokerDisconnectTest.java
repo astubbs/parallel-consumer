@@ -1,5 +1,9 @@
 package io.confluent.parallelconsumer.integrationTests;
 
+/*-
+ * Copyright (C) 2020-2022 Confluent, Inc.
+ */
+
 import com.google.common.truth.Truth;
 import io.confluent.csid.utils.ThreadUtils;
 import io.confluent.parallelconsumer.ManagedTruth;
@@ -35,7 +39,6 @@ import static org.testcontainers.shaded.org.hamcrest.Matchers.is;
 @Tag("disconnect")
 @Tag("toxiproxy")
 @Slf4j
-//@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
 
     int numberOfRecordsToProduce = 1000;

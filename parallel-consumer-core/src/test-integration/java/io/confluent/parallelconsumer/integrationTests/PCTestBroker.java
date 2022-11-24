@@ -1,5 +1,9 @@
 package io.confluent.parallelconsumer.integrationTests;
 
+/*-
+ * Copyright (C) 2020-2022 Confluent, Inc.
+ */
+
 import io.confluent.csid.testcontainers.FilteredTestContainerSlf4jLogConsumer;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.AccessLevel;
@@ -7,10 +11,12 @@ import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.*;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.config.TopicConfig;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.lifecycle.Startable;
@@ -30,6 +36,8 @@ import static org.testcontainers.containers.KafkaContainer.KAFKA_PORT;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
+ * Our wrapper for {@link KafkaContainer}, which is a TestContainer for Kafka.
+ * <p>
  * Reusable by default, but can be made non-reusable by setting {@link KafkaContainer#withReuse} to false.
  *
  * @author Antony Stubbs
@@ -40,6 +48,8 @@ public class PCTestBroker implements Startable {
     public static final int KAFKA_INTERNAL_PORT = KAFKA_PORT - 1;
 
     public static final int KAFKA_PROXY_PORT = KAFKA_PORT + 1;
+
+    public static final String CONTAINER_PREFIX = "csid-pc-";
 
     @Getter(AccessLevel.PROTECTED)
     protected final KafkaContainer kafkaContainer;
@@ -114,11 +124,12 @@ public class PCTestBroker implements Startable {
         // Kafka Container overrides our env with it's configure method, so have to do some gymnastics
         var boostrapForAdmin = String.format("PLAINTEXT://%s:%s", "localhost", getKafkaContainer().getMappedPort(KAFKA_PORT));
         p.put(BOOTSTRAP_SERVERS_CONFIG, boostrapForAdmin);
+        p.put(CommonClientConfigs.CLIENT_ID_CONFIG, getClass().getSimpleName() + "-admin-" + System.currentTimeMillis());
         AdminClient admin = AdminClient.create(p);
         return admin;
     }
 
-    protected void followContainerLogs(GenericContainer containerToFollow, String prefix) {
+    protected void followContainerLogs(GenericContainer<?> containerToFollow, String prefix) {
         FilteredTestContainerSlf4jLogConsumer logConsumer = new FilteredTestContainerSlf4jLogConsumer(log);
         logConsumer.withPrefix(prefix);
         containerToFollow.followOutput(logConsumer);
@@ -126,9 +137,10 @@ public class PCTestBroker implements Startable {
 
     @Override
     public void start() {
-        log.debug("Broker starting {}", getDirectBootstrapServers());
+        log.debug("Broker starting...");
         kafkaContainer.start();
         followContainerLogs(kafkaContainer, "KAFKA");
+        injectContainerPrefix(kafkaContainer);
         kcu.open();
         log.debug("Broker started {}", getDirectBootstrapServers());
     }
@@ -137,6 +149,27 @@ public class PCTestBroker implements Startable {
     public void stop() {
         kafkaContainer.stop();
         kcu.close();
+    }
+
+    protected void injectContainerPrefix(GenericContainer<?> container) {
+        var dockerClient = DockerClientFactory.lazyClient();
+
+        // check prefix not already injected - for reused containers
+        var containerInfo = dockerClient.inspectContainerCmd(container.getContainerId()).exec();
+        if (StringUtils.startsWith(containerInfo.getName(), "/" + CONTAINER_PREFIX)) {
+            log.debug("Container already has prefix, skipping");
+            return;
+        }
+
+        // inject prefix
+        var name = getContainerPrefix() + StringUtils.removeStart(container.getContainerName(), "/");
+        dockerClient.renameContainerCmd(container.getContainerId())
+                .withName(name)
+                .exec();
+    }
+
+    protected String getContainerPrefix() {
+        return CONTAINER_PREFIX + "reuse-";
     }
 
     @SneakyThrows
@@ -170,4 +203,7 @@ public class PCTestBroker implements Startable {
         return kafkaContainer.getHost();
     }
 
+    public String getKafkaContainerId() {
+        return kafkaContainer.getContainerId();
+    }
 }

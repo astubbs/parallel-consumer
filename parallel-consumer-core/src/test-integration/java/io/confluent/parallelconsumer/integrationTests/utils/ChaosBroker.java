@@ -1,5 +1,9 @@
 package io.confluent.parallelconsumer.integrationTests.utils;
 
+/*-
+ * Copyright (C) 2020-2022 Confluent, Inc.
+ */
+
 import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.ToxiproxyClient;
 import io.confluent.csid.utils.ThreadUtils;
@@ -59,14 +63,10 @@ public class ChaosBroker extends PCTestBroker {
      */
     public Network network;
 
+    /**
+     * External Zookeeper which Broker will keep stable across Broker restarts
+     */
     private GenericContainer<?> zookeeperContainer;
-
-//    /**
-//     * https://www.testcontainers.org/test_framework_integration/manual_lifecycle_control/#singleton-containers
-//     * https://github.com/testcontainers/testcontainers-java/pull/1781
-//     */
-//    @Getter(AccessLevel.PRIVATE)
-//    public KafkaContainer kafkaContainer = createKafkaContainer();
 
     /**
      * Toxiproxy container, which will be used as a TCP proxy
@@ -80,6 +80,9 @@ public class ChaosBroker extends PCTestBroker {
     @Getter(PRIVATE)
     private ToxiproxyContainer.ContainerProxy brokerProxy;
 
+    /**
+     * An admin client that goes through the proxy, and so will automatically reconnect after restarts.
+     */
     @Getter(AccessLevel.PUBLIC)
     private AdminClient proxiedAdmin;
 
@@ -88,6 +91,11 @@ public class ChaosBroker extends PCTestBroker {
         super();
 
         initToxiproxy();
+    }
+
+    @Override
+    protected String getContainerPrefix() {
+        return CONTAINER_PREFIX + "chaos-";
     }
 
     private void initToxiproxy() {
@@ -102,9 +110,7 @@ public class ChaosBroker extends PCTestBroker {
                 .withNetwork(network)
                 .withNetworkAliases(ZOOKEEPER_NETWORK_ALIAS)
                 .withExposedPorts(ZOOKEEPER_PORT)
-//            .addExposedPort()
                 .withEnv("ZOOKEEPER_CLIENT_PORT", ZOOKEEPER_PORT + "")
-//            .withReuse(false)
                 .withReuse(false);
     }
 
@@ -157,6 +163,9 @@ public class ChaosBroker extends PCTestBroker {
     private void postStart() {
         setupBrokerProxyAndClients();
         updateAdvertisedListenersToProxy();
+        injectContainerPrefix(zookeeperContainer);
+        injectContainerPrefix(kafkaContainer);
+        injectContainerPrefix(toxiproxy);
     }
 
     private void setupBrokerProxyAndClients() {
@@ -167,8 +176,10 @@ public class ChaosBroker extends PCTestBroker {
 
     @Override
     public void stop() {
+        // in reverse dependence order
+        proxiedAdmin.close();
         toxiproxy.stop();
-        kafkaContainer.stop();
+        super.stop();
         zookeeperContainer.stop();
     }
 
@@ -219,9 +230,9 @@ public class ChaosBroker extends PCTestBroker {
         AlterConfigOp op = new AlterConfigOp(toxiAdvertListener, AlterConfigOp.OpType.SET);
 
         // todo reuse existing admin client? or refactor to make construction nicer
-        AdminClient admin = createDirectAdminClient();
-        admin.incrementalAlterConfigs(Map.of(configResource, List.of(op))).all().get();
-        admin.close();
+        try (AdminClient admin = createDirectAdminClient()) {
+            admin.incrementalAlterConfigs(Map.of(configResource, List.of(op))).all().get();
+        }
 
         //
         log.debug("Updated advertised listeners to point to toxi proxy port: {}, advertised listeners: {}", toxiPort, value);

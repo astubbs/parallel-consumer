@@ -726,7 +726,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         });
 
         //
-        Duration expectedDurationOfClose = JavaUtils.max(timeBetweenCommits, ofSeconds(1)); // wait at least 1 second
+        // wait at least X seconds, or double the commit interval, to allow time for the commit to happen
+        Duration expectedDurationOfClose = JavaUtils.max(timeBetweenCommits.multipliedBy(2), ofSeconds(2));
         assertThat(durationOfCloseOperation).as("Should be fast").isLessThan(expectedDurationOfClose);
     }
 
@@ -823,7 +824,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         optionsBuilder.consumer(new KafkaConsumer<>(properties, deserializer, deserializer));
         assertThat(catchThrowable(() -> parallelConsumer = initPollingAsyncConsumer(optionsBuilder.build())))
                 .as("Should error on auto commit enabled by default")
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ParallelConsumerException.class)
                 .hasMessageContainingAll("auto", "commit", "disabled");
 
         // fail auto commit disabled
@@ -831,7 +832,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         optionsBuilder.consumer(new KafkaConsumer<>(properties, deserializer, deserializer));
         assertThat(catchThrowable(() -> parallelConsumer = initPollingAsyncConsumer(optionsBuilder.build())))
                 .as("Should error on auto commit enabled")
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ParallelConsumerException.class)
                 .hasMessageContainingAll("auto", "commit", "disabled");
 
         // set missing auto commit
