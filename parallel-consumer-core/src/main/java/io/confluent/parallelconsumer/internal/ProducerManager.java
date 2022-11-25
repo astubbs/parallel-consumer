@@ -245,13 +245,16 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         var sendOffsetsRetryCount = 0;
         while (true) {
             try {
+                log.debug("Sending offsets to broker...");
                 producerWrapper.sendOffsetsToTransaction(offsetsToSend, groupMetadata);
                 log.debug("Transactional offset commit successful, retried {}", sendOffsetsRetryCount);
                 break;
             } catch (ProducerFencedException | CommitFailedException e) {
                 // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
                 //  see APIException#fillInStackTrace
-                throw new InternalRuntimeException("Error sending offsets to transaction, cannot recover - Producer needs to be reinitialised", e);
+                var msg = "Error sending offsets to transaction, cannot recover - Producer needs to be reinitialised - throwing";
+                log.warn(msg, e);
+                throw new InternalRuntimeException(msg, e);
             } catch (TimeoutException e) {
                 if (retrySettings.isFailFastOrRetryExhausted(sendOffsetsRetryCount)) {
                     throw new PCCommitFailedException(msg("Failed to send offsets to transaction after {} retries", sendOffsetsRetryCount));
@@ -333,6 +336,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 retryCount++;
             }
         }
+        log.debug("Transactional offset commit finished");
     }
 
     private void commitTransaction() {
