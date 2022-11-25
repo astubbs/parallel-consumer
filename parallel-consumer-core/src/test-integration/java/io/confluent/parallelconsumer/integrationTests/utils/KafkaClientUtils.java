@@ -8,7 +8,6 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.integrationTests.PCTestBroker;
 import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
 import io.confluent.parallelconsumer.state.ModelUtils;
 import lombok.Getter;
@@ -27,6 +26,7 @@ import org.apache.kafka.common.IsolationLevel;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
+import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -60,9 +60,18 @@ public class KafkaClientUtils implements AutoCloseable {
 
     public static final String GROUP_ID_PREFIX = "group-1-";
 
-    public static final int GROUP_SESSION_TIMEOUT_MS = 5000;
+    /**
+     * Default min is 6000
+     *
+     * @see PCTestBroker#createKafkaContainer
+     */
+    public static final int GROUP_SESSION_TIMEOUT_MS = 6000;
 
     private final ModelUtils mu = new ModelUtils(new PCModuleTestEnv());
+
+    public AdminClient getAdmin() {
+        return admin;
+    }
 
     class PCVersion {
         public static final String V051 = "0.5.1";
@@ -79,12 +88,16 @@ public class KafkaClientUtils implements AutoCloseable {
     @Getter
     private KafkaProducer<String, String> producer;
 
-    @Getter
     private AdminClient admin;
 
     @Getter
     @Setter
     private String groupId = GROUP_ID_PREFIX + nextInt();
+
+    /**
+     * Track all created clients, so they can all be closed
+     */
+    private final List<Closeable> clientsCreated = new ArrayList<>();
 
     /**
      * todo docs
@@ -107,14 +120,18 @@ public class KafkaClientUtils implements AutoCloseable {
     private Properties setupProducerProps() {
         var producerProps = createCommonProperties();
 
+        injectClientName(producerProps, "producer");
+
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
 
         return producerProps;
     }
 
-    private Properties setupConsumerProps(String groupIdToUse) {
+    public Properties setupConsumerProps(String groupIdToUse) {
         var consumerProps = createCommonProperties();
+
+        injectClientName(consumerProps, "consumer");
 
         //
         consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupIdToUse);
@@ -130,7 +147,7 @@ public class KafkaClientUtils implements AutoCloseable {
         //    consumerProps.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 10);
         //    consumerProps.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 100);
 
-        // make sure we can download lots of records if they're small. Default is 500
+        // make sure we can download lots of records if they're small. Default is 500 (too few)
 //        consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1_000_000);
         consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, MAX_POLL_RECORDS);
 
@@ -141,10 +158,20 @@ public class KafkaClientUtils implements AutoCloseable {
     }
 
     public void open() {
-        log.info("Setting up clients using {}...", createCommonProperties());
+        var commonProperties = createCommonProperties();
+        log.info("Setting up clients using {}...", commonProperties);
         consumer = this.createNewConsumer();
         producer = this.createNewProducer(false);
-        admin = AdminClient.create(createCommonProperties());
+        admin = createAdmin(commonProperties);
+    }
+
+    private AdminClient createAdmin(Properties commonProperties) {
+        injectClientName(commonProperties, "admin");
+        return AdminClient.create(commonProperties);
+    }
+
+    private void injectClientName(Properties commonProperties, String name) {
+        commonProperties.put(CommonClientConfigs.CLIENT_ID_CONFIG, getClass().getSimpleName() + "-" + name + "-" + System.currentTimeMillis());
     }
 
     public void close() {
@@ -154,6 +181,14 @@ public class KafkaClientUtils implements AutoCloseable {
             consumer.close();
         if (admin != null)
             admin.close();
+
+        for (Closeable client : clientsCreated) {
+            try {
+                client.close();
+            } catch (Exception e) {
+                log.error("Error closing client", e);
+            }
+        }
     }
 
     public enum GroupOption {
@@ -200,6 +235,7 @@ public class KafkaClientUtils implements AutoCloseable {
         properties.putAll(overridingOptions);
 
         KafkaConsumer<K, V> kvKafkaConsumer = new KafkaConsumer<>(properties);
+        clientsCreated.add(kvKafkaConsumer);
         log.debug("New consumer {}", kvKafkaConsumer);
         return kvKafkaConsumer;
     }
@@ -249,11 +285,12 @@ public class KafkaClientUtils implements AutoCloseable {
 
         txProps.putAll(overridingOptions);
 
-        // todo remove?
-        txProps.put(ProducerConfig.BATCH_SIZE_CONFIG, 1);
+        // needed by what test?
+//         todo remove?
+//        txProps.put(ProducerConfig.BATCH_SIZE_CONFIG, 1);
 
         KafkaProducer<K, V> kvKafkaProducer = new KafkaProducer<>(txProps);
-
+        clientsCreated.add(kvKafkaProducer);
         log.debug("New producer {}", kvKafkaProducer);
         return kvKafkaProducer;
     }
@@ -319,6 +356,9 @@ public class KafkaClientUtils implements AutoCloseable {
         return buildPc(ParallelConsumerOptions.<String, String>builder()
                 .ordering(order)
                 .commitMode(commitMode)
+                // todo resolve - magic number
+                // 100 27s, 200 23s
+                .maxConcurrency(100)
                 .build(), groupOption, maxPoll);
     }
 
@@ -329,7 +369,9 @@ public class KafkaClientUtils implements AutoCloseable {
     public ParallelEoSStreamProcessor<String, String> buildPc(ParallelConsumerOptions<String, String> options, GroupOption groupOption, int maxPoll) {
         Properties consumerProps = new Properties();
         consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPoll);
-        consumerProps.put(ConsumerConfig.FETCH_MAX_BYTES_CONFIG, 1);
+
+        // todo test is this needed for? make specific to that test
+        //consumerProps.put(ConsumerConfig.FETCH_MAX_BYTES_CONFIG, 1);
 
         if (options.getConsumer() == null) {
             boolean newConsumerGroup = groupOption.equals(GroupOption.NEW_GROUP);

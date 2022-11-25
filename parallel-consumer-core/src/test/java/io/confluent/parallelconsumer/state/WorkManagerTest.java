@@ -26,7 +26,6 @@ import org.assertj.core.api.ObjectAssert;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -423,16 +422,6 @@ public class WorkManagerTest {
     }
 
     @Test
-    @Disabled
-    public void maxPerPartition() {
-    }
-
-    @Test
-    @Disabled
-    public void maxPerTopic() {
-    }
-
-    @Test
     public void maxInFlight() {
         //
         var opts = ParallelConsumerOptions.builder();
@@ -446,6 +435,7 @@ public class WorkManagerTest {
         assertThat(wm.getWorkIfAvailable()).isEmpty();
     }
 
+    // todo delete?
     public static class FluentQueue<T> implements Iterable<T> {
         ArrayDeque<T> work = new ArrayDeque<>();
 

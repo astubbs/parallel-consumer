@@ -1,5 +1,9 @@
 package io.confluent.parallelconsumer.integrationTests;
 
+/*-
+ * Copyright (C) 2020-2022 Confluent, Inc.
+ */
+
 import com.google.common.truth.Truth;
 import io.confluent.csid.utils.ThreadUtils;
 import io.confluent.parallelconsumer.ManagedTruth;
@@ -7,11 +11,11 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.RetrySettings;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -35,7 +39,7 @@ import static org.testcontainers.shaded.org.hamcrest.Matchers.is;
 @Tag("disconnect")
 @Tag("toxiproxy")
 @Slf4j
-//@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Timeout(180)
 class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
 
     int numberOfRecordsToProduce = 1000;
@@ -52,15 +56,15 @@ class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
     /**
      * Retry forever by default
      */
-    private void setupAndWarmUp(KafkaClientUtils kcu, CommitMode commitMode) {
-        setupAndWarmUp(kcu, commitMode, RetrySettings.builder().failureReaction(RETRY_FOREVER).build());
+    private void setupAndWarmUp(CommitMode commitMode) {
+        setupAndWarmUp(commitMode, RetrySettings.builder().failureReaction(RETRY_FOREVER).build());
     }
 
     @SneakyThrows
-    void setupAndWarmUp(KafkaClientUtils kcu, CommitMode commitMode, RetrySettings retrySettings) {
+    void setupAndWarmUp(CommitMode commitMode, RetrySettings retrySettings) {
         topicName = setupTopic();
         groupId = getTopic();
-        kcu.produceMessages(topicName, numberOfRecordsToProduce);
+        getKcu().produceMessages(topicName, numberOfRecordsToProduce);
 
         var preOptions = ParallelConsumerOptions.<String, String>builder()
                 .ordering(UNORDERED)
@@ -75,11 +79,11 @@ class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
 
         var options = preOptions.build();
 
-        pc = kcu.buildPc(options, NEW_GROUP, 1);
+        pc = getKcu().buildPc(options, NEW_GROUP, 1);
         pc.subscribe(topicName);
         pc.poll(recordContexts -> {
             var count = processedCount.incrementAndGet();
-            log.info("Processed: offset: {} count: {}", recordContexts.offset(), count);
+            log.debug("Processed: offset: {} count: {}", recordContexts.offset(), count);
         });
 
         // make sure we've started consuming already before disconnecting the broker
@@ -94,7 +98,7 @@ class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
     @ParameterizedTest
     @EnumSource
     void brokerConnectionInterruption(CommitMode commitMode) {
-        setupAndWarmUp(getChaosBroker().getKcu(), commitMode);
+        setupAndWarmUp(commitMode);
 
         //
         getChaosBroker().simulateBrokerUnreachable();
@@ -144,7 +148,7 @@ class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
                 .failureReaction(RETRY_UP_TO_MAX_RETRIES)
                 .build();
 
-        setupAndWarmUp(getChaosBroker().getKcu(), commitMode, giveUpAfter3);
+        setupAndWarmUp(commitMode, giveUpAfter3);
 
         //
         getChaosBroker().stop();
@@ -187,7 +191,7 @@ class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
     @Order(1)
     // simplest
     void brokerRestartTest(CommitMode commitMode) {
-        setupAndWarmUp(getChaosBroker().getKcu(), commitMode);
+        setupAndWarmUp(commitMode);
 
         //
         log.debug("Restarting broker - consumed so far: {}", processedCount.get());
@@ -224,9 +228,11 @@ class BrokerDisconnectTest extends DedicatedBrokerIntegrationTest {
 
         pc.closeDrainFirst();
 
-        ManagedTruth.assertThat(getChaosBroker().createProxiedConsumer(groupId))
-                .hasCommittedToPartition(topicName)
-                .offset(expectedNumberToConsumer);
+        try (var proxiedConsumer = getChaosBroker().createProxiedConsumer(groupId)) {
+            ManagedTruth.assertThat(proxiedConsumer)
+                    .hasCommittedToPartition(topicName)
+                    .offset(expectedNumberToConsumer);
+        }
     }
 
 }

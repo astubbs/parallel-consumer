@@ -37,13 +37,18 @@ import static pl.tlinkowski.unij.api.UniLists.of;
 class MultiInstanceHighVolumeTest extends BrokerIntegrationTest {
 
     public List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
+
     public List<String> producedKeysAcknowledged = Collections.synchronizedList(new ArrayList<>());
+
     public AtomicInteger processedCount = new AtomicInteger(0);
+
     public AtomicInteger producedCount = new AtomicInteger(0);
 
     int maxPoll = 500; // 500 is the kafka default
 
     CommitMode commitMode = CommitMode.PERIODIC_CONSUMER_SYNC;
+//    CommitMode commitMode = CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
+
     ProcessingOrder order = ProcessingOrder.KEY;
 
 
@@ -80,7 +85,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest {
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(ofSeconds(60))
+            waitAtMost(ofSeconds(40)) // 25 seconds on M1 dedicated run
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     // .failFast( () -> pcThree.getFailureCause(), () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .failFast("PC died - check logs", () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
@@ -113,13 +118,13 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest {
         return pc;
     }
 
-    Integer barId = 0;
+    int progressBarId = 0;
 
     private ProgressBar run(final int expectedMessageCount, final ParallelEoSStreamProcessor<String, String> pc, List<ConsumerRecord<?, ?>> consumed) {
         ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
-        bar.setExtraMessage("#" + barId);
-        pc.setMyId(Optional.of("id: " + barId));
-        barId++;
+        bar.setExtraMessage("#" + progressBarId);
+        pc.setMyId(Optional.of("id: " + progressBarId));
+        progressBarId++;
         pc.poll(record -> {
                     processRecord(bar, record.getSingleConsumerRecord(), consumed);
                 }

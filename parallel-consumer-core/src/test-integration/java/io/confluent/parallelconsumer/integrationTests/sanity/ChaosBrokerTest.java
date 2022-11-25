@@ -1,3 +1,7 @@
+
+/*-
+ * Copyright (C) 2020-2022 Confluent, Inc.
+ */
 package io.confluent.parallelconsumer.integrationTests.sanity;
 
 import com.google.common.truth.Truth;
@@ -7,10 +11,13 @@ import org.apache.kafka.clients.admin.AdminClient;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.DockerClientFactory;
 
 import java.time.Duration;
 
-import static io.confluent.parallelconsumer.integrationTests.sanity.BrokerIntegrationTestTest.INTEGRATION_TEST_BASE;
+import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
+import static io.confluent.parallelconsumer.integrationTests.sanity.ChaosBrokerTest.INTEGRATION_TEST_BASE;
+import static io.confluent.parallelconsumer.integrationTests.utils.PCTestBroker.CONTAINER_PREFIX;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -20,7 +27,7 @@ import static org.awaitility.Awaitility.await;
  */
 @Order(INTEGRATION_TEST_BASE - 10)
 @Tag("toxiproxy")
-class BrokerIntegrationTestTest extends DedicatedBrokerIntegrationTest {
+class ChaosBrokerTest extends DedicatedBrokerIntegrationTest {
 
     String clusterId;
 
@@ -28,7 +35,6 @@ class BrokerIntegrationTestTest extends DedicatedBrokerIntegrationTest {
     @Test
     void restartingBroker() {
         try (AdminClient admin = getChaosBroker().createProxiedAdminClient()) {
-
             testConnection(admin);
             getChaosBroker().restart();
             testConnection(admin);
@@ -36,9 +42,10 @@ class BrokerIntegrationTestTest extends DedicatedBrokerIntegrationTest {
     }
 
     @Test
-    void testConsumerOffsetsPersistAcrossRestartsWhenCommitted() {
-        // todo
-        throw new UnsupportedOperationException();
+    void containerPrefixInjection() {
+        var details = DockerClientFactory.lazyClient().inspectContainerCmd(getChaosBroker().getKafkaContainerId()).exec();
+        var containerName = details.getName();
+        assertThat(containerName).startsWith("/" + CONTAINER_PREFIX);
     }
 
     private void testConnection(AdminClient admin) {

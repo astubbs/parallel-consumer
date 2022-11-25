@@ -345,17 +345,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 assertCommitLists(of(of(2), of(2, 3, 4))));
     }
 
-    @Test
-    @Disabled
-    public void avro() {
-        // send three messages - 0,1,2
-        // finish processing 1
-        // make sure no offsets are committed
-        // finish 0
-        // make sure offset 1, not 0 is committed
-        assertThat(false).isTrue();
-    }
-
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {
@@ -412,38 +401,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
             verify(producerSpy, atLeastOnce()).commitTransaction();
             verify(producerSpy, atLeastOnce()).sendOffsetsToTransaction(anyMap(), ArgumentMatchers.<ConsumerGroupMetadata>any());
         }
-    }
-
-    @Test
-    @Disabled
-    public void userSucceedsButProduceToBrokerFails() {
-    }
-
-    @Test
-    @Disabled
-    public void poisonPillGoesToDeadLetterQueue() {
-    }
-
-    @Test
-    @Disabled
-    public void failingMessagesDontBreakCommitOrders() {
-        assertThat(false).isTrue();
-    }
-
-    @Test
-    @Disabled
-    public void messagesCanBeProcessedOptionallyPartitionOffsetOrder() {
-    }
-
-    @Test
-    @Disabled
-    public void failingMessagesThatAreRetriedDontBreakProcessingOrders() {
-        assertThat(false).isTrue();
-    }
-
-    @Test
-    @Disabled
-    public void ifTooManyMessagesAreInFlightDontPollBrokerForMore() {
     }
 
     @ParameterizedTest()
@@ -726,7 +683,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         });
 
         //
-        Duration expectedDurationOfClose = JavaUtils.max(timeBetweenCommits, ofSeconds(1)); // wait at least 1 second
+        // wait at least X seconds, or double the commit interval, to allow time for the commit to happen
+        Duration expectedDurationOfClose = JavaUtils.max(timeBetweenCommits.multipliedBy(2), ofSeconds(2));
         assertThat(durationOfCloseOperation).as("Should be fast").isLessThan(expectedDurationOfClose);
     }
 
@@ -823,7 +781,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         optionsBuilder.consumer(new KafkaConsumer<>(properties, deserializer, deserializer));
         assertThat(catchThrowable(() -> parallelConsumer = initPollingAsyncConsumer(optionsBuilder.build())))
                 .as("Should error on auto commit enabled by default")
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ParallelConsumerException.class)
                 .hasMessageContainingAll("auto", "commit", "disabled");
 
         // fail auto commit disabled
@@ -831,7 +789,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         optionsBuilder.consumer(new KafkaConsumer<>(properties, deserializer, deserializer));
         assertThat(catchThrowable(() -> parallelConsumer = initPollingAsyncConsumer(optionsBuilder.build())))
                 .as("Should error on auto commit enabled")
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ParallelConsumerException.class)
                 .hasMessageContainingAll("auto", "commit", "disabled");
 
         // set missing auto commit
