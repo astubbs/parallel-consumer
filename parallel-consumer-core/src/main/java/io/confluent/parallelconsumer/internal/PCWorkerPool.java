@@ -1,11 +1,13 @@
 package io.confluent.parallelconsumer.internal;
 
 import io.confluent.csid.utils.Range;
+import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.lang.Nullable;
 import lombok.Data;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayDeque;
 import java.util.List;
@@ -14,7 +16,10 @@ import java.util.stream.Collectors;
 import static java.util.Optional.ofNullable;
 
 @Data
+@Slf4j
 public class PCWorkerPool<K, V, R> {
+
+    ParallelConsumerOptions<K, V> options;
 
     @Setter
     @Nullable
@@ -29,7 +34,24 @@ public class PCWorkerPool<K, V, R> {
     }
 
     public int getCapacity(Timer workRetrievalTimer) {
-        return workers.stream().map(worker -> worker.getQueueCapacity(workRetrievalTimer)).reduce(Integer::sum).orElse(0);
+        var raw = workers.stream().map(worker -> worker.getQueueCapacity(workRetrievalTimer)).reduce(Integer::sum).orElse(0);
+
+        // always round up to fill batches - get however extra are needed to fill a batch
+        if (options.isUsingBatching()) {
+            //noinspection OptionalGetWithoutIsPresent
+            int batchSize = options.getBatchSize();
+            int modulo = unitDelta % batchSize;
+
+            // batching calculation need fixing
+            if (modulo > 0) {
+                int extraToFillBatch = batchSize - modulo;
+                unitDelta = unitDelta + extraToFillBatch;
+            }
+        }
+
+        log.debug("Will try to get work - target: {}, current queue size: {}, requesting: {}",
+                options.getMaxConcurrency(), getQueueCapacity(workRetrievalTimer), unitDelta);
+        return unitDelta;
     }
 
     /**
@@ -42,4 +64,5 @@ public class PCWorkerPool<K, V, R> {
             poll.ifPresent(worker::enqueue);
         }
     }
+
 }

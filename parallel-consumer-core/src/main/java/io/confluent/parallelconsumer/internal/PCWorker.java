@@ -27,11 +27,19 @@ public class PCWorker<K, V> {
 
     public void loop() {
         while (true) {
-            var poll = workQueue.poll();
-            process(poll);
+            try {
+                var poll = workQueue.poll();
+                process(poll);
+            } catch (Exception e) {
+                log.error("Error processing work", e);
+            }
         }
     }
 
+
+    /**
+     * @return number of {@link WorkContainer} units that should be enqueued
+     */
     public int getQueueCapacity(Timer workRetrievalTimer) {
         return calculateQuantityToGet(workRetrievalTimer) - workQueue.size();
     }
