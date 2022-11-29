@@ -4,13 +4,13 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.csid.utils.BlockingExecutor;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.PollContextInternal;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-import java.util.concurrent.ThreadPoolExecutor;
 
 import static io.confluent.csid.utils.StringUtils.msg;
 
@@ -40,10 +40,10 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
         return getOptions().getTargetAmountOfRecordsInFlight();
     }
 
-    @Override
-    protected void checkPipelinePressure() {
-        // no-op - as calculateQuantityToRequest does not use a pressure system, unlike the core module
-    }
+//    @Override
+//    protected void checkPipelinePressure() {
+//        // no-op - as calculateQuantityToRequest does not use a pressure system, unlike the core module
+//    }
 
     /**
      * The vert.x module doesn't use any thread pool for dispatching work, as the work is all done by the vert.x engine.
@@ -53,8 +53,8 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      * vert.x.
      */
     @Override
-    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
-        return super.setupWorkerPool(1);
+    protected BlockingExecutor setupWorkerPool() {
+        return super.setupWorkerPool();
     }
 
     /**

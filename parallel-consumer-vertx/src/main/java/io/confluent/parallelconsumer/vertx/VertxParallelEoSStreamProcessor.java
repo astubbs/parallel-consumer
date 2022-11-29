@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer.vertx;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.csid.utils.BlockingExecutor;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.PollContext;
 import io.confluent.parallelconsumer.PollContextInternal;
@@ -31,7 +32,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -120,8 +120,8 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
      * vert.x.
      */
     @Override
-    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
-        return super.setupWorkerPool(1);
+    protected BlockingExecutor setupWorkerPool() {
+        return super.setupWorkerPool();
     }
 
     @Override
