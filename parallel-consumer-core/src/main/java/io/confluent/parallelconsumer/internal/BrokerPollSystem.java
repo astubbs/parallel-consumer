@@ -8,6 +8,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private final ConsumerManager<K, V> consumerManager;
 
+    private final ParallelConsumerOptions<K, V> options;
+
     private State runState = running;
 
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
@@ -49,8 +52,6 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     @Getter
     private volatile boolean pausedForThrottling = false;
-
-    private final AbstractParallelEoSStreamProcessor<K, V> pc;
 
     private Optional<ConsumerOffsetCommitter<K, V>> committer = Optional.empty();
 
@@ -64,15 +65,21 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private final WorkManager<K, V> wm;
 
-    public BrokerPollSystem(ConsumerManager<K, V> consumerMgr, WorkManager<K, V> wm, AbstractParallelEoSStreamProcessor<K, V> pc, final ParallelConsumerOptions<K, V> options) {
-        this.wm = wm;
-        this.pc = pc;
+    @NonNull
+    private WorkMailbox<K, V> workMailbox;
 
+    public BrokerPollSystem(@NonNull ConsumerManager<K, V> consumerMgr,
+                            @NonNull WorkMailbox<K, V> workMailbox,
+                            @NonNull WorkManager<K, V> workManager,
+                            @NonNull ParallelConsumerOptions<K, V> options) {
+        this.wm = workManager;
+        this.workMailbox = workMailbox;
+        this.options = options;
         this.consumerManager = consumerMgr;
 
         switch (options.getCommitMode()) {
             case PERIODIC_CONSUMER_SYNC, PERIODIC_CONSUMER_ASYNCHRONOUS -> {
-                ConsumerOffsetCommitter<K, V> consumerCommitter = new ConsumerOffsetCommitter<>(consumerMgr, wm, options);
+                ConsumerOffsetCommitter<K, V> consumerCommitter = new ConsumerOffsetCommitter<>(consumerMgr, workManager, options);
                 committer = Optional.of(consumerCommitter);
             }
         }
@@ -108,7 +115,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private boolean controlLoop() throws TimeoutException, InterruptedException {
         Thread.currentThread().setName("pc-broker-poll");
-        pc.getMyId().ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
+        options.getMyId().ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
         log.trace("Broker poll control loop start");
         committer.ifPresent(ConsumerOffsetCommitter::claim);
         try {
@@ -143,7 +150,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
             if (count > 0) {
                 log.trace("Loop: Register work");
-                pc.registerWork(polledRecords);
+                workMailbox.registerWork(polledRecords);
             }
         }
     }

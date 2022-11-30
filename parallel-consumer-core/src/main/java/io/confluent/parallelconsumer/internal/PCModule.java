@@ -27,6 +27,7 @@ public class PCModule<K, V> {
 
     @Setter
     protected AbstractParallelEoSStreamProcessor<K, V> parallelEoSStreamProcessor;
+    private WorkMailbox<K, V> workMailbox;
 
     public PCModule(ParallelConsumerOptions<K, V> options) {
         this.optionsInstance = options;
@@ -96,11 +97,18 @@ public class PCModule<K, V> {
 
     private BrokerPollSystem<K, V> brokerPollSystem;
 
-    protected BrokerPollSystem<K, V> brokerPoller(AbstractParallelEoSStreamProcessor<K, V> pc) {
+    protected BrokerPollSystem<K, V> brokerPoller() {
         if (brokerPollSystem == null) {
-            brokerPollSystem = new BrokerPollSystem<>(consumerManager(), workManager(), pc, options());
+            brokerPollSystem = new BrokerPollSystem<>(consumerManager(), workMailbox(), workManager(), options());
         }
         return brokerPollSystem;
+    }
+
+    protected WorkMailbox<K, V> workMailbox() {
+        if (workMailbox == null) {
+            workMailbox = new WorkMailbox<>(workManager());
+        }
+        return workMailbox;
     }
 
     public Clock clock() {

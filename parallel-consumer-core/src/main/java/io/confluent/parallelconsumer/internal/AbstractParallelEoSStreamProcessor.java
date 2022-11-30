@@ -43,6 +43,7 @@ import static java.lang.Boolean.TRUE;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static lombok.AccessLevel.PROTECTED;
+import static lombok.AccessLevel.PUBLIC;
 
 /**
  * @see ParallelConsumer
@@ -52,14 +53,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     public static final String MDC_INSTANCE_ID = "pcId";
 
-    /**
-     * Key for the work container descriptor that will be added to the {@link MDC diagnostic context} while inside a
-     * user function.
-     */
-    private static final String MDC_WORK_CONTAINER_DESCRIPTOR = "offset";
-
     @Getter(PROTECTED)
-    protected final ParallelConsumerOptions<?, ?> options;
+    protected final ParallelConsumerOptions<K, V> options;
+
+    private final PCModule<K, V> module;
 
     /**
      * Injectable clock for testing
@@ -103,14 +100,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     protected final ThreadPoolExecutor workerThreadPool;
 
-    private final PCWorkerPool<K, V> workerPool;
+    private PCWorkerPool<K, V, Object> workerPool;
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
     // todo make package level
-    @Getter(AccessLevel.PUBLIC)
+    @Getter(PUBLIC)
     protected final WorkManager<K, V> wm;
 
+    // todo make private
+    @Getter(PUBLIC)
     private WorkMailbox<K, V> workMailbox;
 
     private final BrokerPollSystem<K, V> brokerPollSubsystem;
@@ -209,10 +208,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     protected AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions, PCModule<K, V> module) {
         Objects.requireNonNull(newOptions, "Options must be supplied");
+        this.module = module;
 
         options = newOptions;
         this.consumer = options.getConsumer();
-
         validateConfiguration();
 
         module.setParallelEoSStreamProcessor(this);
@@ -225,11 +224,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
 
         workerThreadPool = setupWorkerPool(newOptions.getMaxConcurrency());
-        workerPool = new PCWorkerPool<K, V>(options.getMaxConcurrency());
 
         this.wm = module.workManager();
 
-        this.brokerPollSubsystem = module.brokerPoller(this);
+        this.brokerPollSubsystem = module.brokerPoller();
 
         if (options.isProducerSupplied()) {
             this.producerManager = Optional.of(module.producerManager());
@@ -241,6 +239,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             this.producerManager = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
+
+        this.workMailbox = module.workMailbox();
     }
 
     private void validateConfiguration() {
@@ -500,7 +500,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.debug("Worker pool terminated.");
 
         // last check to see if after worker pool closed, has any new work arrived?
-        processWorkCompleteMailBox(Duration.ZERO);
+        workMailbox.processWorkCompleteMailBox(Duration.ZERO);
 
         //
         commitOffsetsThatAreReady();
@@ -570,27 +570,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * Optional ID of this instance. Useful for testing.
-     */
-    @Setter
-    @Getter
-    private Optional<String> myId = Optional.empty();
-
-    /**
      * Kicks off the control loop in the executor, with supervision and returns.
      *
      * @see #supervisorLoop(Function, Consumer)
      */
     protected <R> void supervisorLoop(Function<PollContextInternal<K, V>, List<R>> userFunctionWrapped,
                                       Consumer<R> callback) {
-        if (state != State.unused) {
+        if (state == State.unused) {
+            state = running;
+        } else {
             throw new IllegalStateException(msg("Invalid state - you cannot call the poll* or pollAndProduce* methods " +
                     "more than once (they are asynchronous) (current state is {})", state));
-        } else {
-            state = running;
         }
-
-        workerPool.setFunctionRunner(new FunctionRunner<>(userFunctionWrapped, callback));
 
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
@@ -605,45 +596,64 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
 
         // run main pool loop in thread
-        Callable<Boolean> controlTask = () -> {
-            addInstanceMDC();
-            log.info("Control loop starting up...");
-            Thread controlThread = Thread.currentThread();
-            controlThread.setName("pc-control");
-            this.blockableControlThread = controlThread;
-            while (state != closed) {
-                log.debug("Control loop start");
-                try {
-                    controlLoop(userFunctionWrapped, callback);
-                } catch (InterruptedException e) {
-                    log.debug("Control loop interrupted, closing");
-                    doClose(DrainingCloseable.DEFAULT_TIMEOUT);
-                } catch (Exception e) {
-                    log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + e.getMessage(), e);
-                    failureReason = new RuntimeException("Error from poll control thread: " + e.getMessage(), e);
-                    doClose(DrainingCloseable.DEFAULT_TIMEOUT); // attempt to close
-                    throw failureReason;
-                }
-            }
-            log.info("Control loop ending clean (state:{})...", state);
-            return true;
-        };
+        Callable<Boolean> controlTask = () -> superviseControlLoop((Function) userFunctionWrapped, (Consumer<Object>) callback);
         Future<Boolean> controlTaskFutureResult = executorService.submit(controlTask);
         this.controlThreadFuture = Optional.of(controlTaskFutureResult);
+    }
+
+    // todo name
+    private <R> boolean superviseControlLoop(Function userFunctionWrapped, Consumer<Object> callback) throws Exception {
+        addInstanceMDC(options);
+        log.info("Control loop starting up...");
+
+        initWorkerPool(userFunctionWrapped, callback);
+
+        Thread controlThread = Thread.currentThread();
+        controlThread.setName("pc-control");
+        this.blockableControlThread = controlThread;
+        while (state != closed) {
+            log.debug("Control loop start");
+            try {
+                controlLoop();
+            } catch (InterruptedException e) {
+                log.debug("Control loop interrupted, closing");
+                doClose(DrainingCloseable.DEFAULT_TIMEOUT);
+            } catch (Exception e) {
+                log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + e.getMessage(), e);
+                failureReason = new RuntimeException("Error from poll control thread: " + e.getMessage(), e);
+                doClose(DrainingCloseable.DEFAULT_TIMEOUT); // attempt to close
+                throw failureReason;
+            }
+        }
+        log.info("Control loop ending clean (state:{})...", state);
+        return true;
+    }
+
+    private static void initWorkerPool(Function userFunctionWrapped, Consumer<Object> callback) {
+        // todo casts
+        Function<PollContextInternal<K, V>, List<Object>> cast = userFunctionWrapped;
+        var runner = FunctionRunner.<K, V, Object>builder()
+                .userFunctionWrapped(cast)
+                .callback(callback)
+                .options(options)
+                .module(module)
+                .workMailbox(workMailbox)
+                .workManager(wm)
+                .build();
+        workerPool = new PCWorkerPool<>(options.getMaxConcurrency(), runner, options);
     }
 
     /**
      * Useful when testing with more than one instance
      */
-    private void addInstanceMDC() {
-        this.myId.ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
+    public static void addInstanceMDC(ParallelConsumerOptions<?, ?> options) {
+        options.getMyId().ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
     }
 
     /**
      * Main control loop
      */
-    protected <R> void controlLoop(Function<PollContextInternal<K, V>, List<R>> userFunction,
-                                   Consumer<R> callback) throws TimeoutException, ExecutionException, InterruptedException {
+    protected <R> void controlLoop() throws TimeoutException, ExecutionException, InterruptedException {
         maybeWakeupPoller();
 
         //
@@ -651,7 +661,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
-        processWorkCompleteMailBox(timeToBlockFor);
+        workMailbox.processWorkCompleteMailBox(timeToBlockFor);
 
         //
         if (shouldTryCommitNow) {
@@ -660,7 +670,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
 
         // distribute more work
-        retrieveAndDistributeNewWorkNew(userFunction, callback);
+        retrieveAndDistributeNewWorkNew();
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -728,7 +738,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return shouldTryCommitNow;
     }
 
-    private <R> int retrieveAndDistributeNewWorkNew(final Function<PollContextInternal<K, V>, List<R>> userFunction, final Consumer<R> callback) {
+    private <R> int retrieveAndDistributeNewWorkNew() {
         var capacity = workerPool.getCapacity(workRetrievalTimer);
         var work = wm.getWorkIfAvailable(capacity);
         workerPool.distribute(work);
@@ -932,7 +942,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // no work is currently being done
         boolean workInFlight = wm.hasWorkInFlight();
         // work mailbox is empty
-        boolean workWaitingInMailbox = !workMailBox.isEmpty();
+        boolean workWaitingInMailbox = !workMailbox.isEmpty();
         boolean workWaitingToProcess = wm.hasIncompleteOffsets();
         log.trace("workIsWaitingToBeCompletedSuccessfully {} || workInFlight {} || workWaitingInMailbox {} || !workWaitingToProcess {};",
                 workIsWaitingToBeCompletedSuccessfully, workInFlight, workWaitingInMailbox, !workWaitingToProcess);
