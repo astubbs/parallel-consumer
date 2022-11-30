@@ -7,7 +7,6 @@ import io.micrometer.core.instrument.Timer;
 import lombok.Value;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
-import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -37,24 +36,31 @@ public class PCWorkerPool<K, V, R> {
     }
 
     public int getCapacity(Timer workRetrievalTimer) {
-        var raw = workers.stream().map(worker -> worker.getQueueCapacity(workRetrievalTimer)).reduce(Integer::sum).orElse(0);
+        int rawCapacity = getRawCapacity(workRetrievalTimer);
+        int request = rawCapacity;
 
         // always round up to fill batches - get however extra are needed to fill a batch
-        if (options.isUsingBatching()) {
-            //noinspection OptionalGetWithoutIsPresent
-            int batchSize = options.getBatchSize();
-            int modulo = unitDelta % batchSize;
-
+        int batchSize = pcOptions.getBatchSize();
+        int modulo = rawCapacity % batchSize;
+        if (modulo > 0) {
             // batching calculation need fixing
-            if (modulo > 0) {
-                int extraToFillBatch = batchSize - modulo;
-                unitDelta = unitDelta + extraToFillBatch;
-            }
+            int extraToFillBatch = batchSize - modulo;
+            request = request + extraToFillBatch;
         }
 
-        log.debug("Will try to get work - target: {}, current queue size: {}, requesting: {}",
-                options.getMaxConcurrency(), getQueueCapacity(workRetrievalTimer), unitDelta);
-        return unitDelta;
+        log.debug("Concurrency target: {}, batching: {}, modulo: {}, current queue capacity: {}, requesting: {}",
+                pcOptions.getMaxConcurrency(),
+                batchSize,
+                modulo,
+                rawCapacity,
+                request);
+        return rawCapacity;
+    }
+
+    private Integer getRawCapacity(Timer workRetrievalTimer) {
+        return workers.stream()
+                .map(worker -> worker.getQueueCapacity(workRetrievalTimer))
+                .reduce(Integer::sum).orElse(0);
     }
 
     /**

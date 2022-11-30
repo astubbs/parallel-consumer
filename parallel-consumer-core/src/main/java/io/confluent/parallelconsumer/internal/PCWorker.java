@@ -41,7 +41,8 @@ public class PCWorker<K, V, R> {
      * @return number of {@link WorkContainer} units that should be enqueued
      */
     public int getQueueCapacity(Timer workRetrievalTimer) {
-        return calculateQuantityToGet(workRetrievalTimer) - workQueue.size();
+        var target = calculateQuantityToGet(workRetrievalTimer);
+        return target - workQueue.size();
     }
 
     private int calculateQuantityToGet(Timer workRetrievalTimer) {
