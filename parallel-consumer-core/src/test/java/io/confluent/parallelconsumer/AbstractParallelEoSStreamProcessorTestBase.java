@@ -78,7 +78,7 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
      * @see AbstractParallelEoSStreamProcessor#workMailBox
      * @see AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox
      */
-    public static final int DEFAULT_COMMIT_INTERVAL_MAX_MS = 100;
+    public static final int DEFAULT_COMMIT_INTERVAL_MAX_MS = 1000;
 
     protected LongPollingMockConsumer<String, String> consumerSpy;
     protected MockProducer<String, String> producerSpy;

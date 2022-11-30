@@ -40,7 +40,7 @@ public class WorkMailbox<K, V> {
      */
     private final AtomicBoolean currentlyPollingWorkCompleteMailBox = new AtomicBoolean();
 
-    private Optional<ProducerManager<K, V>> producerManager;
+    private final Optional<ProducerManager<K, V>> producerManager;
 
     public void registerWork(EpochAndRecordsMap<K, V> polledRecords) {
         log.trace("Adding {} to mailbox...", polledRecords);

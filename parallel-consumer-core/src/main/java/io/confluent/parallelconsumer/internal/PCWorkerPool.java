@@ -8,13 +8,17 @@ import lombok.Value;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 
+import javax.naming.InitialContext;
+import javax.naming.NamingException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 import static java.util.Optional.ofNullable;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 @Slf4j
 @Value
@@ -27,12 +31,21 @@ public class PCWorkerPool<K, V, R> {
 
     List<PCWorker<K, V, R>> workers;
 
+    ExecutorService executorService;
+
     public PCWorkerPool(int poolSize, FunctionRunner<K, V, R> functionRunner, ParallelConsumerOptions<K, V> options) {
         this.runner = functionRunner;
         this.pcOptions = options;
+        this.executorService = setupWorkerPool(poolSize);
         workers = Range.range(poolSize).toStream().boxed()
                 .map(ignore -> new PCWorker<>(this))
                 .collect(Collectors.toList());
+
+        start();
+    }
+
+    private void start() {
+        workers.forEach(worker -> executorService.submit(worker::loop));
     }
 
     public int getCapacity(Timer workRetrievalTimer) {
@@ -83,8 +96,11 @@ public class PCWorkerPool<K, V, R> {
         // debugging
         if (log.isDebugEnabled()) {
             var sizes = batches.stream().map(List::size).sorted().collect(Collectors.toList());
-            log.debug("Number batches: {}, smallest {}, sizes {}", batches.size(), sizes.stream().findFirst().get(), sizes);
-            List<Integer> integerStream = sizes.stream().filter(x -> x < (int) pcOptions.getBatchSize()).collect(Collectors.toList());
+            log.debug("Number of batches: {}, smallest {}, sizes {}",
+                    batches.size(),
+                    sizes.stream().findFirst().orElse(-1),
+                    sizes);
+            List<Integer> integerStream = sizes.stream().filter(x -> x < pcOptions.getBatchSize()).collect(Collectors.toList());
             if (integerStream.size() > 1) {
                 log.warn("More than one batch isn't target size: {}. Input number of batches: {}", integerStream, batches.size());
             }
@@ -118,6 +134,28 @@ public class PCWorkerPool<K, V, R> {
                 listOfBatches.size(),
                 listOfBatches.stream().map(List::size).collect(Collectors.toList()));
         return listOfBatches;
+    }
+
+    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+        ThreadFactory defaultFactory;
+        try {
+            defaultFactory = InitialContext.doLookup(pcOptions.getManagedThreadFactory());
+        } catch (NamingException e) {
+            log.debug("Using Java SE Thread", e);
+            defaultFactory = Executors.defaultThreadFactory();
+        }
+        ThreadFactory finalDefaultFactory = defaultFactory;
+        ThreadFactory namingThreadFactory = r -> {
+            Thread thread = finalDefaultFactory.newThread(r);
+            String name = thread.getName();
+            thread.setName("pc-" + name);
+            return thread;
+        };
+        ThreadPoolExecutor.AbortPolicy rejectionHandler = new ThreadPoolExecutor.AbortPolicy();
+        LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
+        // todo simplify for this version
+        return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
+                namingThreadFactory, rejectionHandler);
     }
 
 }

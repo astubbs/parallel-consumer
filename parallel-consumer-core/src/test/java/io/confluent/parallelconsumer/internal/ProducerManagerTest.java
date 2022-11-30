@@ -87,7 +87,7 @@ class ProducerManagerTest {
 
         mu = new ModelUtils(module);
 
-        producerManager = module.producerManager();
+        producerManager = module.producerManager().get();
     }
 
     private PCModuleTestEnv buildModule(ParallelConsumerOptions<String, String> opts) {

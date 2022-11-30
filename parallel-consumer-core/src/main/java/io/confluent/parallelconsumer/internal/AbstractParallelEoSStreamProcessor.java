@@ -110,7 +110,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     // todo make private
     @Getter(PUBLIC)
-    private WorkMailbox<K, V> workMailbox;
+    private final WorkMailbox<K, V> workMailbox;
 
     private final BrokerPollSystem<K, V> brokerPollSubsystem;
 
@@ -230,7 +230,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.brokerPollSubsystem = module.brokerPoller();
 
         if (options.isProducerSupplied()) {
-            this.producerManager = Optional.of(module.producerManager());
+            this.producerManager = module.producerManager();
             if (options.isUsingTransactionalProducer())
                 this.committer = this.producerManager.get();
             else
@@ -653,7 +653,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     /**
      * Main control loop
      */
-    protected <R> void controlLoop() throws TimeoutException, ExecutionException, InterruptedException {
+    protected void controlLoop() throws TimeoutException, ExecutionException, InterruptedException {
+        initWorkerPool();
         maybeWakeupPoller();
 
         //
@@ -738,7 +739,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return shouldTryCommitNow;
     }
 
-    private <R> int retrieveAndDistributeNewWorkNew() {
+    private int retrieveAndDistributeNewWorkNew() {
         var capacity = workerPool.getCapacity(workRetrievalTimer);
         var work = wm.getWorkIfAvailable(capacity);
         workerPool.distribute(work);

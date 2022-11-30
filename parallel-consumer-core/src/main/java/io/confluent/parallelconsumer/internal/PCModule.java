@@ -13,6 +13,7 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 
 import java.time.Clock;
+import java.util.Optional;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -46,11 +47,15 @@ public class PCModule<K, V> {
         return producerWrapper;
     }
 
-    private ProducerManager<K, V> producerManager;
+    private Optional<ProducerManager<K, V>> producerManager;
 
-    protected ProducerManager<K, V> producerManager() {
+    protected Optional<ProducerManager<K, V>> producerManager() {
+        if (!options().isProducerSupplied()) {
+            return Optional.empty();
+        }
+
         if (producerManager == null) {
-            this.producerManager = new ProducerManager<>(producerWrap(), consumerManager(), workManager(), options());
+            this.producerManager = Optional.of(new ProducerManager<>(producerWrap(), consumerManager(), workManager(), options()));
         }
         return producerManager;
     }
@@ -106,7 +111,7 @@ public class PCModule<K, V> {
 
     protected WorkMailbox<K, V> workMailbox() {
         if (workMailbox == null) {
-            workMailbox = new WorkMailbox<>(workManager());
+            workMailbox = new WorkMailbox<>(workManager(), producerManager());
         }
         return workMailbox;
     }

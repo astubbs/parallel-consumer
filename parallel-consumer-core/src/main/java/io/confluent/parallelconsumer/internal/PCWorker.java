@@ -17,6 +17,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 @Value
 public class PCWorker<K, V, R> {
 
+    public static final int DEFUALT_QUEUE_SIZE = 5;
     SimpleMeterRegistry metricsRegistry = new SimpleMeterRegistry();
 
     Timer userFunctionTimer = metricsRegistry.timer("user.function");
@@ -25,10 +26,12 @@ public class PCWorker<K, V, R> {
 
     PCWorkerPool<K, V, R> parentPool;
 
+    // todo supervise this thread
     public void loop() {
+        // todo close thread on shutdown
         while (true) {
             try {
-                var poll = workQueue.poll();
+                var poll = workQueue.take();
                 process(poll);
             } catch (Exception e) {
                 log.error("Error processing work", e);
@@ -46,6 +49,11 @@ public class PCWorker<K, V, R> {
     }
 
     private int calculateQuantityToGet(Timer workRetrievalTimer) {
+        var count = workRetrievalTimer.count();
+        if (count < DEFUALT_QUEUE_SIZE) {
+            return DEFUALT_QUEUE_SIZE;
+        }
+
         var retrieval = workRetrievalTimer.mean(NANOSECONDS);
         var processing = userFunctionTimer.mean(NANOSECONDS);
         var quantity = retrieval / processing;
@@ -68,5 +76,6 @@ public class PCWorker<K, V, R> {
     public void enqueue(List<WorkContainer<K, V>> work) {
         workQueue.add(work);
     }
+
 }
 
