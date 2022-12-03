@@ -15,38 +15,43 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @RequiredArgsConstructor
-public class QueuedWorkManager<K, V> implements BlockingQueue {
+public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<K, V>> {
 
     private final WorkManager<K, V> wm;
 
     @Override
-    public boolean add(Object o) {
+    public boolean add(Batch<K, V> o) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public boolean offer(Object o) {
+    public boolean offer(Batch<K, V> o) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void put(Object o) throws InterruptedException {
+    public void put(Batch<K, V> o) throws InterruptedException {
         throw new UnsupportedOperationException();
 
     }
 
     @Override
-    public boolean offer(Object o, long timeout, TimeUnit unit) throws InterruptedException {
+    public boolean offer(Batch<K, V> o, long timeout, TimeUnit unit) throws InterruptedException {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Object take() throws InterruptedException {
-        throw new UnsupportedOperationException();
+    public Batch<K, V> take() throws InterruptedException {
+        return internal();
+    }
+
+    private synchronized Batch<K, V> internal() {
+        var work = wm.getWorkIfAvailable(1);
+        return new Batch<>(work);
     }
 
     @Override
-    public Object poll(long timeout, TimeUnit unit) throws InterruptedException {
+    public Batch<K, V> poll(long timeout, TimeUnit unit) throws InterruptedException {
         throw new UnsupportedOperationException();
     }
 
@@ -80,22 +85,22 @@ public class QueuedWorkManager<K, V> implements BlockingQueue {
     }
 
     @Override
-    public Object remove() {
+    public Batch<K, V> remove() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Object poll() {
+    public Batch<K, V> poll() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Object element() {
+    public Batch<K, V> element() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Object peek() {
+    public Batch<K, V> peek() {
         throw new UnsupportedOperationException();
     }
 

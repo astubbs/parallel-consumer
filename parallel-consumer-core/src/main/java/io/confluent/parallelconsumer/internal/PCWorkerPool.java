@@ -22,10 +22,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 import static java.util.Optional.ofNullable;
@@ -33,6 +30,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
  * @author Antony Stubbs
+ * @see PCWorker
  */
 @Slf4j
 @Value
@@ -55,8 +53,9 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         runner = functionRunner;
         this.options = module.options();
         executorPool = createExecutorPool(options.getMaxConcurrency(), module.workManager());
+        var qwm = new QueuedWorkManager<K, V>(module.workManager());
         workers = Range.range(poolSize).toStream().boxed()
-                .map(ignore -> new PCWorker<>(this))
+                .map(ignore -> new PCWorker<>(this, qwm))
                 .collect(Collectors.toList());
     }
 
@@ -77,8 +76,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         };
         ThreadPoolExecutor.AbortPolicy rejectionHandler = new ThreadPoolExecutor.AbortPolicy();
 
-        //LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
-        var workQueue = new QueuedWorkManager<K, V>(wm);
+        LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
 
         return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
                 namingThreadFactory, rejectionHandler);

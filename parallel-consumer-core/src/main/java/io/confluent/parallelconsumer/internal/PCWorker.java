@@ -4,6 +4,8 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.parallelconsumer.state.Batch;
+import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -30,11 +32,30 @@ public class PCWorker<K, V, R> {
 
     PCWorkerPool<K, V, R> parentPool;
 
-    public void loop() {
+    QueuedWorkManager<K, V> wm;
+
+    public void loop() throws InterruptedException {
         while (true) {
-            var poll = workQueue.poll();
-            process(poll);
+            var work = aquireFromWm();
+            process(work);
         }
+    }
+
+    private Batch<K, V> aquireFromWm() throws InterruptedException {
+        return wm.take();
+    }
+
+    private void process(Batch<K, V> batch) {
+        userFunctionTimer.record(() -> {
+                    var functionRunner = parentPool.getRunner();
+//                    if (functionRunner.isPresent()) {
+//                        functionRunner.get().run(work);
+                    functionRunner.run(batch.getValues());
+//                    } else {
+//                        throw new IllegalStateException("Function runner not set");
+//                    }
+                }
+        );
     }
 
     public int getQueueCapacity(Timer workRetrievalTimer) {
@@ -48,17 +69,8 @@ public class PCWorker<K, V, R> {
         return (int) quantity * 2;
     }
 
-    private void process(List<WorkContainer<K, V>> batch) {
-        userFunctionTimer.record(() -> {
-                    var functionRunner = parentPool.getRunner();
-//                    if (functionRunner.isPresent()) {
-//                        functionRunner.get().run(work);
-                    functionRunner.run(batch);
-//                    } else {
-//                        throw new IllegalStateException("Function runner not set");
-//                    }
-                }
-        );
+    private List<WorkContainer<K, V>> aquireFromQueue() {
+        return workQueue.poll();
     }
 
     public void enqueue(List<WorkContainer<K, V>> work) {
