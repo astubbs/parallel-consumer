@@ -136,6 +136,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 requestedMaxWorkToRetrieve,
                 getNumberRecordsOutForProcessing(),
                 getNumberOfIncompleteOffsets());
+
+        // todo move to shard manager
         numberRecordsOutForProcessing += work.size();
 
         return work;

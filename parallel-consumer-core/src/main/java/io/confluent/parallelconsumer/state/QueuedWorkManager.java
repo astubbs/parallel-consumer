@@ -42,6 +42,7 @@ public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<K, V>> {
 
     @Override
     public Batch<K, V> take() throws InterruptedException {
+        wm.getSm().getWorkThreadSafe();
         return internal();
     }
 
