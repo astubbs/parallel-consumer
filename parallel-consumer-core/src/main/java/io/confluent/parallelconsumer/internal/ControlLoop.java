@@ -111,7 +111,7 @@ public class ControlLoop<K, V> {
                 .workManager(wm)
                 .build();
 
-        workerPool = new PCWorkerPool<>(options.getMaxConcurrency(), runner, options);
+        workerPool = new PCWorkerPool<>(options.getMaxConcurrency(), runner, module);
     }
 
     /**

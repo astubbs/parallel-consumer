@@ -6,7 +6,9 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
+import io.confluent.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Timer;
 import lombok.Value;
 import lombok.experimental.NonFinal;
@@ -20,7 +22,10 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static java.util.Optional.ofNullable;
@@ -46,16 +51,16 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
     List<PCWorker<K, V, R>> workers;
 
-    public PCWorkerPool(int poolSize, FunctionRunner<K, V, R> functionRunner, ParallelConsumerOptions<K, V> options) {
+    public PCWorkerPool(int poolSize, FunctionRunner<K, V, R> functionRunner, PCModule<K, V> module) {
         runner = functionRunner;
-        this.options = options;
-        executorPool = createExecutorPool(options.getMaxConcurrency());
+        this.options = module.options();
+        executorPool = createExecutorPool(options.getMaxConcurrency(), module.workManager());
         workers = Range.range(poolSize).toStream().boxed()
                 .map(ignore -> new PCWorker<>(this))
                 .collect(Collectors.toList());
     }
 
-    protected ThreadPoolExecutor createExecutorPool(int poolSize) {
+    protected ThreadPoolExecutor createExecutorPool(int poolSize, WorkManager<K, V> wm) {
         ThreadFactory defaultFactory;
         try {
             defaultFactory = InitialContext.doLookup(options.getManagedThreadFactory());
@@ -71,7 +76,10 @@ public class PCWorkerPool<K, V, R> implements Closeable {
             return thread;
         };
         ThreadPoolExecutor.AbortPolicy rejectionHandler = new ThreadPoolExecutor.AbortPolicy();
-        LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
+
+        //LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
+        var workQueue = new QueuedWorkManager<K, V>(wm);
+
         return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
                 namingThreadFactory, rejectionHandler);
     }
@@ -87,6 +95,19 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         var batches = makeBatches(workToProcess);
 
         var queue = new ArrayDeque<>(batches);
+        distributeToThreadPool(queue);
+//        distributeToWorkers(queue);
+    }
+
+    private void distributeToThreadPool(ArrayDeque<List<WorkContainer<K, V>>> queue) {
+        while (!queue.isEmpty()) {
+            var work = queue.pop();
+            executorPool.submit(() -> log.debug("{}", work));
+        }
+
+    }
+
+    private void distributeToWorkers(ArrayDeque<List<WorkContainer<K, V>>> queue) {
         for (var worker : workers) {
             var poll = ofNullable(queue.poll());
             poll.ifPresent(worker::enqueue); // todo object allocation warning
