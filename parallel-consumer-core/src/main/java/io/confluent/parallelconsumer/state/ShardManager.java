@@ -16,11 +16,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.channels.Channels;
-import java.nio.channels.Selector;
-import java.nio.channels.spi.SelectorProvider;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -232,23 +227,23 @@ public class ShardManager<K, V> {
     }
 
 
-    public void getWorkThreadSafe() {
-        SelectorProvider provider = SelectorProvider.provider();
-        provider.openPipe().source().
-                QueueChannel channel1 = provider.openQueueChannel();
-        QueueChannel channel2 = provider.openQueueChannel();
-
-
-        var open = Selector.open();
-        var readableByteChannel = Channels.newChannel(new InputStream() {
-            @Override
-            public int read() throws IOException {
-                return 0;
-            }
-        });
-        readableByteChannel.
-                open.
-    }
+//    public void getWorkThreadSafe() {
+//        SelectorProvider provider = SelectorProvider.provider();
+//        provider.openPipe().source().
+//                QueueChannel channel1 = provider.openQueueChannel();
+//        QueueChannel channel2 = provider.openQueueChannel();
+//
+//
+//        var open = Selector.open();
+//        var readableByteChannel = Channels.newChannel(new InputStream() {
+//            @Override
+//            public int read() throws IOException {
+//                return 0;
+//            }
+//        });
+//        readableByteChannel.
+//                open.
+//    }
 
     public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
         LoopingResumingIterator<ShardKey, ProcessingShard<K, V>> shardQueueIterator =
