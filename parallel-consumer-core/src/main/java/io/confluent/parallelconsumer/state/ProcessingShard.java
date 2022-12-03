@@ -9,7 +9,6 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.internal.RateLimiter;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.experimental.Delegate;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
@@ -30,7 +29,7 @@ import static lombok.AccessLevel.PRIVATE;
  */
 @Slf4j
 @RequiredArgsConstructor
-public class ProcessingShard<K, V> implements Queueable<WorkContainer<K, V>> {
+public class ProcessingShard<K, V> {
 
     /**
      * Map of offset to WorkUnits.
@@ -164,14 +163,65 @@ public class ProcessingShard<K, V> implements Queueable<WorkContainer<K, V>> {
         return options.getOrdering() != UNORDERED;
     }
 
-    @Override
-    public Queue<WorkContainer<K, V>> queue() {
-        return new Queue() {
-
-            @Delegate
-            Queue<?> dummy = null;
-
-
-        };
+    public Batch<K, V> pollBatch() {
+        var quantity = options.getBatchSize();
+        var workIfAvailable = getWorkIfAvailable(quantity);
+        return new Batch<>(workIfAvailable);
     }
+
+
+    //    @Override
+//    public Queue<WorkContainer<K, V>> queue() {
+//        return null;
+//    }
+//
+//    @Override
+//    public Queue<WorkContainer<K, V>> queue() {
+//        return new NoOpQueue<K, V>() {
+//
+//            @Override
+//            public WorkContainer<K, V> poll() {
+//                var quantity = options.getBatchSize();
+//                return getWorkIfAvailable(quantity);
+//            }
+//        };
+//    }
+
+//        return new Queue<>() {
+//
+//            @Override
+//            public boolean containsAll(Collection<?> c) {
+//                return false;
+//            }
+//
+//            @Override
+//            public boolean removeAll(Collection<?> c) {
+//                return false;
+//            }
+//
+//            @Override
+//            public boolean retainAll(Collection<?> c) {
+//                return false;
+//            }
+//
+//            private interface MyExcludes {
+//
+//                boolean containsAll(Collection<?> c);
+//
+//                boolean removeAll(Collection<?> c);
+//
+//                boolean retainAll(Collection<?> c);
+//
+//                WorkContainer toArray(WorkContainer[] a);
+//
+//            }
+//
+//
+//            // Use Lombok's dynamic delegate feature to implement the MyInterface interface
+//            @Delegate(excludes = MyExcludes.class)
+//            final Queue<WorkContainer<K, V>> delegate = new ArrayDeque<>();
+//
+//        };
+
+
 }

@@ -36,12 +36,12 @@ public class PCWorker<K, V, R> {
 
     public void loop() throws InterruptedException {
         while (true) {
-            var work = aquireFromWm();
+            var work = acquireFromWm();
             process(work);
         }
     }
 
-    private Batch<K, V> aquireFromWm() throws InterruptedException {
+    private Batch<K, V> acquireFromWm() throws InterruptedException {
         return wm.take();
     }
 

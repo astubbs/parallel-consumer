@@ -4,9 +4,7 @@ import io.confluent.parallelconsumer.internal.PCModule;
 import lombok.Value;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
-import java.util.Collection;
 import java.util.Map;
-import java.util.Queue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -77,19 +75,6 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
         }
     }
 
-    private ConcurrentSkipListMap<ShardKey<?>, Queue<WorkContainer<K, V>>> getQueueMap() {
-
-        var processingShards = super.getProcessingShards();
-        // map values into queues
-
-        // todo too slow for loop call
-        return processingShards.entrySet().stream().collect(
-                ConcurrentSkipListMap::new,
-                (m, e) -> m.put(e.getKey(), e.getValue().queue()),
-                Map::putAll
-        );
-    }
-
     /**
      * Removes an element from the queue and returns it. This method blocks until an element is available.
      *
@@ -133,14 +118,14 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
                     }
 
                     // If the queue is not empty, remove an element from the queue and return it
-                    // todo try to get batch size, or many?
-                    var element = queue.poll();
+                    var element = queue.pollBatch();
 
                     // Update the polledEntry for the current thread
                     polledEntries.put(threadId, key);
 
                     // Return the removed element
-                    return new Batch<>(element);
+//                    return new Batch<>(element);
+                    return element;
                 }
             }
 
@@ -157,13 +142,29 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
                 // indefinitely, and that it will only wait for as long as it takes for a new element to be added to
                 // one of the queues in the map.
                 //noinspection WaitOrAwaitWithoutTimeout,UnconditionalWait
-                queueMap.wait(); // NOSONAR
+                getQueueMap().wait(); // NOSONAR
             }
         }
     }
 
+    private ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> getQueueMap() {
+//    private ConcurrentSkipListMap<ShardKey<?>, Queue<WorkContainer<K, V>>> getQueueMap() {
+
+        var processingShards = super.getProcessingShards();
+        // map values into queues
+
+//        // todo too slow for loop call
+//        return processingShards.entrySet().stream().collect(
+//                ConcurrentSkipListMap::new,
+//                (m, e) -> m.put(e.getKey(), e.getValue().queue()),
+//                Map::putAll
+//        );
+
+        return processingShards;
+    }
+
     public int size() {
-        return getQueueMap().values().stream().mapToInt(Collection::size).sum();
+        return getQueueMap().values().stream().mapToInt(value -> Math.toIntExact(value.getCountOfWorkAwaitingSelection())).sum();
     }
 
     @Value

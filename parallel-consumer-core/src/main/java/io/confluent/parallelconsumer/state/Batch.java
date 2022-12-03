@@ -1,6 +1,8 @@
 package io.confluent.parallelconsumer.state;
 
+import lombok.AllArgsConstructor;
 import lombok.Value;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.List;
 
@@ -10,11 +12,13 @@ import java.util.List;
  * @author Antony Stubbs
  */
 @Value
+@AllArgsConstructor
 public class Batch<K, V> {
 
     List<WorkContainer<K, V>> values;
 
     public Batch(WorkContainer<K, V> element) {
-        this.values = List.of(element);
+        this.values = UniLists.of(element);
     }
+
 }
