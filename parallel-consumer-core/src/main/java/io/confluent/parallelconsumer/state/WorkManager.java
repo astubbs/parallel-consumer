@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
@@ -107,23 +108,23 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         pm.maybeRegisterNewRecordAsWork(records);
     }
 
-//    /**
-//     * Get work with no limit on quantity, useful for testing.
-//     */
-//    public List<WorkContainer<K, V>> getWorkIfAvailable() {
-//        return getWorkIfAvailable(Integer.MAX_VALUE);
-//    }
+    /**
+     * Get work with no limit on quantity, useful for testing.
+     */
+    public List<WorkContainer<K, V>> getWorkIfAvailable() {
+        return getWorkIfAvailable(Integer.MAX_VALUE);
+    }
 
-//    /**
-//     * Depth first work retrieval.
-//     */
-//    public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
-//        if (requestedMaxWorkToRetrieve < 1) {
-//            return UniLists.of();
-//        }
-//
-//        return sm.getWorkIfAvailable(requestedMaxWorkToRetrieve);
-//    }
+    /**
+     * Depth first work retrieval.
+     */
+    public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
+        if (requestedMaxWorkToRetrieve < 1) {
+            return UniLists.of();
+        }
+
+        return sm.getWorkIfAvailable(requestedMaxWorkToRetrieve);
+    }
 
     public void onSuccessResult(WorkContainer<K, V> wc) {
         log.trace("Work success ({}), removing from processing shard queue", wc);
@@ -261,4 +262,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 sm.getNumberRecordsOutForProcessing());
     }
 
+    public int getNumberRecordsOutForProcessing() {
+        return sm.getNumberRecordsOutForProcessing();
+    }
+
+//    public void getWorkIfAvailable() {
+//        sm.get
+//    }
 }

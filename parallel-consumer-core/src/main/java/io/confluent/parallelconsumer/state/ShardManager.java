@@ -307,4 +307,32 @@ public class ShardManager<K, V> {
         }
     }
 
+    public List<WorkContainer<K, V>> getWorkIfAvailable(int requestedMaxWorkToRetrieve) {
+// get work from shards
+        List<WorkContainer<K, V>> workFromAllShards = new ArrayList<>();
+        for (ProcessingShard<K, V> shard : this.processingShards.values()) {
+            int remainingToGet = requestedMaxWorkToRetrieve - workFromAllShards.size();
+            var work = shard.getWorkIfAvailable(remainingToGet);
+            workFromAllShards.addAll(work);
+        }
+
+        // log
+        if (workFromAllShards.size() >= requestedMaxWorkToRetrieve) {
+            log.debug("Work taken is now over max (iteration resume point is {})", iterationResumePoint);
+        }
+
+        //
+        log.debug("Got {} of {} requested records of work. In-flight: {}, Awaiting in commit (partition) queues: {}",
+                workFromAllShards.size(),
+                requestedMaxWorkToRetrieve,
+                getNumberRecordsOutForProcessing()
+//                getNumberOfIncompleteOffsets()
+        );
+
+        // todo move to shard manager
+        numberRecordsOutForProcessing += workFromAllShards.size();
+
+        return workFromAllShards;
+
+    }
 }
