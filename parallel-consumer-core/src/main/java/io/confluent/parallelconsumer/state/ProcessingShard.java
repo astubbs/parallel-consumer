@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.internal.RateLimiter;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.experimental.Delegate;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
@@ -29,7 +30,7 @@ import static lombok.AccessLevel.PRIVATE;
  */
 @Slf4j
 @RequiredArgsConstructor
-public class ProcessingShard<K, V> {
+public class ProcessingShard<K, V> implements Queueable<WorkContainer<K, V>> {
 
     /**
      * Map of offset to WorkUnits.
@@ -44,7 +45,7 @@ public class ProcessingShard<K, V> {
     private final NavigableMap<Long, WorkContainer<K, V>> entries = new ConcurrentSkipListMap<>();
 
     @Getter(PRIVATE)
-    private final ShardKey key;
+    private final ShardKey<?> key;
 
     private final ParallelConsumerOptions<?, ?> options;
 
@@ -163,4 +164,14 @@ public class ProcessingShard<K, V> {
         return options.getOrdering() != UNORDERED;
     }
 
+    @Override
+    public Queue<WorkContainer<K, V>> queue() {
+        return new Queue() {
+
+            @Delegate
+            Queue<?> dummy = null;
+
+
+        };
+    }
 }

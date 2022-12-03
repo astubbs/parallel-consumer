@@ -11,7 +11,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
-import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
@@ -55,9 +54,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * We use it here as well to make sure we have a matching number of messages in queues available.
      */
     private final DynamicLoadFactor dynamicLoadFactor;
-
-    @Getter
-    private int numberRecordsOutForProcessing = 0;
 
     /**
      * Useful for testing
@@ -111,37 +107,23 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         pm.maybeRegisterNewRecordAsWork(records);
     }
 
-    /**
-     * Get work with no limit on quantity, useful for testing.
-     */
-    public List<WorkContainer<K, V>> getWorkIfAvailable() {
-        return getWorkIfAvailable(Integer.MAX_VALUE);
-    }
+//    /**
+//     * Get work with no limit on quantity, useful for testing.
+//     */
+//    public List<WorkContainer<K, V>> getWorkIfAvailable() {
+//        return getWorkIfAvailable(Integer.MAX_VALUE);
+//    }
 
-    /**
-     * Depth first work retrieval.
-     */
-    public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
-        // optimise early
-        if (requestedMaxWorkToRetrieve < 1) {
-            return UniLists.of();
-        }
-
-        //
-        var work = sm.getWorkIfAvailable(requestedMaxWorkToRetrieve);
-
-        //
-        log.debug("Got {} of {} requested records of work. In-flight: {}, Awaiting in commit (partition) queues: {}",
-                work.size(),
-                requestedMaxWorkToRetrieve,
-                getNumberRecordsOutForProcessing(),
-                getNumberOfIncompleteOffsets());
-
-        // todo move to shard manager
-        numberRecordsOutForProcessing += work.size();
-
-        return work;
-    }
+//    /**
+//     * Depth first work retrieval.
+//     */
+//    public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
+//        if (requestedMaxWorkToRetrieve < 1) {
+//            return UniLists.of();
+//        }
+//
+//        return sm.getWorkIfAvailable(requestedMaxWorkToRetrieve);
+//    }
 
     public void onSuccessResult(WorkContainer<K, V> wc) {
         log.trace("Work success ({}), removing from processing shard queue", wc);
@@ -154,8 +136,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         // notify listeners
         successfulWorkListeners.forEach(c -> c.accept(wc));
-
-        numberRecordsOutForProcessing--;
     }
 
     /**
@@ -172,7 +152,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         wc.endFlight();
         pm.onFailure(wc);
         sm.onFailure(wc);
-        numberRecordsOutForProcessing--;
     }
 
     public long getNumberOfIncompleteOffsets() {
@@ -211,7 +190,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     /**
      * @return true if there's enough messages downloaded from the broker already to satisfy the pipeline, false if more
-     * should be downloaded (or pipelined in the Consumer)
+     *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
         return getNumberOfWorkQueuedInShardsAwaitingSelection() > (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
@@ -226,11 +205,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public boolean hasWorkInFlight() {
-        return getNumberRecordsOutForProcessing() != 0;
+        return sm.getNumberRecordsOutForProcessing() != 0;
     }
 
     public boolean isWorkInFlightMeetingTarget() {
-        return getNumberRecordsOutForProcessing() >= options.getTargetAmountOfRecordsInFlight();
+        return sm.getNumberRecordsOutForProcessing() >= options.getTargetAmountOfRecordsInFlight();
     }
 
     public long getNumberOfWorkQueuedInShardsAwaitingSelection() {
@@ -264,7 +243,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public boolean isNoRecordsOutForProcessing() {
-        return getNumberRecordsOutForProcessing() == 0;
+        return sm.getNumberRecordsOutForProcessing() == 0;
     }
 
     public Optional<Duration> getLowestRetryTime() {
@@ -278,7 +257,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     // todo make protected when package protection merged
     public void logState() {
         log.trace("End of control loop, waiting processing {}, remaining in partition queues: {}, out for processing: {}",
-                getNumberOfWorkQueuedInShardsAwaitingSelection(), getNumberOfIncompleteOffsets(), getNumberRecordsOutForProcessing());
+                getNumberOfWorkQueuedInShardsAwaitingSelection(), getNumberOfIncompleteOffsets(),
+                sm.getNumberRecordsOutForProcessing());
     }
 
 }

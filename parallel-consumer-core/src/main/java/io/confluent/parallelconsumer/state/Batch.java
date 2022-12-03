@@ -13,4 +13,8 @@ import java.util.List;
 public class Batch<K, V> {
 
     List<WorkContainer<K, V>> values;
+
+    public Batch(WorkContainer<K, V> element) {
+        this.values = List.of(element);
+    }
 }

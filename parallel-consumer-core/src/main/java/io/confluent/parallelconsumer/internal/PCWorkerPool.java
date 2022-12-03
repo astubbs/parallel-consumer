@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.state.QueuedShardManager;
 import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.confluent.parallelconsumer.state.WorkManager;
@@ -53,7 +54,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         runner = functionRunner;
         this.options = module.options();
         executorPool = createExecutorPool(options.getMaxConcurrency(), module.workManager());
-        var qwm = new QueuedWorkManager<K, V>(module.workManager());
+        var qwm = new QueuedWorkManager<K, V>(new QueuedShardManager<>(module));
         workers = Range.range(poolSize).toStream().boxed()
                 .map(ignore -> new PCWorker<>(this, qwm))
                 .collect(Collectors.toList());

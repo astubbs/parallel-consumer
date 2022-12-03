@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer.state;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.csid.utils.LoopingResumingIterator;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
@@ -19,12 +18,13 @@ import org.apache.kafka.common.TopicPartition;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.util.Optional.empty;
 import static java.util.Optional.of;
+import static lombok.AccessLevel.PROTECTED;
 
 /**
  * Shards are local queues of work to be processed.
@@ -59,7 +59,14 @@ public class ShardManager<K, V> {
      * @see WorkManager#getWorkIfAvailable()
      */
     // performance: could disable/remove if using partition order - but probably not worth the added complexity in the code to handle an extra special case
-    private final Map<ShardKey, ProcessingShard<K, V>> processingShards = new ConcurrentHashMap<>();
+    @Getter(PROTECTED)
+    private final ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> processingShards =
+            new ConcurrentSkipListMap<>();
+
+
+    @Getter
+    private int numberRecordsOutForProcessing = 0;
+
 
     /**
      * TreeSet is a Set, so must ensure that we are consistent with equalTo in our comparator - so include the full id -
@@ -169,7 +176,7 @@ public class ShardManager<K, V> {
 
     public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
         var wc = new WorkContainer<>(epochOfInboundRecords, aRecord, module);
-        ShardKey shardKey = computeShardKey(wc);
+        ShardKey<?> shardKey = computeShardKey(wc);
 
         // don't need to synchronise on /adding/ elements, as the iterator would just stop early
         var shard = processingShards.computeIfAbsent(shardKey,
@@ -190,6 +197,8 @@ public class ShardManager<K, V> {
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {
+        numberRecordsOutForProcessing--;
+
         // remove from the retry queue if it's contained
         this.retryQueue.remove(wc);
 
@@ -211,6 +220,7 @@ public class ShardManager<K, V> {
     public void onFailure(WorkContainer<?, ?> wc) {
         log.debug("Work FAILED");
         this.retryQueue.add(wc);
+        numberRecordsOutForProcessing--;
     }
 
     /**
@@ -245,38 +255,49 @@ public class ShardManager<K, V> {
 //                open.
 //    }
 
-    public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
-        LoopingResumingIterator<ShardKey, ProcessingShard<K, V>> shardQueueIterator =
-                new LoopingResumingIterator<>(iterationResumePoint, this.processingShards);
+//    public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
+//        LoopingResumingIterator<ShardKey, ProcessingShard<K, V>> shardQueueIterator =
+//                new LoopingResumingIterator<>(iterationResumePoint, this.processingShards);
+//
+//        //
+//        List<WorkContainer<K, V>> workFromAllShards = new ArrayList<>();
+//
+//        // loop over shards, and get work from each
+//        Optional<Map.Entry<ShardKey, ProcessingShard<K, V>>> next = shardQueueIterator.next();
+//        while (workFromAllShards.size() < requestedMaxWorkToRetrieve && next.isPresent()) {
+//            var shardEntry = next;
+//            ProcessingShard<K, V> shard = shardEntry.get().getValue();
+//
+//            //
+//            int remainingToGet = requestedMaxWorkToRetrieve - workFromAllShards.size();
+//            var work = shard.getWorkIfAvailable(remainingToGet);
+//            workFromAllShards.addAll(work);
+//
+//            // next
+//            next = shardQueueIterator.next();
+//        }
+//
+//        // log
+//        if (workFromAllShards.size() >= requestedMaxWorkToRetrieve) {
+//            log.debug("Work taken is now over max (iteration resume point is {})", iterationResumePoint);
+//        }
+//
+//        //
+//        updateResumePoint(next);
+//
+//    //
+//        log.debug("Got {} of {} requested records of work. In-flight: {}, Awaiting in commit (partition) queues: {}",
+//                work.size(),
+//    requestedMaxWorkToRetrieve,
+//    getNumberRecordsOutForProcessing(),
+//    getNumberOfIncompleteOffsets());
+//
+//    // todo move to shard manager
+//    numberRecordsOutForProcessing += work.size();
 
-        //
-        List<WorkContainer<K, V>> workFromAllShards = new ArrayList<>();
 
-        // loop over shards, and get work from each
-        Optional<Map.Entry<ShardKey, ProcessingShard<K, V>>> next = shardQueueIterator.next();
-        while (workFromAllShards.size() < requestedMaxWorkToRetrieve && next.isPresent()) {
-            var shardEntry = next;
-            ProcessingShard<K, V> shard = shardEntry.get().getValue();
-
-            //
-            int remainingToGet = requestedMaxWorkToRetrieve - workFromAllShards.size();
-            var work = shard.getWorkIfAvailable(remainingToGet);
-            workFromAllShards.addAll(work);
-
-            // next
-            next = shardQueueIterator.next();
-        }
-
-        // log
-        if (workFromAllShards.size() >= requestedMaxWorkToRetrieve) {
-            log.debug("Work taken is now over max (iteration resume point is {})", iterationResumePoint);
-        }
-
-        //
-        updateResumePoint(next);
-
-        return workFromAllShards;
-    }
+//        return workFromAllShards;
+//    }
 
     private void updateResumePoint(Optional<Map.Entry<ShardKey, ProcessingShard<K, V>>> lastShard) {
         // if empty, iteration was exhausted and no resume point is needed

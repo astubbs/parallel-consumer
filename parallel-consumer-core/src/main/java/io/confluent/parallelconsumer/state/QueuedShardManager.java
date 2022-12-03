@@ -1,12 +1,15 @@
 package io.confluent.parallelconsumer.state;
 
+import io.confluent.parallelconsumer.internal.PCModule;
 import lombok.Value;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 
-import java.util.List;
+import java.util.Collection;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -18,31 +21,35 @@ import java.util.concurrent.locks.ReentrantLock;
  * @author ChatCGPT-3
  */
 @Value
-public class QueuedShardManager<K, V, T> {
+public class QueuedShardManager<K, V> extends ShardManager<K, V> {
+
+    //
+//    /**
+//     * Map of BlockingQueue entries, keyed on a unique identifier.
+//     */
+//    ConcurrentSkipListMap<ShardKey<?>, Queue<Object>> queueMap;
 
     /**
-     * Map of BlockingQueue entries, keyed on a unique identifier.
+     * A map of locks for the queues in the queue map.
      */
-    ConcurrentHashMap<ShardKey, QueueLock<T>> queueMap;
+    Map<ShardKey<?>, ReentrantLock> lockMap = new ConcurrentHashMap<>();
 
     /**
      * Map of entries that have been polled by each thread, keyed on the thread's ID.
      */
-    Map<Long, String> polledEntries;
+    Map<Long, ShardKey> polledEntries;
 
     /**
      * Atomic integer to keep track of the last position in the queueMap that was polled by each thread.
      */
     AtomicInteger lastPosition;
 
-    ShardManager<K, V> sm;
-
     /**
      * Constructs a new BlockingQueue.
      */
-    public QueuedShardManager() {
-        // Initialize the queueMap with a LinkedBlockingQueue for each entry
-        queueMap = new ConcurrentHashMap<>();
+    public QueuedShardManager(PCModule<K, V> module) {
+        super(module, module.workManager());
+//        queueMap = super.getProcessingShards();
 
         // Initialize the polledEntries map
         polledEntries = new ConcurrentHashMap<>();
@@ -51,30 +58,36 @@ public class QueuedShardManager<K, V, T> {
         lastPosition = new AtomicInteger();
     }
 
-    /**
-     * Puts an element in the queue with the specified key.
-     *
-     * @param key     The key of the queue to put the element in.
-     * @param element The element to put in the queue.
-     */
-    public void put(ShardKey key, T value) throws InterruptedException {
-        queueMap.computeIfAbsent(key, k -> {
-            // Create a new LinkedBlockingQueue and a corresponding ReentrantLock
-            LinkedBlockingQueue<T> queue = new LinkedBlockingQueue<>();
-            ReentrantLock lock = new ReentrantLock();
-
-            // Return a QueueLock object that contains the queue and the lock
-            return new QueueLock<>(queue, lock);
-        }).queue.put(value);
+    @Override
+    public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
+        super.addWorkContainer(epochOfInboundRecords, aRecord);
+        ShardKey<?> shardKey = computeShardKey(aRecord);
+        lockMap.computeIfAbsent(shardKey, k -> {
+            // Create the corresponding ReentrantLock
+            return new ReentrantLock();
+        });
 
         // Wake up any threads that are waiting in the take method
-        synchronized (queueMap) {
+        synchronized (getQueueMap()) {
             // notifyAll in the put method is not necessary in this case because there will only be one thread
             // waiting on the queueMap monitor at any given time. Using notify is sufficient to wake up that thread and
             // avoid thread starvation.
             //noinspection CallToNotifyInsteadOfNotifyAll
-            queueMap.notify();
+            getQueueMap().notify();
         }
+    }
+
+    private ConcurrentSkipListMap<ShardKey<?>, Queue<WorkContainer<K, V>>> getQueueMap() {
+
+        var processingShards = super.getProcessingShards();
+        // map values into queues
+
+        // todo too slow for loop call
+        return processingShards.entrySet().stream().collect(
+                ConcurrentSkipListMap::new,
+                (m, e) -> m.put(e.getKey(), e.getValue().queue()),
+                Map::putAll
+        );
     }
 
     /**
@@ -83,61 +96,74 @@ public class QueuedShardManager<K, V, T> {
      * @return The removed element from the queue.
      * @throws InterruptedException If the current thread is interrupted while waiting for an element to be available.
      */
-    public T take() throws InterruptedException {
-        // Poll each BlockingQueue in the queueMap until a non-empty queue is found
-        T element = null;
-        while (element == null) {
-            // Try to acquire the lock for each BlockingQueue without blocking the current thread
-            for (var entry : queueMap.entrySet()) {
-                ReentrantLock lock = entry.getValue().getLock();
+    // todo needs to return a batch
+    public Batch<K, V> take() throws InterruptedException {
+        // Get the current thread's ID
+        var threadId = Thread.currentThread().getId();
+        var queueMap = getQueueMap();
 
-                // If the lock is acquired, try to poll the BlockingQueue
-                if (lock.tryLock()) {
-                    try {
-                        BlockingQueue<T> queue = entry.getValue().getQueue();
-                        element = queue.poll();
-                    } finally {
-                        // Release the lock
-                        lock.unlock();
-                    }
+        // Loop until an element is available
+        while (true) {
+            // Check if the thread has already polled an entry in the queueMap
+            var polledEntry = polledEntries.get(threadId);
 
-                    // If a non-empty queue was found, break out of the loop
-                    if (element != null) {
-                        break;
-                    }
-                }
-                // if the lock can't be acquired, then the queue is being modified by another thread
+            // If an entry has not been polled, start from the beginning of the queueMap
+            if (polledEntry == null) {
+                polledEntry = queueMap.keySet().iterator().next();
             }
 
-            // If no non-empty queue was found, block the current thread until any queue has an element available
-            if (element == null) {
-                synchronized (queueMap) {
-                    // In the take method, the call to wait on the queueMap monitor is unconditional because it is
-                    // only called if no non-empty queue was found in the map. This means that there will only be one
-                    // thread waiting on the queueMap monitor at any given time, and the put method will always call
-                    // notify (or notifyAll) to wake up that thread when a new element is added to any queue in the map.
+            // Get an iterator for the queueMap, starting from the polledEntry
+            var iterator = queueMap.tailMap(polledEntry).keySet().iterator();
 
-                    // Using an unconditional wait in this way is safe because the put method always calls notify (or
-                    // notifyAll) to wake up the waiting thread. This ensures that the waiting thread will not be blocked
-                    // indefinitely, and that it will only wait for as long as it takes for a new element to be added to
-                    // one of the queues in the map.
-                    //noinspection WaitOrAwaitWithoutTimeout,UnconditionalWait
-                    queueMap.wait(); // NOSONAR
+            // Loop through the queueMap, starting from the polledEntry
+            while (iterator.hasNext()) {
+                // Get the next key from the iterator
+                var key = iterator.next();
+
+                // Get the QueueLock for the key
+                var queueLock = lockMap.get(key);
+
+                // Acquire the lock on the QueueLock
+                synchronized (queueLock) {
+                    // Check if the QueueLock's queue is empty
+                    var queue = queueMap.get(key);
+                    if (queue.isEmpty()) {
+                        // If the queue is empty, release the lock and continue to the next entry in the queueMap
+                        continue;
+                    }
+
+                    // If the queue is not empty, remove an element from the queue and return it
+                    // todo try to get batch size, or many?
+                    var element = queue.poll();
+
+                    // Update the polledEntry for the current thread
+                    polledEntries.put(threadId, key);
+
+                    // Return the removed element
+                    return new Batch<>(element);
                 }
+            }
+
+            // If all entries in the queueMap have been polled and are empty, wait for a new element to be added to the queue
+            synchronized (getQueueMap()) {
+                // In the take method, the call to wait on the queueMap monitor is unconditional because it is
+                // only called if no non-empty queue was found in the map. This means that there will only be one
+                // thread waiting on the queueMap monitor at any given time, and the put method will always call
+                // notify (or notifyAll) to wake up that thread when a new element is added to any queue in the map.
+                // If the queue is not empty, remove an element from the queue and return it
+
+                // Using an unconditional wait in this way is safe because the put method always calls notify (or
+                // notifyAll) to wake up the waiting thread. This ensures that the waiting thread will not be blocked
+                // indefinitely, and that it will only wait for as long as it takes for a new element to be added to
+                // one of the queues in the map.
+                //noinspection WaitOrAwaitWithoutTimeout,UnconditionalWait
+                queueMap.wait(); // NOSONAR
             }
         }
-
-        // Return the element from the non-empty queue
-        return element;
-    }
-
-    private List<WorkContainer<K, V>> findFirstAvailableEntry(int requestedMaxWorkToRetrieve) {
-        return sm.getWorkIfAvailable(requestedMaxWorkToRetrieve);
-//        return queueMap.values().stream().filter(ts -> !ts.isEmpty()).findFirst().orElse(EMPTY_QUEUE).poll();
     }
 
     public int size() {
-        return queueMap.values().stream().mapToInt(value -> value.queue.size()).sum();
+        return getQueueMap().values().stream().mapToInt(Collection::size).sum();
     }
 
     @Value

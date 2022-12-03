@@ -1,6 +1,8 @@
 package io.confluent.parallelconsumer.state;
 
+import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collection;
@@ -15,9 +17,15 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @RequiredArgsConstructor
+@FieldDefaults(makeFinal = true, level = AccessLevel.PRIVATE)
 public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<K, V>> {
 
-    private final WorkManager<K, V> wm;
+//    WorkManager<K, V> wm;
+//
+//    PCModule<K,V> module;
+
+    QueuedShardManager<K, V> qsm;// = new QueuedShardManager<>(wm.getModule(), wm);
+
 
     @Override
     public boolean add(Batch<K, V> o) {
@@ -43,15 +51,14 @@ public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<K, V>> {
     @Override
     public Batch<K, V> take() throws InterruptedException {
 //        wm.getSm().getWorkThreadSafe();
-        QueuedShardManager<K, V> qsm = wm.getSm();
-        qsm.take();
-        return internal();
+        return qsm.take();
+//        return internal();
     }
 
-    private synchronized Batch<K, V> internal() {
-        var work = wm.getWorkIfAvailable(1);
-        return new Batch<>(work);
-    }
+//    private synchronized Batch<K, V> internal() {
+//        var work = wm.getWorkIfAvailable(1);
+//        return new Batch<>(work);
+//    }
 
     @Override
     public Batch<K, V> poll(long timeout, TimeUnit unit) throws InterruptedException {
