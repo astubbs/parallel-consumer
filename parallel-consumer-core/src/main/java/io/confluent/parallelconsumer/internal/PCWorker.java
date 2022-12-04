@@ -93,12 +93,19 @@ public class PCWorker<K, V, R> {
         return workQueue.poll();
     }
 
-    public void enqueue(List<WorkContainer<K, V>> work) {
-        workQueue.add(work);
+//    public void enqueue(List<WorkContainer<K, V>> work) {
+//        workQueue.add(work);
+//    }
+
+    /**
+     * Add to the collection of {@link ProcessingShard}s this Worker is responsible for
+     */
+    public void addShardIfMissing(ProcessingShard<K, V> shard) {
+        workQueue.addIfMissing(shard);
     }
 
-    public void addShard(ProcessingShard<K, V> shard) {
-        workQueue.add(shard);
+    public void onWorkAdded(ProcessingShard<K, V> processingShard) throws InterruptedException {
+        workQueue.onWorkAdded(processingShard);
     }
 }
 

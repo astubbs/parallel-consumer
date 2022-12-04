@@ -111,8 +111,14 @@ public class ShardManager<K, V> {
         return Optional.ofNullable(processingShards.get(key));
     }
 
-    ShardKey computeShardKey(WorkContainer<?, ?> wc) {
-        return ShardKey.of(wc, options.getOrdering());
+    public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
+        var wc = new WorkContainer<>(epochOfInboundRecords, aRecord, module);
+        ShardKey<Object> shardKey = computeShardKey(wc);
+
+        // don't need to synchronise on /adding/ elements, as the iterator would just stop early
+        var shard = processingShards.computeIfAbsent(shardKey,
+                ignore -> new ProcessingShard<>(shardKey, options, module.partitionStateManager()));
+        shard.addWorkContainer(wc);
     }
 
     ShardKey computeShardKey(ConsumerRecord<?, ?> wc) {
@@ -171,14 +177,9 @@ public class ShardManager<K, V> {
 
     }
 
-    public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
-        var wc = new WorkContainer<>(epochOfInboundRecords, aRecord, module);
-        ShardKey<?> shardKey = computeShardKey(wc);
-
-        // don't need to synchronise on /adding/ elements, as the iterator would just stop early
-        var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, module.partitionStateManager()));
-        shard.addWorkContainer(wc);
+    // todo generics
+    ShardKey computeShardKey(WorkContainer<?, ?> wc) {
+        return ShardKey.of(wc, options.getOrdering());
     }
 
     void removeShardIfEmpty(ShardKey key) {

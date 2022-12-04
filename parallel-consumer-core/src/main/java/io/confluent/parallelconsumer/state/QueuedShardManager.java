@@ -1,7 +1,7 @@
 package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.PCWorkerPool;
+import lombok.SneakyThrows;
 import lombok.Value;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
@@ -61,6 +61,8 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
     ReentrantLock newWorkLockMaker = new ReentrantLock();
 
+    PCModule<K, V> module;
+
     @NonFinal
     Condition newWorkEvent = newWorkLockMaker.newCondition();
 
@@ -79,15 +81,13 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
     // todo does this have to be concurrent?
     Map<Long, BlockingQueue<ProcessingShard<K, V>>> shardQueueMap = new ConcurrentHashMap<>();
 
-    PCWorkerPool<K, V, ?> workerPool;
-
     /**
      * Constructs a new BlockingQueue.
      */
     public QueuedShardManager(PCModule<K, V> module) {
         super(module);
 
-        workerPool = module.workerPool();
+        this.module = module;
 
 //        queueMap = super.getProcessingShards();
 
@@ -98,16 +98,22 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
         lastPosition = new AtomicInteger();
     }
 
+    // todo sneaky
+    @SneakyThrows
     @Override
     public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
 //        synchronized (monitor) {
         ShardKey<?> shardKey = computeShardKey(aRecord);
 
-        super.addWorkContainer(epochOfInboundRecords, aRecord);
+        var processingShard = processingShards.get(shardKey);
+        module.workerPool().onWorkAdded(processingShard);
 
-        workerPool.distributeShards(processingShards.get(shardKey));
-
-        maybeAddShardToQueue(shardKey);
+//        super.addWorkContainer(epochOfInboundRecords, aRecord);
+//
+//        // todo clean up
+//        module.workerPool().distributeShards(processingShard);
+//
+//        maybeAddShardToQueue(shardKey);
 
 //        lockMap.computeIfAbsent(shardKey, k -> {
 //            // Create the corresponding ReentrantLock

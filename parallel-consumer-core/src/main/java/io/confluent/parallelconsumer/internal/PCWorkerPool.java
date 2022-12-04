@@ -20,14 +20,10 @@ import javax.naming.InitialContext;
 import javax.naming.NamingException;
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.ArrayDeque;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-import static java.util.Optional.ofNullable;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -51,7 +47,9 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
     Queue<PCWorker<K, V, R>> workers;
 
-    Batcher<?> batcher = new Batcher();
+    Map<ProcessingShard<?, ?>, PCWorker<K, V, ?>> map = new HashMap<>();
+
+//    Batcher<?> batcher = new Batcher();
 
     @SneakyThrows
     public PCWorkerPool(int poolSize, FunctionRunner<K, V, R> functionRunner, PCModule<K, V> module) {
@@ -93,26 +91,25 @@ public class PCWorkerPool<K, V, R> implements Closeable {
                 namingThreadFactory, rejectionHandler);
     }
 
-    public void distributeShards(ProcessingShard<K, V> shard) {
-        var poll = getWorkers().poll();
-        poll.addShard(shard);
-        getWorkers().offer(poll);
+    public void onWorkAdded(ProcessingShard<K, V> processingShard) throws InterruptedException {
+        PCWorker<K, V, ?> worker = maybeDistributeShards(processingShard);
+        worker.onWorkAdded(processingShard);
     }
 
     public int getCapacity(Timer workRetrievalTimer) {
         return workers.stream().map(worker -> worker.getQueueCapacity(workRetrievalTimer)).reduce(Integer::sum).orElse(0);
     }
 
-    /**
-     * Distribute the work in this list fairly across the workers
-     */
-    public void distribute(List<WorkContainer<K, V>> workToProcess) {
-        var batches = batcher.makeBatches(workToProcess);
-
-        var queue = new ArrayDeque<>(batches);
-        distributeToThreadPool(queue);
-//        distributeToWorkers(queue);
-    }
+//    /**
+//     * Distribute the work in this list fairly across the workers
+//     */
+//    public void distribute(List<WorkContainer<K, V>> workToProcess) {
+//        var batches = batcher.makeBatches(workToProcess);
+//
+//        var queue = new ArrayDeque<>(batches);
+//        distributeToThreadPool(queue);
+////        distributeToWorkers(queue);
+//    }
 
     private void distributeToThreadPool(ArrayDeque<List<WorkContainer<K, V>>> queue) {
         while (!queue.isEmpty()) {
@@ -122,12 +119,12 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
     }
 
-    private void distributeToWorkers(ArrayDeque<List<WorkContainer<K, V>>> queue) {
-        for (var worker : workers) {
-            var poll = ofNullable(queue.poll());
-            poll.ifPresent(worker::enqueue); // todo object allocation warning
-        }
-    }
+//    private void distributeToWorkers(ArrayDeque<List<WorkContainer<K, V>>> queue) {
+//        for (var worker : workers) {
+//            var poll = ofNullable(queue.poll());
+//            poll.ifPresent(worker::enqueue); // todo object allocation warning
+//        }
+//    }
 
     @Override
     public void close() throws IOException {
@@ -147,5 +144,23 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
     private int getNumberOfUserFunctionsQueued() {
         return executorPool.getQueue().size();
+    }
+
+    /**
+     * Round robyn using queue pop, offer
+     *
+     * @return the worker for the shard
+     */
+    private PCWorker<K, V, ?> maybeDistributeShards(ProcessingShard<K, V> shard) {
+        var workerOpt = Optional.ofNullable(map.get(shard));
+        if (workerOpt.isPresent()) {
+            return workerOpt.get();
+        } else {
+            var poll = getWorkers().poll();
+            poll.addShardIfMissing(shard);
+            map.put(shard, poll);
+            getWorkers().offer(poll); // move to back
+            return poll;
+        }
     }
 }

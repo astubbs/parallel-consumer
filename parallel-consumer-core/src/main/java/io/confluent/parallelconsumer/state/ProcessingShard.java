@@ -7,7 +7,9 @@ package io.confluent.parallelconsumer.state;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.internal.RateLimiter;
+import lombok.EqualsAndHashCode;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,7 +31,8 @@ import static lombok.AccessLevel.PRIVATE;
  */
 @Slf4j
 @RequiredArgsConstructor
-public class ProcessingShard<K, V> {
+@EqualsAndHashCode
+public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> {
 
     /**
      * Map of offset to WorkUnits.
@@ -43,8 +46,9 @@ public class ProcessingShard<K, V> {
     @Getter
     private final NavigableMap<Long, WorkContainer<K, V>> entries = new ConcurrentSkipListMap<>();
 
+    // todo generics
     @Getter(PRIVATE)
-    private final ShardKey<?> key;
+    private final ShardKey<Object> key;
 
     private final ParallelConsumerOptions<?, ?> options;
 
@@ -172,6 +176,12 @@ public class ProcessingShard<K, V> {
         logSlowWork(slowWork);
 
         return workTaken;
+    }
+
+    @Override
+    public int compareTo(@NonNull ProcessingShard<K, V> o) {
+        return Comparator.<ProcessingShard<K, V>, ShardKey<Object>>comparing(ProcessingShard::getKey)
+                .compare(this, o);
     }
 
 
