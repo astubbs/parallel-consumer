@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.internal.PCModule;
 import lombok.Value;
+import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
@@ -12,9 +13,11 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static io.confluent.csid.utils.BackportUtils.isEmpty;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**
  * A blocking queue implementation, backed by a map of non-blocking queues.
@@ -57,6 +60,11 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
      */
     ConcurrentHashMap<Long, ShardKey<?>> polledEntries = new ConcurrentHashMap<>();
 
+    ReentrantLock newWorkLockMaker = new ReentrantLock();
+
+    @NonFinal
+    Condition newWorkEvent = newWorkLockMaker.newCondition();
+
     /**
      * Constructs a new BlockingQueue.
      */
@@ -73,24 +81,34 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
     @Override
     public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
-        synchronized (monitor) {
+//        synchronized (monitor) {
 
-            ShardKey<?> shardKey = computeShardKey(aRecord);
-            lockMap.computeIfAbsent(shardKey, k -> {
-                // Create the corresponding ReentrantLock
-                return new ReentrantLock();
-            });
+        ShardKey<?> shardKey = computeShardKey(aRecord);
+        lockMap.computeIfAbsent(shardKey, k -> {
+            // Create the corresponding ReentrantLock
+            return new ReentrantLock();
+        });
 
-            super.addWorkContainer(epochOfInboundRecords, aRecord);
+        super.addWorkContainer(epochOfInboundRecords, aRecord);
 
-            // Wake up any threads that are waiting in the take method
+        // Wake up any threads that are waiting in the take method
 //        var queueMap = getQueueMap();
 
-            // notifyAll in the put method is not necessary in this case because there will only be one thread
-            // waiting on the queueMap monitor at any given time. Using notify is sufficient to wake up that thread and
-            // avoid thread starvation.
-            //noinspection
-            monitor.notifyAll(); // todo notifies too indiscriminately?
+        // notifyAll in the put method is not necessary in this case because there will only be one thread
+        // waiting on the queueMap monitor at any given time. Using notify is sufficient to wake up that thread and
+        // avoid thread starvation.
+        //noinspection
+//            monitor.notifyAll(); // todo notifies too indiscriminately?
+//        }
+
+        // todo move down to entire batch processing, not every message
+//        var old = newWorkEvent;
+        newWorkEvent = newWorkLockMaker.newCondition();
+        newWorkLockMaker.lock();
+        try {
+            newWorkEvent.signalAll();
+        } finally {
+            newWorkLockMaker.unlock();
         }
     }
 
@@ -123,30 +141,39 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 //            lock.
             element = tryOneIteration(threadId);
 
+//            if (element == null) {
+
+            ReentrantLock lock = null;
+
+
+            // If all entries in the queueMap have been polled and are empty, wait for a new element to be added to the queue
+//                synchronized (monitor) {
+            // todo move out of sync, use Lock? - fix race condition between adding, and notifying
+//                    element = tryOneIteration(threadId);
+
+            // In the take method, the call to wait on the queueMap monitor is unconditional because it is
+            // only called if no non-empty queue was found in the map. This means that there will only be one
+            // thread waiting on the queueMap monitor at any given time, and the put method will always call
+            // notify (or notifyAll) to wake up that thread when a new element is added to any queue in the map.
+            // If the queue is not empty, remove an element from the queue and return it
+
+            // Using an unconditional wait in this way is safe because the put method always calls notify (or
+            // notifyAll) to wake up the waiting thread. This ensures that the waiting thread will not be blocked
+            // indefinitely, and that it will only wait for as long as it takes for a new element to be added to
+            // one of the queues in the map.
             if (element == null) {
-
-                // If all entries in the queueMap have been polled and are empty, wait for a new element to be added to the queue
-                synchronized (monitor) {
-                    // todo move out of sync, use Lock? - fix race condition between adding, and notifying
-                    element = tryOneIteration(threadId);
-
-                    // In the take method, the call to wait on the queueMap monitor is unconditional because it is
-                    // only called if no non-empty queue was found in the map. This means that there will only be one
-                    // thread waiting on the queueMap monitor at any given time, and the put method will always call
-                    // notify (or notifyAll) to wake up that thread when a new element is added to any queue in the map.
-                    // If the queue is not empty, remove an element from the queue and return it
-
-                    // Using an unconditional wait in this way is safe because the put method always calls notify (or
-                    // notifyAll) to wake up the waiting thread. This ensures that the waiting thread will not be blocked
-                    // indefinitely, and that it will only wait for as long as it takes for a new element to be added to
-                    // one of the queues in the map.
-                    if (element == null) {
-                        log.debug("No work found, going to sleep until notified");
-                        //noinspection WaitOrAwaitWithoutTimeout,UnconditionalWait
-                        monitor.wait(1000); // NOSONAR
-                    }
+                log.debug("No work found, going to sleep until notified");
+                //noinspection WaitOrAwaitWithoutTimeout,UnconditionalWait
+//                        monitor.wait(1000); // NOSONAR
+                newWorkLockMaker.lock();
+                try {
+                    boolean wasSignaled = newWorkEvent.await(1, SECONDS);
+                } finally {
+                    newWorkLockMaker.unlock();
                 }
             }
+//                }
+//            }
         }
         return element;
     }
@@ -179,13 +206,14 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
             // Get the next key from the iterator
             var shardKey = shardIterator.next();
 
-            var shardOpt = Optional.ofNullable(queueMap.get(shardKey));
+            var shardOpt = Optional.ofNullable(processingShards.get(shardKey));
 
             if (isEmpty(shardOpt)) {
-                log.error("Unexpected null shard for {}", shardKey);
+//                log.error("Unexpected null shard for {}", shardKey);
+                continue;
             }
 
-            // Check if the QueueLock's shard is empty
+            // Check if shard is empty
             var shard = shardOpt.get();
             if (shard.isEmpty()) {
                 // If the shard is empty, release the lock and continue to the next entry in the queueMap
@@ -193,19 +221,20 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
             }
 
             // Check if the shard has been polled by another thread
-            if (polledEntries.containsValue(shardKey)) {
-                // Skip this shard and try the next one
-                continue;
-            }
+//            if (polledEntries.containsValue(shardKey)) {
+//                // Skip this shard and try the next one
+//                continue;
+//            }
 
             // Get the QueueLock for the key
             var lock = lockMap.get(shardKey);
+
 
             // If the lock is acquired
             if (lock.tryLock()) {
                 try {
                     // Mark the shard as polled by the current thread
-                    polledEntries.put(threadId, shardKey);
+//                    polledEntries.put(threadId, shardKey);
 
                     element = shard.pollBatch();
 
@@ -222,6 +251,8 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
                     log.debug("Found work {}", element);
                     return element;
                 }
+            } else {
+                log.debug("Could not acquire lock for {}", shardKey);
             }
         }
 

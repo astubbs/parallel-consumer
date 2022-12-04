@@ -294,7 +294,7 @@ public class ParallelConsumerOptions<K, V> {
     @Builder.Default
     private final int maxConcurrency = DEFAULT_MAX_CONCURRENCY;
 
-    public static final int DEFAULT_MAX_CONCURRENCY = 1;
+    public static final int DEFAULT_MAX_CONCURRENCY = 16;
 
     public static final Duration DEFAULT_STATIC_RETRY_DELAY = Duration.ofSeconds(1);
 
