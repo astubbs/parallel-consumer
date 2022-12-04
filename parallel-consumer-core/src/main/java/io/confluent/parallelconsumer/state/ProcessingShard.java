@@ -166,6 +166,11 @@ public class ProcessingShard<K, V> {
     public Batch<K, V> pollBatch() {
         var quantity = options.getBatchSize();
         var workIfAvailable = getWorkIfAvailable(quantity);
+
+        if (workIfAvailable.isEmpty()) {
+            return null;
+        }
+
         return new Batch<>(workIfAvailable);
     }
 

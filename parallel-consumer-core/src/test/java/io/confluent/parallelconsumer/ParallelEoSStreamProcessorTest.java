@@ -870,7 +870,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     void produceMessageFlow(CommitMode commitMode) {
         setupParallelConsumerInstance(commitMode);
 
-        parallelConsumer.pollAndProduce((ignore) -> new ProducerRecord<>("Hello", "there"));
+        parallelConsumer.pollAndProduce((ignore) -> {
+            log.debug("Test record processor - rec: {}", ignore);
+            return new ProducerRecord<>("Hello", "there");
+        });
 
         // let it process
         awaitForSomeLoopCycles(2);

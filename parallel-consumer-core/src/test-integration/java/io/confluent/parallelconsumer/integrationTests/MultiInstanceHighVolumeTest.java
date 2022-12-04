@@ -57,6 +57,8 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
 
 //        int expectedMessageCount = 10_000_000;
         int expectedMessageCount = 30_000_00;
+//        int expectedMessageCount = 30_000;
+
         log.info("Producing {} messages before starting test", expectedMessageCount);
 
         List<String> expectedKeys = getKcu().produceMessages(inputTopicName, expectedMessageCount);

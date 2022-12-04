@@ -9,7 +9,9 @@ import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import lombok.Value;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
+import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
@@ -20,7 +22,8 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * @author Antony Stubbs
  */
 @Slf4j
-@Value
+@RequiredArgsConstructor
+@FieldDefaults(makeFinal = true, level = AccessLevel.PRIVATE)
 // todo rename worker
 public class PCWorker<K, V, R> {
 
@@ -34,10 +37,14 @@ public class PCWorker<K, V, R> {
 
     QueuedWorkManager<K, V> wm;
 
-    public void loop() throws InterruptedException {
+    public void loop() {
         while (true) {
-            var work = acquireFromWm();
-            process(work);
+            try {
+                Batch<K, V> work = acquireFromWm();
+                process(work);
+            } catch (Exception e) {
+                log.error("Error acquiring work from work manager", e);
+            }
         }
     }
 

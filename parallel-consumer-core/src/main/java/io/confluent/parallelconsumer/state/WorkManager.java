@@ -46,7 +46,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     // todo make private
     @Getter(PUBLIC)
-    private final ShardManager<K, V> sm;
+    private final QueuedShardManager<K, V> sm;
 
     /**
      * The multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} that should be pre-loaded awaiting
@@ -66,8 +66,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                        DynamicLoadFactor dynamicExtraLoadFactor) {
         this.options = module.options();
         this.dynamicLoadFactor = dynamicExtraLoadFactor;
-        this.sm = new ShardManager<>(module, this);
-        this.pm = new PartitionStateManager<>(module, sm);
+        this.sm = module.queuedShardManager();
+        this.pm = module.partitionStateManager();
     }
 
     /**

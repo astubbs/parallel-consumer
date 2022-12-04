@@ -290,8 +290,8 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      * @return true if this record be taken from its partition as work.
      */
     public boolean couldBeTakenAsWork(WorkContainer<K, V> workContainer) {
-        return getPartitionState(workContainer)
-                .couldBeTakenAsWork(workContainer);
+        var partitionState = getPartitionState(workContainer);
+        return partitionState.couldBeTakenAsWork(workContainer);
     }
 
     public boolean isDirty() {

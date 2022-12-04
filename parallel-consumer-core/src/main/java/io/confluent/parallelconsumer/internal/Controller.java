@@ -43,8 +43,6 @@ public class Controller<K, V> implements DrainingCloseable {
 
     private ControlLoop<K, V> controlLoop;
 
-    private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
-
     /**
      * Reference to the control thread, used for waking up a blocking poll ({@link BlockingQueue#poll}) against a
      * collection sooner.
@@ -110,8 +108,6 @@ public class Controller<K, V> implements DrainingCloseable {
     // todo rename
     protected <R> void supervisorLoop(Function<PollContextInternal<K, V>, List<R>> userFunctionWrapped,
                                       Consumer<R> callback) {
-        state.transitionToRunning();
-
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
@@ -128,7 +124,8 @@ public class Controller<K, V> implements DrainingCloseable {
         // todo casts
         Callable<Boolean> controlTask = () -> superviseControlLoop((Function) userFunctionWrapped, (Consumer<Object>) callback);
         Future<Boolean> controlTaskFutureResult = executorService.submit(controlTask);
-        this.controlThreadFuture = Optional.of(controlTaskFutureResult);
+
+        state.transitionToRunning(controlTaskFutureResult);
     }
 
     // todo delete type param

@@ -10,6 +10,7 @@ import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Value;
+import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 
@@ -32,23 +33,24 @@ import static lombok.AccessLevel.PROTECTED;
 // todo rename to ControllerMailbox
 @Slf4j
 @RequiredArgsConstructor
+@FieldDefaults(level = PRIVATE, makeFinal = true)
 public class WorkMailbox<K, V> {
 
-    protected final WorkManager<K, V> wm;
+    protected WorkManager<K, V> wm;
 
     /**
      * Collection of work waiting to be
      */
     @Getter(PROTECTED)
-    private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non blocking
+    BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non blocking
 
     /**
      * @see #notifySomethingToDo
      * @see #processWorkCompleteMailBox
      */
-    private final AtomicBoolean currentlyPollingWorkCompleteMailBox = new AtomicBoolean();
+    AtomicBoolean currentlyPollingWorkCompleteMailBox = new AtomicBoolean();
 
-    private Optional<ProducerManager<K, V>> producerManager;
+    Optional<ProducerManager<K, V>> producerManager;
 
     public void registerWork(EpochAndRecordsMap<K, V> polledRecords) {
         log.trace("Adding {} to mailbox...", polledRecords);

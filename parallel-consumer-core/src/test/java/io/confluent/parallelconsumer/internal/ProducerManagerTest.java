@@ -88,7 +88,7 @@ class ProducerManagerTest {
         try (var pc = module.pc()) {
             pc.subscribe(UniLists.of(mu.getTopic()));
             module.rebalanceHandler().onPartitionsAssigned(mu.getPartitions());
-            module.stateMachine().transitionToRunning();
+            module.stateMachine().transitionToRunning(mock(Future.class));
 
             // "send" one record
             EpochAndRecordsMap<String, String> freshWork = mu.createFreshWork();

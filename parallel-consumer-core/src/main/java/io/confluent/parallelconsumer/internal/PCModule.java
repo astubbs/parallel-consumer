@@ -7,6 +7,8 @@ package io.confluent.parallelconsumer.internal;
 import io.confluent.csid.utils.TimeUtils;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import io.confluent.parallelconsumer.state.PartitionStateManager;
+import io.confluent.parallelconsumer.state.QueuedShardManager;
 import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.Setter;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -41,6 +43,10 @@ public class PCModule<K, V> {
     private RebalanceHandler<K, V> rebalanceHandler;
 
     private ControlLoop<K, V> controlLoop;
+
+    private QueuedShardManager<K, V> queuedShardManager;
+
+    private PartitionStateManager<K, V> partitionStateManager;
 
     public PCModule(ParallelConsumerOptions<K, V> options) {
         this.optionsInstance = options;
@@ -120,7 +126,7 @@ public class PCModule<K, V> {
 
     public WorkMailbox<K, V> workMailbox() {
         if (workMailbox == null) {
-            workMailbox = new WorkMailbox<>(workManager());
+            workMailbox = new WorkMailbox<>(workManager(), producerManager());
         }
         return workMailbox;
     }
@@ -180,10 +186,17 @@ public class PCModule<K, V> {
         return controller;
     }
 
-    public WorkMailbox<K, V> workMailBox() {
-        if (workMailbox == null) {
-            workMailbox = new WorkMailbox<>(workManager());
+    public PartitionStateManager<K, V> partitionStateManager() {
+        if (partitionStateManager == null) {
+            partitionStateManager = new PartitionStateManager<>(this, queuedShardManager());
         }
-        return workMailbox;
+        return partitionStateManager;
+    }
+
+    public QueuedShardManager<K, V> queuedShardManager() {
+        if (queuedShardManager == null) {
+            queuedShardManager = new QueuedShardManager<>(this);
+        }
+        return queuedShardManager;
     }
 }

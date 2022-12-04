@@ -45,8 +45,6 @@ public class ShardManager<K, V> {
     @Getter
     private final ParallelConsumerOptions<?, ?> options;
 
-    private final WorkManager<K, V> wm;
-
     /**
      * Map of Object keys to Shard
      * <p>
@@ -60,13 +58,12 @@ public class ShardManager<K, V> {
      */
     // performance: could disable/remove if using partition order - but probably not worth the added complexity in the code to handle an extra special case
     @Getter(PROTECTED)
-    private final ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> processingShards =
+    protected final ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> processingShards =
             new ConcurrentSkipListMap<>();
 
-
+    // todo audit
     @Getter
     private int numberRecordsOutForProcessing = 0;
-
 
     /**
      * TreeSet is a Set, so must ensure that we are consistent with equalTo in our comparator - so include the full id -
@@ -97,11 +94,11 @@ public class ShardManager<K, V> {
      * Iteration resume point, to ensure fairness (prevent shard starvation) when we can't process messages from every
      * shard.
      */
-    private Optional<ShardKey> iterationResumePoint = Optional.empty();
+    private Optional<ShardKey<?>> iterationResumePoint = Optional.empty();
 
-    public ShardManager(final PCModule<K, V> module, final WorkManager<K, V> wm) {
+
+    public ShardManager(final PCModule<K, V> module) {
         this.module = module;
-        this.wm = wm;
         this.options = module.options();
     }
 
@@ -180,7 +177,7 @@ public class ShardManager<K, V> {
 
         // don't need to synchronise on /adding/ elements, as the iterator would just stop early
         var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm()));
+                ignore -> new ProcessingShard<>(shardKey, options, module.partitionStateManager()));
         shard.addWorkContainer(wc);
     }
 

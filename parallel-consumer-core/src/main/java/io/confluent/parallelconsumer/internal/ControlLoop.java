@@ -142,7 +142,7 @@ public class ControlLoop<K, V> {
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
         this.controlLoopHooks.forEach(Runnable::run);
 
-        state.maybeTransitionState();
+        state.maybeCloseOrDrain();
 
         // thread yield for spin lock avoidance
         Duration duration = Duration.ofMillis(1);

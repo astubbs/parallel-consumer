@@ -280,8 +280,8 @@ public class PartitionState<K, V> {
      *
      * @see #maybeRegisterNewPollBatchAsWork
      */
-    private ShardManager<K, V> getShardManager() {
-        return module.workManager().getSm();
+    private QueuedShardManager<K, V> getShardManager() {
+        return module.queuedShardManager();
     }
 
     public boolean isPartitionRemovedOrNeverAssigned() {

@@ -35,6 +35,7 @@ public class StateMachine implements DrainingCloseable {
 
     PCModule<?, ?> module;
 
+    @NonFinal
     Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
     /**
@@ -191,7 +192,7 @@ public class StateMachine implements DrainingCloseable {
         }
     }
 
-    protected void maybeTransitionState() throws TimeoutException, ExecutionException, InterruptedException {
+    protected void maybeCloseOrDrain() throws TimeoutException, ExecutionException, InterruptedException {
         log.trace("Current state: {}", state);
         switch (state) {
             case draining -> {
@@ -210,7 +211,8 @@ public class StateMachine implements DrainingCloseable {
         return this.failureReason;
     }
 
-    public void transitionToRunning() {
+    public void transitionToRunning(Future<Boolean> controlThreadFuture) {
+        this.controlThreadFuture = Optional.of(controlThreadFuture);
         if (state == State.unused) {
             state = running;
         } else {

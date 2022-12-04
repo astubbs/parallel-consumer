@@ -6,11 +6,11 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.state.QueuedShardManager;
 import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.confluent.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Timer;
+import lombok.SneakyThrows;
 import lombok.Value;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
@@ -50,14 +50,21 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
     List<PCWorker<K, V, R>> workers;
 
+    @SneakyThrows
     public PCWorkerPool(int poolSize, FunctionRunner<K, V, R> functionRunner, PCModule<K, V> module) {
         runner = functionRunner;
         this.options = module.options();
         executorPool = createExecutorPool(options.getMaxConcurrency(), module.workManager());
-        var qwm = new QueuedWorkManager<K, V>(new QueuedShardManager<>(module));
+        var qwm = new QueuedWorkManager<K, V>(module.queuedShardManager());
         workers = Range.range(poolSize).toStream().boxed()
                 .map(ignore -> new PCWorker<>(this, qwm))
                 .collect(Collectors.toList());
+
+        // start
+        for (PCWorker<K, V, R> worker : workers) {
+            // todo throws
+            executorPool.submit(worker::loop);
+        }
     }
 
     protected ThreadPoolExecutor createExecutorPool(int poolSize, WorkManager<K, V> wm) {
@@ -163,7 +170,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
     }
 
     public boolean awaitTermination(long toSeconds, TimeUnit seconds) throws InterruptedException {
-        throw new UnsupportedOperationException("Not implemented yet");
+        return executorPool.awaitTermination(toSeconds, seconds);
     }
 
     /**
