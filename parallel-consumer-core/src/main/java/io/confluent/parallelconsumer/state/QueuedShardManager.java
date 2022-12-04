@@ -105,10 +105,11 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 //        synchronized (monitor) {
         ShardKey<?> shardKey = computeShardKey(aRecord);
 
+        super.addWorkContainer(epochOfInboundRecords, aRecord);
+
         var processingShard = processingShards.get(shardKey);
         module.workerPool().onWorkAdded(processingShard);
 
-//        super.addWorkContainer(epochOfInboundRecords, aRecord);
 //
 //        // todo clean up
 //        module.workerPool().distributeShards(processingShard);

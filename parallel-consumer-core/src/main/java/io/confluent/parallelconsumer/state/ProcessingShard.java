@@ -180,7 +180,7 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
 
     @Override
     public int compareTo(@NonNull ProcessingShard<K, V> o) {
-        return Comparator.<ProcessingShard<K, V>, ShardKey<Object>>comparing(ProcessingShard::getKey)
+        return Comparator.nullsFirst(Comparator.<ProcessingShard<K, V>, ShardKey<Object>>comparing(ProcessingShard::getKey))
                 .compare(this, o);
     }
 

@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.NavigableSet;
+import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -55,16 +56,20 @@ public class WorkQueue<K, V> {
         int quantity = 100;
         while (true) {
 
+            SortedSet<ProcessingShard<K, V>> tailset;
             if (lastShard == null) {
-
+                tailset = shardQueue;
+            } else {
+                tailset = shardQueue.tailSet(lastShard);
             }
-            var processingShards = shardQueue.tailSet(lastShard);
 
-            var shardSetToIterate = new TreeSet<>(processingShards);
-            var iteratpr = shardSetToIterate.iterator();
-            while (iteratpr.hasNext()) {
+            var shardSetToIterate = new TreeSet<>(tailset);
+            var iterator = shardSetToIterate.iterator();
+            while (iterator.hasNext()) {
                 //var shard = shardQueue.take();
-                var shard = iteratpr.next();
+
+                var shard = iterator.next();
+                lastShard = shard;
 
                 try {
                     if (!shard.isEmpty()) {

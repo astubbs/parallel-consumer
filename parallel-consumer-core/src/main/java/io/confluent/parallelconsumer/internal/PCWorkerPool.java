@@ -11,6 +11,7 @@ import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.confluent.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Timer;
+import lombok.NonNull;
 import lombok.SneakyThrows;
 import lombok.Value;
 import lombok.experimental.NonFinal;
@@ -45,7 +46,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
     FunctionRunner<K, V, R> runner;
 
-    Queue<PCWorker<K, V, R>> workers;
+    BlockingQueue<PCWorker<K, V, R>> workers;
 
     Map<ProcessingShard<?, ?>, PCWorker<K, V, ?>> map = new HashMap<>();
 
@@ -59,7 +60,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         var qwm = new QueuedWorkManager<K, V>(module.queuedShardManager());
         workers = Range.range(poolSize).toStream().boxed()
                 .map(ignore -> new PCWorker<>(this, qwm))
-                .collect(Collectors.toCollection(LinkedList::new));
+                .collect(Collectors.toCollection(LinkedBlockingQueue::new));
 
         // start
         for (PCWorker<K, V, R> worker : workers) {
@@ -91,7 +92,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
                 namingThreadFactory, rejectionHandler);
     }
 
-    public void onWorkAdded(ProcessingShard<K, V> processingShard) throws InterruptedException {
+    public void onWorkAdded(@NonNull ProcessingShard<K, V> processingShard) throws InterruptedException {
         PCWorker<K, V, ?> worker = maybeDistributeShards(processingShard);
         worker.onWorkAdded(processingShard);
     }
@@ -151,12 +152,12 @@ public class PCWorkerPool<K, V, R> implements Closeable {
      *
      * @return the worker for the shard
      */
-    private PCWorker<K, V, ?> maybeDistributeShards(ProcessingShard<K, V> shard) {
+    private PCWorker<K, V, ?> maybeDistributeShards(@NonNull ProcessingShard<K, V> shard) throws InterruptedException {
         var workerOpt = Optional.ofNullable(map.get(shard));
         if (workerOpt.isPresent()) {
             return workerOpt.get();
         } else {
-            var poll = getWorkers().poll();
+            var poll = getWorkers().take();
             poll.addShardIfMissing(shard);
             map.put(shard, poll);
             getWorkers().offer(poll); // move to back
