@@ -20,8 +20,6 @@ import javax.naming.NamingException;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
@@ -49,6 +47,8 @@ public class PCWorkerPool<K, V, R> implements Closeable {
     FunctionRunner<K, V, R> runner;
 
     List<PCWorker<K, V, R>> workers;
+
+    Batcher batcher = new Batcher();
 
     @SneakyThrows
     public PCWorkerPool(int poolSize, FunctionRunner<K, V, R> functionRunner, PCModule<K, V> module) {
@@ -98,7 +98,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
      * Distribute the work in this list fairly across the workers
      */
     public void distribute(List<WorkContainer<K, V>> workToProcess) {
-        var batches = makeBatches(workToProcess);
+        var batches = batcher.makeBatches(workToProcess);
 
         var queue = new ArrayDeque<>(batches);
         distributeToThreadPool(queue);
@@ -118,50 +118,6 @@ public class PCWorkerPool<K, V, R> implements Closeable {
             var poll = ofNullable(queue.poll());
             poll.ifPresent(worker::enqueue); // todo object allocation warning
         }
-    }
-
-    private List<List<WorkContainer<K, V>>> makeBatches(List<WorkContainer<K, V>> workToProcess) {
-        int maxBatchSize = options.getBatchSize();
-        var batches = partition(workToProcess, maxBatchSize);
-
-        // debugging
-        if (log.isDebugEnabled()) {
-            var sizes = batches.stream().map(List::size).sorted().collect(Collectors.toList());
-            log.debug("Number batches: {}, smallest {}, sizes {}", batches.size(), sizes.stream().findFirst().get(), sizes);
-            List<Integer> integerStream = sizes.stream().filter(x -> x < (int) options.getBatchSize()).collect(Collectors.toList());
-            if (integerStream.size() > 1) {
-                log.warn("More than one batch isn't target size: {}. Input number of batches: {}", integerStream, batches.size());
-            }
-        }
-
-        return batches;
-    }
-
-    private static <T> List<List<T>> partition(Collection<T> sourceCollection, int maxBatchSize) {
-        List<List<T>> listOfBatches = new ArrayList<>();
-        List<T> batchInConstruction = new ArrayList<>();
-
-        //
-        for (T item : sourceCollection) {
-            batchInConstruction.add(item);
-
-            //
-            if (batchInConstruction.size() == maxBatchSize) {
-                listOfBatches.add(batchInConstruction);
-                batchInConstruction = new ArrayList<>(); // todo object allocation warning
-            }
-        }
-
-        // add partial tail
-        if (!batchInConstruction.isEmpty()) {
-            listOfBatches.add(batchInConstruction);
-        }
-
-        log.debug("sourceCollection.size() {}, batches: {}, batch sizes {}",
-                sourceCollection.size(),
-                listOfBatches.size(),
-                listOfBatches.stream().map(List::size).collect(Collectors.toList()));
-        return listOfBatches;
     }
 
     @Override

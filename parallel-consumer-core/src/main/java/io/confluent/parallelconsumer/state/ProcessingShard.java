@@ -96,16 +96,16 @@ public class ProcessingShard<K, V> {
         return entries.remove(offset);
     }
 
-    public Batch<K, V> pollBatch() {
-        var quantity = options.getBatchSize() * 100;
-        var workIfAvailable = getWorkIfAvailable(quantity);
-
-        if (workIfAvailable.isEmpty()) {
-            return null;
-        }
-
-        return new Batch<>(workIfAvailable);
-    }
+//    public Batch<K, V> pollBatch() {
+//        var quantity = options.getBatchSize() * 100;
+//        var workIfAvailable = getWorkIfAvailable(quantity);
+//
+//        if (workIfAvailable.isEmpty()) {
+//            return null;
+//        }
+//
+//        return new Batch<>(workIfAvailable);
+//    }
 
     private void logSlowWork(Set<WorkContainer<?, ?>> slowWork) {
         // log

@@ -13,11 +13,11 @@ import java.util.List;
  */
 @Value
 @AllArgsConstructor
-public class Batch<K, V> {
+public class Batch<T> {
 
-    List<WorkContainer<K, V>> values;
+    List<T> values;
 
-    public Batch(WorkContainer<K, V> element) {
+    public Batch(T element) {
         this.values = UniLists.of(element);
     }
 

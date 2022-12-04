@@ -56,7 +56,8 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         String inputTopicName = setupTopic(this.getClass().getSimpleName() + "-input");
 
 //        int expectedMessageCount = 10_000_000;
-        int expectedMessageCount = 60_000_00;
+//        int expectedMessageCount = 60_000_00;
+        int expectedMessageCount = 30_000_00;
 //        int expectedMessageCount = 30_000;
 
         log.info("Producing {} messages before starting test", expectedMessageCount);

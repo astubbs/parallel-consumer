@@ -37,27 +37,37 @@ public class PCWorker<K, V, R> {
 
     QueuedWorkManager<K, V> wm;
 
+    Batcher<WorkContainer<K, V>> batcher = new Batcher<>();
+
     public void loop() {
         while (true) {
             try {
-                Batch<K, V> work = acquireFromWm();
-                process(work);
+//                Batch<K, V> work = acquireFromWm();
+                var work = acquireFromWmBatch();
+                var batches = batcher.makeBatches(work.getValues());
+                process(batches);
             } catch (Exception e) {
                 log.error("Error acquiring work from work manager", e);
             }
         }
     }
 
-    private Batch<K, V> acquireFromWm() throws InterruptedException {
+    private Batch<WorkContainer<K, V>> acquireFromWmBatch() throws InterruptedException {
         return wm.take();
     }
 
-    private void process(Batch<K, V> batch) {
+//    private Batch<K, V> acquireFromWm() throws InterruptedException {
+//        return wm.take();
+//    }
+
+    private void process(List<List<WorkContainer<K, V>>> listOfBatches) {
         userFunctionTimer.record(() -> {
                     var functionRunner = parentPool.getRunner();
 //                    if (functionRunner.isPresent()) {
 //                        functionRunner.get().run(work);
-                    functionRunner.run(batch.getValues());
+                    for (var batch : listOfBatches) {
+                        functionRunner.run(batch);
+                    }
 //                    } else {
 //                        throw new IllegalStateException("Function runner not set");
 //                    }

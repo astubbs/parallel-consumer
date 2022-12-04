@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @RequiredArgsConstructor
 @FieldDefaults(makeFinal = true, level = AccessLevel.PRIVATE)
-public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<K, V>> {
+public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<WorkContainer<K, V>>> {
 
 //    WorkManager<K, V> wm;
 //
@@ -28,40 +28,42 @@ public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<K, V>> {
 
 
     @Override
-    public boolean add(Batch<K, V> o) {
+    public boolean add(Batch<WorkContainer<K, V>> o) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public boolean offer(Batch<K, V> o) {
+    public boolean offer(Batch<WorkContainer<K, V>> o) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void put(Batch<K, V> o) throws InterruptedException {
+    public void put(Batch<WorkContainer<K, V>> o) throws InterruptedException {
         throw new UnsupportedOperationException();
 
     }
 
     @Override
-    public boolean offer(Batch<K, V> o, long timeout, TimeUnit unit) throws InterruptedException {
+    public boolean offer(Batch<WorkContainer<K, V>> o, long timeout, TimeUnit unit) throws InterruptedException {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Batch<K, V> take() throws InterruptedException {
+    public Batch<WorkContainer<K, V>> take() throws InterruptedException {
 //        wm.getSm().getWorkThreadSafe();
-        return qsm.take();
+        var take = qsm.take();
+
+        return new Batch<>(take);
 //        return internal();
     }
 
-//    private synchronized Batch<K, V> internal() {
+//    private synchronized Batch<WorkContainer<K, V>>internal() {
 //        var work = wm.getWorkIfAvailable(1);
 //        return new Batch<>(work);
 //    }
 
     @Override
-    public Batch<K, V> poll(long timeout, TimeUnit unit) throws InterruptedException {
+    public Batch<WorkContainer<K, V>> poll(long timeout, TimeUnit unit) throws InterruptedException {
         throw new UnsupportedOperationException();
     }
 
@@ -95,22 +97,22 @@ public class QueuedWorkManager<K, V> implements BlockingQueue<Batch<K, V>> {
     }
 
     @Override
-    public Batch<K, V> remove() {
+    public Batch<WorkContainer<K, V>> remove() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Batch<K, V> poll() {
+    public Batch<WorkContainer<K, V>> poll() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Batch<K, V> element() {
+    public Batch<WorkContainer<K, V>> element() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Batch<K, V> peek() {
+    public Batch<WorkContainer<K, V>> peek() {
         throw new UnsupportedOperationException();
     }
 

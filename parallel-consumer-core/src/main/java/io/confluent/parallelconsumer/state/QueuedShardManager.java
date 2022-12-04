@@ -6,17 +6,16 @@ import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.LinkedTransferQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
-
-import static io.confluent.csid.utils.BackportUtils.isEmpty;
-import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**
  * A blocking queue implementation, backed by a map of non-blocking queues.
@@ -65,6 +64,17 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
     Condition newWorkEvent = newWorkLockMaker.newCondition();
 
     /**
+     * Shards in this queue:
+     * <p>
+     * - always have at least one entry,
+     * <p>
+     * - and aren't being modified by any other thread.
+     * <p>
+     * It must only contain Shards once.
+     */
+    BlockingQueue<ProcessingShard<K, V>> shardQueue = new LinkedTransferQueue<>();
+
+    /**
      * Constructs a new BlockingQueue.
      */
     public QueuedShardManager(PCModule<K, V> module) {
@@ -81,14 +91,17 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
     @Override
     public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
 //        synchronized (monitor) {
-
         ShardKey<?> shardKey = computeShardKey(aRecord);
-        lockMap.computeIfAbsent(shardKey, k -> {
-            // Create the corresponding ReentrantLock
-            return new ReentrantLock();
-        });
 
         super.addWorkContainer(epochOfInboundRecords, aRecord);
+
+        maybeAddShardToQueue(shardKey);
+
+//        lockMap.computeIfAbsent(shardKey, k -> {
+//            // Create the corresponding ReentrantLock
+//            return new ReentrantLock();
+//        });
+
 
         // Wake up any threads that are waiting in the take method
 //        var queueMap = getQueueMap();
@@ -103,6 +116,13 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
     }
 
+    private void maybeAddShardToQueue(ShardKey<?> shardKey) {
+        var shard = processingShards.get(shardKey);
+        if (!shardQueue.contains(shard)) {
+            shardQueue.add(shard);
+        }
+    }
+
     /**
      * Removes an element from the queue and returns it. This method blocks until an element is available.
      *
@@ -110,12 +130,12 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
      * @throws InterruptedException If the current thread is interrupted while waiting for an element to be available.
      */
     // todo needs to return a batch
-    public Batch<K, V> take() throws InterruptedException {
+    public List<WorkContainer<K, V>> take() throws InterruptedException {
 
 //        var startKey = getStartKey();
 
 //        while (true) {
-        Batch<K, V> element = inner();
+        var element = inner();
 
         // Return the removed element
         return element;
@@ -123,18 +143,19 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
     }
 
-    private Batch<K, V> inner() throws InterruptedException {
-        var threadId = Thread.currentThread().getId();
-        Batch<K, V> element = null;
+    private List<WorkContainer<K, V>> inner() throws InterruptedException {
+//        var threadId = Thread.currentThread().getId();
+        List<WorkContainer<K, V>> element = null;
         while (element == null) {
 
 //            var lock = new Semaphore(1);
 //            lock.
-            element = tryOneIteration(threadId);
+//            element = tryOneIteration(threadId);
+            element = tryOneIterationQueueRemoval();
 
 //            if (element == null) {
 
-            ReentrantLock lock = null;
+//            ReentrantLock lock = null;
 
 
             // If all entries in the queueMap have been polled and are empty, wait for a new element to be added to the queue
@@ -152,132 +173,155 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
             // notifyAll) to wake up the waiting thread. This ensures that the waiting thread will not be blocked
             // indefinitely, and that it will only wait for as long as it takes for a new element to be added to
             // one of the queues in the map.
-            if (element == null) {
-                log.debug("No work found, going to sleep until notified");
-                //noinspection WaitOrAwaitWithoutTimeout,UnconditionalWait
-//                        monitor.wait(1000); // NOSONAR
-                newWorkLockMaker.lock();
-                try {
-                    boolean wasSignaled = newWorkEvent.await(1, SECONDS);
-                } finally {
-                    newWorkLockMaker.unlock();
-                }
-            }
+//            if (element == null) {
+//                log.debug("No work found, going to sleep until notified");
+//                //noinspection WaitOrAwaitWithoutTimeout,UnconditionalWait
+////                        monitor.wait(1000); // NOSONAR
+//                newWorkLockMaker.lock();
+//                try {
+//                    boolean wasSignaled = newWorkEvent.await(1, SECONDS);
+//                } finally {
+//                    newWorkLockMaker.unlock();
 //                }
 //            }
+////                }
+////            }
         }
         return element;
     }
 
-    /**
-     * Loop through the queueMap, starting from the startKey
-     */
-    private Batch<K, V> tryOneIteration(long threadId) {
-        var queueMap = getQueueMap();
+    private List<WorkContainer<K, V>> tryOneIterationQueueRemoval() throws InterruptedException {
+        int quantity = 100;
 
-        var startKey = getStartKey();
+        while (true) {
+            var shard = shardQueue.take();
+            try {
+                if (!shard.isEmpty()) {
+                    var workIfAvailable = shard.getWorkIfAvailable(quantity);
 
-//        // Get an iterator for the queueMap, starting from the startKey
-//        Iterator<ShardKey<?>> shardIterator;
-//        if (isEmpty(startKey)) {
-//            shardIterator = queueMap.keySet().iterator();
-//        } else {
-//            var tailMap = queueMap.tailMap(startKey.get());
-//            if (tailMap.isEmpty()) {
-//                log.debug("Reached empty tail map, removing start marker: {}", startKey.get());
-//                lastPolledEntriesPerThread.remove(threadId);
-//                shardIterator = queueMap.keySet().iterator();
-//            } else {
-//                shardIterator = tailMap.keySet().iterator();
-//            }
-//        }
+                    if (!workIfAvailable.isEmpty()) {
+//                        return new Batch<>(workIfAvailable);
+                        return workIfAvailable;
+                    }
+                }
+            } finally {
+                // only add back to queue if not empty
+                if (!shard.isEmpty()) {
+                    shardQueue.add(shard);
+                }
+            }
+        }
+    }
 
-        // iterate the entries using the thread id modulo, to avoid starvation - use an incrementing multiple offset
-        // from the base
-        var shardIterator = queueMap.keySet().iterator();
-
-//        var lastPosition = this.lastPosition.get();
-//        var position = lastPosition;
-//        var size = queueMap.size();
-//        var max = getOptions().getMaxConcurrency();
-//        var offset = max % size;
-//        var sets = size / max;
+//    /**
+//     * Loop through the queueMap, starting from the startKey
+//     */
+//    private Batch<K, V> tryOneIteration(long threadId) {
+//        var queueMap = getQueueMap();
 //
-//        var listView = new ArrayList<ProcessingShard<K, V>>(queueMap.values());
-//        var multipleOffset = offset * size;
-
-
-//        Iterator<ShardKey<?>> shardIterator = queueMap.keySet().iterator();
-
-        Batch<K, V> element;
-//        var base = 0;
-//        int round = base;
-        while (shardIterator.hasNext()) {
-//            var index =  % size;
-//            round++;
-
-            // Get the next key from the iterator
-//            var shardKey = listView.get(index);
-            var shardKey = shardIterator.next();
-
-            var shardOpt = Optional.ofNullable(processingShards.get(shardKey));
-
-            if (isEmpty(shardOpt)) {
-//                log.error("Unexpected null shard for {}", shardKey);
-                continue;
-            }
-
-            // Check if shard is empty
-            var shard = shardOpt.get();
-            if (shard.isEmpty()) {
-                // If the shard is empty, release the lock and continue to the next entry in the queueMap
-                continue;
-            }
-
-            // Check if the shard has been polled by another thread
-//            if (polledEntries.containsValue(shardKey)) {
-//                // Skip this shard and try the next one
+//        var startKey = getStartKey();
+//
+////        // Get an iterator for the queueMap, starting from the startKey
+////        Iterator<ShardKey<?>> shardIterator;
+////        if (isEmpty(startKey)) {
+////            shardIterator = queueMap.keySet().iterator();
+////        } else {
+////            var tailMap = queueMap.tailMap(startKey.get());
+////            if (tailMap.isEmpty()) {
+////                log.debug("Reached empty tail map, removing start marker: {}", startKey.get());
+////                lastPolledEntriesPerThread.remove(threadId);
+////                shardIterator = queueMap.keySet().iterator();
+////            } else {
+////                shardIterator = tailMap.keySet().iterator();
+////            }
+////        }
+//
+//        // iterate the entries using the thread id modulo, to avoid starvation - use an incrementing multiple offset
+//        // from the base
+//        var shardIterator = queueMap.keySet().iterator();
+//
+////        var lastPosition = this.lastPosition.get();
+////        var position = lastPosition;
+////        var size = queueMap.size();
+////        var max = getOptions().getMaxConcurrency();
+////        var offset = max % size;
+////        var sets = size / max;
+////
+////        var listView = new ArrayList<ProcessingShard<K, V>>(queueMap.values());
+////        var multipleOffset = offset * size;
+//
+//
+////        Iterator<ShardKey<?>> shardIterator = queueMap.keySet().iterator();
+//
+//        Batch<K, V> element;
+////        var base = 0;
+////        int round = base;
+//        while (shardIterator.hasNext()) {
+////            var index =  % size;
+////            round++;
+//
+//            // Get the next key from the iterator
+////            var shardKey = listView.get(index);
+//            var shardKey = shardIterator.next();
+//
+//            var shardOpt = Optional.ofNullable(processingShards.get(shardKey));
+//
+//            if (isEmpty(shardOpt)) {
+////                log.error("Unexpected null shard for {}", shardKey);
 //                continue;
 //            }
-
-            // Get the QueueLock for the key
-            var lock = lockMap.get(shardKey);
-
-
-            // If the lock is acquired
-//            if (lock.tryLock()) {
-            try {
-                // Mark the shard as polled by the current thread
-//                    polledEntries.put(threadId, shardKey);
-
-                element = shard.pollBatch();
-
-                // Update the startKey for the current thread
-                lastPolledEntriesPerThread.put(threadId, shardKey);
-
-            } finally {
-                // Release the lock
-//                    lock.unlock();
-            }
-
-            // If we found an element, break out of the loop and remove the entry from the polledEntries map
-            if (element != null) {
-                log.debug("Found work {}", element);
-                return element;
-            }
-//            } else {
-//                log.debug("Could not acquire lock for {}", shardKey);
+//
+//            // Check if shard is empty
+//            var shard = shardOpt.get();
+//            if (shard.isEmpty()) {
+//                // If the shard is empty, release the lock and continue to the next entry in the queueMap
+//                continue;
 //            }
-        }
-
-        log.debug("Finished iterating all queues, no work found");
-
-        // Iteration complete, remove our marker from the polledEntries map, so that we will start from the beginning
-        // again
-        polledEntries.remove(threadId);
-
-        return null;
-    }
+//
+//            // Check if the shard has been polled by another thread
+////            if (polledEntries.containsValue(shardKey)) {
+////                // Skip this shard and try the next one
+////                continue;
+////            }
+//
+//            // Get the QueueLock for the key
+//            var lock = lockMap.get(shardKey);
+//
+//
+//            // If the lock is acquired
+////            if (lock.tryLock()) {
+//            try {
+//                // Mark the shard as polled by the current thread
+////                    polledEntries.put(threadId, shardKey);
+//
+//                element = shard.pollBatch();
+//
+//                // Update the startKey for the current thread
+//                lastPolledEntriesPerThread.put(threadId, shardKey);
+//
+//            } finally {
+//                // Release the lock
+////                    lock.unlock();
+//            }
+//
+//            // If we found an element, break out of the loop and remove the entry from the polledEntries map
+//            if (element != null) {
+//                log.debug("Found work {}", element);
+//                return element;
+//            }
+////            } else {
+////                log.debug("Could not acquire lock for {}", shardKey);
+////            }
+//        }
+//
+//        log.debug("Finished iterating all queues, no work found");
+//
+//        // Iteration complete, remove our marker from the polledEntries map, so that we will start from the beginning
+//        // again
+//        polledEntries.remove(threadId);
+//
+//        return null;
+//    }
 
     // todo remove
     private ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> getQueueMap() {
@@ -320,12 +364,12 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
     }
 
     public void onFinishNewWork() {
-        newWorkLockMaker.lock();
-        try {
-            newWorkEvent.signalAll();
-        } finally {
-            newWorkLockMaker.unlock();
-        }
+//        newWorkLockMaker.lock();
+//        try {
+//            newWorkEvent.signalAll();
+//        } finally {
+//            newWorkLockMaker.unlock();
+//        }
     }
 
     @Value
