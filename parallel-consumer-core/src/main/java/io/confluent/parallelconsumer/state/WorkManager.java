@@ -11,7 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
-import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
 import java.util.*;
@@ -112,15 +112,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * Get work with no limit on quantity, useful for testing.
      */
     public List<WorkContainer<K, V>> getWorkIfAvailable() {
-        return getWorkIfAvailable(Integer.MAX_VALUE);
+//        return getWorkIfAvailable(Integer.MAX_VALUE);
+        throw new UnsupportedOperationException("Not implemented");
     }
 
     /**
      * Depth first work retrieval.
      */
-    public List<WorkContainer<K, V>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
+    public Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
         if (requestedMaxWorkToRetrieve < 1) {
-            return UniLists.of();
+            return UniMaps.of();
         }
 
         return sm.getWorkIfAvailable(requestedMaxWorkToRetrieve);

@@ -121,7 +121,7 @@ public class ShardManager<K, V> {
         shard.addWorkContainer(wc);
     }
 
-    ShardKey computeShardKey(ConsumerRecord<?, ?> wc) {
+    public ShardKey computeShardKey(ConsumerRecord<?, ?> wc) {
         return ShardKey.of(wc, options.getOrdering());
     }
 
@@ -305,13 +305,13 @@ public class ShardManager<K, V> {
         }
     }
 
-    public List<WorkContainer<K, V>> getWorkIfAvailable(int requestedMaxWorkToRetrieve) {
+    public Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> getWorkIfAvailable(int requestedMaxWorkToRetrieve) {
 // get work from shards
-        List<WorkContainer<K, V>> workFromAllShards = new ArrayList<>();
+        Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workFromAllShards = new HashMap<>();
         for (ProcessingShard<K, V> shard : this.processingShards.values()) {
             int remainingToGet = requestedMaxWorkToRetrieve - workFromAllShards.size();
             var work = shard.getWorkIfAvailable(remainingToGet);
-            workFromAllShards.addAll(work);
+            workFromAllShards.put(shard, work);
         }
 
         // log

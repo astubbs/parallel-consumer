@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class Batcher<T> {
 
-    int maxBatchSize;
+    int maxBatchSize = 1;
 
     // todo rename
     public List<Batch<T>> makeBatchesAsBatch(List<T> workToProcess) {

@@ -11,14 +11,7 @@ import lombok.experimental.FieldDefaults;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.List;
-import java.util.NavigableSet;
-import java.util.SortedSet;
-import java.util.TreeSet;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-
-import static java.util.concurrent.TimeUnit.SECONDS;
+import java.util.*;
 
 /**
  * @author Antony Stubbs
@@ -29,10 +22,10 @@ public class WorkQueue<K, V> {
 
     NavigableSet<ProcessingShard<K, V>> shardQueue = new TreeSet<>();
 
-    ReentrantLock newWorkLockMaker = new ReentrantLock();
-
-    //    @NonFinal
-    Condition newWorkEvent = newWorkLockMaker.newCondition();
+//    ReentrantLock newWorkLockMaker = new ReentrantLock();
+//
+//    //    @NonFinal
+//    Condition newWorkEvent = newWorkLockMaker.newCondition();
 
 //    PCModule<K, V> module;
 
@@ -43,61 +36,70 @@ public class WorkQueue<K, V> {
         return shardQueue.size();
     }
 
-    public void onWorkAdded(ProcessingShard<K, V> shard) throws InterruptedException {
-        newWorkLockMaker.lock();
-        try {
-            newWorkEvent.signalAll();
-        } finally {
-            newWorkLockMaker.unlock();
-        }
-    }
+//    public void onWorkAdded(ProcessingShard<K, V> shard) throws InterruptedException {
+//        newWorkLockMaker.lock();
+//        try {
+//            newWorkEvent.signalAll();
+//        } finally {
+//            newWorkLockMaker.unlock();
+//        }
+//    }
+
 
     public List<WorkContainer<K, V>> poll() throws InterruptedException {
         int quantity = 100;
-        while (true) {
+        var gotSoFar = 0;
+        var gotten = new ArrayList<WorkContainer<K, V>>(quantity);
+//        while (true) {
 
-            SortedSet<ProcessingShard<K, V>> tailset;
-            if (lastShard == null) {
-                tailset = shardQueue;
-            } else {
-                tailset = shardQueue.tailSet(lastShard);
-            }
+        SortedSet<ProcessingShard<K, V>> tailset;
+        if (lastShard == null) {
+            tailset = shardQueue;
+        } else {
+            tailset = shardQueue.tailSet(lastShard);
+        }
 
-            var shardSetToIterate = new TreeSet<>(tailset);
-            var iterator = shardSetToIterate.iterator();
-            while (iterator.hasNext()) {
-                //var shard = shardQueue.take();
+        var shardSetToIterate = new TreeSet<>(tailset);
+        var iterator = shardSetToIterate.iterator();
 
-                var shard = iterator.next();
-                lastShard = shard;
+        // todo for
+        while (iterator.hasNext()) {
+            //var shard = shardQueue.take();
 
-                try {
-                    if (!shard.isEmpty()) {
-                        var workIfAvailable = shard.getWorkIfAvailable(quantity);
+            var shard = iterator.next();
 
-                        if (!workIfAvailable.isEmpty()) {
-//                        return new Batch<>(workIfAvailable);
-                            return workIfAvailable;
-                        }
-                    }
-                } finally {
-                    // only add back to queue if not empty
-                    if (!shard.isEmpty()) {
-                        // add it to the back
-                        shardQueue.add(shard);
-                    }
-                }
-            }
+            lastShard = shard;
 
-            // if we get here, we've exhausted the queue
-            newWorkLockMaker.lock();
             try {
-                newWorkEvent.await(1, SECONDS);
+                if (!shard.isEmpty()) {
+                    var delta = quantity - gotten.size();
+                    var workIfAvailable = shard.getWorkIfAvailable(delta);
+                    gotten.addAll(workIfAvailable);
+
+//                    gotSoFar = gotSoFar + workIfAvailable.size();
+//
+//                    if (!workIfAvailable.isEmpty()) {
+////                        return new Batch<>(workIfAvailable);
+//                        return workIfAvailable;
+//                    }
+                }
             } finally {
-                newWorkLockMaker.unlock();
+                if (shard.isEmpty()) {
+                    shardQueue.remove(shard);
+                }
             }
         }
 
+//            // if we get here, we've exhausted the queue
+//            newWorkLockMaker.lock();
+//            try {
+//                newWorkEvent.await(1, SECONDS);
+//            } finally {
+//                newWorkLockMaker.unlock();
+//            }
+//        }
+
+        return gotten;
     }
 
     public void addIfMissing(ProcessingShard<K, V> shard) {
@@ -105,5 +107,17 @@ public class WorkQueue<K, V> {
             shardQueue.add(shard);
         }
     }
+
+    public void addAll(List<PCWorker<K, V, ?>.NewWork> newWork) {
+        for (var work : newWork) {
+            addIfMissing(work.getShard());
+
+            for (var newWork1 : work.getValue()) {
+                // todo add all
+                work.getShard().addWorkContainer(newWork1);
+            }
+        }
+    }
+
 
 }

@@ -130,7 +130,7 @@ public class Controller<K, V> implements DrainingCloseable {
 
     // todo delete type param
     // todo name
-    private <R> boolean superviseControlLoop(Function userFunctionWrapped, Consumer<Object> callback) throws Exception {
+    private <R> boolean superviseControlLoop(Function userFunctionWrapped, Consumer<Object> callback) {
         addInstanceMDC(options);
         log.info("Control loop starting up...");
 
@@ -140,23 +140,33 @@ public class Controller<K, V> implements DrainingCloseable {
         controlThread.setName("pc-control");
         this.blockableControlThread = controlThread;
         while (state.isOpen()) {
-            log.debug("Control loop start");
             try {
-                controlLoop.loop();
-
-                // sanity - supervise the poller
-                brokerPollSubsystem.supervise();
-
-                wm.logState();
-            } catch (InterruptedException e) {
-                log.debug("Control loop interrupted, closing");
-                state.doClose(DrainingCloseable.DEFAULT_TIMEOUT);
+                loopLoop();
             } catch (Exception e) {
-                throw state.handleCrash(e);
+                log.error("Unhandled error in control loop, crashing", e);
             }
         }
         log.info("Control loop ending clean (state:{})...", state);
         return true;
+    }
+
+    // todo naming
+    private void loopLoop() throws Exception {
+        log.debug("Control loop start");
+        try {
+            controlLoop.loop();
+
+            // sanity - supervise the poller
+            brokerPollSubsystem.supervise();
+
+            wm.logState();
+        } catch (InterruptedException e) {
+            log.debug("Control loop interrupted, closing");
+            Thread.currentThread().interrupt();
+            state.doClose(DrainingCloseable.DEFAULT_TIMEOUT);
+        } catch (Exception e) {
+            throw state.handleCrash(e);
+        }
     }
 
     /**
