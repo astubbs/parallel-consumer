@@ -5,6 +5,7 @@ package io.confluent.parallelconsumer.internal;
  */
 
 import io.confluent.parallelconsumer.state.Batch;
+import io.confluent.parallelconsumer.state.ProcessingShard;
 import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.micrometer.core.instrument.Timer;
@@ -43,8 +44,10 @@ public class PCWorker<K, V, R> {
         while (!Thread.currentThread().isInterrupted()) {
             try {
 //                Batch<K, V> work = acquireFromWm();
-                var work = acquireFromWmBatch();
-                var batches = batcher.makeBatches(work.getValues());
+                var work = aquireFromQueue();
+                var batches = batcher.makeBatches(work);
+//                var work = acquireFromWmBatch();
+//                var batches = batcher.makeBatches(work.getValues());
                 process(batches);
             } catch (Exception e) {
                 log.error("Error acquiring work from work manager", e);
@@ -86,12 +89,16 @@ public class PCWorker<K, V, R> {
         return (int) quantity * 2;
     }
 
-    private List<WorkContainer<K, V>> aquireFromQueue() {
+    private List<WorkContainer<K, V>> aquireFromQueue() throws InterruptedException {
         return workQueue.poll();
     }
 
     public void enqueue(List<WorkContainer<K, V>> work) {
         workQueue.add(work);
+    }
+
+    public void addShard(ProcessingShard<K, V> shard) {
+        workQueue.add(shard);
     }
 }
 

@@ -136,7 +136,7 @@ public class ProcessingShard<K, V> {
         return options.getOrdering() != UNORDERED;
     }
 
-    synchronized ArrayList<WorkContainer<K, V>> getWorkIfAvailable(int workToGetDelta) {
+    public synchronized ArrayList<WorkContainer<K, V>> getWorkIfAvailable(int workToGetDelta) {
         log.trace("Looking for work on shardQueueEntry: {}", getKey());
 
         var slowWork = new HashSet<WorkContainer<?, ?>>();

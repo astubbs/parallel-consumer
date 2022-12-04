@@ -4,29 +4,54 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
+import io.confluent.parallelconsumer.state.ProcessingShard;
 import io.confluent.parallelconsumer.state.WorkContainer;
+import lombok.AccessLevel;
+import lombok.experimental.FieldDefaults;
+import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayDeque;
 import java.util.List;
-import java.util.Queue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
  * @author Antony Stubbs
  */
-//todo remove? - only for new Worker queues branch experiment
+@Slf4j
+@FieldDefaults(makeFinal = true, level = AccessLevel.PRIVATE)
 public class WorkQueue<K, V> {
 
-    Queue<List<WorkContainer<K, V>>> queue = new ArrayDeque<>();
+    BlockingQueue<ProcessingShard<K, V>> shardQueue = new LinkedBlockingQueue<>();
 
     public int size() {
-        return queue.size();
+        return shardQueue.size();
     }
 
-    public List<WorkContainer<K, V>> poll() {
-        return queue.poll();
+    public List<WorkContainer<K, V>> poll() throws InterruptedException {
+        int quantity = 100;
+
+        while (true) {
+            var shard = shardQueue.take();
+            try {
+                if (!shard.isEmpty()) {
+                    var workIfAvailable = shard.getWorkIfAvailable(quantity);
+
+                    if (!workIfAvailable.isEmpty()) {
+//                        return new Batch<>(workIfAvailable);
+                        return workIfAvailable;
+                    }
+                }
+            } finally {
+                // only add back to queue if not empty
+                if (!shard.isEmpty()) {
+                    shardQueue.add(shard);
+                }
+            }
+        }
     }
 
-    public void add(List<WorkContainer<K, V>> work) {
-        queue.add(work);
+    public void add(ProcessingShard<K, V> shard) {
+        shardQueue.add(shard);
     }
+
 }

@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.state.ProcessingShard;
 import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.confluent.parallelconsumer.state.WorkManager;
@@ -20,7 +21,9 @@ import javax.naming.NamingException;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
@@ -46,9 +49,9 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
     FunctionRunner<K, V, R> runner;
 
-    List<PCWorker<K, V, R>> workers;
+    Queue<PCWorker<K, V, R>> workers;
 
-    Batcher batcher = new Batcher();
+    Batcher<?> batcher = new Batcher();
 
     @SneakyThrows
     public PCWorkerPool(int poolSize, FunctionRunner<K, V, R> functionRunner, PCModule<K, V> module) {
@@ -58,7 +61,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         var qwm = new QueuedWorkManager<K, V>(module.queuedShardManager());
         workers = Range.range(poolSize).toStream().boxed()
                 .map(ignore -> new PCWorker<>(this, qwm))
-                .collect(Collectors.toList());
+                .collect(Collectors.toCollection(LinkedList::new));
 
         // start
         for (PCWorker<K, V, R> worker : workers) {
@@ -88,6 +91,12 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
         return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
                 namingThreadFactory, rejectionHandler);
+    }
+
+    public void distributeShards(ProcessingShard<K, V> shard) {
+        var poll = getWorkers().poll();
+        poll.addShard(shard);
+        getWorkers().offer(poll);
     }
 
     public int getCapacity(Timer workRetrievalTimer) {

@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.internal.PCModule;
+import io.confluent.parallelconsumer.internal.PCWorkerPool;
 import lombok.Value;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
@@ -78,11 +79,16 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
     // todo does this have to be concurrent?
     Map<Long, BlockingQueue<ProcessingShard<K, V>>> shardQueueMap = new ConcurrentHashMap<>();
 
+    PCWorkerPool<K, V, ?> workerPool;
+
     /**
      * Constructs a new BlockingQueue.
      */
     public QueuedShardManager(PCModule<K, V> module) {
         super(module);
+
+        workerPool = module.workerPool();
+
 //        queueMap = super.getProcessingShards();
 
         // Initialize the polledEntries map
@@ -98,6 +104,8 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
         ShardKey<?> shardKey = computeShardKey(aRecord);
 
         super.addWorkContainer(epochOfInboundRecords, aRecord);
+
+        workerPool.distributeShards(processingShards.get(shardKey));
 
         maybeAddShardToQueue(shardKey);
 

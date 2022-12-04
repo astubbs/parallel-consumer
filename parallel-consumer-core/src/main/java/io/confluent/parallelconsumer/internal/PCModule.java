@@ -199,4 +199,8 @@ public class PCModule<K, V> {
         }
         return queuedShardManager;
     }
+
+    public PCWorkerPool<K, V, ?> workerPool() {
+        return controlLoop().getWorkerPool();
+    }
 }
