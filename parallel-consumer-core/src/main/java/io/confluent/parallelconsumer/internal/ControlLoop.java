@@ -136,7 +136,7 @@ public class ControlLoop<K, V> {
         }
 
         // distribute more work - moved to PCWorker
-//        retrieveAndDistributeNewWorkNew();
+        retrieveAndDistributeNewWorkNew();
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -355,16 +355,16 @@ public class ControlLoop<K, V> {
         }
     }
 
-//    private <R> int retrieveAndDistributeNewWorkNew() throws InterruptedException {
-//        var capacity = workerPool.getCapacity(workRetrievalTimer);
-//
-////        var work = wm.getWorkIfAvailable(capacity);
+    private int retrieveAndDistributeNewWorkNew() {
+        var capacity = workerPool.getCapacity(workRetrievalTimer);
+
+        var work = wm.getWorkIfAvailable(capacity);
 //        var work = qsm.take();
-//
-//
-//        workerPool.distribute(work);
-//        return work.size();
-//    }
+
+//        workerPool.distributeToWorkerShards(work);
+        workerPool.distributeToWorkers(work);
+        return work.size();
+    }
 
     /**
      * Plugin a function to run at the end of each main loop.

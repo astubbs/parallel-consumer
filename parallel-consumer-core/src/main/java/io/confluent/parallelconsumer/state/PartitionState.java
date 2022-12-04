@@ -221,7 +221,10 @@ public class PartitionState<K, V> {
     public void onSuccess(long offset) {
         //noinspection OptionalAssignedToNull - null check to see if key existed
         boolean removedFromIncompletes = this.incompleteOffsets.remove(offset) != null; // NOSONAR
-        assert (removedFromIncompletes);
+        if (!removedFromIncompletes) {
+            // trying to be removed twice? or never existed?
+            throw new IllegalStateException("Offset " + offset + " was not in the incomplete offsets set");
+        }
 
         updateHighestSucceededOffsetSoFar(offset);
 
@@ -251,7 +254,8 @@ public class PartitionState<K, V> {
         return !Objects.equals(epochOfInboundRecords, currentPartitionEpoch);
     }
 
-    public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
+    public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.
+            RecordsAndEpoch recordsAndEpoch) {
         if (epochIsStale(recordsAndEpoch)) {
             log.debug("Inbound record of work has epoch ({}) not matching currently assigned epoch for the applicable partition ({}), skipping",
                     recordsAndEpoch.getEpochOfPartitionAtPoll(), getPartitionsAssignmentEpoch());

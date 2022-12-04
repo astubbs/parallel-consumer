@@ -108,7 +108,9 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
         super.addWorkContainer(epochOfInboundRecords, aRecord);
 
         var processingShard = processingShards.get(shardKey);
-        module.workerPool().onWorkAdded(processingShard);
+//        module.workerPool().onWorkAdded(processingShard);
+
+//        module.workerPool().addRecord(epochOfInboundRecords, aRecord);
 
 //
 //        // todo clean up
