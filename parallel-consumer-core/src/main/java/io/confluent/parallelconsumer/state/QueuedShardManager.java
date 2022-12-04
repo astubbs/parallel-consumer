@@ -6,7 +6,6 @@ import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
@@ -178,24 +177,47 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
         var startKey = getStartKey();
 
-        // Get an iterator for the queueMap, starting from the startKey
-        Iterator<ShardKey<?>> shardIterator;
-        if (isEmpty(startKey)) {
-            shardIterator = queueMap.keySet().iterator();
-        } else {
-            var tailMap = queueMap.tailMap(startKey.get());
-            if (tailMap.isEmpty()) {
-                log.debug("Reached empty tail map, removing start marker: {}", startKey.get());
-                lastPolledEntriesPerThread.remove(threadId);
-                shardIterator = queueMap.keySet().iterator();
-            } else {
-                shardIterator = tailMap.keySet().iterator();
-            }
-        }
+//        // Get an iterator for the queueMap, starting from the startKey
+//        Iterator<ShardKey<?>> shardIterator;
+//        if (isEmpty(startKey)) {
+//            shardIterator = queueMap.keySet().iterator();
+//        } else {
+//            var tailMap = queueMap.tailMap(startKey.get());
+//            if (tailMap.isEmpty()) {
+//                log.debug("Reached empty tail map, removing start marker: {}", startKey.get());
+//                lastPolledEntriesPerThread.remove(threadId);
+//                shardIterator = queueMap.keySet().iterator();
+//            } else {
+//                shardIterator = tailMap.keySet().iterator();
+//            }
+//        }
+
+        // iterate the entries using the thread id modulo, to avoid starvation - use an incrementing multiple offset
+        // from the base
+        var shardIterator = queueMap.keySet().iterator();
+
+//        var lastPosition = this.lastPosition.get();
+//        var position = lastPosition;
+//        var size = queueMap.size();
+//        var max = getOptions().getMaxConcurrency();
+//        var offset = max % size;
+//        var sets = size / max;
+//
+//        var listView = new ArrayList<ProcessingShard<K, V>>(queueMap.values());
+//        var multipleOffset = offset * size;
+
+
+//        Iterator<ShardKey<?>> shardIterator = queueMap.keySet().iterator();
 
         Batch<K, V> element;
+//        var base = 0;
+//        int round = base;
         while (shardIterator.hasNext()) {
+//            var index =  % size;
+//            round++;
+
             // Get the next key from the iterator
+//            var shardKey = listView.get(index);
             var shardKey = shardIterator.next();
 
             var shardOpt = Optional.ofNullable(processingShards.get(shardKey));
@@ -224,19 +246,19 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
             // If the lock is acquired
 //            if (lock.tryLock()) {
-                try {
-                    // Mark the shard as polled by the current thread
+            try {
+                // Mark the shard as polled by the current thread
 //                    polledEntries.put(threadId, shardKey);
 
-                    element = shard.pollBatch();
+                element = shard.pollBatch();
 
-                    // Update the startKey for the current thread
-                    lastPolledEntriesPerThread.put(threadId, shardKey);
+                // Update the startKey for the current thread
+                lastPolledEntriesPerThread.put(threadId, shardKey);
 
-                } finally {
-                    // Release the lock
+            } finally {
+                // Release the lock
 //                    lock.unlock();
-                }
+            }
 
             // If we found an element, break out of the loop and remove the entry from the polledEntries map
             if (element != null) {
