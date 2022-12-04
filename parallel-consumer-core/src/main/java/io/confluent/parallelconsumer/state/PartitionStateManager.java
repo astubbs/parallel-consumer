@@ -268,6 +268,7 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
             PartitionState<K, V> partitionState = getPartitionState(recordsAndEpoch);
             partitionState.maybeRegisterNewPollBatchAsWork(recordsAndEpoch);
         }
+        module.queuedShardManager().onFinishNewWork();
     }
 
     public Map<TopicPartition, OffsetAndMetadata> collectDirtyCommitData() {

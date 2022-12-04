@@ -96,7 +96,47 @@ public class ProcessingShard<K, V> {
         return entries.remove(offset);
     }
 
-    ArrayList<WorkContainer<K, V>> getWorkIfAvailable(int workToGetDelta) {
+    public Batch<K, V> pollBatch() {
+        var quantity = options.getBatchSize() * 100;
+        var workIfAvailable = getWorkIfAvailable(quantity);
+
+        if (workIfAvailable.isEmpty()) {
+            return null;
+        }
+
+        return new Batch<>(workIfAvailable);
+    }
+
+    private void logSlowWork(Set<WorkContainer<?, ?>> slowWork) {
+        // log
+        if (!slowWork.isEmpty()) {
+            List<String> slowTopics = slowWork.parallelStream()
+                    .map(x -> x.getTopicPartition().toString()).distinct()
+                    .collect(Collectors.toList());
+            slowWarningRateLimit.performIfNotLimited(() ->
+                    log.warn("Warning: {} records in the queue have been waiting longer than {}s for following topics {}.",
+                            slowWork.size(), toSeconds(options.getThresholdForTimeSpendInQueueWarning()), slowTopics));
+        }
+    }
+
+    private void addToSlowWorkMaybe(Set<WorkContainer<?, ?>> slowWork, WorkContainer<?, ?> workContainer) {
+        var msgTemplate = "Can't take as work: Work ({}). Must all be true: Delay passed= {}. Is not in flight= {}. Has not succeeded already= {}. Time spent in execution queue: {}.";
+        Duration timeInFlight = workContainer.getTimeInFlight();
+        var msg = msg(msgTemplate, workContainer, workContainer.isDelayPassed(), workContainer.isNotInFlight(), !workContainer.isUserFunctionSucceeded(), timeInFlight);
+        Duration slowThreshold = options.getThresholdForTimeSpendInQueueWarning();
+        if (isGreaterThan(timeInFlight, slowThreshold)) {
+            slowWork.add(workContainer);
+            log.trace("Work has spent over " + slowThreshold + " in queue! " + msg);
+        } else {
+            log.trace(msg);
+        }
+    }
+
+    private boolean isOrderRestricted() {
+        return options.getOrdering() != UNORDERED;
+    }
+
+    synchronized ArrayList<WorkContainer<K, V>> getWorkIfAvailable(int workToGetDelta) {
         log.trace("Looking for work on shardQueueEntry: {}", getKey());
 
         var slowWork = new HashSet<WorkContainer<?, ?>>();
@@ -132,46 +172,6 @@ public class ProcessingShard<K, V> {
         logSlowWork(slowWork);
 
         return workTaken;
-    }
-
-    private void logSlowWork(Set<WorkContainer<?, ?>> slowWork) {
-        // log
-        if (!slowWork.isEmpty()) {
-            List<String> slowTopics = slowWork.parallelStream()
-                    .map(x -> x.getTopicPartition().toString()).distinct()
-                    .collect(Collectors.toList());
-            slowWarningRateLimit.performIfNotLimited(() ->
-                    log.warn("Warning: {} records in the queue have been waiting longer than {}s for following topics {}.",
-                            slowWork.size(), toSeconds(options.getThresholdForTimeSpendInQueueWarning()), slowTopics));
-        }
-    }
-
-    private void addToSlowWorkMaybe(Set<WorkContainer<?, ?>> slowWork, WorkContainer<?, ?> workContainer) {
-        var msgTemplate = "Can't take as work: Work ({}). Must all be true: Delay passed= {}. Is not in flight= {}. Has not succeeded already= {}. Time spent in execution queue: {}.";
-        Duration timeInFlight = workContainer.getTimeInFlight();
-        var msg = msg(msgTemplate, workContainer, workContainer.isDelayPassed(), workContainer.isNotInFlight(), !workContainer.isUserFunctionSucceeded(), timeInFlight);
-        Duration slowThreshold = options.getThresholdForTimeSpendInQueueWarning();
-        if (isGreaterThan(timeInFlight, slowThreshold)) {
-            slowWork.add(workContainer);
-            log.trace("Work has spent over " + slowThreshold + " in queue! " + msg);
-        } else {
-            log.trace(msg);
-        }
-    }
-
-    private boolean isOrderRestricted() {
-        return options.getOrdering() != UNORDERED;
-    }
-
-    public Batch<K, V> pollBatch() {
-        var quantity = options.getBatchSize();
-        var workIfAvailable = getWorkIfAvailable(quantity);
-
-        if (workIfAvailable.isEmpty()) {
-            return null;
-        }
-
-        return new Batch<>(workIfAvailable);
     }
 
 

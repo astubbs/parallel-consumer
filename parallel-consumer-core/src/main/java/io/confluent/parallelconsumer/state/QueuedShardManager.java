@@ -101,15 +101,7 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 //            monitor.notifyAll(); // todo notifies too indiscriminately?
 //        }
 
-        // todo move down to entire batch processing, not every message
-//        var old = newWorkEvent;
-        newWorkEvent = newWorkLockMaker.newCondition();
-        newWorkLockMaker.lock();
-        try {
-            newWorkEvent.signalAll();
-        } finally {
-            newWorkLockMaker.unlock();
-        }
+
     }
 
     /**
@@ -231,7 +223,7 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
 
             // If the lock is acquired
-            if (lock.tryLock()) {
+//            if (lock.tryLock()) {
                 try {
                     // Mark the shard as polled by the current thread
 //                    polledEntries.put(threadId, shardKey);
@@ -243,17 +235,17 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
                 } finally {
                     // Release the lock
-                    lock.unlock();
+//                    lock.unlock();
                 }
 
-                // If we found an element, break out of the loop and remove the entry from the polledEntries map
-                if (element != null) {
-                    log.debug("Found work {}", element);
-                    return element;
-                }
-            } else {
-                log.debug("Could not acquire lock for {}", shardKey);
+            // If we found an element, break out of the loop and remove the entry from the polledEntries map
+            if (element != null) {
+                log.debug("Found work {}", element);
+                return element;
             }
+//            } else {
+//                log.debug("Could not acquire lock for {}", shardKey);
+//            }
         }
 
         log.debug("Finished iterating all queues, no work found");
@@ -303,6 +295,15 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
     public int size() {
         return getQueueMap().values().stream().mapToInt(value -> Math.toIntExact(value.getCountOfWorkAwaitingSelection())).sum();
+    }
+
+    public void onFinishNewWork() {
+        newWorkLockMaker.lock();
+        try {
+            newWorkEvent.signalAll();
+        } finally {
+            newWorkLockMaker.unlock();
+        }
     }
 
     @Value
