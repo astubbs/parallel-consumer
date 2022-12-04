@@ -40,7 +40,7 @@ public class PCWorker<K, V, R> {
     Batcher<WorkContainer<K, V>> batcher = new Batcher<>();
 
     public void loop() {
-        while (true) {
+        while (!Thread.currentThread().isInterrupted()) {
             try {
 //                Batch<K, V> work = acquireFromWm();
                 var work = acquireFromWmBatch();

@@ -12,7 +12,7 @@ import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.LinkedTransferQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -72,7 +72,11 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
      * <p>
      * It must only contain Shards once.
      */
-    BlockingQueue<ProcessingShard<K, V>> shardQueue = new LinkedTransferQueue<>();
+//    BlockingQueue<ProcessingShard<K, V>> shardQueue = new LinkedTransferQueue<>();
+    ThreadLocal<BlockingQueue<ProcessingShard<K, V>>> threadLocalShardQueue = new ThreadLocal<>();
+
+    // todo does this have to be concurrent?
+    Map<Long, BlockingQueue<ProcessingShard<K, V>>> shardQueueMap = new ConcurrentHashMap<>();
 
     /**
      * Constructs a new BlockingQueue.
@@ -118,9 +122,18 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 
     private void maybeAddShardToQueue(ShardKey<?> shardKey) {
         var shard = processingShards.get(shardKey);
+
+        BlockingQueue<ProcessingShard<K, V>> shardQueue = getShardQueueFromMap();
+
         if (!shardQueue.contains(shard)) {
             shardQueue.add(shard);
         }
+    }
+
+    private BlockingQueue<ProcessingShard<K, V>> getShardQueueFromMap() {
+        var shardQueue = shardQueueMap.computeIfAbsent(Thread.currentThread().getId(),
+                aLong -> new LinkedBlockingQueue<>());
+        return shardQueue;
     }
 
     /**
@@ -191,7 +204,16 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
     }
 
     private List<WorkContainer<K, V>> tryOneIterationQueueRemoval() throws InterruptedException {
+        // save it to the
+        if (threadLocalShardQueue.get() == null) {
+            var threadLocalQueue = getShardQueueFromMap();
+            threadLocalShardQueue.set(threadLocalQueue);
+        }
+
+
         int quantity = 100;
+
+        var shardQueue = threadLocalShardQueue.get();
 
         while (true) {
             var shard = shardQueue.take();
