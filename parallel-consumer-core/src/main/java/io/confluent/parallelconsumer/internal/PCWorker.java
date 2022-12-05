@@ -16,11 +16,7 @@ import lombok.experimental.FieldDefaults;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Queue;
-
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Antony Stubbs
@@ -51,7 +47,7 @@ public class PCWorker<K, V, R> {
     private final int workerId = workerCount++;
 
     //    WorkQueue<K, V> workQueue = new WorkQueue<>();
-    Queue<WorkContainer<K, V>> workQueue = new LinkedList<>();
+//    Queue<WorkContainer<K, V>> workQueue = new LinkedList<>();
 
     Timer processingWorkQueueTimer = metricsRegistry.timer("user.function");
 
@@ -97,8 +93,8 @@ public class PCWorker<K, V, R> {
 
     // todo audit interruptions with finally blocks
     public void loop() {
-        Runnable stats = () -> log.debug("Loop stats: blocking time for new work: {} ms",
-                (int) spentWaitingForNewWorkTimer.mean(MILLISECONDS));
+        Runnable stats = () -> log.debug("Loop stats: blocking time for new work: {} ns",
+                (int) spentWaitingForNewWorkTimer.mean(TimeUnit.NANOSECONDS));
 
         while (!Thread.currentThread().isInterrupted()) {
             try {
@@ -165,11 +161,16 @@ public class PCWorker<K, V, R> {
 //    }
 
     private void processWorkQueueFromCentral() throws InterruptedException {
-        if (workQueue.isEmpty()) {
-            return;
-        }
+//        if (workQueue.isEmpty()) {
+//            return;
+//        }
 
-        var start = Timer.start(metricsRegistry);
+        var take = Timer.start();
+        var work = centralQueue.take();
+        take.stop(spentWaitingForNewWorkTimer);
+
+
+        var run = Timer.start(metricsRegistry);
 
         var functionRunner = parentPool.getRunner();
 
@@ -177,7 +178,7 @@ public class PCWorker<K, V, R> {
 //
 //        while (!workQueue.isEmpty()) {
 
-        var work = centralQueue.take();
+
 //            var listOfBatches = batcher.makeBatches(work);
 //            for (var batch : listOfBatches) {
         functionRunner.run(work.getValues());
@@ -185,7 +186,7 @@ public class PCWorker<K, V, R> {
 //        }
 
         // update metrics
-        start.stop(processingWorkQueueTimer);
+        run.stop(processingWorkQueueTimer);
 //        workQueueSizeDistribution.record(workQueueSize);
     }
 
@@ -214,13 +215,13 @@ public class PCWorker<K, V, R> {
 //        workQueueSizeDistribution.record(workQueueSize);
 //    }
 
-    private List<WorkContainer<K, V>> pollFromQueue(int howMany) {
-        var work = new LinkedList<WorkContainer<K, V>>();
-        while (!workQueue.isEmpty() && work.size() < howMany) {
-            work.add(workQueue.poll());
-        }
-        return work;
-    }
+//    private List<WorkContainer<K, V>> pollFromQueue(int howMany) {
+//        var work = new LinkedList<WorkContainer<K, V>>();
+//        while (!workQueue.isEmpty() && work.size() < howMany) {
+//            work.add(workQueue.poll());
+//        }
+//        return work;
+//    }
 
 //    public int getQueueCapacity(Timer workRetrievalTimer) {
 ////        return 100 - workQueue.size();
