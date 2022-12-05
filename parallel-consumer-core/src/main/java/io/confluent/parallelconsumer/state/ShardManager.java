@@ -310,7 +310,6 @@ public class ShardManager<K, V> {
     }
 
     public Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> getWorkIfAvailable(int requestedMaxWorkToRetrieve) {
-// get work from shards
         var slowWork = new HashSet<WorkContainer<?, ?>>();
         Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workFromAllShards = new HashMap<>();
         for (ProcessingShard<K, V> shard : this.processingShards.values()) {

@@ -59,9 +59,10 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         numPartitions = 12;
         String inputTopicName = setupTopic(this.getClass().getSimpleName() + "-input");
 
-//        int expectedMessageCount = 10_000_000;
+//        int expectedMessageCount = 24_000_000;
+//        int expectedMessageCount = 12_000_000;
         int expectedMessageCount = 6_000_000;
-//        int expectedMessageCount = 3_000000;
+//        int expectedMessageCount = 3_000_000;
 //        int expectedMessageCount = 300_000;
 //        int expectedMessageCount = 30_000;
 //        int expectedMessageCount = 3_000;

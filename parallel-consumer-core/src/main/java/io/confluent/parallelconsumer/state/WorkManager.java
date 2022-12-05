@@ -117,7 +117,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
-     * Depth first work retrieval.
+     * Depth first work retrieval (if using KEY ordering, it's always breadth as we can only take a single element from
+     * each shard).
      */
     public Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> getWorkIfAvailable(final int requestedMaxWorkToRetrieve) {
         if (requestedMaxWorkToRetrieve < 1) {

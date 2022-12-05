@@ -28,6 +28,7 @@ import java.util.function.Function;
 
 import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.parallelconsumer.internal.State.running;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
@@ -40,6 +41,8 @@ import static lombok.AccessLevel.PROTECTED;
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ControlLoop<K, V> {
+
+    public static final String CONTROL_LOOP_PREFIX = "control.loop";
 
     PCModule<K, V> module;
 
@@ -67,12 +70,18 @@ public class ControlLoop<K, V> {
     StateMachine state;
 
     // todo delete
-//    RateLimiter queueStatsLimiter = new RateLimiter();
+    RateLimiter loopPerfStats = new RateLimiter();
 
     // todo depends on MicroMeter pr
     SimpleMeterRegistry metricsRegistry = new SimpleMeterRegistry();
 
-    Timer workRetrievalTimer = metricsRegistry.timer("user.function");
+    Timer controlLoop = metricsRegistry.timer(CONTROL_LOOP_PREFIX);
+
+    Timer inboxProcessingTimer = metricsRegistry.timer(CONTROL_LOOP_PREFIX + ".inbox");
+
+    Timer commitTimer = metricsRegistry.timer(CONTROL_LOOP_PREFIX + ".commit");
+
+    Timer workDistributionTimer = metricsRegistry.timer(CONTROL_LOOP_PREFIX + ".distribution");
 
     /**
      * Used to request a commit asap
@@ -87,6 +96,7 @@ public class ControlLoop<K, V> {
 
     @NonFinal
     Instant lastCommitCheckTime = Instant.now();
+
 
     public ControlLoop(PCModule<K, V> module) {
         this.module = module;
@@ -118,6 +128,23 @@ public class ControlLoop<K, V> {
      * Main control loop
      */
     protected void loop() throws TimeoutException, ExecutionException, InterruptedException {
+        Timer.Sample sample = Timer.start(metricsRegistry);
+        timedLoop();
+        sample.stop(controlLoop);
+
+        loopPerfStats.performIfNotLimited(() -> {
+//            if (log.isDebugEnabled()) {
+            log.info("Control loop took (ms) {}, processing inbox: {} committing: {} distribution to workers: {}",
+                    (int) controlLoop.mean(MILLISECONDS),
+                    (int) inboxProcessingTimer.mean(MILLISECONDS),
+                    (int) commitTimer.mean(MILLISECONDS),
+                    (int) workDistributionTimer.mean(MILLISECONDS)
+            );
+//            }
+        });
+    }
+
+    private void timedLoop() throws TimeoutException, InterruptedException, ExecutionException {
         Objects.requireNonNull(workerPool);
 
         maybeWakeupPoller();
@@ -127,16 +154,24 @@ public class ControlLoop<K, V> {
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
+        Timer.Sample inboxProcessingSample = Timer.start(metricsRegistry);
         workMailbox.processWorkCompleteMailBox(timeToBlockFor);
+        inboxProcessingSample.stop(inboxProcessingTimer);
 
         //
         if (shouldTryCommitNow) {
             // offsets will be committed when the consumer has its partitions revoked
+            Timer.Sample commitSample = Timer.start(metricsRegistry);
             commitOffsetsThatAreReady();
+            commitSample.stop(commitTimer);
         }
 
         // distribute more work - moved to PCWorker
+        // todo samples vs record lambda - runtime exception handling?
+        Timer.Sample distributionSample = Timer.start(metricsRegistry);
+//        workDistributionTimer.record(this::retrieveAndDistributeNewWorkNew);
         retrieveAndDistributeNewWorkNew();
+        distributionSample.stop(workDistributionTimer);
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -348,9 +383,10 @@ public class ControlLoop<K, V> {
     }
 
     private int retrieveAndDistributeNewWorkNew() {
-        var capacity = workerPool.getCapacity(workRetrievalTimer);
+        var capacity = workerPool.getCapacity(controlLoop);
 
-        var work = wm.getWorkIfAvailable(capacity);
+        var loadingFactor = 2;
+        var work = wm.getWorkIfAvailable(capacity * loadingFactor);
 //        var work = qsm.take();
 
 //        workerPool.distributeToWorkerShards(work);

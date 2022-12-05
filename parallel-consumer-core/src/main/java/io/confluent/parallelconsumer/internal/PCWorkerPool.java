@@ -82,7 +82,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         try {
             defaultFactory = InitialContext.doLookup(options.getManagedThreadFactory());
         } catch (NamingException e) {
-            log.debug("Using Java SE Thread", e);
+            log.debug("Using Java SE Thread, as: {}", e.getMessage());
             defaultFactory = Executors.defaultThreadFactory();
         }
         ThreadFactory finalDefaultFactory = defaultFactory;
@@ -106,7 +106,12 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 //    }
 
     public int getCapacity(Timer workRetrievalTimer) {
-        return workers.stream().map(worker -> worker.getQueueCapacity(workRetrievalTimer)).reduce(Integer::sum).orElse(0);
+        var poolRemainingCapacity = workers.stream().map(worker ->
+                        worker.getQueueCapacity(workRetrievalTimer))
+                .reduce(Integer::sum)
+                .orElse(0);
+        log.debug("Pool remaining capacity: {}", poolRemainingCapacity);
+        return poolRemainingCapacity;
     }
 
 //    /**
@@ -163,6 +168,10 @@ public class PCWorkerPool<K, V, R> implements Closeable {
     public void distributeToWorkers(Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workMap) {
         if (workMap.isEmpty()) {
             log.debug("No work to distribute");
+        }
+
+        if (log.isDebugEnabled()) {
+            log.debug("Distributing {} work items to {} workers", workMap.values().stream().mapToInt(List::size).sum(), workers.size());
         }
 
         //
