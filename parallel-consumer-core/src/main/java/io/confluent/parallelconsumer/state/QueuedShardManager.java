@@ -236,7 +236,7 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
             var shard = shardQueue.take();
             try {
                 if (!shard.isEmpty()) {
-                    var workIfAvailable = shard.getWorkIfAvailable(quantity);
+                    var workIfAvailable = shard.getWorkIfAvailable(quantity).getWorkTaken();
 
                     if (!workIfAvailable.isEmpty()) {
 //                        return new Batch<>(workIfAvailable);

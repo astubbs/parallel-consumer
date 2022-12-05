@@ -143,14 +143,6 @@ public class ControlLoop<K, V> {
         this.controlLoopHooks.forEach(Runnable::run);
 
         state.maybeCloseOrDrain();
-
-        // thread yield for spin lock avoidance
-        Duration duration = Duration.ofMillis(1);
-        try {
-            Thread.sleep(duration.toMillis());
-        } catch (InterruptedException e) {
-            log.trace("Woke up", e);
-        }
     }
 
     /**

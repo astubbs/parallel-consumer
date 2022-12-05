@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.internal.BrokerPollSystem;
 import io.confluent.parallelconsumer.internal.PCModule;
+import io.confluent.parallelconsumer.internal.RateLimiter;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +22,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 
+import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.util.Optional.empty;
 import static java.util.Optional.of;
@@ -44,6 +46,8 @@ public class ShardManager<K, V> {
 
     @Getter
     private final ParallelConsumerOptions<?, ?> options;
+
+    private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
     /**
      * Map of Object keys to Shard
@@ -307,17 +311,24 @@ public class ShardManager<K, V> {
 
     public Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> getWorkIfAvailable(int requestedMaxWorkToRetrieve) {
 // get work from shards
+        var slowWork = new HashSet<WorkContainer<?, ?>>();
         Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workFromAllShards = new HashMap<>();
         for (ProcessingShard<K, V> shard : this.processingShards.values()) {
             int remainingToGet = requestedMaxWorkToRetrieve - workFromAllShards.size();
             var work = shard.getWorkIfAvailable(remainingToGet);
-            workFromAllShards.put(shard, work);
+            var workTaken = work.getWorkTaken();
+            if (!workTaken.isEmpty()) {
+                workFromAllShards.put(shard, workTaken);
+            }
+            slowWork.addAll(work.getSlowWork());
         }
 
         // log
         if (workFromAllShards.size() >= requestedMaxWorkToRetrieve) {
             log.debug("Work taken is now over max (iteration resume point is {})", iterationResumePoint);
         }
+
+        logSlowWork(slowWork);
 
         //
         log.debug("Got {} of {} requested records of work. In-flight: {}, Awaiting in commit (partition) queues: {}",
@@ -331,6 +342,18 @@ public class ShardManager<K, V> {
         numberRecordsOutForProcessing += workFromAllShards.size();
 
         return workFromAllShards;
-
     }
+
+    private void logSlowWork(Set<WorkContainer<?, ?>> slowWork) {
+        // log
+        if (!slowWork.isEmpty()) {
+            List<String> slowTopics = slowWork.parallelStream()
+                    .map(x -> x.getTopicPartition().toString()).distinct()
+                    .collect(Collectors.toList());
+            slowWarningRateLimit.performIfNotLimited(() ->
+                    log.warn("Warning: {} records in the queue have been waiting longer than {}s for following topics {}.",
+                            slowWork.size(), toSeconds(options.getThresholdForTimeSpendInQueueWarning()), slowTopics));
+        }
+    }
+
 }

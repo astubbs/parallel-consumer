@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.parallelconsumer.state.Batch;
 import io.confluent.parallelconsumer.state.ProcessingShard;
 import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
@@ -16,9 +15,9 @@ import lombok.Value;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.stream.Collectors;
 
@@ -38,7 +37,8 @@ public class PCWorker<K, V, R> {
     Timer userFunctionTimer = metricsRegistry.timer("user.function");
 
     //    WorkQueue<K, V> workQueue = new WorkQueue<>();
-    List<NewWork> workQueue = new ArrayList<>();
+
+    Queue<NewWorkMessage> workQueue = new LinkedList<>();
 
     PCWorkerPool<K, V, R> parentPool;
 
@@ -46,18 +46,23 @@ public class PCWorker<K, V, R> {
 
     Batcher<WorkContainer<K, V>> batcher = new Batcher<>();
 
-    private LinkedBlockingQueue<NewWork> inbox = new LinkedBlockingQueue<>();
+    private LinkedBlockingQueue<NewWorkMessage> inbox = new LinkedBlockingQueue<>();
 
+    // todo audit interruptions with finally blocks
     public void loop() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
 //                Batch<K, V> work = acquireFromWm();
                 var work = acquireFromQueue();
-                // todo rectify
+
+                // todo rectify - drainTo?
                 var ll = work.stream().flatMap(x -> x.getValue().stream()).collect(Collectors.toList());
+
                 var batches = batcher.makeBatches(ll);
+
 //                var work = acquireFromWmBatch();
 //                var batches = batcher.makeBatches(work.getValues());
+
                 process(batches);
             } catch (InterruptedException e) {
                 log.info("Interrupted");
@@ -68,9 +73,9 @@ public class PCWorker<K, V, R> {
         }
     }
 
-    private Batch<WorkContainer<K, V>> acquireFromWmBatch() throws InterruptedException {
-        return wm.take();
-    }
+//    private Batch<WorkContainer<K, V>> acquireFromWmBatch() throws InterruptedException {
+//        return wm.take();
+//    }
 
 //    private Batch<K, V> acquireFromWm() throws InterruptedException {
 //        return wm.take();
@@ -91,19 +96,27 @@ public class PCWorker<K, V, R> {
         );
     }
 
-    private List<NewWork> acquireFromQueue() throws InterruptedException {
-        processNewWork();
-        return workQueue;
+    private List<NewWorkMessage> acquireFromQueue() throws InterruptedException {
+        processNewWorkBlocking();
+        var work = new LinkedList<NewWorkMessage>();
+        while (!workQueue.isEmpty()) {
+            work.add(workQueue.poll());
+        }
+        return work;
     }
 
-    private void processNewWork() throws InterruptedException {
-        var drain = new LinkedList<NewWork>();
-        drain.add(inbox.take()); // wait for first
-        this.inbox.drainTo(drain);
-        workQueue.addAll(drain);
+    /**
+     * Blocks until a message is received
+     */
+    private void processNewWorkBlocking() throws InterruptedException {
+        inbox.add(inbox.take()); // wait for first
+        inbox.drainTo(workQueue, inbox.size()); // drain the rest, but up to a limit
+        log.trace("Message received, messages drained: {}", workQueue.size());
     }
 
+    // todo plug this in
     public int getQueueCapacity(Timer workRetrievalTimer) {
+//        return 100 - workQueue.size();
         return 100;
 //        return calculateQuantityShouldHaveInQueue(workRetrievalTimer) - workQueue.size();
     }
@@ -130,18 +143,23 @@ public class PCWorker<K, V, R> {
 //        workQueue.onWorkAdded(processingShard);
 //    }
 
-    public void newWorkMessage(ProcessingShard<K, V> shard, List<WorkContainer<K, V>> value) {
-        this.inbox.add(new NewWork(shard, value));
+    public void newWorkMessage(ProcessingShard<K, V> shard, List<WorkContainer<K, V>> workList) {
+        if (workList.isEmpty()) {
+            throw new IllegalArgumentException("Empty work list");
+        }
+
+        NewWorkMessage msg = new NewWorkMessage(shard, workList);
+        this.inbox.add(msg);
     }
 
-    public void newWorkMessage(List<WorkContainer<K, V>> p) {
-        // todo resolve null
-        this.inbox.add(new NewWork(null, p));
-    }
+//    public void newWorkMessage(List<WorkContainer<K, V>> p) {
+//        // todo resolve null
+//        this.inbox.add(new NewWork(null, p));
+//    }
 
 
     @Value
-    public class NewWork {
+    public class NewWorkMessage {
 
         ProcessingShard<K, V> shard;
 

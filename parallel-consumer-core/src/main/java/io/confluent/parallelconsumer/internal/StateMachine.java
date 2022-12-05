@@ -182,7 +182,6 @@ public class StateMachine implements DrainingCloseable {
         if (doneOrCancelled && controlThreadFuture.isPresent()) {
             var throwable = controlThreadFuture.get();
             log.error("Control thread future is done or cancelled, outcome is {}", throwable);
-
         }
         return closedOrFailed;
     }

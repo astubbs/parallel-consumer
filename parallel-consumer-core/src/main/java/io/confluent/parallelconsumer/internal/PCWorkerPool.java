@@ -24,7 +24,6 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-import static java.util.Optional.ofNullable;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -158,27 +157,33 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         return executorPool.getQueue().size();
     }
 
+    /**
+     * Distribute round robbin to the workers, resuming from the last worker
+     */
     public void distributeToWorkers(Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workMap) {
-        // take each shard's list
-        var queue = new LinkedBlockingQueue<>(workMap.entrySet());
-        while (!queue.isEmpty()) {
+        if (workMap.isEmpty()) {
+            log.debug("No work to distribute");
+        }
 
-            // distribute round robbin to the workers, resuming from the last worker
-            var startPoint = lastWorker == null ? workers.first() : lastWorker;
-            var workerTail = workers.tailSet(startPoint);
-            if (workerTail.isEmpty()) {
-                // loop to start
-                workerTail = workers;
-            }
+        //
+        var startPoint = lastWorker == null ? workers.first() : lastWorker;
+        var workerTail = workers.tailSet(startPoint);
+        if (workerTail.isEmpty()) {
+            // loop to start
+            workerTail = workers;
+        }
+        var workerIterator = workerTail.iterator();
 
-            for (var worker : workerTail) {
-                lastWorker = worker;
-                var poll = ofNullable(queue.poll());
-                if (poll.isPresent()) {
-                    var p = poll.get();
-                    worker.newWorkMessage(p.getKey(), p.getValue());
-                }
+        // loops forever over the workers, resuming from last point, until all work is distributed
+        for (var work : workMap.entrySet()) {
+            // if exhausted, loop back to start
+            if (!workerIterator.hasNext()) {
+                workerIterator = workers.iterator();
             }
+            var workUnits = work.getValue();
+            var worker = workerIterator.next();
+            lastWorker = worker;
+            worker.newWorkMessage(work.getKey(), workUnits);
         }
 
 //        // flatten
@@ -190,17 +195,17 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 //        distributeToWorkers(queue);
     }
 
-    private void distributeToWorkers(Deque<List<WorkContainer<K, V>>> queue) {
-        // round robin
-        // todo can batch?
-
-        while (!queue.isEmpty()) {
-            for (var worker : workers) {
-                var poll = ofNullable(queue.poll());
-                poll.ifPresent(p -> worker.newWorkMessage(p)); // todo object allocation warning
-            }
-        }
-    }
+//    private void distributeToWorkers(Deque<List<WorkContainer<K, V>>> queue) {
+//        // round robin
+//        // todo can batch?
+//
+//        while (!queue.isEmpty()) {
+//            for (var worker : workers) {
+//                var poll = ofNullable(queue.poll());
+//                poll.ifPresent(p -> worker.newWorkMessage(p)); // todo object allocation warning
+//            }
+//        }
+//    }
 
 //    /**
 //     * Round robyn using queue pop, offer

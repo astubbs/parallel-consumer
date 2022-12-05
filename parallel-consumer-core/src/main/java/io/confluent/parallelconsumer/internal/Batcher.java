@@ -24,6 +24,10 @@ public class Batcher<T> {
     }
 
     public List<List<T>> makeBatches(List<T> workToProcess) {
+        if (workToProcess.isEmpty()) {
+            throw new IllegalStateException("Cannot make batches from nothing");
+        }
+
         var batches = partition(workToProcess, maxBatchSize);
 
         // debugging

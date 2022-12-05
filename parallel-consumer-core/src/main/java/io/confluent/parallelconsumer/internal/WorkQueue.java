@@ -74,7 +74,7 @@ public class WorkQueue<K, V> {
                 if (!shard.isEmpty()) {
                     var delta = quantity - gotten.size();
                     var workIfAvailable = shard.getWorkIfAvailable(delta);
-                    gotten.addAll(workIfAvailable);
+                    gotten.addAll(workIfAvailable.getWorkTaken());
 
 //                    gotSoFar = gotSoFar + workIfAvailable.size();
 //
@@ -108,7 +108,7 @@ public class WorkQueue<K, V> {
         }
     }
 
-    public void addAll(List<PCWorker<K, V, ?>.NewWork> newWork) {
+    public void addAll(List<PCWorker<K, V, ?>.NewWorkMessage> newWork) {
         for (var work : newWork) {
             addIfMissing(work.getShard());
 

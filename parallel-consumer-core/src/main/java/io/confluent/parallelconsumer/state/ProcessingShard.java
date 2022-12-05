@@ -6,19 +6,13 @@ package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.internal.RateLimiter;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.NonNull;
-import lombok.RequiredArgsConstructor;
+import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.stream.Collectors;
 
-import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.csid.utils.JavaUtils.isGreaterThan;
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
@@ -53,8 +47,6 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
     private final ParallelConsumerOptions<?, ?> options;
 
     private final PartitionStateManager<K, V> pm;
-
-    private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
     public boolean workIsWaitingToBeProcessed() {
         return entries.values().parallelStream()
@@ -111,18 +103,6 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
 //        return new Batch<>(workIfAvailable);
 //    }
 
-    private void logSlowWork(Set<WorkContainer<?, ?>> slowWork) {
-        // log
-        if (!slowWork.isEmpty()) {
-            List<String> slowTopics = slowWork.parallelStream()
-                    .map(x -> x.getTopicPartition().toString()).distinct()
-                    .collect(Collectors.toList());
-            slowWarningRateLimit.performIfNotLimited(() ->
-                    log.warn("Warning: {} records in the queue have been waiting longer than {}s for following topics {}.",
-                            slowWork.size(), toSeconds(options.getThresholdForTimeSpendInQueueWarning()), slowTopics));
-        }
-    }
-
     private void addToSlowWorkMaybe(Set<WorkContainer<?, ?>> slowWork, WorkContainer<?, ?> workContainer) {
         var msgTemplate = "Can't take as work: Work ({}). Must all be true: Delay passed= {}. Is not in flight= {}. Has not succeeded already= {}. Time spent in execution queue: {}.";
         Duration timeInFlight = workContainer.getTimeInFlight();
@@ -140,7 +120,9 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
         return options.getOrdering() != UNORDERED;
     }
 
-    public synchronized ArrayList<WorkContainer<K, V>> getWorkIfAvailable(int workToGetDelta) {
+    // audit synchronized usage
+    // todo remove synchronized
+    public synchronized WorkRequestResult getWorkIfAvailable(int workToGetDelta) {
         log.trace("Looking for work on shardQueueEntry: {}", getKey());
 
         var slowWork = new HashSet<WorkContainer<?, ?>>();
@@ -169,13 +151,19 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
             }
         }
 
-        if (workTaken.size() == workToGetDelta) {
+        if (workTaken.size() > workToGetDelta) {
             log.trace("Work taken ({}) exceeds max ({})", workTaken.size(), workToGetDelta);
         }
 
-        logSlowWork(slowWork);
+        return new WorkRequestResult(workTaken, slowWork);
+    }
 
-        return workTaken;
+    @Value
+    public class WorkRequestResult {
+
+        ArrayList<WorkContainer<K, V>> workTaken;
+
+        HashSet<WorkContainer<?, ?>> slowWork;
     }
 
     @Override

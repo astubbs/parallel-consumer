@@ -38,13 +38,17 @@ import static pl.tlinkowski.unij.api.UniLists.of;
 class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> {
 
     public List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
+
     public List<String> producedKeysAcknowledged = Collections.synchronizedList(new ArrayList<>());
+
     public AtomicInteger processedCount = new AtomicInteger(0);
+
     public AtomicInteger producedCount = new AtomicInteger(0);
 
     int maxPoll = 500; // 500 is the kafka default
 
     CommitMode commitMode = CommitMode.PERIODIC_CONSUMER_SYNC;
+
     ProcessingOrder order = ProcessingOrder.KEY;
 
 
@@ -56,9 +60,11 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         String inputTopicName = setupTopic(this.getClass().getSimpleName() + "-input");
 
 //        int expectedMessageCount = 10_000_000;
-//        int expectedMessageCount = 60_000_00;
-        int expectedMessageCount = 30_000_00;
+        int expectedMessageCount = 6_000_000;
+//        int expectedMessageCount = 3_000000;
+//        int expectedMessageCount = 300_000;
 //        int expectedMessageCount = 30_000;
+//        int expectedMessageCount = 3_000;
 
         log.info("Producing {} messages before starting test", expectedMessageCount);
 
@@ -84,7 +90,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(ofSeconds(60))
+            waitAtMost(ofSeconds(160))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     // .failFast( () -> pcThree.getFailureCause(), () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .failFast("PC died - check logs", () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761

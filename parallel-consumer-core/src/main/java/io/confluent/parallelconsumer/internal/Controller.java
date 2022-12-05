@@ -21,6 +21,7 @@ import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import static io.confluent.csid.utils.StringUtils.msg;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
 
@@ -116,7 +117,7 @@ public class Controller<K, V> implements DrainingCloseable {
         try {
             executorService = InitialContext.doLookup(options.getManagedExecutorService());
         } catch (NamingException e) {
-            log.debug("Using Java SE Thread", e);
+            log.debug(msg("Using Java SE Thread {}", e.getMessage()));
             executorService = Executors.newSingleThreadExecutor();
         }
 
