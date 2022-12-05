@@ -53,8 +53,8 @@
     <!-- Key classes -->
     <!--    <logger name="io.confluent.parallelconsumer.internal.WorkMailbox" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer.internal.ControlLoop" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.internal.PCWorkerPool" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.internal.PCWorker" level="debug"/>-->
+    <logger name="io.confluent.parallelconsumer.internal.PCWorkerPool" level="debug"/>
+    <logger name="io.confluent.parallelconsumer.internal.PCWorker" level="debug"/>
     <!--    <logger name="io.confluent.parallelconsumer.internal.Controller" level="debug"/>-->
     <!--        <logger name="io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="debug"/>-->
     <!-- <logger name="io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="trace"/>-->

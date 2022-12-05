@@ -167,7 +167,8 @@ public class PCWorkerPool<K, V, R> implements Closeable {
      */
     public void distributeToWorkers(Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workMap) {
         if (workMap.isEmpty()) {
-            log.debug("No work to distribute");
+            log.trace("No work to distribute");
+            return;
         }
 
         if (log.isDebugEnabled()) {
@@ -175,6 +176,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         }
 
         //
+        // todo extract to new version of looping resuming iterator / collection?
         var startPoint = lastWorker == null ? workers.first() : lastWorker;
         var workerTail = workers.tailSet(startPoint);
         if (workerTail.isEmpty()) {

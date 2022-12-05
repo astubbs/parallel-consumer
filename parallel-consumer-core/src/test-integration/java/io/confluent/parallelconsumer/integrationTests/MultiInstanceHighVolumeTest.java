@@ -162,6 +162,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
 //        }
         bar.stepBy(1);
         consumedKeys.add(record.key());
+//        Thread.sleep(1);
         processedCount.incrementAndGet();
         consumed.add(record);
 //        return new ProducerRecord<>(outputName, record.key(), "data");

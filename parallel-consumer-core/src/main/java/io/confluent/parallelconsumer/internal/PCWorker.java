@@ -35,6 +35,8 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 // todo rename worker
 public class PCWorker<K, V, R> {
 
+    public static final String WORKER_PREFIX = "worker";
+
     /**
      * Minimum number of timing measurements before we can calculate a good value
      */
@@ -65,7 +67,8 @@ public class PCWorker<K, V, R> {
 
     private LinkedBlockingQueue<NewWorkMessage> inbox = new LinkedBlockingQueue<>();
 
-    DistributionSummary workQueueSizeDistribution = DistributionSummary.builder("workQueue.size").register(metricsRegistry);
+    DistributionSummary workQueueSizeDistribution =
+            DistributionSummary.builder(WORKER_PREFIX + ".workQueue.size").register(metricsRegistry);
 
 //    private Batch<WorkContainer<K, V>> acquireFromWmBatch() throws InterruptedException {
 //        return wm.take();
@@ -75,8 +78,12 @@ public class PCWorker<K, V, R> {
 //        return wm.take();
 //    }
 
+    RateLimiter loopPerfStats = new RateLimiter();
+
     @NonFinal
     public int LOADING_MULTIPLE = 2;
+
+    private Timer spentWaitingForNewWorkTimer = metricsRegistry.timer(WORKER_PREFIX + ".wait.newWork");
 
 //    private void process(List<List<WorkContainer<K, V>>> listOfBatches) {
 //        var start = Timer.start(metricsRegistry);
@@ -92,6 +99,9 @@ public class PCWorker<K, V, R> {
 
     // todo audit interruptions with finally blocks
     public void loop() {
+        Runnable stats = () -> log.debug("Loop stats: blocking time for new work: {} ms",
+                (int) spentWaitingForNewWorkTimer.mean(MILLISECONDS));
+
         while (!Thread.currentThread().isInterrupted()) {
             try {
 //                Batch<K, V> work = acquireFromWm();
@@ -109,6 +119,11 @@ public class PCWorker<K, V, R> {
 //                var batches = batcher.makeBatches(work.getValues());
 
                 processWorkQueue();
+
+                if (log.isDebugEnabled()) {
+                    loopPerfStats.performIfNotLimited(stats);
+                }
+
             } catch (InterruptedException e) {
                 log.info("Interrupted");
                 Thread.currentThread().interrupt();
@@ -133,7 +148,10 @@ public class PCWorker<K, V, R> {
     private void processNewWorkBlocking() throws InterruptedException {
         var drain = new LinkedList<NewWorkMessage>();
 
+        var start = Timer.start();
         var first = inbox.take();// wait for first
+        start.stop(spentWaitingForNewWorkTimer);
+
         drain.add(first);
 
         // drain if still not empty
@@ -184,11 +202,13 @@ public class PCWorker<K, V, R> {
     public int getQueueCapacity(Timer workRetrievalTimer) {
 //        return 100 - workQueue.size();
 //        return 100000;
-        var totalCapacity = calculateQuantityShouldHaveInQueue(workRetrievalTimer);
+        var calculatedTargetQueueSize = calculateQuantityShouldHaveInQueue(workRetrievalTimer);
+        var targetSize = calculatedTargetQueueSize * LOADING_MULTIPLE;
         var currentQueueSize = getCurrentQueueWorkContainerCount();
-        var remainingCapacity = totalCapacity - currentQueueSize;
-        log.debug("Target capacity: {}, current q size: {}, remaining {}",
-                totalCapacity,
+        var remainingCapacity = targetSize - currentQueueSize;
+
+        log.trace("Target capacity: {}, current q size: {}, remaining {}",
+                targetSize,
                 currentQueueSize,
                 remainingCapacity);
 
@@ -212,17 +232,20 @@ public class PCWorker<K, V, R> {
 
 
         if (log.isDebugEnabled()) {
-            log.debug("ID: {}, Calculated raw capacity: {}, control measurement count: {}, time: {} ms, " +
-                            "worker measurement count: {}, avg queue size: {}, processing time: {} ms, " +
-                            "avg time per work container: {} microSeconds",
-                    getWorkerId(),
-                    rawCalculatedCapacity,
-                    workRetrievalTimer.count(),
-                    (int) workRetrievalTimer.mean(MILLISECONDS),
-                    processingWorkQueueTimer.count(),
-                    (int) averageWorkContainersInQueueCOUNT,
-                    (int) processingWorkQueueTimer.mean(MILLISECONDS),
-                    (int) processingTimePerWorkContainerNS / 1000
+            loopPerfStats.performIfNotLimited(() ->
+                    log.debug("Worker: {}, " +
+                                    "Units required to keep busy: {}, " +
+                                    "control loop time: {} ms," +
+                                    "worker avg queue size: {}, " +
+                                    "processing time: {} ms, " +
+                                    "avg time per work container: {} microSeconds",
+                            getWorkerId(),
+                            rawCalculatedCapacity,
+                            (int) workRetrievalTimer.mean(MILLISECONDS),
+                            (int) averageWorkContainersInQueueCOUNT,
+                            (int) processingWorkQueueTimer.mean(MILLISECONDS),
+                            (int) processingTimePerWorkContainerNS / 1000
+                    )
             );
         }
 

@@ -69,7 +69,6 @@ public class ControlLoop<K, V> {
 
     StateMachine state;
 
-    // todo delete
     RateLimiter loopPerfStats = new RateLimiter();
 
     // todo depends on MicroMeter pr
@@ -385,8 +384,7 @@ public class ControlLoop<K, V> {
     private int retrieveAndDistributeNewWorkNew() {
         var capacity = workerPool.getCapacity(controlLoop);
 
-        var loadingFactor = 2;
-        var work = wm.getWorkIfAvailable(capacity * loadingFactor);
+        var work = wm.getWorkIfAvailable(capacity);
 //        var work = qsm.take();
 
 //        workerPool.distributeToWorkerShards(work);
