@@ -48,6 +48,8 @@ public class PCModule<K, V> {
 
     private PartitionStateManager<K, V> partitionStateManager;
 
+    private CentralQueue<K, V> centralQueue;
+
     public PCModule(ParallelConsumerOptions<K, V> options) {
         this.optionsInstance = options;
     }
@@ -202,5 +204,12 @@ public class PCModule<K, V> {
 
     public PCWorkerPool<K, V, ?> workerPool() {
         return controlLoop().getWorkerPool();
+    }
+
+    public CentralQueue<K, V> centralQueue() {
+        if (centralQueue == null) {
+            centralQueue = new CentralQueue<>(options());
+        }
+        return centralQueue;
     }
 }

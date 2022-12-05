@@ -6,13 +6,11 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.state.ProcessingShard;
 import io.confluent.parallelconsumer.state.QueuedWorkManager;
-import io.confluent.parallelconsumer.state.WorkContainer;
 import io.confluent.parallelconsumer.state.WorkManager;
-import io.micrometer.core.instrument.Timer;
 import lombok.SneakyThrows;
 import lombok.Value;
+import lombok.experimental.FieldDefaults;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 
@@ -20,11 +18,14 @@ import javax.naming.InitialContext;
 import javax.naming.NamingException;
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.*;
+import java.util.Comparator;
+import java.util.NavigableSet;
+import java.util.TreeSet;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static lombok.AccessLevel.PRIVATE;
 
 /**
  * @author Antony Stubbs
@@ -33,6 +34,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 @Slf4j
 @Value
 @NonFinal
+@FieldDefaults(makeFinal = true, level = PRIVATE)
 // todo rename WorkerPool
 public class PCWorkerPool<K, V, R> implements Closeable {
 
@@ -50,7 +52,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 
 //    Map<ProcessingShard<?, ?>, PCWorker<K, V, ?>> shardWorkerMap = new HashMap<>();
 
-    private final PCModule<K, V> module;
+    PCModule<K, V> module;
 
     @NonFinal
     PCWorker<K, V, R> lastWorker;
@@ -65,7 +67,7 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         executorPool = createExecutorPool(options.getMaxConcurrency(), module.workManager());
         var qwm = new QueuedWorkManager<K, V>(module.queuedShardManager());
         var pcWorkerStream = Range.range(poolSize).toStream().boxed()
-                .map(ignore -> new PCWorker<>(this, qwm))
+                .map(ignore -> new PCWorker<>(this, qwm, module.centralQueue()))
                 .collect(Collectors.toList());
         workers = new TreeSet<PCWorker<K, V, R>>(Comparator.comparing(PCWorker::toString));
         workers.addAll(pcWorkerStream);
@@ -105,14 +107,14 @@ public class PCWorkerPool<K, V, R> implements Closeable {
 //        worker.onWorkAdded(processingShard);
 //    }
 
-    public int getCapacity(Timer workRetrievalTimer) {
-        var poolRemainingCapacity = workers.stream().map(worker ->
-                        worker.getQueueCapacity(workRetrievalTimer))
-                .reduce(Integer::sum)
-                .orElse(0);
-        log.debug("Pool remaining capacity: {}", poolRemainingCapacity);
-        return poolRemainingCapacity;
-    }
+//    public int getCapacity(Timer workRetrievalTimer) {
+//        var poolRemainingCapacity = workers.stream().map(worker ->
+//                        worker.getQueueCapacity(workRetrievalTimer))
+//                .reduce(Integer::sum)
+//                .orElse(0);
+//        log.debug("Pool remaining capacity: {}", poolRemainingCapacity);
+//        return poolRemainingCapacity;
+//    }
 
 //    /**
 //     * Distribute the work in this list fairly across the workers
@@ -162,49 +164,49 @@ public class PCWorkerPool<K, V, R> implements Closeable {
         return executorPool.getQueue().size();
     }
 
-    /**
-     * Distribute round robbin to the workers, resuming from the last worker
-     */
-    public void distributeToWorkers(Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workMap) {
-        if (workMap.isEmpty()) {
-            log.trace("No work to distribute");
-            return;
-        }
-
-        if (log.isDebugEnabled()) {
-            log.debug("Distributing {} work items to {} workers", workMap.values().stream().mapToInt(List::size).sum(), workers.size());
-        }
-
-        //
-        // todo extract to new version of looping resuming iterator / collection?
-        var startPoint = lastWorker == null ? workers.first() : lastWorker;
-        var workerTail = workers.tailSet(startPoint);
-        if (workerTail.isEmpty()) {
-            // loop to start
-            workerTail = workers;
-        }
-        var workerIterator = workerTail.iterator();
-
-        // loops forever over the workers, resuming from last point, until all work is distributed
-        for (var work : workMap.entrySet()) {
-            // if exhausted, loop back to start
-            if (!workerIterator.hasNext()) {
-                workerIterator = workers.iterator();
-            }
-            var workUnits = work.getValue();
-            var worker = workerIterator.next();
-            lastWorker = worker;
-            worker.newWorkMessage(work.getKey(), workUnits);
-        }
-
-//        // flatten
-//        var queue = new ArrayDeque<List<WorkContainer<K, V>>>();
-//        for (var toProcess : workMap.entrySet()) {
-//            queue.add(toProcess.getValue());
+//    /**
+//     * Distribute round robbin to the workers, resuming from the last worker
+//     */
+//    public void distributeToWorkers(Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> workMap) {
+//        if (workMap.isEmpty()) {
+//            log.trace("No work to distribute");
+//            return;
 //        }
 //
-//        distributeToWorkers(queue);
-    }
+//        if (log.isDebugEnabled()) {
+//            log.debug("Distributing {} work items to {} workers", workMap.values().stream().mapToInt(List::size).sum(), workers.size());
+//        }
+//
+//        //
+//        // todo extract to new version of looping resuming iterator / collection?
+//        var startPoint = lastWorker == null ? workers.first() : lastWorker;
+//        var workerTail = workers.tailSet(startPoint);
+//        if (workerTail.isEmpty()) {
+//            // loop to start
+//            workerTail = workers;
+//        }
+//        var workerIterator = workerTail.iterator();
+//
+//        // loops forever over the workers, resuming from last point, until all work is distributed
+//        for (var work : workMap.entrySet()) {
+//            // if exhausted, loop back to start
+//            if (!workerIterator.hasNext()) {
+//                workerIterator = workers.iterator();
+//            }
+//            var workUnits = work.getValue();
+//            var worker = workerIterator.next();
+//            lastWorker = worker;
+//            worker.newWorkMessage(work.getKey(), workUnits);
+//        }
+//
+////        // flatten
+////        var queue = new ArrayDeque<List<WorkContainer<K, V>>>();
+////        for (var toProcess : workMap.entrySet()) {
+////            queue.add(toProcess.getValue());
+////        }
+////
+////        distributeToWorkers(queue);
+//    }
 
 //    private void distributeToWorkers(Deque<List<WorkContainer<K, V>>> queue) {
 //        // round robin

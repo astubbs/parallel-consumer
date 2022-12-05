@@ -108,16 +108,16 @@ public class WorkQueue<K, V> {
         }
     }
 
-    public void addAll(List<PCWorker<K, V, ?>.NewWorkMessage> newWork) {
-        for (var work : newWork) {
-            addIfMissing(work.getShard());
-
-            for (var newWork1 : work.getValue()) {
-                // todo add all
-                work.getShard().addWorkContainer(newWork1);
-            }
-        }
-    }
+//    public void addAll(List<PCWorker<K, V, ?>queue.NewWorkMessage> newWork) {
+//        for (var work : newWork) {
+//            addIfMissing(work.getShard());
+//
+//            for (var newWork1 : work.getValue()) {
+//                // todo add all
+//                work.getShard().addWorkContainer(newWork1);
+//            }
+//        }
+//    }
 
 
 }

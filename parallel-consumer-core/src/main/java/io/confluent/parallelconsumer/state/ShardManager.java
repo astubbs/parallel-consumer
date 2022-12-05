@@ -6,17 +6,15 @@ package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.BrokerPollSystem;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.RateLimiter;
+import io.confluent.parallelconsumer.internal.*;
 import lombok.AccessLevel;
 import lombok.Getter;
+import lombok.experimental.FieldDefaults;
+import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -24,8 +22,6 @@ import java.util.stream.Collectors;
 
 import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
-import static java.util.Optional.empty;
-import static java.util.Optional.of;
 import static lombok.AccessLevel.PROTECTED;
 
 /**
@@ -40,6 +36,7 @@ import static lombok.AccessLevel.PROTECTED;
  * @author Antony Stubbs
  */
 @Slf4j
+@FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ShardManager<K, V> {
 
     private final PCModule<K, V> module;
@@ -65,10 +62,6 @@ public class ShardManager<K, V> {
     protected final ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> processingShards =
             new ConcurrentSkipListMap<>();
 
-    // todo audit
-    @Getter
-    private int numberRecordsOutForProcessing = 0;
-
     /**
      * TreeSet is a Set, so must ensure that we are consistent with equalTo in our comparator - so include the full id -
      * {@link TopicPartition} and offset after comparing the retry due time.
@@ -79,7 +72,7 @@ public class ShardManager<K, V> {
      * of WHEN it's queried - so must not use shortcuts like {@link Instant#now()}
      */
     @Getter(AccessLevel.PACKAGE) // visible for testing
-    private final Comparator<WorkContainer<?, ?>> retryQueueWorkContainerComparator = Comparator
+    public static final Comparator<WorkContainer<?, ?>> retryQueueWorkContainerComparator = Comparator
             .comparing((WorkContainer<?, ?> workContainer) -> workContainer.getRetryDueAt())
             .thenComparing(workContainer -> {
                 // TopicPartition does not implement comparable
@@ -88,11 +81,18 @@ public class ShardManager<K, V> {
             })
             .thenComparing(WorkContainer::offset);
 
-    /**
-     * Read optimised view of {@link WorkContainer}s that need retrying.
-     */
-    @Getter(AccessLevel.PACKAGE) // visible for testing
-    private final NavigableSet<WorkContainer<?, ?>> retryQueue = new TreeSet<>(retryQueueWorkContainerComparator);
+    CentralQueue<K, V> centralQueue;
+
+    // todo audit
+    @Getter
+    @NonFinal
+    int numberRecordsOutForProcessing = 0;
+
+//    /**
+//     * Read optimised view of {@link WorkContainer}s that need retrying.
+//     */
+//    @Getter(AccessLevel.PACKAGE) // visible for testing
+//    private final NavigableSet<WorkContainer<?, ?>> retryQueue = new TreeSet<>(retryQueueWorkContainerComparator);
 
     /**
      * Iteration resume point, to ensure fairness (prevent shard starvation) when we can't process messages from every
@@ -104,6 +104,7 @@ public class ShardManager<K, V> {
     public ShardManager(final PCModule<K, V> module) {
         this.module = module;
         this.options = module.options();
+        this.centralQueue = module.centralQueue();
     }
 
     /**
@@ -123,6 +124,16 @@ public class ShardManager<K, V> {
         var shard = processingShards.computeIfAbsent(shardKey,
                 ignore -> new ProcessingShard<>(shardKey, options, module.partitionStateManager()));
         shard.addWorkContainer(wc);
+
+        maybeQueueCentrallyFromShard(shard);
+    }
+
+    /**
+     * After work is added to a shard, check if it should be queued centrally for processing.
+     */
+    private void maybeQueueCentrallyFromShard(ProcessingShard<K, V> shard) {
+        var workIfAvailable = shard.getWorkIfAvailable(Integer.MAX_VALUE);
+        centralQueue.queueWorkForProcessing(workIfAvailable);
     }
 
     public ShardKey computeShardKey(ConsumerRecord<?, ?> wc) {
@@ -170,8 +181,10 @@ public class ShardManager<K, V> {
             ProcessingShard<K, V> shard = processingShards.get(shardKey);
             WorkContainer<K, V> removedWC = shard.remove(consumerRecord.offset());
 
-            // remove if in retry queue
-            this.retryQueue.remove(removedWC);
+//            // remove if in retry queue
+//            this.retryQueue.remove(removedWC);
+            // todo is this needed? worker can just ignore it?
+            centralQueue.removeWorkFromShardFor(removedWC);
 
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
@@ -201,15 +214,19 @@ public class ShardManager<K, V> {
     public void onSuccess(WorkContainer<?, ?> wc) {
         numberRecordsOutForProcessing--;
 
-        // remove from the retry queue if it's contained
-        this.retryQueue.remove(wc);
+//        // remove from the retry queue if it's contained
+//        this.retryQueue.remove(wc);
 
         // remove from processing queues
         var key = computeShardKey(wc);
         var shardOptional = getShard(key);
         if (shardOptional.isPresent()) {
             //
-            shardOptional.get().onSuccess(wc);
+            var shard = shardOptional.get();
+            shard.onSuccess(wc);
+
+            maybeQueueCentrallyFromShard(shard);
+
             removeShardIfEmpty(key);
         } else {
             log.trace("Dropping successful result for revoked partition {}. Record in question was: {}", key, wc.getCr());
@@ -219,24 +236,27 @@ public class ShardManager<K, V> {
     /**
      * Idempotent - work may have not been removed, either way it's put back
      */
-    public void onFailure(WorkContainer<?, ?> wc) {
+    public void onFailure(WorkContainer<K, V> wc) {
         log.debug("Work FAILED");
-        this.retryQueue.add(wc);
+
+        // todo maybe move to shard?
+        centralQueue.addToRetry(wc);
+//        this.retryQueue.add(wc);
         numberRecordsOutForProcessing--;
     }
 
-    /**
-     * @return none if there are no messages to retry
-     */
-    public Optional<Duration> getLowestRetryTime() {
-        // find the first in the queue that isn't in flight
-        // could potentially remove from queue when in flight but that's messy and performance gain would be trivial
-        for (WorkContainer<?, ?> workContainer : this.retryQueue) {
-            if (workContainer.isNotInFlight())
-                return of(workContainer.getDelayUntilRetryDue());
-        }
-        return empty();
-    }
+//    /**
+//     * @return none if there are no messages to retry
+//     */
+//    public Optional<Duration> getLowestRetryTime() {
+//        // find the first in the queue that isn't in flight
+//        // could potentially remove from queue when in flight but that's messy and performance gain would be trivial
+//        for (WorkContainer<?, ?> workContainer : this.retryQueue) {
+//            if (workContainer.isNotInFlight())
+//                return of(workContainer.getDelayUntilRetryDue());
+//        }
+//        return empty();
+//    }
 
 
 //    public void getWorkThreadSafe() {
@@ -301,13 +321,13 @@ public class ShardManager<K, V> {
 //        return workFromAllShards;
 //    }
 
-    private void updateResumePoint(Optional<Map.Entry<ShardKey, ProcessingShard<K, V>>> lastShard) {
-        // if empty, iteration was exhausted and no resume point is needed
-        iterationResumePoint = lastShard.map(Map.Entry::getKey);
-        if (iterationResumePoint.isPresent()) {
-            log.debug("Work taken is now over max, stopping (saving iteration resume point {})", iterationResumePoint);
-        }
-    }
+//    private void updateResumePoint(Optional<Map.Entry<ShardKey, ProcessingShard<K, V>>> lastShard) {
+//        // if empty, iteration was exhausted and no resume point is needed
+//        iterationResumePoint = lastShard.map(Map.Entry::getKey);
+//        if (iterationResumePoint.isPresent()) {
+//            log.debug("Work taken is now over max, stopping (saving iteration resume point {})", iterationResumePoint);
+//        }
+//    }
 
     public Map<ProcessingShard<K, V>, List<WorkContainer<K, V>>> getWorkIfAvailable(int requestedMaxWorkToRetrieve) {
         var slowWork = new HashSet<WorkContainer<?, ?>>();
@@ -356,3 +376,4 @@ public class ShardManager<K, V> {
     }
 
 }
+

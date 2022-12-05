@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import io.confluent.parallelconsumer.state.ProcessingShard;
 import io.confluent.parallelconsumer.state.QueuedWorkManager;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -13,7 +12,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.Value;
 import lombok.experimental.FieldDefaults;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
@@ -21,10 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
-import java.util.concurrent.LinkedBlockingQueue;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 /**
  * @author Antony Stubbs
@@ -65,7 +61,7 @@ public class PCWorker<K, V, R> {
 
     Batcher<WorkContainer<K, V>> batcher = new Batcher<>();
 
-    private LinkedBlockingQueue<NewWorkMessage> inbox = new LinkedBlockingQueue<>();
+//    private LinkedBlockingQueue<NewWorkMessage> inbox = new LinkedBlockingQueue<>();
 
     DistributionSummary workQueueSizeDistribution =
             DistributionSummary.builder(WORKER_PREFIX + ".workQueue.size").register(metricsRegistry);
@@ -84,6 +80,8 @@ public class PCWorker<K, V, R> {
     public int LOADING_MULTIPLE = 2;
 
     private Timer spentWaitingForNewWorkTimer = metricsRegistry.timer(WORKER_PREFIX + ".wait.newWork");
+
+    private CentralQueue centralQueue;
 
 //    private void process(List<List<WorkContainer<K, V>>> listOfBatches) {
 //        var start = Timer.start(metricsRegistry);
@@ -107,7 +105,7 @@ public class PCWorker<K, V, R> {
 //                Batch<K, V> work = acquireFromWm();
 //                var work = acquireFromQueue();
 
-                processNewWorkBlocking();
+//                processNewWorkBlocking();
 
 
                 // todo rectify - drainTo?
@@ -118,7 +116,7 @@ public class PCWorker<K, V, R> {
 //                var work = acquireFromWmBatch();
 //                var batches = batcher.makeBatches(work.getValues());
 
-                processWorkQueue();
+                processWorkQueueFromCentral();
 
                 if (log.isDebugEnabled()) {
                     loopPerfStats.performIfNotLimited(stats);
@@ -142,31 +140,31 @@ public class PCWorker<K, V, R> {
 //        return work;
 //    }
 
-    /**
-     * Blocks until a message is received
-     */
-    private void processNewWorkBlocking() throws InterruptedException {
-        var drain = new LinkedList<NewWorkMessage>();
+//    /**
+//     * Blocks until a message is received
+//     */
+//    private void processNewWorkBlocking() throws InterruptedException {
+//        var drain = new LinkedList<NewWorkMessage>();
+//
+//        var start = Timer.start();
+//        var first = inbox.take();// wait for first
+//        start.stop(spentWaitingForNewWorkTimer);
+//
+//        drain.add(first);
+//
+//        // drain if still not empty
+//        if (!inbox.isEmpty()) { // protects from acquiring the lock again
+//            var inboxSize = inbox.size();
+//            inbox.drainTo(drain, inboxSize); // drain the rest, but up to a limit
+//        }
+//
+//        // process
+//        for (var msg : drain) {
+//            workQueue.addAll(msg.getValue());
+//        }
+//    }
 
-        var start = Timer.start();
-        var first = inbox.take();// wait for first
-        start.stop(spentWaitingForNewWorkTimer);
-
-        drain.add(first);
-
-        // drain if still not empty
-        if (!inbox.isEmpty()) { // protects from acquiring the lock again
-            var inboxSize = inbox.size();
-            inbox.drainTo(drain, inboxSize); // drain the rest, but up to a limit
-        }
-
-        // process
-        for (var msg : drain) {
-            workQueue.addAll(msg.getValue());
-        }
-    }
-
-    private void processWorkQueue() {
+    private void processWorkQueueFromCentral() throws InterruptedException {
         if (workQueue.isEmpty()) {
             return;
         }
@@ -175,21 +173,46 @@ public class PCWorker<K, V, R> {
 
         var functionRunner = parentPool.getRunner();
 
-        var workQueueSize = workQueue.size();
+//        var workQueueSize = workQueue.size();
+//
+//        while (!workQueue.isEmpty()) {
 
-        while (!workQueue.isEmpty()) {
-
-            var work = pollFromQueue(1);
-            var listOfBatches = batcher.makeBatches(work);
-            for (var batch : listOfBatches) {
-                functionRunner.run(batch);
-            }
-        }
+        var work = centralQueue.take();
+//            var listOfBatches = batcher.makeBatches(work);
+//            for (var batch : listOfBatches) {
+        functionRunner.run(work.getValues());
+//            }
+//        }
 
         // update metrics
         start.stop(processingWorkQueueTimer);
-        workQueueSizeDistribution.record(workQueueSize);
+//        workQueueSizeDistribution.record(workQueueSize);
     }
+
+//    private void processWorkQueue() {
+//        if (workQueue.isEmpty()) {
+//            return;
+//        }
+//
+//        var start = Timer.start(metricsRegistry);
+//
+//        var functionRunner = parentPool.getRunner();
+//
+//        var workQueueSize = workQueue.size();
+//
+//        while (!workQueue.isEmpty()) {
+//
+//            var work = pollFromQueue(1);
+//            var listOfBatches = batcher.makeBatches(work);
+//            for (var batch : listOfBatches) {
+//                functionRunner.run(batch);
+//            }
+//        }
+//
+//        // update metrics
+//        start.stop(processingWorkQueueTimer);
+//        workQueueSizeDistribution.record(workQueueSize);
+//    }
 
     private List<WorkContainer<K, V>> pollFromQueue(int howMany) {
         var work = new LinkedList<WorkContainer<K, V>>();
@@ -199,62 +222,62 @@ public class PCWorker<K, V, R> {
         return work;
     }
 
-    public int getQueueCapacity(Timer workRetrievalTimer) {
-//        return 100 - workQueue.size();
-//        return 100000;
-        var calculatedTargetQueueSize = calculateQuantityShouldHaveInQueue(workRetrievalTimer);
-        var targetSize = calculatedTargetQueueSize * LOADING_MULTIPLE;
-        var currentQueueSize = getCurrentQueueWorkContainerCount();
-        var remainingCapacity = targetSize - currentQueueSize;
+//    public int getQueueCapacity(Timer workRetrievalTimer) {
+////        return 100 - workQueue.size();
+////        return 100000;
+//        var calculatedTargetQueueSize = calculateQuantityShouldHaveInQueue(workRetrievalTimer);
+//        var targetSize = calculatedTargetQueueSize * LOADING_MULTIPLE;
+//        var currentQueueSize = getCurrentQueueWorkContainerCount();
+//        var remainingCapacity = targetSize - currentQueueSize;
+//
+//        log.trace("Target capacity: {}, current q size: {}, remaining {}",
+//                targetSize,
+//                currentQueueSize,
+//                remainingCapacity);
+//
+//        return remainingCapacity;
+//    }
 
-        log.trace("Target capacity: {}, current q size: {}, remaining {}",
-                targetSize,
-                currentQueueSize,
-                remainingCapacity);
+//    private int calculateQuantityShouldHaveInQueue(Timer workRetrievalTimer) {
+//        if (workRetrievalTimer.count() < NUMBER_OF_MEASUREMENTS_CUTOFF || processingWorkQueueTimer.count() < NUMBER_OF_MEASUREMENTS_CUTOFF) {
+//            return INITIAL_MIN_QUEUE_SIZE;
+//        }
+//
+//        var retrievalNS = workRetrievalTimer.mean(NANOSECONDS);
+//
+//        var averageTimeProcessingWorkQueueNS = processingWorkQueueTimer.mean(NANOSECONDS);
+//        var averageWorkContainersInQueueCOUNT = workQueueSizeDistribution.mean();
+//        var processingTimePerWorkContainerNS = averageTimeProcessingWorkQueueNS / averageWorkContainersInQueueCOUNT;
+//
+//        var quantity = retrievalNS / processingTimePerWorkContainerNS;
+//
+//        var rawCalculatedCapacity = (int) quantity;
+//
+//
+//        if (log.isDebugEnabled()) {
+//            loopPerfStats.performIfNotLimited(() ->
+//                    log.debug("Worker: {}, " +
+//                                    "Units required to keep busy: {}, " +
+//                                    "control loop time: {} ms," +
+//                                    "worker avg queue size: {}, " +
+//                                    "processing time: {} ms, " +
+//                                    "avg time per work container: {} microSeconds",
+//                            getWorkerId(),
+//                            rawCalculatedCapacity,
+//                            (int) workRetrievalTimer.mean(MILLISECONDS),
+//                            (int) averageWorkContainersInQueueCOUNT,
+//                            (int) processingWorkQueueTimer.mean(MILLISECONDS),
+//                            (int) processingTimePerWorkContainerNS / 1000
+//                    )
+//            );
+//        }
+//
+//        return rawCalculatedCapacity;
+//    }
 
-        return remainingCapacity;
-    }
-
-    private int calculateQuantityShouldHaveInQueue(Timer workRetrievalTimer) {
-        if (workRetrievalTimer.count() < NUMBER_OF_MEASUREMENTS_CUTOFF || processingWorkQueueTimer.count() < NUMBER_OF_MEASUREMENTS_CUTOFF) {
-            return INITIAL_MIN_QUEUE_SIZE;
-        }
-
-        var retrievalNS = workRetrievalTimer.mean(NANOSECONDS);
-
-        var averageTimeProcessingWorkQueueNS = processingWorkQueueTimer.mean(NANOSECONDS);
-        var averageWorkContainersInQueueCOUNT = workQueueSizeDistribution.mean();
-        var processingTimePerWorkContainerNS = averageTimeProcessingWorkQueueNS / averageWorkContainersInQueueCOUNT;
-
-        var quantity = retrievalNS / processingTimePerWorkContainerNS;
-
-        var rawCalculatedCapacity = (int) quantity;
-
-
-        if (log.isDebugEnabled()) {
-            loopPerfStats.performIfNotLimited(() ->
-                    log.debug("Worker: {}, " +
-                                    "Units required to keep busy: {}, " +
-                                    "control loop time: {} ms," +
-                                    "worker avg queue size: {}, " +
-                                    "processing time: {} ms, " +
-                                    "avg time per work container: {} microSeconds",
-                            getWorkerId(),
-                            rawCalculatedCapacity,
-                            (int) workRetrievalTimer.mean(MILLISECONDS),
-                            (int) averageWorkContainersInQueueCOUNT,
-                            (int) processingWorkQueueTimer.mean(MILLISECONDS),
-                            (int) processingTimePerWorkContainerNS / 1000
-                    )
-            );
-        }
-
-        return rawCalculatedCapacity;
-    }
-
-    private int getCurrentQueueWorkContainerCount() {
-        return workQueue.size() + inbox.stream().mapToInt(x -> x.getValue().size()).sum();
-    }
+//    private int getCurrentQueueWorkContainerCount() {
+//        return workQueue.size() + inbox.stream().mapToInt(x -> x.getValue().size()).sum();
+//    }
 
 //    public void enqueue(List<WorkContainer<K, V>> work) {
 //        workQueue.add(work);
@@ -271,34 +294,34 @@ public class PCWorker<K, V, R> {
 //        workQueue.onWorkAdded(processingShard);
 //    }
 
-    /**
-     * todo docs
-     * <p>
-     * todo extract external API interface
-     * <p>
-     * External thread safe API
-     */
-    @ThreadSafe
-    public void newWorkMessage(ProcessingShard<K, V> shard, List<WorkContainer<K, V>> workList) {
-        if (workList.isEmpty()) {
-            throw new IllegalArgumentException("Empty work list");
-        }
-
-        NewWorkMessage msg = new NewWorkMessage(shard, workList);
-        this.inbox.add(msg);
-    }
+//    /**
+//     * todo docs
+//     * <p>
+//     * todo extract external API interface
+//     * <p>
+//     * External thread safe API
+//     */
+//    @ThreadSafe
+//    public void newWorkMessage(ProcessingShard<K, V> shard, List<WorkContainer<K, V>> workList) {
+//        if (workList.isEmpty()) {
+//            throw new IllegalArgumentException("Empty work list");
+//        }
+//
+//        NewWorkMessage msg = new NewWorkMessage(shard, workList);
+//        this.inbox.add(msg);
+//    }
 
 //    public void newWorkMessage(List<WorkContainer<K, V>> p) {
 //        // todo resolve null
 //        this.inbox.add(new NewWork(null, p));
 //    }
 
-    @Value
-    public class NewWorkMessage {
-
-        ProcessingShard<K, V> shard;
-
-        List<WorkContainer<K, V>> value;
-    }
+//    @Value
+//    public class NewWorkMessage {
+//
+//        ProcessingShard<K, V> shard;
+//
+//        List<WorkContainer<K, V>> value;
+//    }
 }
 

@@ -167,10 +167,10 @@ public class ControlLoop<K, V> {
 
         // distribute more work - moved to PCWorker
         // todo samples vs record lambda - runtime exception handling?
-        Timer.Sample distributionSample = Timer.start(metricsRegistry);
+//        Timer.Sample distributionSample = Timer.start(metricsRegistry);
 //        workDistributionTimer.record(this::retrieveAndDistributeNewWorkNew);
-        retrieveAndDistributeNewWorkNew();
-        distributionSample.stop(workDistributionTimer);
+//        retrieveAndDistributeNewWorkNew();
+//        distributionSample.stop(workDistributionTimer);
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -318,21 +318,23 @@ public class ControlLoop<K, V> {
      */
     private Duration getTimeToBlockFor() {
         // if less than target work already in flight, don't sleep longer than the next retry time for failed work, if it exists - so that we can wake up and maybe retry the failed work
-        if (!wm.isWorkInFlightMeetingTarget()) {
-            // though check if we have work awaiting retry
-            var lowestScheduledOpt = wm.getLowestRetryTime();
-            if (lowestScheduledOpt.isPresent()) {
-                // todo can sleep for less than this time? is this lower bound required? given that if we're starved - the failed work will most likely be selected? And even if not selected - then we will no longer be starved.
-                Duration retryDelay = options.getDefaultMessageRetryDelay();
-                // at min block for the retry time - retry time is not exact
-                Duration lowestScheduled = lowestScheduledOpt.get();
-                Duration timeBetweenCommits = getTimeBetweenCommits();
-                Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
-                Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
-                log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
-                return result;
-            }
-        }
+
+        // retries are done in CentralQueue
+//        if (!wm.isWorkInFlightMeetingTarget()) {
+//            // though check if we have work awaiting retry
+//            var lowestScheduledOpt = wm.getLowestRetryTime();
+//            if (lowestScheduledOpt.isPresent()) {
+//                // todo can sleep for less than this time? is this lower bound required? given that if we're starved - the failed work will most likely be selected? And even if not selected - then we will no longer be starved.
+//                Duration retryDelay = options.getDefaultMessageRetryDelay();
+//                // at min block for the retry time - retry time is not exact
+//                Duration lowestScheduled = lowestScheduledOpt.get();
+//                Duration timeBetweenCommits = getTimeBetweenCommits();
+//                Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
+//                Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
+//                log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
+//                return result;
+//            }
+//        }
 
         //
         Duration effectiveCommitAttemptDelay = getTimeToNextCommitCheck();
@@ -381,16 +383,16 @@ public class ControlLoop<K, V> {
         }
     }
 
-    private int retrieveAndDistributeNewWorkNew() {
-        var capacity = workerPool.getCapacity(controlLoop);
-
-        var work = wm.getWorkIfAvailable(capacity);
-//        var work = qsm.take();
-
-//        workerPool.distributeToWorkerShards(work);
-        workerPool.distributeToWorkers(work);
-        return work.size();
-    }
+//    private int retrieveAndDistributeNewWorkNew() {
+//        var capacity = workerPool.getCapacity(controlLoop);
+//
+//        var work = wm.getWorkIfAvailable(capacity);
+////        var work = qsm.take();
+//
+////        workerPool.distributeToWorkerShards(work);
+//        workerPool.distributeToWorkers(work);
+//        return work.size();
+//    }
 
     /**
      * Plugin a function to run at the end of each main loop.

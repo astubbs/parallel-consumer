@@ -13,7 +13,6 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import pl.tlinkowski.unij.api.UniMaps;
 
-import java.time.Duration;
 import java.util.*;
 import java.util.function.Consumer;
 
@@ -249,9 +248,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return sm.getNumberRecordsOutForProcessing() == 0;
     }
 
-    public Optional<Duration> getLowestRetryTime() {
-        return sm.getLowestRetryTime();
-    }
+//    public Optional<Duration> getLowestRetryTime() {
+//        return sm.getLowestRetryTime();
+//    }
 
     public boolean isDirty() {
         return pm.isDirty();
