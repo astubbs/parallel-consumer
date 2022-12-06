@@ -398,9 +398,9 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
         return Optional.ofNullable(startKey);
     }
 
-    public int size() {
-        return getQueueMap().values().stream().mapToInt(value -> Math.toIntExact(value.getCountOfWorkAwaitingSelection())).sum();
-    }
+//    public int size() {
+//        return getQueueMap().values().stream().mapToInt(value -> Math.toIntExact(value.getCountOfWorkAwaitingSelection())).sum();
+//    }
 
     public void onFinishNewWork() {
 //        newWorkLockMaker.lock();
@@ -411,14 +411,14 @@ public class QueuedShardManager<K, V> extends ShardManager<K, V> {
 //        }
     }
 
-    @Value
-    private static class QueueLock<T> {
-
-        /**
-         * Threadsafe for {@link #size()} access
-         */
-        BlockingQueue<T> queue;
-
-        ReentrantLock lock;
-    }
+//    @Value
+//    private static class QueueLock<T> {
+//
+//        /**
+//         * Threadsafe for {@link #size()} access
+//         */
+//        BlockingQueue<T> queue;
+//
+//        ReentrantLock lock;
+//    }
 }

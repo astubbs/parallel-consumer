@@ -281,9 +281,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     // todo make protected when package protection merged
     public void logState() {
-        log.trace("End of control loop, waiting processing {}, remaining in partition queues: {}, out for processing: {}",
-                getNumberOfWorkQueuedInShardsAwaitingSelection(), getNumberOfIncompleteOffsets(),
-                sm.getNumberRecordsOutForProcessing());
+        if (log.isTraceEnabled()) {
+            log.trace("End of control loop, waiting processing {}, remaining in partition queues: {}, out for processing: {}",
+                    getNumberOfWorkQueuedInShardsAwaitingSelection(), getNumberOfIncompleteOffsets(),
+                    sm.getNumberRecordsOutForProcessing());
+        }
     }
 
     public int getNumberRecordsOutForProcessing() {

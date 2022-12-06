@@ -65,7 +65,7 @@ public class CentralQueue<K, V> {
         return got;
     }
 
-    public void queueWorkForProcessing(ProcessingShard<K, V>.WorkRequestResult workIfAvailable) {
+    public void queueWorkForProcessing(ProcessingShard.WorkRequestResult<K, V> workIfAvailable) {
         var workTaken = workIfAvailable.getWorkTaken();
         var batches = batcher.makeBatchesAsBatch(workTaken);
         mainQueue.addAll(batches);
@@ -78,5 +78,9 @@ public class CentralQueue<K, V> {
 
     public void removeWorkFromShardFor(WorkContainer<K, V> consumerRecord) {
         retryQueue.remove(consumerRecord);
+    }
+
+    public long size() {
+        return mainQueue.size() + retryQueue.size();
     }
 }

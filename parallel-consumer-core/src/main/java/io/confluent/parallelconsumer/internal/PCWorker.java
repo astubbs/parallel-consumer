@@ -16,6 +16,7 @@ import lombok.experimental.FieldDefaults;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -93,8 +94,9 @@ public class PCWorker<K, V, R> {
 
     // todo audit interruptions with finally blocks
     public void loop() {
-        Runnable stats = () -> log.debug("Loop stats: blocking time for new work: {} ns",
-                (int) spentWaitingForNewWorkTimer.mean(TimeUnit.NANOSECONDS));
+        Runnable stats = () -> log.debug("Loop stats: blocking time for new work: {} ns, queue size {}",
+                Duration.ofNanos((int) spentWaitingForNewWorkTimer.mean(TimeUnit.NANOSECONDS)),
+                (int) workQueueSizeDistribution.mean());
 
         while (!Thread.currentThread().isInterrupted()) {
             try {
@@ -164,6 +166,8 @@ public class PCWorker<K, V, R> {
 //        if (workQueue.isEmpty()) {
 //            return;
 //        }
+
+        workQueueSizeDistribution.record(centralQueue.size());
 
         var take = Timer.start();
         var work = centralQueue.take();

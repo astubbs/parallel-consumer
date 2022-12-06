@@ -39,13 +39,6 @@ import static lombok.AccessLevel.PROTECTED;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ShardManager<K, V> {
 
-    private final PCModule<K, V> module;
-
-    @Getter
-    private final ParallelConsumerOptions<?, ?> options;
-
-    private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
-
     /**
      * Map of Object keys to Shard
      * <p>
@@ -59,8 +52,15 @@ public class ShardManager<K, V> {
      */
     // performance: could disable/remove if using partition order - but probably not worth the added complexity in the code to handle an extra special case
     @Getter(PROTECTED)
-    protected final ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> processingShards =
+    protected ConcurrentSkipListMap<ShardKey<?>, ProcessingShard<K, V>> processingShards =
             new ConcurrentSkipListMap<>();
+
+    PCModule<K, V> module;
+
+    @Getter
+    ParallelConsumerOptions<?, ?> options;
+
+    RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
     /**
      * TreeSet is a Set, so must ensure that we are consistent with equalTo in our comparator - so include the full id -
@@ -100,6 +100,10 @@ public class ShardManager<K, V> {
      */
     private Optional<ShardKey<?>> iterationResumePoint = Optional.empty();
 
+    // thread safe? consumer and controller both access - consumer upon partition revocation
+    @NonFinal
+    long totalSizeOfShards;
+
 
     public ShardManager(final PCModule<K, V> module) {
         this.module = module;
@@ -126,6 +130,9 @@ public class ShardManager<K, V> {
         shard.addWorkContainer(wc);
 
         maybeQueueCentrallyFromShard(shard);
+//        centralQueue.queueWorkForProcessing(new ProcessingShard.WorkRequestResult<K, V>(UniLists.of(wc), UniSets.of()));
+
+        totalSizeOfShards++;
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {
@@ -141,6 +148,7 @@ public class ShardManager<K, V> {
             //
             var shard = shardOptional.get();
             shard.onSuccess(wc);
+            totalSizeOfShards--;
 
             maybeQueueCentrallyFromShard(shard);
 
@@ -150,24 +158,47 @@ public class ShardManager<K, V> {
         }
     }
 
-    public ShardKey computeShardKey(ConsumerRecord<?, ?> wc) {
-        return ShardKey.of(wc, options.getOrdering());
-    }
-
     /**
+     * Relatively expensive if in KEY ordered mode where there are lots of shards (unique keys)
+     *
      * @return Work ready in the processing shards, awaiting selection as work to do
      */
     public long getNumberOfWorkQueuedInShardsAwaitingSelection() {
-        cache this
-        return processingShards.values().stream()
-                .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
-                .sum();
+        return totalSizeOfShards;
+//        cache this?
+//        return processingShards.values().parallelStream()
+//                .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
+//                .sum();
     }
 
     public boolean workIsWaitingToBeProcessed() {
-        Collection<ProcessingShard<K, V>> allShards = processingShards.values();
-        return allShards.parallelStream()
-                .anyMatch(ProcessingShard::workIsWaitingToBeProcessed);
+        return processingShards.values().parallelStream()
+                .anyMatch(ProcessingShard::isWorkWaitingToBeProcessed);
+    }
+
+    /**
+     * Removes any tracked work for this record, and removes the shard if it is empty
+     */
+    private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
+        ShardKey shardKey = computeShardKey(consumerRecord);
+
+        if (processingShards.containsKey(shardKey)) {
+            // remove the work
+            ProcessingShard<K, V> shard = processingShards.get(shardKey);
+            WorkContainer<K, V> removedWC = shard.remove(consumerRecord.offset());
+            totalSizeOfShards--;
+
+//            // remove if in retry queue
+//            this.retryQueue.remove(removedWC);
+            // todo is this needed? worker can just ignore it?
+            centralQueue.removeWorkFromShardFor(removedWC);
+
+            // remove the shard if empty
+            removeShardIfEmpty(shardKey);
+        } else {
+            log.trace("Shard referenced by WC: {} with shard key: {} already removed", consumerRecord, shardKey);
+        }
+
     }
 
     /**
@@ -185,28 +216,9 @@ public class ShardManager<K, V> {
         }
     }
 
-    /**
-     * Removes any tracked work for this record, and removes the shard if it is empty
-     */
-    private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
-        ShardKey shardKey = computeShardKey(consumerRecord);
-
-        if (processingShards.containsKey(shardKey)) {
-            // remove the work
-            ProcessingShard<K, V> shard = processingShards.get(shardKey);
-            WorkContainer<K, V> removedWC = shard.remove(consumerRecord.offset());
-
-//            // remove if in retry queue
-//            this.retryQueue.remove(removedWC);
-            // todo is this needed? worker can just ignore it?
-            centralQueue.removeWorkFromShardFor(removedWC);
-
-            // remove the shard if empty
-            removeShardIfEmpty(shardKey);
-        } else {
-            log.trace("Shard referenced by WC: {} with shard key: {} already removed", consumerRecord, shardKey);
-        }
-
+    // todo generics
+    public ShardKey computeShardKey(ConsumerRecord<?, ?> wc) {
+        return ShardKey.of(wc, options.getOrdering());
     }
 
     // todo generics

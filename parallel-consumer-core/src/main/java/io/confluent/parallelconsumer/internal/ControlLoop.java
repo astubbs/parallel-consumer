@@ -95,6 +95,8 @@ public class ControlLoop<K, V> {
     @NonFinal
     Instant lastCommitCheckTime = Instant.now();
 
+    private CentralQueue<K, V> centralQueue;
+
 
     public ControlLoop(PCModule<K, V> module) {
         this.module = module;
@@ -104,7 +106,7 @@ public class ControlLoop<K, V> {
         state = module.stateMachine();
         workMailbox = module.workMailbox();
         meterRegistry = module.meterRegistry();
-
+        centralQueue = module.centralQueue();
 
         controlLoopTimer = meterRegistry.timer(CONTROL_LOOP_PREFIX);
         inboxProcessingTimer = meterRegistry.timer(CONTROL_LOOP_PREFIX + ".inbox");
@@ -139,13 +141,14 @@ public class ControlLoop<K, V> {
         loopPerfStats.performIfNotLimited(() -> {
 //            if (log.isDebugEnabled()) {
             log.info("Control loop took (ms) {}, processing inbox: {} committing: {} distribution to workers: {}, " +
-                            "successRate: {}, failureRate {}",
+                            "successRate: {}, failureRate {}, queue size: {}",
                     (int) controlLoopTimer.mean(MILLISECONDS),
                     (int) inboxProcessingTimer.mean(MILLISECONDS),
                     (int) commitTimer.mean(MILLISECONDS),
                     (int) workDistributionTimer.mean(MILLISECONDS),
                     wm.getSuccessRate(),
-                    wm.getFailureRate()
+                    wm.getFailureRate(),
+                    centralQueue.size()
             );
 //            }
         });
