@@ -6,7 +6,9 @@ package io.confluent.parallelconsumer.state;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.internal.*;
+import io.micrometer.core.instrument.Counter;
 import lombok.Getter;
+import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -16,7 +18,9 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.util.*;
 import java.util.function.Consumer;
 
+import static io.confluent.parallelconsumer.internal.PCModule.PARALLEL_CONSUMER_PREFIX;
 import static java.lang.Boolean.TRUE;
+import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PUBLIC;
 
 /**
@@ -34,7 +38,12 @@ import static lombok.AccessLevel.PUBLIC;
  * @author Antony Stubbs
  */
 @Slf4j
+@FieldDefaults(level = PRIVATE, makeFinal = true)
 public class WorkManager<K, V> implements ConsumerRebalanceListener {
+
+    public static final String WORK_MANAGER_PREFIX = "workManager.";
+
+    PCModule<K, V> module;
 
     @Getter
     private final ParallelConsumerOptions<K, V> options;
@@ -61,12 +70,23 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     @Getter(PUBLIC)
     private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new ArrayList<>();
 
+    Counter successCounter;
+
+    Counter failureCounter;
+
     public WorkManager(PCModule<K, V> module,
                        DynamicLoadFactor dynamicExtraLoadFactor) {
+        this.module = module;
         this.options = module.options();
         this.dynamicLoadFactor = dynamicExtraLoadFactor;
         this.sm = module.queuedShardManager();
         this.pm = module.partitionStateManager();
+
+        successCounter = Counter.builder(PARALLEL_CONSUMER_PREFIX + WORK_MANAGER_PREFIX + "success")
+                .register(module.meterRegistry());
+
+        failureCounter = Counter.builder(PARALLEL_CONSUMER_PREFIX + WORK_MANAGER_PREFIX + "failure")
+                .register(module.meterRegistry());
     }
 
     /**
@@ -130,6 +150,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public void onSuccessResult(WorkContainer<K, V> wc) {
         log.trace("Work success ({}), removing from processing shard queue", wc);
 
+        successCounter.increment();
+
         wc.endFlight();
 
         // update as we go
@@ -152,6 +174,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public void onFailureResult(WorkContainer<K, V> wc) {
         // error occurred, put it back in the queue if it can be retried
         wc.endFlight();
+        failureCounter.increment();
         pm.onFailure(wc);
         sm.onFailure(wc);
     }
@@ -265,6 +288,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public int getNumberRecordsOutForProcessing() {
         return sm.getNumberRecordsOutForProcessing();
+    }
+
+    public PCRate getSuccessRate() {
+        return new PCRate(module.getUpTime(), successCounter);
+    }
+
+    public PCRate getFailureRate() {
+        return new PCRate(module.getUpTime(), failureCounter);
     }
 
 //    public void getWorkIfAvailable() {

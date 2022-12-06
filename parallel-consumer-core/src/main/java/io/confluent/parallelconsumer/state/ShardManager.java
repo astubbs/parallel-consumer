@@ -133,7 +133,9 @@ public class ShardManager<K, V> {
      */
     private void maybeQueueCentrallyFromShard(ProcessingShard<K, V> shard) {
         var workIfAvailable = shard.getWorkIfAvailable(Integer.MAX_VALUE);
-        centralQueue.queueWorkForProcessing(workIfAvailable);
+        if (workIfAvailable.isEmpty()) {
+            centralQueue.queueWorkForProcessing(workIfAvailable);
+        }
     }
 
     public ShardKey computeShardKey(ConsumerRecord<?, ?> wc) {

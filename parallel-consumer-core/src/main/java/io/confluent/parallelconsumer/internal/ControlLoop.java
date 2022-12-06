@@ -7,8 +7,8 @@ package io.confluent.parallelconsumer.internal;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.PollContextInternal;
 import io.confluent.parallelconsumer.state.WorkManager;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.core.lang.Nullable;
 import lombok.Getter;
 import lombok.experimental.FieldDefaults;
@@ -71,16 +71,15 @@ public class ControlLoop<K, V> {
 
     RateLimiter loopPerfStats = new RateLimiter();
 
-    // todo depends on MicroMeter pr
-    SimpleMeterRegistry metricsRegistry = new SimpleMeterRegistry();
+    MeterRegistry meterRegistry;
 
-    Timer controlLoop = metricsRegistry.timer(CONTROL_LOOP_PREFIX);
+    Timer controlLoopTimer;
 
-    Timer inboxProcessingTimer = metricsRegistry.timer(CONTROL_LOOP_PREFIX + ".inbox");
+    Timer inboxProcessingTimer;
 
-    Timer commitTimer = metricsRegistry.timer(CONTROL_LOOP_PREFIX + ".commit");
+    Timer commitTimer;
 
-    Timer workDistributionTimer = metricsRegistry.timer(CONTROL_LOOP_PREFIX + ".distribution");
+    Timer workDistributionTimer;
 
     /**
      * Used to request a commit asap
@@ -104,7 +103,13 @@ public class ControlLoop<K, V> {
         brokerPollSubsystem = module.brokerPoller();
         state = module.stateMachine();
         workMailbox = module.workMailbox();
+        meterRegistry = module.meterRegistry();
 
+
+        controlLoopTimer = meterRegistry.timer(CONTROL_LOOP_PREFIX);
+        inboxProcessingTimer = meterRegistry.timer(CONTROL_LOOP_PREFIX + ".inbox");
+        commitTimer = meterRegistry.timer(CONTROL_LOOP_PREFIX + ".commit");
+        workDistributionTimer = meterRegistry.timer(CONTROL_LOOP_PREFIX + ".distribution");
     }
 
     // todo make private
@@ -127,17 +132,20 @@ public class ControlLoop<K, V> {
      * Main control loop
      */
     protected void loop() throws TimeoutException, ExecutionException, InterruptedException {
-        Timer.Sample sample = Timer.start(metricsRegistry);
+        Timer.Sample sample = Timer.start(meterRegistry);
         timedLoop();
-        sample.stop(controlLoop);
+        sample.stop(controlLoopTimer);
 
         loopPerfStats.performIfNotLimited(() -> {
 //            if (log.isDebugEnabled()) {
-            log.info("Control loop took (ms) {}, processing inbox: {} committing: {} distribution to workers: {}",
-                    (int) controlLoop.mean(MILLISECONDS),
+            log.info("Control loop took (ms) {}, processing inbox: {} committing: {} distribution to workers: {}, " +
+                            "successRate: {}, failureRate {}",
+                    (int) controlLoopTimer.mean(MILLISECONDS),
                     (int) inboxProcessingTimer.mean(MILLISECONDS),
                     (int) commitTimer.mean(MILLISECONDS),
-                    (int) workDistributionTimer.mean(MILLISECONDS)
+                    (int) workDistributionTimer.mean(MILLISECONDS),
+                    wm.getSuccessRate(),
+                    wm.getFailureRate()
             );
 //            }
         });
@@ -153,14 +161,14 @@ public class ControlLoop<K, V> {
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
-        Timer.Sample inboxProcessingSample = Timer.start(metricsRegistry);
+        Timer.Sample inboxProcessingSample = Timer.start(meterRegistry);
         workMailbox.processWorkCompleteMailBox(timeToBlockFor);
         inboxProcessingSample.stop(inboxProcessingTimer);
 
         //
         if (shouldTryCommitNow) {
             // offsets will be committed when the consumer has its partitions revoked
-            Timer.Sample commitSample = Timer.start(metricsRegistry);
+            Timer.Sample commitSample = Timer.start(meterRegistry);
             commitOffsetsThatAreReady();
             commitSample.stop(commitTimer);
         }

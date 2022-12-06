@@ -10,12 +10,20 @@ import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.state.PartitionStateManager;
 import io.confluent.parallelconsumer.state.QueuedShardManager;
 import io.confluent.parallelconsumer.state.WorkManager;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.Setter;
+import lombok.experimental.FieldDefaults;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.InstantSource;
 import java.util.Optional;
+
+import static lombok.AccessLevel.PRIVATE;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -24,8 +32,13 @@ import java.util.Optional;
  *
  * @author Antony Stubbs
  */
+@FieldDefaults(makeFinal = false, level = PRIVATE)
 //todo make all protected
 public class PCModule<K, V> {
+
+    public static final String PARALLEL_CONSUMER_PREFIX = "parallel-consumer.";
+
+    Instant startTime;
 
     protected ParallelConsumerOptions<K, V> optionsInstance;
 
@@ -50,8 +63,13 @@ public class PCModule<K, V> {
 
     private CentralQueue<K, V> centralQueue;
 
+    SimpleMeterRegistry meterRegistry;
+
     public PCModule(ParallelConsumerOptions<K, V> options) {
         this.optionsInstance = options;
+
+        // start time is never faked in tests
+        startTime = alwaysRealClock().instant();
     }
 
     public ParallelConsumerOptions<K, V> options() {
@@ -211,5 +229,20 @@ public class PCModule<K, V> {
             centralQueue = new CentralQueue<>(options());
         }
         return centralQueue;
+    }
+
+    private InstantSource alwaysRealClock() {
+        return Clock.systemUTC();
+    }
+
+    public MeterRegistry meterRegistry() {
+        if (meterRegistry == null) {
+            meterRegistry = new SimpleMeterRegistry();
+        }
+        return meterRegistry;
+    }
+
+    public Duration getUpTime() {
+        return Duration.between(startTime, clock().instant());
     }
 }
