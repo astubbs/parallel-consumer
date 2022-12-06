@@ -158,6 +158,7 @@ public class ShardManager<K, V> {
      * @return Work ready in the processing shards, awaiting selection as work to do
      */
     public long getNumberOfWorkQueuedInShardsAwaitingSelection() {
+        cache this
         return processingShards.values().stream()
                 .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
                 .sum();

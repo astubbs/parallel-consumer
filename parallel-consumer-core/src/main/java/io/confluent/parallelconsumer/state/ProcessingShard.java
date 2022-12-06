@@ -49,6 +49,7 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
     private final PartitionStateManager<K, V> pm;
 
     public boolean workIsWaitingToBeProcessed() {
+        cache this
         return entries.values().parallelStream()
                 .anyMatch(kvWorkContainer -> kvWorkContainer.isAvailableToTakeAsWork());
     }
@@ -72,6 +73,7 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
     }
 
     public long getCountOfWorkAwaitingSelection() {
+        cache this
         return entries.values().stream()
                 // todo missing pm.isBlocked(topicPartition) ?
                 .filter(WorkContainer::isAvailableToTakeAsWork)
