@@ -61,11 +61,12 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
 
 //        int expectedMessageCount = 24_000_000;
 //        int expectedMessageCount = 12_000_000;
-//        int expectedMessageCount = 6_000_000;
+        int expectedMessageCount = 6_000_000;
 //        int expectedMessageCount = 3_000_000;
 //        int expectedMessageCount = 300_000;
-        int expectedMessageCount = 30_000;
+//        int expectedMessageCount = 30_000;
 //        int expectedMessageCount = 3_000;
+
 
         log.info("Producing {} messages before starting test", expectedMessageCount);
 

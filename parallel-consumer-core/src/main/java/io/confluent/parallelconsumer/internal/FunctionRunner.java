@@ -98,7 +98,13 @@ public class FunctionRunner<K, V, R> {
                 return null;
             }
 
+
+            //
+            // run the user function
+            //
             resultsFromUserFunction = this.userFunctionWrapped.apply(context);
+            //
+            //
 
             for (final WorkContainer<K, V> kvWorkContainer : workContainerBatch) {
                 onUserFunctionSuccess(kvWorkContainer, resultsFromUserFunction);

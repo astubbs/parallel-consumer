@@ -165,8 +165,8 @@ public class ProcessingShard<K, V> implements Comparable<ProcessingShard<K, V>> 
 
         HashSet<WorkContainer<?, ?>> slowWork;
 
-        public boolean isEmpty() {
-            return workTaken.isEmpty();
+        public boolean hasWork() {
+            return !workTaken.isEmpty();
         }
     }
 

@@ -128,13 +128,25 @@ public class ShardManager<K, V> {
         maybeQueueCentrallyFromShard(shard);
     }
 
-    /**
-     * After work is added to a shard, check if it should be queued centrally for processing.
-     */
-    private void maybeQueueCentrallyFromShard(ProcessingShard<K, V> shard) {
-        var workIfAvailable = shard.getWorkIfAvailable(Integer.MAX_VALUE);
-        if (workIfAvailable.isEmpty()) {
-            centralQueue.queueWorkForProcessing(workIfAvailable);
+    public void onSuccess(WorkContainer<?, ?> wc) {
+        numberRecordsOutForProcessing--;
+
+//        // remove from the retry queue if it's contained
+//        this.retryQueue.remove(wc);
+
+        // remove from processing queues
+        var key = computeShardKey(wc);
+        var shardOptional = getShard(key);
+        if (shardOptional.isPresent()) {
+            //
+            var shard = shardOptional.get();
+            shard.onSuccess(wc);
+
+            maybeQueueCentrallyFromShard(shard);
+
+//            removeShardIfEmpty(key);
+        } else {
+            log.trace("Dropping successful result for revoked partition {}. Record in question was: {}", key, wc.getCr());
         }
     }
 
@@ -213,25 +225,13 @@ public class ShardManager<K, V> {
         }
     }
 
-    public void onSuccess(WorkContainer<?, ?> wc) {
-        numberRecordsOutForProcessing--;
-
-//        // remove from the retry queue if it's contained
-//        this.retryQueue.remove(wc);
-
-        // remove from processing queues
-        var key = computeShardKey(wc);
-        var shardOptional = getShard(key);
-        if (shardOptional.isPresent()) {
-            //
-            var shard = shardOptional.get();
-            shard.onSuccess(wc);
-
-            maybeQueueCentrallyFromShard(shard);
-
-            removeShardIfEmpty(key);
-        } else {
-            log.trace("Dropping successful result for revoked partition {}. Record in question was: {}", key, wc.getCr());
+    /**
+     * After work is added to a shard, check if it should be queued centrally for processing.
+     */
+    private void maybeQueueCentrallyFromShard(ProcessingShard<K, V> shard) {
+        var workIfAvailable = shard.getWorkIfAvailable(Integer.MAX_VALUE);
+        if (workIfAvailable.hasWork()) {
+            centralQueue.queueWorkForProcessing(workIfAvailable);
         }
     }
 
