@@ -12,6 +12,11 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+/**
+ * @deprecated Use {@link ParallelEoSStreamProcessor} instead, will be removed in future major release. If you have a
+ *         use case, please file an issue.
+ */
+@Deprecated
 public interface JStreamParallelStreamProcessor<K, V> extends DrainingCloseable {
 
     static <K, V> JStreamParallelStreamProcessor<K, V> createJStreamEosStreamProcessor(ParallelConsumerOptions<K, V> options) {
