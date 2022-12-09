@@ -218,7 +218,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        return getNumberOfWorkQueuedInShardsAwaitingSelection() > (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
+        var threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
+        var loaded = getNumberOfWorkQueuedInShardsAwaitingSelection() > threshold;
+//        return loaded;
+        return false;
     }
 
     private int getLoadingFactor() {

@@ -68,6 +68,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     @NonNull
     private WorkMailbox<K, V> workMailbox;
 
+    private final RateLimiter pauseLimiter = new RateLimiter(1);
+
     public BrokerPollSystem(@NonNull ConsumerManager<K, V> consumerMgr,
                             @NonNull WorkMailbox<K, V> workMailbox,
                             @NonNull WorkManager<K, V> workManager,
@@ -207,17 +209,13 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         }
     }
 
-    private final RateLimiter pauseLimiter = new RateLimiter(1);
-
     private void doPauseMaybe() {
         // idempotent
         if (pausedForThrottling) {
             log.trace("Already paused");
         } else {
             if (pauseLimiter.couldPerform()) {
-                pauseLimiter.performIfNotLimited(() -> {
-                    doPause();
-                });
+                pauseLimiter.performIfNotLimited(() -> doPause());
             } else {
                 if (log.isDebugEnabled()) {
                     log.debug("Should pause but pause rate limit exceeded {} vs {}.",

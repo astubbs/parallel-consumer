@@ -39,6 +39,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
 
     public List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
 
+    // todo delete
     public List<String> producedKeysAcknowledged = Collections.synchronizedList(new ArrayList<>());
 
     public AtomicInteger processedCount = new AtomicInteger(0);

@@ -33,7 +33,7 @@ public class DynamicLoadFactor {
      * <p>
      * Starts off as 2, so there's a good guarantee that we start off with enough data queued up.
      */
-    private static final int DEFAULT_INITIAL_LOADING_FACTOR = 2;
+    private static final int DEFAULT_INITIAL_LOADING_FACTOR = 200;
 
     private final long startTimeMs = System.currentTimeMillis();
 

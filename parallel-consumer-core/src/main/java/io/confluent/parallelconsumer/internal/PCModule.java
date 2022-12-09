@@ -20,7 +20,6 @@ import org.apache.kafka.clients.producer.Producer;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.InstantSource;
 import java.util.Optional;
 
 import static lombok.AccessLevel.PRIVATE;
@@ -231,7 +230,7 @@ public class PCModule<K, V> {
         return centralQueue;
     }
 
-    private InstantSource alwaysRealClock() {
+    private Clock alwaysRealClock() {
         return Clock.systemUTC();
     }
 
