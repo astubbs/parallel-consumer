@@ -1092,6 +1092,22 @@ Note::
 See https://github.com/confluentinc/parallel-consumer/issues/162[issue #162]
 and this https://stackoverflow.com/questions/4786881/why-is-test-jar-dependency-required-for-mvn-compile[Stack Overflow question].
 
+=== Build Scripts
+
+Helper scripts are in the `bin/` directory:
+
+[qanda]
+Quick local build (compile + unit tests)::
+`bin/build.sh`
+
+Full CI build with all tests (unit + integration)::
+`bin/ci-build.sh`
+
+CI build against a specific Kafka version::
+`bin/ci-build.sh 3.9.1`
+
+The GitHub Actions CI workflow uses `bin/ci-build.sh`, so running it locally reproduces the CI environment.
+
 === Testing
 
 The project has good automated test coverage, of all features.
