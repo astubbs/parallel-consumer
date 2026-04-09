@@ -9,10 +9,10 @@ on:
   pull_request:
 
 jobs:
-  # Fast build on push - only latest Kafka version
+  # Fast build on push - uses default Kafka version from pom.xml
   build:
     if: github.event_name == 'push'
-    name: "Build (AK 3.9.1)"
+    name: "Build (default AK)"
     runs-on: ubuntu-latest
 
     steps:
@@ -53,7 +53,7 @@ jobs:
       #          restore-keys: ${{ runner.os }}-m2
 
       - name: Build and Test
-        run: bin/ci-build.sh 3.9.1
+        run: bin/ci-build.sh
 
 #     - name: Archive test results
 #       if: ${{ always() }}
