@@ -1,6 +1,7 @@
 /mk-include
 /.mk-include-timestamp
 .DS_Store
+CLAUDE.md
 
 # Compiled class file
 *.class
