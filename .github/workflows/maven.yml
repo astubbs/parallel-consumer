@@ -8,6 +8,11 @@ on:
   push:
   pull_request:
 
+# Cancel in-progress runs when a new commit is pushed to the same branch/PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Fast build on push - uses default Kafka version from pom.xml
   build:
