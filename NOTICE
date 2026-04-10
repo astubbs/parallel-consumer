@@ -1,0 +1,10 @@
+Parallel Consumer
+Copyright 2020-2026 Confluent, Inc.
+Copyright 2026 Antony Stubbs and contributors
+
+This product includes software originally developed by Confluent, Inc.
+(https://github.com/confluentinc/parallel-consumer), licensed under the
+Apache License, Version 2.0.
+
+This fork is maintained independently at:
+  https://github.com/astubbs/parallel-consumer

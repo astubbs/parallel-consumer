@@ -9,12 +9,12 @@
 
     <parent>
         <artifactId>parallel-consumer-parent</artifactId>
-        <groupId>io.confluent.parallelconsumer</groupId>
-        <version>0.5.3.4-SNAPSHOT</version>
+        <groupId>io.github.astubbs.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>parallel-consumer-examples</artifactId>
-    <name>Confluent Parallel Consumer Examples</name>
+    <name>Parallel Consumer Examples</name>
     <packaging>pom</packaging>
 
     <modules>
