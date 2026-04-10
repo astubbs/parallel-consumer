@@ -6,13 +6,13 @@
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <groupId>io.confluent.parallelconsumer</groupId>
+        <groupId>io.github.astubbs.parallelconsumer</groupId>
         <artifactId>parallel-consumer-parent</artifactId>
-        <version>0.5.3.4-SNAPSHOT</version>
+        <version>0.6.0.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>parallel-consumer-vertx</artifactId>
-    <name>Confluent Parallel Consumer Vert.x</name>
+    <name>Parallel Consumer Vert.x</name>
 
     <modelVersion>4.0.0</modelVersion>
 
@@ -22,12 +22,12 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.confluent.parallelconsumer</groupId>
+            <groupId>io.github.astubbs.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.confluent.parallelconsumer</groupId>
+            <groupId>io.github.astubbs.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
             <classifier>tests</classifier>
