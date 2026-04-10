@@ -8,18 +8,18 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>io.confluent.parallelconsumer</groupId>
+        <groupId>io.github.astubbs.parallelconsumer</groupId>
         <artifactId>parallel-consumer-examples</artifactId>
-        <version>0.5.3.4-SNAPSHOT</version>
+        <version>0.6.0.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>parallel-consumer-example-metrics</artifactId>
-    <name>Confluent Parallel Consumer Example - Metrics</name>
+    <name>Parallel Consumer Example - Metrics</name>
 
     <dependencies>
         <!-- tag::exampleDep[] -->
         <dependency>
-            <groupId>io.confluent.parallelconsumer</groupId>
+            <groupId>io.github.astubbs.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -30,7 +30,7 @@
         </dependency>
         <!-- end::exampleDep[] -->
         <dependency>
-            <groupId>io.confluent.parallelconsumer</groupId>
+            <groupId>io.github.astubbs.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
             <classifier>tests</classifier>
