@@ -47,6 +47,7 @@ bin/ci-build.sh 3.9.1
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
+- **Performance tests**: Tagged `@Tag("performance")` and excluded from regular CI by default. They run on a self-hosted runner via `.github/workflows/performance.yml` (see `docs/SELF_HOSTED_RUNNER.md`). Run locally with `bin/performance-test.sh` (or `bin/performance-test.cmd` on Windows). Override the test group selection with Maven properties: `-Dincluded.groups=performance` to run only perf, `-Dexcluded.groups=` to run everything.
 
 ## Known Issues
 

@@ -21,6 +21,7 @@ import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.assertj.core.util.Lists;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import pl.tlinkowski.unij.api.UniLists;
@@ -44,6 +45,7 @@ import static org.mockito.Mockito.mock;
  * Mocked out comparative volume tests
  */
 @Slf4j
+@Tag("performance")
 class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
 
     @SneakyThrows
