@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./mvnw test:*)",
+      "Bash(./mvnw clean:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl -s https://raw.githubusercontent.com/gregsdennis/dependencies-action/main/README.md)",
+      "Bash(curl:*)",
+      "Bash(npm test:*)",
+      "Bash(git branch:*)",
+      "Bash(git -C /Users/astubbs/github/parallel-consumer/.claude/worktrees/dev-cc log --oneline 083f3840 -1)",
+      "Bash(git -C /Users/astubbs/github/parallel-consumer/.claude/worktrees/dev-cc log --oneline 848ddbc2 -1)"
+    ]
+  }
+}
