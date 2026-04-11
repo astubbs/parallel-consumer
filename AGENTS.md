@@ -49,6 +49,7 @@ bin/ci-build.sh 3.9.1
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
+- **Performance tests**: Tagged `@Tag("performance")` and excluded from regular CI by default. They run on a self-hosted runner via `.github/workflows/performance.yml` (see `docs/SELF_HOSTED_RUNNER.md`). Run locally with `bin/performance-test.sh` (or `bin/performance-test.cmd` on Windows). Override the test group selection with Maven properties: `-Dincluded.groups=performance` to run only perf, `-Dexcluded.groups=` to run everything.
 
 ## Known Issues
 
@@ -58,8 +59,28 @@ bin/ci-build.sh 3.9.1
 
 - **Lombok**: Used extensively (builders, getters, logging). IntelliJ Lombok plugin required.
 - **EditorConfig**: Enforced via `.editorconfig` - 4-space indent for Java, 120 char line length.
-- **License headers**: Managed by `license-maven-plugin` (Mycila). Use `-Dlicense.skip` locally to skip checks.
+- **License headers**: Managed by `license-maven-plugin` (Mycila). See "License headers" section below.
 - **Google Truth**: Used for test assertions alongside JUnit 5 and Mockito.
+
+## License headers
+
+The Mycila `license-maven-plugin` enforces a Confluent copyright header on all source files. It uses git-derived years via `${license.git.copyrightYears}`.
+
+**Skipping the check** (for any Maven goal):
+```
+./mvnw <goal> -Dlicense.skip
+```
+
+**When to skip:**
+- Running builds inside a git worktree — the git-years lookup fails with `Bare Repository has neither a working tree, nor an index`
+- Local iteration where you don't want years auto-bumped on touched files
+- Any command other than the canonical `mvn install` flow when copyright drift would create noise in `git status`
+
+The default behavior on macOS dev machines is `format` mode (auto-fixes headers) via the `license-format` profile (auto-activated). The `ci` profile flips this to `check` mode (fails the build on drift). Both `bin/build.sh` and `bin/ci-build.sh` already pass `-Dlicense.skip` for this reason.
+
+**When NOT to skip:**
+- You're intentionally running `mvn license:format` to update headers
+- You want to verify CI's check would pass before pushing
 
 ## CI
 

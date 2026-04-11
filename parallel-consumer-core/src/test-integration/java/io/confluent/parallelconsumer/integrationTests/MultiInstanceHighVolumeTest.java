@@ -17,6 +17,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.core.ConditionTimeoutException;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -34,6 +35,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 @Slf4j
+@Tag("performance")
 class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> {
 
     public List<String> consumedKeys = Collections.synchronizedList(new ArrayList<>());
