@@ -281,7 +281,7 @@ The user just has to provide a function to extract from the message the HTTP cal
 
 === Illustrative Performance Example
 
-.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VolumeTests.java[VolumeTests.java])
+.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
 These performance comparison results below, even though are based on real performance measurement results, are for illustrative purposes.
 To see how the performance of the tool is related to instance counts, partition counts, key distribution and how it would relate to the vanilla client.
 Actual results will vary wildly depending upon the setup being deployed into.
@@ -1106,7 +1106,38 @@ Full CI build with all tests (unit + integration)::
 CI build against a specific Kafka version::
 `bin/ci-build.sh 3.9.1`
 
+Performance test suite (also `bin/performance-test.cmd` on Windows)::
+`bin/performance-test.sh`
+
 The GitHub Actions CI workflow uses `bin/ci-build.sh`, so running it locally reproduces the CI environment.
+
+=== Performance Tests
+
+Tests tagged `@Tag("performance")` are excluded from the regular CI build because they need substantial hardware. They run on a dedicated self-hosted runner via `.github/workflows/performance.yml` (manual trigger or weekly schedule).
+
+To run the performance suite locally, use `bin/performance-test.sh`. To set up your own self-hosted runner for these tests, see link:./docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md].
+
+=== Releasing
+
+The `pom.xml` version is the source of truth for publishing — there is no `maven-release-plugin` step.
+
+On every push to `master`, `.github/workflows/publish.yml` deploys to Maven Central:
+
+* If the version ends in `-SNAPSHOT` → publishes a snapshot
+* If the version does not end in `-SNAPSHOT` → publishes a full release, creates a `v<version>` git tag, and creates a GitHub release
+
+To cut a release:
+
+. Open a PR removing `-SNAPSHOT` from `<version>` in the parent `pom.xml` (e.g. `0.6.0.0-SNAPSHOT` → `0.6.0.0`)
+. Merge it to master → CI publishes the release
+. Open another PR bumping to the next snapshot (e.g. `0.6.0.1-SNAPSHOT`) and merge
+
+Required GitHub repository secrets:
+
+* `MAVEN_CENTRAL_USERNAME` — Sonatype Central Portal token username
+* `MAVEN_CENTRAL_PASSWORD` — Sonatype Central Portal token password
+* `MAVEN_GPG_PRIVATE_KEY` — Armored GPG private key for signing artifacts
+* `MAVEN_GPG_PASSPHRASE` — Passphrase for the GPG key
 
 === Testing
 
