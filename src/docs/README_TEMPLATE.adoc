@@ -281,7 +281,7 @@ The user just has to provide a function to extract from the message the HTTP cal
 
 === Illustrative Performance Example
 
-.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VolumeTests.java[VolumeTests.java])
+.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
 These performance comparison results below, even though are based on real performance measurement results, are for illustrative purposes.
 To see how the performance of the tool is related to instance counts, partition counts, key distribution and how it would relate to the vanilla client.
 Actual results will vary wildly depending upon the setup being deployed into.
@@ -1108,7 +1108,16 @@ Full CI build with all tests (unit + integration)::
 CI build against a specific Kafka version::
 `bin/ci-build.sh 3.9.1`
 
+Performance test suite (also `bin/performance-test.cmd` on Windows)::
+`bin/performance-test.sh`
+
 The GitHub Actions CI workflow uses `bin/ci-build.sh`, so running it locally reproduces the CI environment.
+
+=== Performance Tests
+
+Tests tagged `@Tag("performance")` are excluded from the regular CI build because they need substantial hardware. They run on a dedicated self-hosted runner via `.github/workflows/performance.yml` (manual trigger or weekly schedule).
+
+To run the performance suite locally, use `bin/performance-test.sh`. To set up your own self-hosted runner for these tests, see link:./docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md].
 
 === Releasing
 

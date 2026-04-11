@@ -81,6 +81,13 @@
         <skipITs>${skipTests}</skipITs>
         <skipUTs>${skipTests}</skipUTs>
 
+        <!-- JUnit 5 test groups (failsafe). Override on the command line:
+             -Dgroups=performance         (run only performance tests)
+             -Dexcluded.groups=           (run everything including performance)
+             -Dexcluded.groups=transactions,performance  (skip multiple groups) -->
+        <included.groups></included.groups>
+        <excluded.groups>performance</excluded.groups>
+
         <!-- version numbers -->
         <!-- plugins -->
         <mycila.version>5.0.0</mycila.version>
@@ -713,6 +720,11 @@
                     <skipTests>${skipTests}</skipTests>
                     <skipITs>${skipITs}</skipITs>
                     <parallel>methods</parallel>
+                    <!-- Performance tests are excluded by default and run on dedicated hardware via the
+                         performance.yml workflow on a self-hosted runner. Override with -Dgroups=performance
+                         to run only performance tests, or -Dexcluded.groups= to run everything. -->
+                    <groups>${included.groups}</groups>
+                    <excludedGroups>${excluded.groups}</excludedGroups>
                 </configuration>
             </plugin>
             <plugin>
