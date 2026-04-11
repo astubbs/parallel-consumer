@@ -1110,6 +1110,28 @@ CI build against a specific Kafka version::
 
 The GitHub Actions CI workflow uses `bin/ci-build.sh`, so running it locally reproduces the CI environment.
 
+=== Releasing
+
+The `pom.xml` version is the source of truth for publishing — there is no `maven-release-plugin` step.
+
+On every push to `master`, `.github/workflows/publish.yml` deploys to Maven Central:
+
+* If the version ends in `-SNAPSHOT` → publishes a snapshot
+* If the version does not end in `-SNAPSHOT` → publishes a full release, creates a `v<version>` git tag, and creates a GitHub release
+
+To cut a release:
+
+. Open a PR removing `-SNAPSHOT` from `<version>` in the parent `pom.xml` (e.g. `0.6.0.0-SNAPSHOT` → `0.6.0.0`)
+. Merge it to master → CI publishes the release
+. Open another PR bumping to the next snapshot (e.g. `0.6.0.1-SNAPSHOT`) and merge
+
+Required GitHub repository secrets:
+
+* `MAVEN_CENTRAL_USERNAME` — Sonatype Central Portal token username
+* `MAVEN_CENTRAL_PASSWORD` — Sonatype Central Portal token password
+* `MAVEN_GPG_PRIVATE_KEY` — Armored GPG private key for signing artifacts
+* `MAVEN_GPG_PASSPHRASE` — Passphrase for the GPG key
+
 === Testing
 
 The project has good automated test coverage, of all features.
