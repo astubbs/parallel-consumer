@@ -1,24 +1,19 @@
 package io.confluent.parallelconsumer.integrationTests;
 
 /*-
- * Copyright (C) 2020-2022 Confluent, Inc.
+ * Copyright (C) 2020-2026 Confluent, Inc. and contributors
  */
 
 import io.confluent.csid.utils.ProgressBarUtils;
 import io.confluent.csid.utils.ProgressTracker;
 import io.confluent.csid.utils.TrimListRepresentation;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import lombok.Getter;
+import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.SneakyThrows;
-import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -48,7 +43,6 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.util.IterableUtil.toCollection;
 import static org.awaitility.Awaitility.waitAtMost;
-import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
  * Test running with multiple instances of parallel-consumer consuming from topic with two partitions.
@@ -62,13 +56,6 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     public static final int DEFAULT_POLL_DELAY = 150;
     AtomicInteger count = new AtomicInteger();
 
-    /**
-     * When true, consumers are configured with CooperativeStickyAssignor instead of the default RangeAssignor.
-     * Cooperative rebalancing revokes and assigns partitions in separate callbacks, widening the window for
-     * stale container races. Issue #857 reporters specifically said this makes the bug more visible.
-     */
-    boolean useCooperativeAssignor = false;
-
     static {
         MDC.put(MDC_INSTANCE_ID, "Test-Thread");
     }
@@ -80,7 +67,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         int expectedMessageCount = (order == PARTITION) ? 100 : 1000;
         int numberOfPcsToRun = 2;
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_SYNC, order, expectedMessageCount,
-                numberOfPcsToRun, 1.0, DEFAULT_POLL_DELAY);
+                numberOfPcsToRun, 1.0, DEFAULT_POLL_DELAY, false);
     }
 
     @ParameterizedTest
@@ -89,7 +76,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         numPartitions = 2;
         int expectedMessageCount = (order == PARTITION) ? 100 : 1000;
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, order, expectedMessageCount,
-                2, 1.0, DEFAULT_POLL_DELAY);
+                2, 1.0, DEFAULT_POLL_DELAY, false);
     }
 
     /**
@@ -113,7 +100,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         int numberOfPcsToRun = 12;
         int expectedMessageCount = 500000;
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED, expectedMessageCount,
-                numberOfPcsToRun, 0.3, 1);
+                numberOfPcsToRun, 0.3, 1, false);
     }
 
     /**
@@ -126,12 +113,11 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Tag("performance")
     @Test
     void cooperativeStickyRebalanceShouldNotStall() {
-        useCooperativeAssignor = true;
         numPartitions = 30;
         int numberOfPcsToRun = 4;
         int expectedMessageCount = 100_000;
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED,
-                expectedMessageCount, numberOfPcsToRun, 0.3, 1);
+                expectedMessageCount, numberOfPcsToRun, 0.3, 1, true);
     }
 
     ProgressBar overallProgress;
@@ -139,7 +125,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
 
     @SneakyThrows
     private void runTest(int maxPoll, CommitMode commitMode, ProcessingOrder order, int expectedMessageCount,
-                         int numberOfPcsToRun, double fractionOfMessagesToPreProduce, int pollDelayMs) {
+                         int numberOfPcsToRun, double fractionOfMessagesToPreProduce, int pollDelayMs,
+                         boolean useCooperativeAssignor) {
         String inputName = setupTopic(this.getClass().getSimpleName() + "-input-" + RandomUtils.nextInt());
 
         overallProgress = ProgressBarUtils.getNewMessagesBar("overall", log, expectedMessageCount);
@@ -147,6 +134,15 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         ExecutorService pcExecutor = Executors.newWorkStealingPool();
 
         var sendingProgress = ProgressBarUtils.getNewMessagesBar("sending", log, expectedMessageCount);
+
+        ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
+                .maxPoll(maxPoll)
+                .commitMode(commitMode)
+                .order(order)
+                .inputTopic(inputName)
+                .pollDelayMs(pollDelayMs)
+                .useCooperativeAssignor(useCooperativeAssignor)
+                .build();
 
         // pre-produce messages to input-topic
         Set<String> expectedKeys = new ConcurrentSkipListSet<>();
@@ -177,8 +173,11 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
 
         // Submit first parallel-consumer
         log.info("Running first instance of pc");
-        int expectedMessageCountPerPC = expectedMessageCount / numberOfPcsToRun;
-        ParallelConsumerRunnable pc1 = new ParallelConsumerRunnable(maxPoll, commitMode, order, inputName, expectedMessageCountPerPC, pollDelayMs);
+        ManagedPCInstance pc1 = new ManagedPCInstance(pcConfig, getKcu(), key -> {
+            count.incrementAndGet();
+            overallProgress.step();
+            overallConsumedKeys.add(key);
+        });
         pcExecutor.submit(pc1);
 
         // Wait for first consumer to consume messages, also effectively waits for the group.initial.rebalance.delay.ms (3s by default)
@@ -224,16 +223,18 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                                 log.error(e.getMessage(), e);
                             }
                             log.info("Running pc instance {}", value);
-                    ParallelConsumerRunnable instance = new ParallelConsumerRunnable(maxPoll, commitMode, order, inputName, expectedMessageCountPerPC, pollDelayMs);
+                            ManagedPCInstance instance = new ManagedPCInstance(pcConfig, getKcu(), key -> {
+                                count.incrementAndGet();
+                                overallProgress.step();
+                                overallConsumedKeys.add(key);
+                            });
                             pcExecutor.submit(instance);
                             return instance;
                         }
                 ).collect(Collectors.toList()));
-        final List<ParallelConsumerRunnable> allPCRunners = Collections.synchronizedList(new ArrayList<>());
+        final List<ManagedPCInstance> allPCRunners = Collections.synchronizedList(new ArrayList<>());
         allPCRunners.add(pc1);
         allPCRunners.addAll(secondaryPcs);
-        final ParallelConsumerRunnable[] parallelConsumerRunnablesArray = allPCRunners.toArray(new ParallelConsumerRunnable[0]);
-
 
         // Randomly start and stop PCs
         var chaosMonkey = new Runnable() {
@@ -251,8 +252,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                                 log.info("Will mess with {} instances", numberToMessWith);
                                 IntStream.range(0, numberToMessWith).forEach(value -> {
                                     int instanceToGet = (int) ((size - 1) * Math.random());
-                                    ParallelConsumerRunnable victim = secondaryPcs.get(instanceToGet);
-                                    log.info("Victim is instance: " + victim.instanceId);
+                                    ManagedPCInstance victim = secondaryPcs.get(instanceToGet);
+                                    log.info("Victim is instance: " + victim.getInstanceId());
                                     victim.toggle(pcExecutor);
                                 });
                             }
@@ -281,9 +282,9 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                     .alias(failureMessage)
                     .pollInterval(1, SECONDS)
                     .untilAsserted(() -> {
-                        log.trace("Processed-count: {}", getAllConsumedKeys(parallelConsumerRunnablesArray).size());
+                        log.trace("Processed-count: {}", getAllConsumedKeys(allPCRunners).size());
                         if (progressTracker.hasProgressNotBeenMade()) {
-                            expectedKeys.removeAll(getAllConsumedKeys(parallelConsumerRunnablesArray));
+                            expectedKeys.removeAll(getAllConsumedKeys(allPCRunners));
                             throw progressTracker.constructError(msg("No progress, missing keys: {}.", expectedKeys));
                         }
                         SoftAssertions all = new SoftAssertions();
@@ -311,17 +312,17 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
             sendingProgress.close();
         }
 
-        allPCRunners.forEach(ParallelConsumerRunnable::close);
+        allPCRunners.forEach(ManagedPCInstance::close);
 
-        assertThat(pc1.consumedKeys).hasSizeGreaterThan(0);
-        assertThat(getAllConsumedKeys(secondaryPcs.toArray(new ParallelConsumerRunnable[0])))
+        assertThat(pc1.getConsumedKeys()).hasSizeGreaterThan(0);
+        assertThat(getAllConsumedKeys(secondaryPcs))
                 .as("Second PC should have taken over some of the work and consumed some records")
                 .hasSizeGreaterThan(0);
 
         pcExecutor.shutdown();
 
         Collection<?> duplicates = toCollection(StandardComparisonStrategy.instance()
-                .duplicatesFrom(getAllConsumedKeys(parallelConsumerRunnablesArray)));
+                .duplicatesFrom(getAllConsumedKeys(allPCRunners)));
         log.info("Duplicate consumed keys (at least one is expected due to the rebalance): {}", duplicates);
         double percentageDuplicateTolerance = 0.2;
         assertThat(duplicates)
@@ -331,139 +332,24 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
 
     }
 
-    private boolean noneHaveFailed(List<ParallelConsumerRunnable> secondaryPcs) {
-        return checkForFailure(secondaryPcs).isEmpty();
+    private boolean noneHaveFailed(List<ManagedPCInstance> pcs) {
+        return checkForFailure(pcs).isEmpty();
     }
 
-    private List<Exception> checkForFailure(List<ParallelConsumerRunnable> secondaryPcs) {
-        return secondaryPcs.stream().filter(pcr -> {
-            var pc = pcr.getParallelConsumer();
+    private List<Exception> checkForFailure(List<ManagedPCInstance> pcs) {
+        return pcs.stream().filter(instance -> {
+            var pc = instance.getParallelConsumer();
             if (pc == null) return false; // hasn't started
             if (!pc.isClosedOrFailed()) return false; // still open
             boolean failed = pc.getFailureCause() != null; // actually failed
             return failed;
-        }).map(pc -> pc.getParallelConsumer().getFailureCause()).collect(Collectors.toList());
+        }).map(instance -> instance.getParallelConsumer().getFailureCause()).collect(Collectors.toList());
     }
 
-    List<String> getAllConsumedKeys(ParallelConsumerRunnable... instances) {
-        return Arrays.stream(instances)
-                .flatMap(parallelConsumerRunnable -> parallelConsumerRunnable.consumedKeys.stream())
+    List<String> getAllConsumedKeys(List<ManagedPCInstance> instances) {
+        return instances.stream()
+                .flatMap(instance -> instance.getConsumedKeys().stream())
                 .collect(Collectors.toList());
     }
-
-    int pcInstanceCount = 0;
-
-    @Getter
-    @ToString
-    public class ParallelConsumerRunnable implements Runnable {
-
-        private final int instanceId;
-
-        private final int maxPoll;
-        private final CommitMode commitMode;
-        private final ProcessingOrder order;
-        private final String inputTopic;
-        private final int expectedMessageCount;
-        private final ProgressBar bar;
-        private final int pollDelayMs;
-        private ParallelEoSStreamProcessor<String, String> parallelConsumer;
-        private boolean started = false;
-
-        @ToString.Exclude
-        private final Queue<String> consumedKeys = new ConcurrentLinkedQueue<>();
-
-        public ParallelConsumerRunnable(int maxPoll, CommitMode commitMode, ProcessingOrder order, String inputTopic, int expectedMessageCount, int pollDelayMs) {
-            this.maxPoll = maxPoll;
-            this.commitMode = commitMode;
-            this.order = order;
-            this.inputTopic = inputTopic;
-            this.expectedMessageCount = expectedMessageCount;
-            this.pollDelayMs = pollDelayMs;
-
-            instanceId = pcInstanceCount;
-            pcInstanceCount++;
-
-            bar = ProgressBarUtils.getNewMessagesBar("PC" + instanceId, log, expectedMessageCount);
-        }
-
-        @Override
-        public void run() {
-            MDC.put(MDC_INSTANCE_ID, "Runner-" + instanceId);
-
-            started = true;
-            log.info("Running consumer!");
-
-            Properties consumerProps = new Properties();
-            consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPoll);
-            if (useCooperativeAssignor) {
-                consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG,
-                        "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
-            }
-            KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(false, consumerProps);
-
-            this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
-                    .ordering(order)
-                    .consumer(newConsumer)
-                    .commitMode(commitMode)
-                    .maxConcurrency(10)
-                    .build());
-
-
-            // test was written with 1-second cycles in mind - in terms of expected progression
-            this.parallelConsumer.setTimeBetweenCommits(ofSeconds(1));
-
-
-            parallelConsumer.setMyId(Optional.of("PC-" + instanceId));
-
-            parallelConsumer.subscribe(of(inputTopic));
-
-            parallelConsumer.poll(record -> {
-                        // simulate work
-                        try {
-                            Thread.sleep(pollDelayMs);
-                        } catch (InterruptedException e) {
-                            // ignore
-                        }
-                        count.incrementAndGet();
-                        this.bar.step();
-                        overallProgress.step();
-                        consumedKeys.add(record.key());
-                        overallConsumedKeys.add(record.key());
-                    }
-            );
-        }
-
-        public void stop() {
-            log.info("Stopping {}", this.instanceId);
-            started = false;
-            parallelConsumer.close();
-        }
-
-        public void start(ExecutorService pcExecutor) {
-            // strange structure for debugging
-            Exception failureCause = getParallelConsumer().getFailureCause();
-            if (failureCause != null) {
-                throw new RuntimeException("Error starting PC, pc died from previous error: " + failureCause.getMessage(), failureCause);
-            }
-
-            log.info("Starting {}", this);
-            pcExecutor.submit(this);
-        }
-
-        public void close() {
-            log.info("Stopping {}", this);
-            stop();
-            bar.close();
-        }
-
-        public void toggle(ExecutorService pcExecutor) {
-            if (started) {
-                stop();
-            } else {
-                start(pcExecutor);
-            }
-        }
-    }
-
 
 }
