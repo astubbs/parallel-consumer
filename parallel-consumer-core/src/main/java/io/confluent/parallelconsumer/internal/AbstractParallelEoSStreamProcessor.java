@@ -197,6 +197,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final AtomicBoolean commitCommand = new AtomicBoolean(false);
 
     /**
+     * Lock for offset commit operations. Replaces synchronized(commitCommand) for commit execution
+     * to allow tryLock() semantics in rebalance callbacks, preventing the deadlock in #857.
+     */
+    private final java.util.concurrent.locks.ReentrantLock commitLock = new java.util.concurrent.locks.ReentrantLock();
+
+    /**
      * Multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} to have in our processing queue, in order to make
      * sure threads always have work to do.
      */
@@ -420,8 +426,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            // commit any offsets from revoked partitions BEFORE truncation
-            commitOffsetsThatAreReady();
+            // Try to commit offsets for revoked partitions, but don't block if the control
+            // thread is already mid-commit. Blocking here deadlocks: the poll thread (us)
+            // holds the rebalance callback, and the control thread's commitSync() needs the
+            // poll thread to be responsive. If we can't commit, it's safe — the offsets will
+            // be re-delivered to the new assignee. See #857.
+            tryCommitOffsetsOnRevoke();
 
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
@@ -435,6 +445,35 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             usersConsumerRebalanceListener.ifPresent(listener -> listener.onPartitionsRevoked(partitions));
         } catch (Exception e) {
             throw new ExceptionInUserFunctionException("Error from rebalance listener function after #onPartitionsRevoked", e);
+        }
+    }
+
+    /**
+     * Non-blocking attempt to commit offsets during partition revocation. Uses tryLock semantics
+     * on the commitCommand monitor to avoid deadlocking with the control thread.
+     * <p>
+     * If the lock is already held (control thread is mid-commit), we skip the commit. This is
+     * safe because Kafka will re-deliver uncommitted records to the new partition assignee.
+     * <p>
+     * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a> —
+     * the original synchronized(commitCommand) call in onPartitionsRevoked caused a deadlock
+     * between the poll thread and the control thread under rebalance churn.
+     */
+    private void tryCommitOffsetsOnRevoke() {
+        if (commitLock.tryLock()) {
+            try {
+                log.debug("Acquired commitLock on revoke, committing offsets");
+                committer.retrieveOffsetsAndCommit();
+                clearCommitCommand();
+                this.lastCommitTime = Instant.now();
+            } catch (Exception e) {
+                log.warn("Failed to commit offsets during revoke: {}", e.getMessage());
+            } finally {
+                commitLock.unlock();
+            }
+        } else {
+            log.info("Skipping offset commit during partition revocation — control thread is mid-commit. " +
+                    "Uncommitted offsets will be re-delivered to the new assignee. See #857.");
         }
     }
 
@@ -1310,12 +1349,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Visible for testing
      */
     protected void commitOffsetsThatAreReady() throws TimeoutException, InterruptedException {
-        log.trace("Synchronizing on commitCommand...");
-        synchronized (commitCommand) {
+        log.trace("Acquiring commitLock...");
+        commitLock.lock();
+        try {
             log.debug("Committing offsets that are ready...");
             committer.retrieveOffsetsAndCommit();
             clearCommitCommand();
             this.lastCommitTime = Instant.now();
+        } finally {
+            commitLock.unlock();
         }
     }
 
