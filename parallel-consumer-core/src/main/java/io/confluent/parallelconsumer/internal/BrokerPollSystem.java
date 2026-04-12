@@ -375,6 +375,21 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * {@link io.confluent.parallelconsumer.internal.State#RUNNING running}, calling this method will be a no-op.
      * </p>
      */
+    /**
+     * Reset the throttle/pause flag when partitions are assigned. Kafka clears its internal
+     * consumer pause state on reassignment, so our flag must match. Without this reset,
+     * {@link #managePauseOfSubscription()} may immediately re-pause the newly assigned
+     * partitions if stale shard counts make {@link #shouldThrottle()} return true.
+     * <p>
+     * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>.
+     */
+    public void onPartitionsAssigned() {
+        if (pausedForThrottling) {
+            log.info("Resetting pausedForThrottling flag on partition assignment (was true)");
+            pausedForThrottling = false;
+        }
+    }
+
     public void pausePollingAndWorkRegistrationIfRunning() {
         if (this.runState == RUNNING) {
             log.info("Transitioning broker poll system to state paused.");

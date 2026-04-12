@@ -448,6 +448,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
         wm.onPartitionsAssigned(partitions);
+        // Reset the throttle flag — Kafka clears its internal pause state on reassignment,
+        // so our flag must match. Without this, shouldThrottle() may re-pause the new
+        // partitions immediately if stale shard counts make it think we're overloaded.
+        // See #857.
+        brokerPollSubsystem.onPartitionsAssigned();
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
     }
