@@ -130,6 +130,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             MDC.put(MDC_INSTANCE_ID, id);
         });
         log.trace("Broker poll control loop start");
+        consumerManager.claimConsumerOwnership();
         committer.ifPresent(ConsumerOffsetCommitter::claim);
         try {
             while (runState != CLOSED) {

@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @RequiredArgsConstructor
 public class ConsumerManager<K, V> {
 
-    private final Consumer<K, V> consumer;
+    private final ThreadConfinedConsumer<K, V> consumer;
 
     private final Duration offsetCommitTimeout;
 
@@ -242,6 +242,14 @@ public class ConsumerManager<K, V> {
 
     public ConsumerGroupMetadata groupMetadata() {
         return metaCache;
+    }
+
+    /**
+     * Claim the underlying consumer for the current thread. After this, any consumer method
+     * (except wakeup) called from a different thread will throw immediately with a clear message.
+     */
+    void claimConsumerOwnership() {
+        consumer.claimOwnership();
     }
 
     public void signalStop() {
