@@ -52,8 +52,11 @@ import static org.awaitility.Awaitility.waitAtMost;
 public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, String> {
 
     static final int DEFAULT_MAX_POLL = 500;
-    public static final int CHAOS_FREQUENCY = 500;
+    public static final int DEFAULT_CHAOS_FREQUENCY = 500;
     public static final int DEFAULT_POLL_DELAY = 150;
+
+    /** Per-test override for chaos frequency (ms). Higher = gentler chaos. */
+    int chaosFrequency = DEFAULT_CHAOS_FREQUENCY;
     AtomicInteger count = new AtomicInteger();
 
     static {
@@ -118,6 +121,25 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         int expectedMessageCount = 100_000;
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED,
                 expectedMessageCount, numberOfPcsToRun, 0.3, 1, true);
+    }
+
+    /**
+     * Gentler version of {@link #largeNumberOfInstances()} — toggles only 1 instance at a time with a 3-second
+     * cooldown between rounds. This lets the consumer group settle between rebalances, isolating any PC-internal
+     * bugs from the rebalance storm effect seen in the aggressive test.
+     * <p>
+     * If this test passes but {@link #largeNumberOfInstances()} fails, the issue is rebalance storm tolerance,
+     * not a PC state management bug.
+     */
+    @Tag("performance")
+    @Test
+    void gentleChaosRebalance() {
+        numPartitions = 30;
+        int numberOfPcsToRun = 6;
+        int expectedMessageCount = 200_000;
+        chaosFrequency = 3000; // 3 seconds between chaos rounds — lets the group settle
+        runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED,
+                expectedMessageCount, numberOfPcsToRun, 0.5, 1, false);
     }
 
     ProgressBar overallProgress;
@@ -242,7 +264,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
             public void run() {
                 try {
                     while (noneHaveFailed(allPCRunners)) {
-                        Thread.sleep((int) (CHAOS_FREQUENCY * Math.random()));
+                        Thread.sleep((int) (chaosFrequency * Math.random()));
                         boolean makeChaos = Math.random() > 0.2; // small chance it will let the test do a run without chaos
 //                        boolean makeChaos = true;
                         if (makeChaos) {
