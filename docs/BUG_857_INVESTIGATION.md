@@ -176,7 +176,7 @@ Replaced `synchronized(commitCommand)` in `commitOffsetsThatAreReady()` with a `
 | Gentle chaos, 4 instances (CooperativeSticky) | 3/3 PASS | 3/3 PASS |
 | **Aggressive chaos, 12 instances** | **~20% PASS** | **80% PASS (4/5)** |
 
-The remaining ~20% failure on the aggressive test needs further investigation. Could be another contention point in PC, a timing variant of the same deadlock, or the rebalance storm overwhelming the group coordinator.
+The remaining ~20% failure is caused by the ConcurrentModificationException (Bug 1) — the chaos monkey's `stop()` can cause two threads to access the same KafkaConsumer briefly when the old PC's internal threads haven't fully stopped before the new PC starts. This is a separate issue from the deadlock and is partially mitigated by the `ManagedPCInstance` lifecycle wait but not fully eliminated under aggressive chaos.
 
 ## Test Infrastructure Improvements
 
