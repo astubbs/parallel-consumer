@@ -163,16 +163,20 @@ With more instances:
 
 The `commitCommand` lock creates a cross-thread dependency between the poll thread (which must remain responsive during rebalance) and the control thread (which holds the lock during potentially slow broker commits). This violates Kafka's threading model: rebalance callbacks must complete quickly, and the poll thread must not be blocked by operations on other threads.
 
-### Fix direction
+### Fix: ReentrantLock with tryLock()
 
-The fix should ensure `onPartitionsRevoked` never blocks on the `commitCommand` lock. Options:
-1. Skip the commit attempt in `onPartitionsRevoked` if the lock is already held (use `tryLock()` semantics)
-2. Move to a single-thread model where the control loop IS the poll thread
-3. Use a non-blocking commit in the revocation handler
+Replaced `synchronized(commitCommand)` in `commitOffsetsThatAreReady()` with a `ReentrantLock`. In `onPartitionsRevoked`, use `tryLock()` — if the lock is held by the control thread mid-commit, skip the commit. Kafka re-delivers uncommitted records to the new assignee, so this is safe.
 
-Open questions:
-- Could a single rebalance (not a storm) trigger the stall under specific timing conditions we haven't hit in the gentle test?
-- Is there a relationship between the number of in-flight records at rebalance time and the likelihood of the lock collision?
+### Results after fix
+
+| Test | Before | After |
+|------|--------|-------|
+| No chaos, 2 instances | 6/6 PASS | 6/6 PASS |
+| Gentle chaos, 6 instances (Range) | 3/3 PASS | 3/3 PASS |
+| Gentle chaos, 4 instances (CooperativeSticky) | 3/3 PASS | 3/3 PASS |
+| **Aggressive chaos, 12 instances** | **~20% PASS** | **80% PASS (4/5)** |
+
+The remaining ~20% failure on the aggressive test needs further investigation. Could be another contention point in PC, a timing variant of the same deadlock, or the rebalance storm overwhelming the group coordinator.
 
 ## Test Infrastructure Improvements
 
