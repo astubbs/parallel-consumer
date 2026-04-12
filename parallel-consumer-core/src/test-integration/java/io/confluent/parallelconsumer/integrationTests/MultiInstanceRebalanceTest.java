@@ -27,7 +27,6 @@ import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.internal.StandardComparisonStrategy;
 import org.awaitility.Awaitility;
 import org.awaitility.core.TerminalFailureException;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -87,12 +86,14 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
 
     /**
      * Tests with very large numbers of parallel consumer instances to try to reproduce state and concurrency issues
-     * (#188, #189).
+     * (#188, #189, #857).
      * <p>
-     * This test takes some time, but seems required in order to expose some race conditions without syntehticly
-     * creatign them.
+     * This test takes some time, but seems required in order to expose some race conditions without synthetically
+     * creating them. Re-enabled to investigate
+     * <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a> — paused consumption after
+     * rebalance with multiple consumers. A community member reported this test fails ~50% of runs with
+     * "No progress, missing keys: ..." which is consistent with the symptoms in #857.
      */
-    @Disabled
     @Test
     void largeNumberOfInstances() {
         numPartitions = 80;
