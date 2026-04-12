@@ -119,6 +119,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         numPartitions = 30;
         int numberOfPcsToRun = 4;
         int expectedMessageCount = 100_000;
+        chaosFrequency = 3000; // gentle chaos — let group settle between rebalances
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED,
                 expectedMessageCount, numberOfPcsToRun, 0.3, 1, true);
     }

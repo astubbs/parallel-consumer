@@ -983,14 +983,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             gotWorkCount = records.size();
             lastWorkRequestWasFulfilled = gotWorkCount >= delta;
 
-            // Temporary diagnostic for #857 — log every iteration to catch the exact
-            // moment work distribution stops. Remove after root cause identified.
-            if (delta <= 0 || gotWorkCount == 0) {
-                log.info("#857-diag: delta={}, got={}, outForProcessing={}, queuedInShards={}, state={}",
-                        delta, gotWorkCount, wm.getNumberRecordsOutForProcessing(),
-                        wm.getNumberOfWorkQueuedInShardsAwaitingSelection(), state);
-            }
-
             log.trace("Loop: Submit to pool");
             submitWorkToPool(userFunction, callback, records);
         }
