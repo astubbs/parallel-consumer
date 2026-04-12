@@ -1,0 +1,542 @@
+= Upstream PR & Issue Analysis for parallel-consumer
+:toc: macro
+:toclevels: 3
+:numbered: 1
+
+toc::[]
+
+== Part 1: Open Upstream PRs (confluentinc/parallel-consumer)
+
+The upstream repository has accumulated *19 open PRs* (565 closed). The repo appears sparsely maintained -- some PRs from early 2025 remain unreviewed. The local fork (`astubbs/parallel-consumer`) is pinned to Kafka 3.1.0, JUnit 5.8.2, with a Java 17 WIP branch in progress.
+
+=== Summary Table (19 PRs, most to least important)
+
+[cols="1,1,4,2,3", options="header"]
+|===
+|Rank |PR |Title |Group |Why it matters
+
+|1 |#893 |Fix offset reset on partition reassignment |Correctness bug |Data-loss / reset risk during rebalance
+|2 |#909 |Replace stale container when adding work container |Correctness bug |Record drops during rebalance
+|3 |#915 |Feature: select batch construction strategy |Feature (closes #266) |Unlocks throughput & ordering flexibility
+|4 |#908 |Feature: Support Virtual Threads (JDK 21+) |Feature (closes #896) |Major platform modernisation
+|5 |#905 |Metric: max queued records per shard |Observability |Diagnose hot-key bottlenecks
+|6 |#866 |Update Kafka to v7 (BREAKING) |Major dep bump |Keeps library on supported Kafka
+|7 |#867 |Update vertx to v5 (BREAKING) |Major dep bump |Keeps vertx module alive
+|8 |#901 |Fix failing licence check + gitignore |Build/tooling |Unblocks CI
+|9 |#877 |chore: update repo by service bot |Build/tooling |Bot-maintained config
+|10 |#851 |postgres 42.7.2 (security) |Security CVE |Fork should not ship vulnerable deps
+|11 |#913 |assertj 3.27.7 (security) |Security CVE |Test-only, low severity
+|12 |#914 |logback 1.5.25 (security, DRAFT) |Security CVE |Logging stack CVE
+|13 |#855 |wiremock-jre8 to v3 (BREAKING) |Test dep |Test-only, unblocks other updates
+|14 |#899 |JUnit platform 1.10.2 to 6.0.0 |Test dep |Huge jump, needs care
+|15 |#900 |testcontainers 1.19.8 to 1.21.3 |Test dep |Routine bump
+|16 |#897 |vertx 4.5.7 to 5.0.5 |Dep (overlaps #867) |Duplicate of #867
+|17 |#869 |threeten-extra 1.7.2 to 1.8.0 |Dep |Trivial
+|18 |#898 |maven-gpg-plugin 3.1.0 to 3.2.8 |Build plugin |Trivial
+|19 |#854 |renovate minor+patch batch |Dep batch |Routine
+|===
+
+=== Group A -- Correctness fixes (merge first)
+
+These address real bugs observed in production and should be the highest priority to cherry-pick.
+
+==== #893 -- Accurate committed offset on partition assignment
+
+* *Author:* Martyn Ye (sangreal), opened *Oct 2025*
+* *Problem:* Race condition in `PartitionState.getOffsetToCommit()`. Between offset calculation and commit, `incompletes` may drain, so a higher offset gets committed than intended. After rebalance, the consumer tries to fetch a non-existent offset and *triggers `auto.offset.reset`* (data loss or replay).
+* *Fix:* Call `getOffsetToCommit()` once per commit cycle, track `lastProcessedOffset`, add synchronisation.
+* *Status:* Has unit tests, approved by Roman Kolesnev, run privately for >1 week with zero recurrence. Awaiting codeowner merge.
+* *Verdict:* Should merge immediately. High-impact, low-risk.
+
+==== #909 -- Replace stale work container on rebalance
+
+* *Author:* cserspring, opened *Jan 2026*
+* *Problem:* Broker-poll thread and control thread race during rebalance. Control thread adds a container at an outdated epoch _after_ `removeStaleContainers()` runs. The stale entry then blocks subsequent valid additions, *dropping records*.
+* *Fix:* `addWorkContainer` replaces stale entries rather than rejecting new ones.
+* *Status:* No visible tests yet, no review comments. Needs more scrutiny than #893 but the root-cause analysis is compelling.
+* *Verdict:* High priority, but request tests before merging.
+
+=== Group B -- Features (real user value)
+
+==== #915 -- Batch construction strategy (closes #266)
+
+* *Author:* Devingryu, opened *Mar 2026* (most recent PR)
+* Adds `batchStrategy` enum with three modes:
+** `SEQUENTIAL` (default, current behaviour) -- one record per shard per cycle
+** `BATCH_MULTIPLEX` -- multiple records from a shard, batches span shards
+** `BATCH_BY_SHARD` -- multi-record batches, each batch from a single shard
+* Closes a long-standing feature request (#266). Touches `ProcessingShard` work-selection and batch construction.
+* Author explicitly flags open design questions (UNORDERED semantics, stage separation) and notes the repo looks unmaintained.
+* *Verdict:* Most valuable user-facing feature in the queue. Needs an architectural review before merge.
+
+==== #908 -- Virtual Threads support (closes #896)
+
+* *Author:* Devingryu, opened *Jan 2026*
+* Adds `useVirtualThreads` option for JDK 21+, migrates `synchronized` to `ReentrantLock` to avoid carrier-thread pinning, generalises `setupWorkerPool` return to `ExecutorService`.
+* Tests skip on JDK 17 via `Assumptions`.
+* *Caveats:* Backwards-compat risk for subclasses overriding executor type; queue-size querying uses `WorkerManager.numberRecordsOutForProcessing` as a proxy.
+* *Verdict:* Strategically important modernisation. Sequence behind Java 17 branch.
+
+==== #905 -- Max-queued-records-per-shard metric
+
+* *Author:* flashmouse, opened *Jan 2026*
+* Adds monitoring metric; useful with `orderType.KEY` to detect *hot-key shards*.
+* Small, self-contained (2 commits). No review comments.
+* *Verdict:* Easy merge, good observability win.
+
+=== Group C -- Major (breaking) dependency bumps
+
+[cols="1,3,4", options="header"]
+|===
+|PR |Bump |Note
+
+|#866 |Kafka to v7 |Upstream Confluent Kafka major bump. Essential for staying current but will cascade test/API changes.
+|#867 |vertx to v5 |Breaking for the `parallel-consumer-vertx` module.
+|#897 |vertx 4.5.7 to 5.0.5 |Duplicate of #867; close one.
+|#855 |wiremock-jre8 to v3 |Test-only, blocks other test-dep updates.
+|#899 |junit platform 1.10.2 to *6.0.0* |Dependabot misread -- 6.0.0 likely incorrect. Close or pin.
+|===
+
+*Verdict:* Tackle #866 (Kafka v7) first. Consolidate #867/#897. Close #899.
+
+=== Group D -- Security CVEs
+
+[cols="1,2,2,2", options="header"]
+|===
+|PR |Dep |Scope |Priority
+
+|#851 |postgresql 42.7.2 |Runtime (JDBC sample) |Medium
+|#913 |assertj 3.27.7 |Test only |Low
+|#914 |logback 1.5.25 (DRAFT) |Runtime logging |Medium
+|===
+
+*Verdict:* All renovate-generated and low-effort. Merge in a single batch once CI is green.
+
+=== Group E -- Routine / housekeeping
+
+* *#854* -- renovate minor+patch dependency batch (trivial)
+* *#869* -- threeten-extra 1.7.2 to 1.8.0 (trivial)
+* *#898* -- maven-gpg-plugin 3.1.0 to 3.2.8 (trivial)
+* *#900* -- testcontainers 1.19.8 to 1.21.3 (routine test dep)
+* *#877* -- service-bot repo config update
+* *#901* -- fix failing license check + gitignore (unblocks CI -- promote to Group A priority)
+
+=== Recommended merge order for the local fork
+
+. *#901* -- unbreak the licence-check build (prerequisite)
+. *#893* -- offset reset fix (correctness, approved upstream)
+. *#909* -- stale container fix (correctness, request tests first)
+. *#905* -- hot-key observability metric (cheap win)
+. *Security batch:* #851, #913, #914
+. *Routine deps batch:* #854, #869, #898, #900, #877
+. *#915* -- batch strategy feature (needs architectural review)
+. *#866* -- Kafka v7 (scheduled breaking upgrade)
+. *#908* -- Virtual Threads (after Java 17 branch lands; requires JDK 21+ CI)
+. *#867* (and close duplicate #897) -- vertx v5
+. *#855* -- wiremock v3 (after other test deps stabilise)
+. *#899* -- close as incorrect; re-open with a sensible target version
+
+== Part 2: astubbs Closed-Unmerged PRs (Revival Candidates)
+
+A GitHub search of `confluentinc/parallel-consumer` for `author:astubbs is:closed is:unmerged` returns *53 PRs*. A striking pattern: *~40 of them were closed on the same day, 2023-06-15*, which looks like an administrative sweep (coinciding with astubbs leaving Confluent) rather than a substantive rejection of the ideas. The PRs represent a trove of unfinished but intentional design work.
+
+=== Group A -- Major features (top revival candidates)
+
+[cols="1,1,4,1,3", options="header"]
+|===
+|Rank |PR |Title |Closes |Notes
+
+|A1 |#464 |Feature: Health check and metrics |#71 |Observability gap; still needed today. Consolidate with upstream #905.
+|A2 |#366 |Dead Letter Queue (DLQ) as option for retry expiration |-- |Most-requested missing feature; no clean upstream alternative.
+|A3 |#441 |Queue priority |#50 |Closes long-standing issue; enables priority-aware shards.
+|A4 |#316 |Combine queues from different partitions/topics with KEY ordering |#314 |Powerful composition primitive.
+|A5 |#300 |Loom POC (Virtual Threads) |#299 |Predates upstream #908. Compare approaches before redoing.
+|A6 |#473 |Producer sends to least-loaded broker |-- |Throughput optimisation.
+|A7 |#390 |Streams integration |-- |Expands reach to Kafka Streams users.
+|A8 |#346 |Thread-safe user API exposure of ALL Consumer APIs |#520 |Safety-critical API surface expansion.
+|A9 |#353 |Broker status informer |#185 |Surface broker health to user code.
+|A10 |#291 |Explicit terminal and retry exceptions + poison pills |#242 |Pairs with #268; cleaner error semantics.
+|A11 |#197 |Retry count available in header |-- |Small, widely useful.
+|A12 |#22 |Dynamic concurrency control (WIP) |#21 |Adaptive parallelism.
+|===
+
+=== Group B -- Performance / correctness work
+
+[cols="1,1,4,3", options="header"]
+|===
+|Rank |PR |Title |Notes
+
+|B1 |#530 |Caching of shard management counts (shard scanning O(n) to cached) |Concrete hot-path perf fix. High ROI.
+|B2 |#237 |Shard starvation fix |#236 -- real user-visible bug.
+|B3 |#356 |Faster record producing: remove Future blocks, async result processing |#29 -- throughput-critical.
+|B4 |#408 |Runlength v3 encoding using Longs instead of Integers |Extends offset encoder capacity.
+|B5 |#46 |Continuous encoding with per-partition realtime offset-space backpressure (WIP!) |Aspirational; pairs with #408.
+|B6 |#66 |Retry system improvements |Iterative correctness work.
+|B7 |#140 |Don't allow use of core methods from vert.x or reactor module |#99 -- prevents footguns.
+|===
+
+=== Group C -- Architectural refactors (keep ideas, not code)
+
+Use as design references. Branches are far too stale to apply directly.
+
+[cols="1,1,4,3", options="header"]
+|===
+|Rank |PR |Title |Notes
+
+|C1 |#488 |Refactor God class to components |Long-standing maintainability pain.
+|C2 |#270 |Shared-nothing architecture -- Partition Events |#200 -- scalability rearchitecture.
+|C3 |#524 |Use Actor for commit commands |Pairs with C4; cleaner concurrency.
+|C4 |#325 |New IPC system using lightweight Lambda actor queue |Underpins many other improvements.
+|C5 |#271 |Major package restructure |Blast radius too large on its own; fold into C1/C2.
+|C6 |#303 |Extend Consumer and Function for more cohesive API |Public-API evolution.
+|C7 |#45 |Direct work loading, direct result processing (WIP!) |POC; informs C2/C4.
+|C8 |#405 |Remove static state |Ties into B-group testability work.
+|===
+
+=== Group D -- Testing & chaos infrastructure
+
+Reviving these pays dividends on every other revival in Groups A-C.
+
+[cols="1,1,4,3", options="header"]
+|===
+|Rank |PR |Title |Notes
+
+|D1 |#345 |Broker disconnect testing + ChaosBroker |#203 -- essential for validating correctness fixes.
+|D2 |#126 |Remove static state manipulation that tests use |Unlocks parallel test execution.
+|D3 |#143 |Parallel tests in CI |Dependent on D2.
+|D4 |#106 |Client factory config: prevent client reuse, safer config validation |Test hygiene.
+|D5 |#492 |Fix incorrect assumption in main PC unit test |Small, easy.
+|D6 |#494 |Re-enable disabled legacy tests in ParallelEoSStreamProcessorTest |Coverage recovery.
+|D7 |#496 |Implement the empty tests |Fill test placeholders.
+|D8 |#73 |Enable integration tests on GH Workflow CI |Verify if merged-equivalent elsewhere.
+|D9 |#75, #74 |Run CI on Java 8 / Java 9 |Obsolete; close permanently -- covered by Java 17 effort.
+|===
+
+=== Group E -- UX, logging, docs
+
+[cols="1,1,4,3", options="header"]
+|===
+|Rank |PR |Title |Notes
+
+|E1 |#268 |Explicit retriable exception for cleaner ERROR logging |#242 -- superseded by #291 (A10); pick one.
+|E2 |#139 |Warning when no SLF4J logger detected |Small UX polish.
+|E3 |#508 |'Back Pressure' notes and Javadoc |Valuable docs addition.
+|E4 |#81 |Parallel join technique documentation |Design docs.
+|E5 |#506 |Fix chart links (docs) |Trivial.
+|===
+
+=== Group F -- Vertx / Reactor module work
+
+[cols="1,1,4,3", options="header"]
+|===
+|Rank |PR |Title |Notes
+
+|F1 |#204 |Run user functions on a Vert.x vertical instead of Java ThreadPool |Re-evaluate in light of upstream #867 / Virtual Threads.
+|F2 |#181 |Convenience methods for Vertx calls |Small API addition.
+|F3 |#179 |Scatter-gather parallel webservice requests (POC) |Useful pattern for docs/examples.
+|===
+
+=== Group G -- Build, tooling, plumbing (mostly obsolete)
+
+[cols="1,3,2", options="header"]
+|===
+|PR |Title |Status
+
+|#442 |Setup mvnw |Consider re-doing -- mvnw is still useful.
+|#91 |Upgrade Apache Kafka version |Obsolete (see upstream #866).
+|#220 |Docker naming, fixes and improvements |Niche.
+|#10 |Extract Interface from implementation |Likely already done.
+|#23 |Playing around with interface naming (WIP!) |Skip.
+|#6 |Fix plugin versions / surefire bug |Obsolete.
+|#2 |Fix groupid in poms |Obsolete.
+|#7 |Store offset map of incomplete messages (Draft) |Likely superseded by current offset encoder.
+|===
+
+=== Top 10 revival candidates (flat ranking)
+
+. *#530* -- shard-count caching perf fix (small, high-impact, hot path)
+. *#464* -- health check and metrics (still-missing observability)
+. *#366* -- dead letter queue option
+. *#237* -- shard starvation bug fix
+. *#345* -- ChaosBroker testing infrastructure (amplifies every other fix)
+. *#441* -- queue priority
+. *#316* -- combine queues across partitions with KEY ordering
+. *#291* -- terminal/retry exception types + poison pill handling
+. *#300* -- Loom / Virtual Threads POC (compare directly to upstream #908)
+. *#197* -- retry count header
+
+=== Cross-references to Part 1
+
+* *#300 (Loom POC)* <-> upstream *#908 (Virtual Threads)* -- astubbs POC may offer earlier-design insight.
+* *#464 (Health check + metrics)* <-> upstream *#905 (max-queued-per-shard metric)* -- merge philosophies.
+* *#91 (Kafka upgrade)* <-> upstream *#866 (Kafka v7)* -- close #91 as obsolete.
+* *#204 (Vertx vertical)* <-> upstream *#867 (vertx v5)* -- re-scope against v5 APIs.
+* *#237 / #345* <-> upstream *#893 / #909* (rebalance correctness) -- astubbs chaos testing would help validate upstream fixes.
+
+== Part 3: Upstream Issues Analysis
+
+`confluentinc/parallel-consumer` has *~61 open issues* (dating back to Nov 2020) and *8 issues formally closed as "Not Planned"*. The issues were NOT bulk-closed in the Jun 2023 sweep -- only the PRs were. Most feature requests and bug reports are still sitting open with no maintainer triage since mid-2023.
+
+Issue #907 ("Is the project still actively maintained?") filed Jan 2026 summarises the community frustration.
+
+=== Category 1: Stability & timeout bugs (work on FIRST)
+
+Production-blocking issues reported by multiple users. Highest urgency.
+
+[cols="1,4,2,1,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Labels |Cross-ref PRs
+
+|#803 |Transactional Producer timeout getting commit lock |PatrickChauveau |2024-06 |verified bug |--
+|#809 |Sporadic timeouts from ConsumerOffsetCommitter.CommitRequest |tedcaozoom |2024-06 |-- |PR #893 may help
+|#833 |PC runs then exits due to InternalRuntimeException(Timeout) |dumontxiong |2024-09 |-- |PR #893 may help
+|#597 |PC doesn't close Kafka consumer if commit fails during close |BartoszSta |2023 |-- |--
+|#402 |Max loading factor steps reached: 100/100 |bartman64 |2022-08 |-- |--
+|#857 |Paused consumption across multiple consumers |rbokade-rbk |2025-03 |-- |--
+|#825 |checkAutoCommitIsDisabled fails with kafka-clients < 3.7.0 |ddqof |2024-08 |-- |--
+|===
+
+*Verdict:* #803 is the only "verified bug" in the entire tracker. Start here. #809 and #833 are likely related -- investigate together.
+
+=== Category 2: Rebalance / offset correctness (data loss risk)
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#777 |Partition revocation leads to duplicate event processing |ajax-levashov-m |2024-05 |PR #893 (offset reset), PR #909 (stale container)
+|#843 |Record picked up by multiple threads simultaneously |singhsaurabh2409 |2024-12 |PR #909 likely root cause
+|#326 |Error in onPartitionsAssigned |milansanjeev |2022-07 |labeled not-a-bug, but related to rebalance
+|===
+
+*Verdict:* Merging PR #893 and PR #909 likely resolves #777 and #843. Verify after cherry-pick.
+
+=== Category 3: Observability & health (most requested feature gap)
+
+[cols="1,4,2,1,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Labels |Cross-ref PRs
+
+|#27 |Micrometer metrics |astubbs |2020-11 |enhancement, medium |--
+|#71 |Health-checks |JorgenRingen |2021-01 |medium |PR #464 (astubbs, closed)
+|#859 |Memory leak in PCMetrics class |CMExile |2025-04 |-- |PR #905 (metric addition)
+|#484 |Question: PC state to read from? |Ehud-Lev |2022-11 |question |--
+|===
+
+*Verdict:* #27 and #71 have been open for 5+ years. PR #464 was the intended fix; redo it. PR #905 adds one metric but doesn't close these.
+
+=== Category 4: Error handling / DLQ / retry (most demanded feature)
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#310 |DLQ implementation |astubbs |2022-05 |PR #366 (astubbs, closed)
+|#196 |Max retries with DLQ callback |astubbs |2022-02 |PR #366, PR #291
+|#304 |Handle deserialization exceptions |astubbs |2022-05 |--
+|#391 |Serialization error handling / flexibility |astubbs |2022-08 |PR #291 (terminal/retry exceptions)
+|===
+
+*Verdict:* DLQ (#310) is the single most impactful missing feature. Revive PR #366 and PR #291 as a pair.
+
+=== Category 5: Thread safety & modern JDK support
+
+[cols="1,4,2,1,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Labels |Cross-ref PRs
+
+|#186 |Ensure all PC APIs are thread safe |fowlerp-qlik |2022-02 |*blocker, ver:1.0* |PR #346 (closed)
+|#78 |Allow customization of ThreadPoolExecutor |mauricioszabo |2021-02 |-- |PR #908 generalises this
+|#192 |Unique thread names for PC instances |nioertel |2022-02 |-- |--
+|#299 |Loom integration POC |astubbs |2022-05 |-- |PR #300 (closed), PR #908 (open)
+|#520 |Safe user API exposure of ALL Consumer APIs |astubbs |2022-12 |-- |PR #346 (closed)
+|#862 |PC cannot run on Java 24 |jvissers |2025-04 |-- |PR #908 may help
+|===
+
+*Verdict:* #186 is labeled *blocker for 1.0*. #862 (Java 24 compat) is time-critical. PR #908 ReentrantLock migration may resolve #862.
+
+=== Category 6: Batch processing
+
+[cols="1,4,2,1,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Labels |Cross-ref PRs
+
+|#266 |Batch option: same key only |astubbs |2022-04 |good first issue |*PR #915* (implements this!)
+|#551 |Batching not working as expected |dixitsingla |2023 |-- |PR #915 may clarify
+|#560 |Min batch size + batch max wait time |Ehud-Lev-Forter |2023 |-- |Complementary to #266
+|===
+
+*Verdict:* PR #915 directly closes #266. #560 could be a follow-up enhancement.
+
+=== Category 7: Advanced features
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#314 |Combine queues across partitions/topics with KEY ordering |astubbs |2022-05 |PR #316 (closed)
+|#321 |Transparent large message chunking |astubbs |2022-06 |--
+|#322 |Disk-backed produce queue |astubbs |2022-06 |--
+|#394 |Producer sends to least loaded broker |astubbs |2022-08 |PR #473 (closed)
+|#718 |Missing feature to terminate processing |Zordid |2024 |--
+|#782 |Seeking to a specific offset for a partition |ebrockman1 |2024-05 |--
+|===
+
+*Verdict:* #718 (terminate processing) and #782 (seek to offset) are practical, self-contained features worth implementing.
+
+=== Category 8: Logging / UX polish
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#629 |Missing topic/offset info in ConsumerOffsetCommitter error log |bmaggi |2023 |--
+|#631 |Warning log too verbose in RemovedPartitionState |bmaggi |2023 |--
+|#640 |Error log too verbose in AbstractParallelEoSStreamProcessor |bmaggi |2023 |PR #291
+|#622 |Wrong multiplier value in retry delay function example |zerda |2023 |--
+|===
+
+*Verdict:* All four are low-effort, high-ROI. Batch them in a single "logging cleanup" PR.
+
+=== Category 9: Documentation gaps
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#115 |Clarify tombstone message handling (javadoc) |astubbs |2021-05 |--
+|#171 |Spring boot example |astubbs |2021-10 |--
+|#178 |Distribute single message to HTTP endpoints |astubbs |2021-11 |--
+|#642 |Add explanation of close modes |rkolesnev |2023 |--
+|===
+
+*Verdict:* #171 (Spring Boot example) is highest-impact doc. #642 (close modes) addresses real operational confusion.
+
+=== Category 10: Vertx / Reactor module
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#170 |CompletableFuture API support + docs |astubbs |2021-10 |--
+|#180 |vertxHttpReqInfo only supports GET |OpenSourceTycoon |2021-11 |--
+|#480 |Question: Produce events using reactor? |Ehud-Lev |2022-11 |--
+|#860 |Accept instance params for managedExecutorService |dougcavalheiro |2025-04 |--
+|#912 |Memory Leak from JStreamVertxParallelStreamProcessor |sharifahmad2061 |2026-01 |--
+|===
+
+*Verdict:* #912 (memory leak) is a production bug and highest priority in this group.
+
+=== Category 11: Build / CI / tooling
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#103 |Matrix test against multiple AK/JDK versions |astubbs |2021-03 |--
+|#130 |Remove static state in tests |astubbs |2021-07 |PR #126, PR #405 (both closed)
+|#162 |mvn compile fails without test-jar |rkolesnev |2021-09 |--
+|#259 |Adopt error-prone and checker |astubbs |2022-04 |--
+|#290 |Refactor test base |astubbs |2022-05 |--
+|#526 |Move LongPollingMockConsumer to main artefact |astubbs |2022-12 |--
+|#861 |Error running tests: ManagedTruth.assertThat not found |gihong-park |2025-04 |PR #901
+|#906 |pom.xml version mismatch |lutzh |2026-01 |--
+|===
+
+*Verdict:* #162 and #861 are contributor-friction issues. Fix these early to unblock external contributors.
+
+=== Category 12: Architecture / refactoring (internal)
+
+[cols="1,4,2,1,2", options="header"]
+|===
+|Issue |Title |Author |Date |Cross-ref PRs
+
+|#200 |Shared-nothing architecture |astubbs |2022-02 |PR #270 (closed)
+|#233 |Refactor OffsetMapCodecManager |astubbs |2022-03 |--
+|#241 |Refactor WC type from String to Enum |astubbs |2022-03 |--
+|#109 |Review serialisation versioning strategy |astubbs |2021-04 |--
+|===
+
+*Verdict:* Internal maintainability improvements. Tackle when touching adjacent code.
+
+=== Category 13: Meta / project governance
+
+[cols="1,4,2,1,1", options="header"]
+|===
+|Issue |Title |Author |Date |Labels
+
+|#172 |Release train for 1.0 |astubbs |2021-10 |*high*
+|#177 |Investigate Release Drafter |astubbs |2021-11 |--
+|#907 |Is the project still actively maintained? |amrynsky |2026-01 |--
+|===
+
+*Verdict:* #907 is the community distress signal. Answering it with a new release would address the maintenance concern directly.
+
+=== Closed as "Not Planned" (8 issues)
+
+[cols="1,4,3", options="header"]
+|===
+|Issue |Title |Reason
+
+|#847 |Python support? |Out of scope (Java only)
+|#462 |How to set starting offset? |Question, answered
+|#446 |Poller behavior question |Question, answered
+|#433 |Different results with different concurrency configs |Cannot reproduce
+|#395 |API to send records through wrapped producer |Closed by astubbs
+|#379 |consumeAndProduce with read-one write-many |Not a bug / by design
+|#377 |Multiple instances/nodes support |Not a bug / by design
+|#373 |batchSize(100) but only getting 1-3 messages |Not a bug / by design
+|===
+
+*Verdict:* Only #395 might be worth reconsidering. The rest are correctly closed.
+
+=== Issue priority ranking (top 15 across all categories)
+
+[cols="1,1,4,2,3", options="header"]
+|===
+|Rank |Issue |Title |Category |Why first
+
+|1 |#803 |Transactional Producer timeout (verified bug) |Stability |Only verified bug; production-blocking
+|2 |#71 |Health-checks |Observability |5+ years open; most basic operational need
+|3 |#27 |Micrometer metrics |Observability |5+ years open; pairs with #71
+|4 |#310 |DLQ implementation |Error handling |Most demanded feature; PR #366 exists as design ref
+|5 |#186 |Thread-safe PC APIs (blocker) |Safety |Labeled *blocker for 1.0*
+|6 |#777 |Partition revocation leads to duplicates |Correctness |Fixed by merging PR #893 + #909
+|7 |#862 |PC cannot run on Java 24 |Compat |Time-critical; JDK moves fast
+|8 |#266 |Batch same-key-only option |Batch |PR #915 already implements this
+|9 |#809 |Sporadic commit timeouts |Stability |Multiple users report; likely related to #803
+|10 |#859 |Memory leak in PCMetrics |Stability |Production leak
+|11 |#912 |Memory leak in Vertx module |Stability |Production leak
+|12 |#162 |mvn compile fails without test-jar |Build |Blocks contributors
+|13 |#718 |Terminate processing feature |Feature |Practical operational gap
+|14 |#196 |Max retries + DLQ callback |Error handling |Companion to #310
+|15 |#629+#631+#640 |Logging verbosity fixes |UX |Low-effort batch fix
+|===
+
+=== Issue to PR cross-reference matrix
+
+[cols="2,2,2,3", options="header"]
+|===
+|Issue |Open upstream PR |Closed astubbs PR |Action
+
+|#71 (health checks) |#905 (partial -- one metric only) |#464 (full health check impl) |Revive #464, merge #905
+|#266 (batch same-key) |*#915* (full implementation) |-- |Merge #915
+|#299 (Loom POC) |*#908* (Virtual Threads) |#300 (Loom POC) |Compare #908 vs #300, merge #908
+|#310 (DLQ) |-- |#366 (DLQ impl) |Revive #366
+|#314 (combine queues) |-- |#316 (impl) |Revive #316
+|#520 (safe user API) |-- |#346 (thread-safe API) |Revive #346
+|#200 (shared-nothing) |-- |#270 (impl) |Keep as design ref
+|#130 (static state tests) |-- |#126, #405 |Revive #126
+|#394 (least-loaded broker) |-- |#473 (impl) |Revive #473
+|#196 (max retries) |-- |#291 (terminal exceptions) |Revive #291
+|#777 (rebalance dupes) |*#893* (offset fix) |-- |Merge #893
+|#843 (multi-thread pickup) |*#909* (stale container) |-- |Merge #909
+|#862 (Java 24 compat) |*#908* (ReentrantLock migration) |-- |Merge #908
+|===
+
+== Part 4: How to use this document
+
+. *Part 1 (open PRs)* = short-term backlog -- fixes and features already written, just needing review / merge / cherry-pick.
+. *Part 2 (astubbs closed PRs)* = medium-term idea bank -- intentional design work that was never rejected on technical grounds. Use each entry as a *spec*, not a branch to resurrect (branches will have bitrot beyond usefulness).
+. *Part 3 (issues)* = the requirements backlog -- user-reported needs and bugs. Use the issue priority ranking and the cross-reference matrix to decide what to tackle next. Issues with linked PRs (open or closed) can be resolved by merging/reviving those PRs.
+. Before picking up a Part 2 item, check Part 1 for overlap (see cross-references) to avoid duplicating effort.
