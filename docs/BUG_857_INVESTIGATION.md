@@ -56,9 +56,37 @@ PR #882 fixed stale work container cleanup in `ProcessingShard.getWorkIfAvailabl
 
 The `ShardManagerStaleContainerTest` tests (3 tests, all pass) prove that the stale container logic works correctly in single-threaded scenarios. The epoch tracking, stale detection, and mid-iteration removal all function as designed. The bug is purely a concurrency issue.
 
-## Fix
+## Bug 2: Silent Stall (the real #857)
 
-The `close()` path needs to safely interrupt the poll thread via `consumer.wakeup()` instead of directly touching the consumer from another thread. The existing `transitionToClosing()` method already calls `consumerManager.wakeup()`, but there's a race window where the consumer is accessed before the wakeup takes effect.
+After fixing the restart logic in tests, we still see 100% failure rate — but with a different pattern: NO exceptions, NO crashes, consumers alive and running, but consumption stops making progress. This is exactly what production users describe.
+
+### Root Cause: `numberRecordsOutForProcessing` counter drift
+
+**File:** `WorkManager.java:65` — `private int numberRecordsOutForProcessing = 0`
+
+This counter tracks how many work items have been dispatched to the worker pool but not yet completed. It's used by `calculateQuantityToRequest()` to determine how many new work items to fetch from shards:
+
+```
+delta = target - numberRecordsOutForProcessing
+```
+
+**The bug:** When partitions are revoked (`onPartitionsRevoked`), work is removed from shards and partition state — but `numberRecordsOutForProcessing` is NOT adjusted. In-flight work for revoked partitions is expected to complete through the mailbox, where `handleFutureResult()` detects them as stale and decrements the counter. But if the work items don't make it back through the mailbox (e.g., the worker pool was shut down during close, interrupting in-flight tasks), the counter stays permanently inflated.
+
+**The consequence:** `calculateQuantityToRequest()` computes `target - inflated_counter = 0` (or negative). No new work is requested. No records are polled. Consumption stalls silently.
+
+**Evidence:** In the failing test runs:
+- All partitions are correctly assigned after rebalances
+- No exceptions, no errors, no crashes
+- But the overall progress count stops incrementing
+- The `ProgressTracker` detects "No progress after 11 rounds"
+
+### Proposed Fix
+
+In `WorkManager.onPartitionsRevoked()`, count the number of in-flight work containers for the revoked partitions and subtract them from `numberRecordsOutForProcessing`. This ensures the counter accurately reflects the actual amount of outstanding work after a rebalance.
+
+## Fix for Bug 1 (CME)
+
+The `close()` path needs to safely interrupt the poll thread via `consumer.wakeup()` instead of directly touching the consumer from another thread. Partial fix committed: moved `updateCache()` after `pollingBroker=false` in `ConsumerManager.poll()`. May need additional work.
 
 ## Test Infrastructure Improvements
 
