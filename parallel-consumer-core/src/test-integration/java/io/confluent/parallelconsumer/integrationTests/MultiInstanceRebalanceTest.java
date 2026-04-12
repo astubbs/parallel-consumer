@@ -62,6 +62,13 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     public static final int DEFAULT_POLL_DELAY = 150;
     AtomicInteger count = new AtomicInteger();
 
+    /**
+     * When true, consumers are configured with CooperativeStickyAssignor instead of the default RangeAssignor.
+     * Cooperative rebalancing revokes and assigns partitions in separate callbacks, widening the window for
+     * stale container races. Issue #857 reporters specifically said this makes the bug more visible.
+     */
+    boolean useCooperativeAssignor = false;
+
     static {
         MDC.put(MDC_INSTANCE_ID, "Test-Thread");
     }
@@ -107,6 +114,24 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         int expectedMessageCount = 500000;
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED, expectedMessageCount,
                 numberOfPcsToRun, 0.3, 1);
+    }
+
+    /**
+     * Variant of {@link #largeNumberOfInstances()} using CooperativeStickyAssignor, which is the assignor
+     * that issue #857 reporters say makes the bug more visible. Cooperative rebalancing revokes and assigns
+     * partitions in separate callbacks, creating a wider window for stale container races.
+     * <p>
+     * Uses parameters closer to the production environments reported in #857: 30 partitions, 4 consumers.
+     */
+    @Tag("performance")
+    @Test
+    void cooperativeStickyRebalanceShouldNotStall() {
+        useCooperativeAssignor = true;
+        numPartitions = 30;
+        int numberOfPcsToRun = 4;
+        int expectedMessageCount = 100_000;
+        runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED,
+                expectedMessageCount, numberOfPcsToRun, 0.3, 1);
     }
 
     ProgressBar overallProgress;
@@ -370,6 +395,10 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
 
             Properties consumerProps = new Properties();
             consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPoll);
+            if (useCooperativeAssignor) {
+                consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG,
+                        "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
+            }
             KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(false, consumerProps);
 
             this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
