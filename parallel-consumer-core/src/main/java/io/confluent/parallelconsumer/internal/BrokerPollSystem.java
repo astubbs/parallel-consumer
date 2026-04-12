@@ -159,12 +159,19 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
             var polledRecords = pollBrokerForRecords();
             int count = polledRecords.count();
+            // Temporary diagnostic for #857
+            if (count == 0) {
+                log.info("#857-poll: runState={}, pausedForThrottling={}, assignment={}",
+                        runState, pausedForThrottling, consumerManager.assignment().size());
+            }
             log.debug("Got {} records in poll result", count);
 
             if (count > 0) {
                 log.trace("Loop: Register work");
                 pc.registerWork(polledRecords);
             }
+        } else {
+            log.info("#857-poll: NOT polling, runState={}", runState);
         }
     }
 

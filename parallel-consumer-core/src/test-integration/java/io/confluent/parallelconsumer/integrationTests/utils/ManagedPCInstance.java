@@ -81,6 +81,25 @@ public class ManagedPCInstance implements Runnable {
     public void run() {
         org.slf4j.MDC.put(MDC_INSTANCE_ID, "Runner-" + instanceId);
 
+        // Wait for the previous PC's threads to fully stop before creating a new one.
+        // Without this, two broker poll threads can briefly coexist, causing
+        // ConcurrentModificationException on the KafkaConsumer.
+        if (parallelConsumer != null) {
+            int waitMs = 0;
+            while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000) {
+                try {
+                    Thread.sleep(100);
+                    waitMs += 100;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            if (waitMs >= 10_000) {
+                log.warn("Instance {} previous PC did not close within 10s, proceeding anyway", instanceId);
+            }
+        }
+
         started = true;
         log.info("Running consumer instance {}", instanceId);
 
