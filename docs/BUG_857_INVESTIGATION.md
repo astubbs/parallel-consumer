@@ -90,15 +90,53 @@ The `close()` path needs to safely interrupt the poll thread via `consumer.wakeu
 
 ## Current Status
 
-Both fixes applied (CME partial fix + counter adjustment). Still failing 3/3 runs with silent stall. The counter adjustment triggers but with values too small (0-1) to explain the stall. The root cause is deeper.
+Under moderate rebalance stress, PC handles multi-instance rebalancing correctly. Under extreme stress (12 instances toggling every 500ms), consumption stalls.
 
-**Remaining suspects:**
-- `pausedForThrottling` flag stuck after rebalance — partition paused for backpressure, never resumed
-- Work being registered with wrong epoch and silently dropped by `maybeRegisterNewPollBatchAsWork`
-- `LoopingResumingIterator` in `ShardManager.getWorkIfAvailable` skipping shards after rebalance
-- Control loop blocked in `processWorkCompleteMailBox` waiting for results that never come
+### What we observed
 
-**Next steps:** TRACE logging on the control loop to see exactly what `calculateQuantityToRequest()` and `getWorkIfAvailable()` return during the stall period.
+Diagnostic logging in the poll loop during the aggressive test stall:
+```
+#857-poll: runState=RUNNING, pausedForThrottling=false, assignment=0
+```
+All PC instances were running, not paused, but the Kafka consumer reported zero assigned partitions. The control loop was requesting work (`delta=41`) but shards were empty because no records were being polled.
+
+### What we don't yet know
+
+The `assignment=0` observation has multiple possible explanations:
+- The Kafka group coordinator can't keep up with rapid membership changes (12 instances toggling every 500ms)
+- PC's `close()` doesn't cleanly deregister from the consumer group, delaying rebalance completion
+- The lifecycle wait in `ManagedPCInstance` (10s) isn't long enough for the old consumer to fully leave
+- There's a PC bug that only manifests under high concurrency/churn, and the gentle test doesn't hit the race window
+- The `consumerManager.assignment()` cache is stale or reported incorrectly
+
+Further investigation is needed to determine whether this is a Kafka group protocol limitation under extreme churn, a PC issue with consumer group cleanup during close, or something else entirely.
+
+### Test Matrix
+
+| Test | Assignor | Chaos | Result |
+|------|----------|-------|--------|
+| No chaos, 2 instances | Range | None | **6/6 PASS** |
+| Gentle chaos, 6 instances | Range | 3s intervals | **3/3 PASS** |
+| Gentle chaos, 4 instances | Cooperative Sticky | 3s intervals | **3/3 PASS** |
+| Aggressive chaos, 12 instances | Range | 500ms intervals | **~20% PASS** |
+
+### Defensive fixes applied
+
+These are all correct improvements regardless of the root cause:
+
+1. **CME prevention**: moved `updateCache()` after `pollingBroker=false` in `ConsumerManager.poll()`
+2. **Counter adjustment**: `adjustOutForProcessingOnRevoke()` in `WorkManager` before shard cleanup
+3. **Throttle reset**: `pausedForThrottling=false` on partition assignment in `BrokerPollSystem`
+4. **Lifecycle wait**: `ManagedPCInstance.run()` waits for previous PC to fully close before creating a new one
+
+### Regarding production #857
+
+The production reports describe consumers that are stable (not being rapidly toggled). The aggressive chaos test may not reproduce the exact production scenario. With gentle chaos (which better simulates production rebalances from deployments), PC handles rebalances correctly with both Range and Cooperative Sticky assignors.
+
+Open questions:
+- Does PC's close path properly deregister from the consumer group, or does it leave ghost members?
+- Could a single rebalance (not a storm) trigger the stall under specific timing conditions we haven't hit in the gentle test?
+- Is there a relationship between the number of in-flight records at rebalance time and the likelihood of a stall?
 
 ## Test Infrastructure Improvements
 
