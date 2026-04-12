@@ -133,10 +133,46 @@ These are all correct improvements regardless of the root cause:
 
 The production reports describe consumers that are stable (not being rapidly toggled). The aggressive chaos test may not reproduce the exact production scenario. With gentle chaos (which better simulates production rebalances from deployments), PC handles rebalances correctly with both Range and Cooperative Sticky assignors.
 
+## Bug 3: commitCommand Lock Contention — THE ROOT CAUSE
+
+### Discovery
+
+With 12 instances + gentle chaos (3s intervals): 0/3 pass. The instance count matters, not just chaos frequency. Analysis of the failed run showed:
+
+1. All 80 partitions revoked at `20:05` via `onPartitionsRevoked` callbacks
+2. Zero `onPartitionsAssigned` callbacks fire after that — ever
+3. All threads go silent — no poll, no control loop, no chaos monkey
+4. System is completely dead for the remaining 15 minutes until timeout
+
+### Root Cause: `synchronized(commitCommand)` deadlock
+
+**File:** `AbstractParallelEoSStreamProcessor.java:1314`
+
+`commitOffsetsThatAreReady()` takes `synchronized(commitCommand)`. This method is called from both:
+- **Poll thread** (line 424): inside `onPartitionsRevoked`, which runs during a Kafka rebalance callback
+- **Control thread** (line 894): inside `controlLoop`, as part of normal offset commit cycle
+
+When the control thread holds the `commitCommand` lock (mid-commit), and a rebalance fires on the poll thread, `onPartitionsRevoked` tries to acquire the same lock. The poll thread blocks. But the control thread's `consumer.commitSync()` (called through `committer.retrieveOffsetsAndCommit()`) needs the poll thread to be responsive for the Kafka protocol to work. **Deadlock.**
+
+With more instances:
+- More consumers in the group = more frequent rebalances
+- More rebalances = higher probability of hitting the window where the control thread is mid-commit
+- This explains why 6 instances passes and 12 fails: the collision probability scales with group size
+
+### This IS a PC bug
+
+The `commitCommand` lock creates a cross-thread dependency between the poll thread (which must remain responsive during rebalance) and the control thread (which holds the lock during potentially slow broker commits). This violates Kafka's threading model: rebalance callbacks must complete quickly, and the poll thread must not be blocked by operations on other threads.
+
+### Fix direction
+
+The fix should ensure `onPartitionsRevoked` never blocks on the `commitCommand` lock. Options:
+1. Skip the commit attempt in `onPartitionsRevoked` if the lock is already held (use `tryLock()` semantics)
+2. Move to a single-thread model where the control loop IS the poll thread
+3. Use a non-blocking commit in the revocation handler
+
 Open questions:
-- Does PC's close path properly deregister from the consumer group, or does it leave ghost members?
 - Could a single rebalance (not a storm) trigger the stall under specific timing conditions we haven't hit in the gentle test?
-- Is there a relationship between the number of in-flight records at rebalance time and the likelihood of a stall?
+- Is there a relationship between the number of in-flight records at rebalance time and the likelihood of the lock collision?
 
 ## Test Infrastructure Improvements
 
