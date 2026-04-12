@@ -88,6 +88,18 @@ In `WorkManager.onPartitionsRevoked()`, count the number of in-flight work conta
 
 The `close()` path needs to safely interrupt the poll thread via `consumer.wakeup()` instead of directly touching the consumer from another thread. Partial fix committed: moved `updateCache()` after `pollingBroker=false` in `ConsumerManager.poll()`. May need additional work.
 
+## Current Status
+
+Both fixes applied (CME partial fix + counter adjustment). Still failing 3/3 runs with silent stall. The counter adjustment triggers but with values too small (0-1) to explain the stall. The root cause is deeper.
+
+**Remaining suspects:**
+- `pausedForThrottling` flag stuck after rebalance — partition paused for backpressure, never resumed
+- Work being registered with wrong epoch and silently dropped by `maybeRegisterNewPollBatchAsWork`
+- `LoopingResumingIterator` in `ShardManager.getWorkIfAvailable` skipping shards after rebalance
+- Control loop blocked in `processWorkCompleteMailBox` waiting for results that never come
+
+**Next steps:** TRACE logging on the control loop to see exactly what `calculateQuantityToRequest()` and `getWorkIfAvailable()` return during the stall period.
+
 ## Test Infrastructure Improvements
 
 As part of this investigation, we also:
