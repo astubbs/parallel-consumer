@@ -67,7 +67,6 @@ public class ConsumerManager<K, V> {
                 commitRequested = false;
             }
             pollingBroker.set(true);
-            updateCache();
             log.debug("Poll starting with timeout: {}", timeoutToUse);
             Instant pollStarted = Instant.now();
             long tryCount = 0;
@@ -106,7 +105,6 @@ public class ConsumerManager<K, V> {
                 }
                 pendingRequests.addAndGet(-1L);
             }
-            updateCache();
         } catch (WakeupException w) {
             correctPollWakeups++;
             log.debug("Awoken from broker poll");
@@ -114,6 +112,13 @@ public class ConsumerManager<K, V> {
             records = new ConsumerRecords<>(UniMaps.of());
         } finally {
             pollingBroker.set(false);
+        }
+        // Update the cache after pollingBroker is cleared, so wakeup() from another thread
+        // won't call consumer.wakeup() while we're calling consumer.groupMetadata()/paused().
+        // This fixes ConcurrentModificationException when close() races against poll().
+        // See https://github.com/confluentinc/parallel-consumer/issues/857
+        if (records != null && records.count() > 0) {
+            updateCache();
         }
         return records != null ? records : new ConsumerRecords<>(UniMaps.of());
     }
