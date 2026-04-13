@@ -23,10 +23,13 @@ public class EpochAndRecordsMap<K, V> {
 
     Map<TopicPartition, RecordsAndEpoch> recordMap = new HashMap<>();
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(EpochAndRecordsMap.class);
+
     public EpochAndRecordsMap(ConsumerRecords<K, V> poll, PartitionStateManager<K, V> pm) {
         poll.partitions().forEach(partition -> {
             var records = poll.records(partition);
             Long epochOfPartition = pm.getEpochOfPartition(partition);
+            log.trace("Tagging {} records for {} with epoch {}", records.size(), partition, epochOfPartition);
             RecordsAndEpoch entry = new RecordsAndEpoch(partition, epochOfPartition, records);
             recordMap.put(partition, entry);
         });

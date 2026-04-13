@@ -936,6 +936,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
+        log.trace("Control loop: blocking on mailbox for {}, shouldCommit={}, queuedInShards={}, outForProcessing={}",
+                timeToBlockFor, shouldTryCommitNow,
+                wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                wm.getNumberRecordsOutForProcessing());
         processWorkCompleteMailBox(timeToBlockFor);
 
         //

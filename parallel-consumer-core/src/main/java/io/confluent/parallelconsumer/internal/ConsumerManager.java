@@ -76,7 +76,7 @@ public class ConsumerManager<K, V> {
                 commitRequested = false;
             }
             pollingBroker.set(true);
-            log.debug("Poll starting with timeout: {}", timeoutToUse);
+            log.trace("Poll starting with timeout: {}, assignment size: {}", timeoutToUse, assignmentSizeCache);
             Instant pollStarted = Instant.now();
             long tryCount = 0;
             boolean polledSuccessfully = false;
@@ -125,10 +125,9 @@ public class ConsumerManager<K, V> {
         // Update the cache after pollingBroker is cleared, so wakeup() from another thread
         // won't call consumer.wakeup() while we're calling consumer.groupMetadata()/paused().
         // This fixes ConcurrentModificationException when close() races against poll().
+        // Always update (not just when records > 0) so assignment cache stays current after rebalances.
         // See https://github.com/confluentinc/parallel-consumer/issues/857
-        if (records != null && records.count() > 0) {
-            updateCache();
-        }
+        updateCache();
         return records != null ? records : new ConsumerRecords<>(UniMaps.of());
     }
 
