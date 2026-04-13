@@ -62,8 +62,6 @@ public class ManagedPCInstance implements Runnable {
     @Getter
     private volatile ParallelEoSStreamProcessor<String, String> parallelConsumer;
     private volatile boolean started = false;
-    /** Prevents double-entry: two run() calls for the same instance create duplicate PCs. See #857. */
-    private final java.util.concurrent.atomic.AtomicBoolean runGuard = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     @ToString.Exclude
     private final Queue<String> consumedKeys = new ConcurrentLinkedQueue<>();
@@ -81,18 +79,6 @@ public class ManagedPCInstance implements Runnable {
 
     @Override
     public void run() {
-        if (!runGuard.compareAndSet(false, true)) {
-            log.warn("Instance {} run() already in progress on another thread, skipping duplicate invocation", instanceId);
-            return;
-        }
-        try {
-            doRun();
-        } finally {
-            runGuard.set(false);
-        }
-    }
-
-    private void doRun() {
         org.slf4j.MDC.put(MDC_INSTANCE_ID, "Runner-" + instanceId);
 
         // Wait for the previous PC to fully close — including its internal threads finishing
@@ -117,7 +103,7 @@ public class ManagedPCInstance implements Runnable {
             }
         }
 
-        started = true;
+        // started flag is set in start(), not here — prevents double-submission
         log.info("Running consumer instance {}", instanceId);
 
         Properties consumerProps = new Properties();
@@ -176,6 +162,7 @@ public class ManagedPCInstance implements Runnable {
                 }
             }
         }
+        started = true; // set BEFORE submit so next toggle() sees it — prevents double-submission
         log.info("Starting instance {}", instanceId);
         pcExecutor.submit(this);
     }
