@@ -103,8 +103,12 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         numPartitions = 80;
         int numberOfPcsToRun = 12;
         int expectedMessageCount = 500000;
+        // Use CooperativeStickyAssignor — under the eager (Range) protocol, rapid membership
+        // changes restart the JoinGroup phase from scratch, leaving all consumers with
+        // assignment=[] indefinitely. Cooperative rebalancing lets consumers keep their
+        // existing assignments during rebalance. See #857 investigation.
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED, expectedMessageCount,
-                numberOfPcsToRun, 0.3, 1, false);
+                numberOfPcsToRun, 0.3, 1, true);
     }
 
     /**
