@@ -176,7 +176,19 @@ Replaced `synchronized(commitCommand)` in `commitOffsetsThatAreReady()` with a `
 | Gentle chaos, 4 instances (CooperativeSticky) | 3/3 PASS | 3/3 PASS |
 | **Aggressive chaos, 12 instances** | **~20% PASS** | **80% PASS (4/5)** |
 
-The remaining ~20% failure is caused by the ConcurrentModificationException (Bug 1) — the chaos monkey's `stop()` can cause two threads to access the same KafkaConsumer briefly when the old PC's internal threads haven't fully stopped before the new PC starts. This is a separate issue from the deadlock and is partially mitigated by the `ManagedPCInstance` lifecycle wait but not fully eliminated under aggressive chaos.
+### State dump analysis (latest finding)
+
+State dump during stall shows:
+- All 12 instances alive (`closed/failed=false`), no exceptions
+- 8/12 stopped by chaos monkey (`started=false`)
+- 4 running instances: `queuedInShards=0`, `incompleteOffsets=0`, `pausedPartitions=0`
+- `outForProcessing=-1` on some (counter drift, known minor issue)
+
+**Key insight**: The 4 RUNNING instances should have all 80 partitions assigned to them (Kafka rebalances when 8 instances leave). They're alive, not paused, and the control loop is requesting work (`delta>0`). But shards are empty — records polled from the broker aren't being registered as work.
+
+This is a **state management problem**, not a threading or deadlock issue. The most likely cause: `maybeRegisterNewPollBatchAsWork` in `PartitionState` silently drops records when the epoch doesn't match. After multiple rapid rebalances, the epoch tracking between `PartitionStateManager.partitionsAssignmentEpochs` and the `EpochAndRecordsMap` created during poll may be out of sync.
+
+This is the elephant: the data model for tracking partition assignment epochs across rebalances has a bug that causes valid records to be silently dropped as "stale" even though they're from the current assignment.
 
 ## Test Infrastructure Improvements
 
