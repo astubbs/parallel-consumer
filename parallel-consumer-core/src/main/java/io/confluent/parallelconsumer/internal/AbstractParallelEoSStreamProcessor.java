@@ -110,7 +110,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Getter(PROTECTED)
     private final Optional<ProducerManager<K, V>> producerManager;
 
-    private final org.apache.kafka.clients.consumer.Consumer<K, V> consumer;
+    /**
+     * All consumer access goes through ConsumerManager (which wraps with ThreadConfinedConsumer).
+     * No raw Consumer<K,V> reference is held — enforced by ArchUnit. See #857.
+     */
+    private final ConsumerManager<K, V> consumerManager;
 
     /**
      * The pool which is used for running the users' supplied function
@@ -290,14 +294,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         options = newOptions;
         this.shutdownTimeout = options.getShutdownTimeout();
         this.drainTimeout = options.getDrainTimeout();
-        this.consumer = options.getConsumer();
+        this.consumerManager = module.consumerManager();
 
         validateConfiguration();
 
         module.setParallelEoSStreamProcessor(this);
 
         log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
-                newOptions.getConsumer().groupMetadata().groupId(),
+                consumerManager.groupMetadata().groupId(),
                 newOptions);
         //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
         pcMetrics = module.pcMetrics();
@@ -337,14 +341,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void validateConfiguration() {
         options.validate();
 
-        checkGroupIdConfigured(consumer);
-        checkNotSubscribed(consumer);
-        checkAutoCommitIsDisabled(consumer);
+        checkGroupIdConfigured();
+        checkNotSubscribed(options.getConsumer());
+        checkAutoCommitIsDisabled(options.getConsumer());
     }
 
-    private void checkGroupIdConfigured(final org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
+    private void checkGroupIdConfigured() {
         try {
-            consumer.groupMetadata();
+            consumerManager.groupMetadata();
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
                     "configured GroupId on your Consumer?", e);
@@ -387,27 +391,27 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public void subscribe(Collection<String> topics) {
         log.debug("Subscribing to {}", topics);
-        consumer.subscribe(topics, this);
+        consumerManager.subscribe(topics, this);
     }
 
     @Override
     public void subscribe(Pattern pattern) {
         log.debug("Subscribing to {}", pattern);
-        consumer.subscribe(pattern, this);
+        consumerManager.subscribe(pattern, this);
     }
 
     @Override
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener callback) {
         log.debug("Subscribing to {}", topics);
         usersConsumerRebalanceListener = Optional.of(callback);
-        consumer.subscribe(topics, this);
+        consumerManager.subscribe(topics, this);
     }
 
     @Override
     public void subscribe(Pattern pattern, ConsumerRebalanceListener callback) {
         log.debug("Subscribing to {}", pattern);
         usersConsumerRebalanceListener = Optional.of(callback);
-        consumer.subscribe(pattern, this);
+        consumerManager.subscribe(pattern, this);
     }
 
     /**
@@ -799,7 +803,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void maybeCloseConsumer() {
         if (isResponsibleForCommits()) {
-            consumer.close();
+            consumerManager.close(Duration.ofSeconds(10));
         }
     }
 

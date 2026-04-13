@@ -16,6 +16,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -55,6 +56,14 @@ public class ConsumerManager<K, V> {
     private int erroneousWakups = 0;
     private int correctPollWakeups = 0;
     private int noWakeups = 0;
+
+    /**
+     * Prime the metadata cache so that groupMetadata() returns a valid value before the poll
+     * thread starts. Must be called after construction, before any thread claims ownership.
+     */
+    void init() {
+        updateCache();
+    }
     private boolean commitRequested;
 
     ConsumerRecords<K, V> poll(Duration requestedLongPollTimeout) {
@@ -290,6 +299,22 @@ public class ConsumerManager<K, V> {
 
     public int getPausedPartitionSize() {
         return pausedPartitionSizeCache;
+    }
+
+    void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
+        consumer.subscribe(topics, listener);
+    }
+
+    void subscribe(java.util.regex.Pattern pattern, ConsumerRebalanceListener listener) {
+        consumer.subscribe(pattern, listener);
+    }
+
+    /**
+     * Returns the raw consumer class type for reflection-based checks (e.g., auto-commit detection).
+     * Does not access the consumer's Kafka methods, just the class object.
+     */
+    Class<?> getConsumerClass() {
+        return consumer.getClass();
     }
 
     public void resume(final Set<TopicPartition> pausedTopics) {

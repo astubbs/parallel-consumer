@@ -76,6 +76,7 @@ public class PCModule<K, V> {
                     optionsInstance.getOffsetCommitTimeout(),
                     optionsInstance.getSaslAuthenticationRetryTimeout(),
                     optionsInstance.getSaslAuthenticationExceptionRetryBackoff());
+            consumerManager.init();
         }
         return consumerManager;
     }
