@@ -188,7 +188,23 @@ State dump during stall shows:
 
 This is a **state management problem**, not a threading or deadlock issue. The most likely cause: `maybeRegisterNewPollBatchAsWork` in `PartitionState` silently drops records when the epoch doesn't match. After multiple rapid rebalances, the epoch tracking between `PartitionStateManager.partitionsAssignmentEpochs` and the `EpochAndRecordsMap` created during poll may be out of sync.
 
-This is the elephant: the data model for tracking partition assignment epochs across rebalances has a bug that causes valid records to be silently dropped as "stale" even though they're from the current assignment.
+### Kafka Rebalance Protocol Explanation (from research)
+
+The `assignedPartitions=0` observation is **documented Kafka behavior** under the eager (RangeAssignor) rebalance protocol:
+
+- During a rebalance, ALL consumers have their partitions revoked (`assignment=[]`)
+- They remain with empty assignment until the SyncGroup phase completes
+- **If a new join/leave occurs DURING the JoinGroup phase, the coordinator RESTARTS the rebalance from scratch**
+- With 12 instances and 500ms chaos, membership changes every ~500ms continuously restart the JoinGroup phase
+- The rebalance never completes, and all consumers sit with `assignment=[]` indefinitely
+
+This is NOT a PC bug — it's the eager rebalance protocol's fundamental limitation under rapid membership churn. The Kafka community addressed this with:
+- **CooperativeStickyAssignor** (KIP-429): consumers keep existing assignments during rebalance, only migrated partitions are briefly unowned
+- **Static group membership** (KIP-345, `group.instance.id`): rejoining consumers get their old assignment without triggering a rebalance
+
+### Verified: epoch mismatch is NOT the cause
+
+Upgraded epoch mismatch logging from DEBUG to WARN. Result: ZERO epoch drops in failing runs. Records are not being silently dropped at registration time — they're genuinely not being polled because the consumer has no assigned partitions.
 
 ## Test Infrastructure Improvements
 
