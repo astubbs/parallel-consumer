@@ -33,7 +33,12 @@ public class PCMetrics {
     /**
      * Tracking of registered meters for removal from registry on shutdown.
      */
-    private List<Meter.Id> registeredMeters = new ArrayList<>();
+    /**
+     * Using LinkedHashSet to prevent duplicate entries when the same meter is registered multiple times
+     * (e.g., during repeated rebalances). Micrometer's registry handles deduplication internally,
+     * but our tracking collection was accumulating duplicates, causing a memory leak. See #859.
+     */
+    private Set<Meter.Id> registeredMeters = new LinkedHashSet<>();
 
     /**
      * Common metrics tags added to all meters - for example PC instance. Configurable through Parallel Consumer
@@ -248,6 +253,9 @@ public class PCMetrics {
             return;
         }
         Search.in(meterRegistry).name(name -> name.startsWith(meterNamePrefix))
-                .tags(commonTags).meters().forEach(meterRegistry::remove);
+                .tags(commonTags).meters().forEach(meter -> {
+                    meterRegistry.remove(meter);
+                    registeredMeters.remove(meter.getId());
+                });
     }
 }
