@@ -130,6 +130,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             MDC.put(MDC_INSTANCE_ID, id);
         });
         log.trace("Broker poll control loop start");
+        consumerManager.claimConsumerOwnership();
         committer.ifPresent(ConsumerOffsetCommitter::claim);
         try {
             while (runState != CLOSED) {
@@ -155,16 +156,25 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     private void handlePoll() {
-        log.trace("Loop: Broker poller: ({})", runState);
+        log.trace("Loop: Broker poller: ({}), pausedForThrottling={}", runState, pausedForThrottling);
         if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
             var polledRecords = pollBrokerForRecords();
             int count = polledRecords.count();
             log.debug("Got {} records in poll result", count);
+            if (count == 0) {
+                log.trace("Poll returned 0 records. assignment={}, paused={}, pausedForThrottling={}",
+                        consumerManager.getAssignmentSize(),
+                        consumerManager.getPausedPartitionSize(),
+                        pausedForThrottling);
+            }
 
             if (count > 0) {
-                log.trace("Loop: Register work");
+                log.trace("Loop: Register work - {} records from {} partitions",
+                        count, polledRecords.partitions().size());
                 pc.registerWork(polledRecords);
             }
+        } else {
+            log.trace("Not polling - runState={}", runState);
         }
     }
 
@@ -304,7 +314,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private void managePauseOfSubscription() {
         boolean throttle = shouldThrottle();
-        log.trace("Need to throttle: {}", throttle);
+        log.trace("Need to throttle: {}, pausedForThrottling={}, assignment={}", throttle, pausedForThrottling, consumerManager.getAssignmentSize());
         if (throttle) {
             doPauseMaybe();
         } else {
@@ -375,6 +385,21 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * {@link io.confluent.parallelconsumer.internal.State#RUNNING running}, calling this method will be a no-op.
      * </p>
      */
+    /**
+     * Reset the throttle/pause flag when partitions are assigned. Kafka clears its internal
+     * consumer pause state on reassignment, so our flag must match. Without this reset,
+     * {@link #managePauseOfSubscription()} may immediately re-pause the newly assigned
+     * partitions if stale shard counts make {@link #shouldThrottle()} return true.
+     * <p>
+     * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>.
+     */
+    public void onPartitionsAssigned() {
+        if (pausedForThrottling) {
+            log.info("Resetting pausedForThrottling flag on partition assignment (was true)");
+            pausedForThrottling = false;
+        }
+    }
+
     public void pausePollingAndWorkRegistrationIfRunning() {
         if (this.runState == RUNNING) {
             log.info("Transitioning broker poll system to state paused.");
