@@ -26,17 +26,29 @@ import java.util.stream.Stream;
 
 import static io.confluent.parallelconsumer.internal.UserFunctions.carefullyRun;
 
+/**
+ * @deprecated Being removed — the JStream interface is not widely used and its unbounded result deque
+ * can cause memory leaks if the stream is not actively consumed. Use the callback-based API instead.
+ * See <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>.
+ */
 @Slf4j
+@Deprecated
 public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelEoSStreamProcessor<K, V>
         implements JStreamVertxParallelStreamProcessor<K, V> {
 
     /**
-     * The stream of results, constructed from the Queue {@link #userProcessResultsStream}
+     * The stream of results, constructed from the Queue {@link #userProcessResultsStream}.
+     * <p>
+     * <b>WARNING:</b> This stream MUST be actively consumed in a separate thread, or results
+     * will accumulate in memory indefinitely. If you don't need the result stream, use the
+     * callback-based API instead.
+     *
+     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
      */
     private final Stream<VertxCPResult<K, V>> stream;
 
     /**
-     * The Queue of results
+     * The Queue of results. Unbounded — will grow indefinitely if the stream is not consumed.
      */
     private final ConcurrentLinkedDeque<VertxCPResult<K, V>> userProcessResultsStream;
 
@@ -78,7 +90,7 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
             // stream
             result.asr(future);
             VertxCPResult<K, V> build = result.build();
-            userProcessResultsStream.add(build);
+            addResultAndWarnIfBacklogged(build);
         };
 
         super.vertxHttpReqInfo(requestInfoFunctionWrapped, onSendCallBack, (ignore) -> {
@@ -104,7 +116,7 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
             // stream
             result.asr(future);
             VertxCPResult<K, V> build = result.build();
-            userProcessResultsStream.add(build);
+            addResultAndWarnIfBacklogged(build);
         };
 
         super.vertxHttpRequest(requestInfoFunctionWrapped, onSendCallBack, (ignore) -> {
@@ -131,12 +143,35 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
             // stream
             result.asr(future);
             VertxCPResult<K, V> build = result.build();
-            userProcessResultsStream.add(build);
+            addResultAndWarnIfBacklogged(build);
         };
 
         super.vertxHttpWebClient(wrappedFunc, onSendCallBack);
 
         return stream;
+    }
+
+    private void addResultAndWarnIfBacklogged(VertxCPResult<K, V> result) {
+        userProcessResultsStream.add(result);
+        if (userProcessResultsStream.size() > 10_000 && userProcessResultsStream.size() % 10_000 == 0) {
+            log.warn("Result stream backlog: {} items. Unconsumed results accumulate in memory. " +
+                    "See https://github.com/confluentinc/parallel-consumer/issues/912", userProcessResultsStream.size());
+        }
+    }
+
+    /**
+     * Clears any unconsumed results from the deque on close to prevent memory leaks.
+     *
+     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+     */
+    @Override
+    public void close() {
+        int remaining = userProcessResultsStream.size();
+        if (remaining > 0) {
+            log.info("Clearing {} unconsumed results from stream on close", remaining);
+        }
+        userProcessResultsStream.clear();
+        super.close();
     }
 
     /**
