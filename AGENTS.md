@@ -57,10 +57,12 @@ bin/ci-build.sh 3.9.1
 
 ## Development Rules
 
+- **Working directory**: This is a multi-module Maven project. All `./mvnw` and `git` commands MUST run from the **project root** (the directory containing `pom.xml` and `./mvnw`). Never `cd` into a submodule and run Maven from there — use `-pl <module>` to target a specific module instead. If you need to check the current directory, run `pwd` first. The `cd` command does NOT persist between tool calls.
 - **Dependency injection**: Always wire new components through `PCModule` (and `PCModuleTestEnv` for tests). Don't bypass the DI by storing direct references to components.
 - **Reuse test infrastructure**: Before creating new test utilities, check existing harnesses: `AbstractParallelEoSStreamProcessorTestBase`, `BrokerIntegrationTest`, `KafkaClientUtils`, `ManagedPCInstance`, `ModelUtils`, `LongPollingMockConsumer`, `ProgressTracker`, `PCModuleTestEnv`.
 - **Never weaken test assertions**: Tests are critical for this project. When modifying test error handling, classify exceptions (whitelist expected ones) rather than ignoring them. Integration/load tests serve as both specific scenario tests AND general stability canaries.
 - **License check**: Always pass `-Dlicense.skip` to Maven commands unless intentionally formatting headers. The plugin breaks in git worktrees.
+- **Run full test suite before pushing**: After significant production code changes, run: `./mvnw clean verify -Dlicense.skip -Dexcluded.groups=performance` from the project root. Don't push until this passes.
 
 ## Code Style
 
