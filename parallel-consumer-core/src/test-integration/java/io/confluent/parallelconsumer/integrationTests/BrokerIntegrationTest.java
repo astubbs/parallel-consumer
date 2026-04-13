@@ -77,8 +77,33 @@ public abstract class BrokerIntegrationTest<K, V> {
         kafkaContainer.start();
     }
 
+    /**
+     * Stop the current Kafka container and start a fresh one. Use this before performance/chaos
+     * tests to avoid stale topics, consumer groups, and broker metadata from previous runs
+     * causing timeouts or unpredictable behaviour.
+     * <p>
+     * After calling this, any new test instances will pick up the fresh container via the
+     * static field. Existing KafkaClientUtils references become stale and must be recreated.
+     */
+    /**
+     * Stop the current Kafka container and start a fresh one. Recreates KafkaClientUtils
+     * to point to the new container. Call before performance/chaos tests.
+     */
+    protected void resetKafkaContainer() {
+        log.info("Resetting Kafka container for clean state...");
+        if (kcu != null) {
+            kcu.close();
+        }
+        kafkaContainer.stop();
+        kafkaContainer = createKafkaContainer(null);
+        kafkaContainer.start();
+        kcu = new KafkaClientUtils(kafkaContainer);
+        kcu.open();
+        log.info("Fresh Kafka container started at {}", kafkaContainer.getBootstrapServers());
+    }
+
     @Getter(AccessLevel.PROTECTED)
-    private final KafkaClientUtils kcu = new KafkaClientUtils(kafkaContainer);
+    private KafkaClientUtils kcu = new KafkaClientUtils(kafkaContainer);
 
     @BeforeAll
     static void followKafkaLogs() {
