@@ -83,18 +83,33 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     }
 
     /**
-     * Tests with very large numbers of parallel consumer instances to try to reproduce state and concurrency issues
-     * (#188, #189, #857).
+     * Stress test: 12 PC instances on 80 partitions with aggressive chaos monkey toggling up to
+     * 6 of 11 secondary instances every 0-500ms. PC-0 is never toggled and should always be alive.
      * <p>
-     * This test takes some time, but seems required in order to expose some race conditions without synthetically
-     * creating them. Re-enabled to investigate
-     * <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a> — paused consumption after
-     * rebalance with multiple consumers. A community member reported this test fails ~50% of runs with
-     * "No progress, missing keys: ..." which is consistent with the symptoms in #857.
+     * Originally created for #188/#189, re-enabled for #857 investigation.
      * <p>
-     * Local testing shows ~80% failure rate (4/5 runs). Stalls at different progress points (17%-74%)
-     * confirming a timing-dependent race condition. Tagged as performance test so it runs on the
-     * self-hosted runner rather than regular CI.
+     * <b>What the test does:</b>
+     * <ol>
+     *   <li>Pre-produces 30% of 500k messages, starts PC-0, waits for it to consume</li>
+     *   <li>Starts 11 more PCs + a background producer for the remaining 70%</li>
+     *   <li>Chaos monkey continuously toggles (stop/start) random secondary instances</li>
+     *   <li>Waits up to 5 minutes for ALL 500k keys to be consumed by any instance</li>
+     *   <li>Fails if no progress is made for 11 consecutive 1-second checks</li>
+     * </ol>
+     * <p>
+     * <b>Known failure modes (from #857 investigation):</b>
+     * <ul>
+     *   <li><b>Fixed:</b> commitCommand deadlock — poll thread blocked in onPartitionsRevoked
+     *       waiting for commitLock held by control thread. Fixed with ReentrantLock.tryLock().</li>
+     *   <li><b>Remaining (~40% failure rate):</b> During stall, running instances show
+     *       assignedPartitions=0 — the Kafka consumer has no partitions despite the group
+     *       being active. Under investigation: could be the eager rebalance protocol's JoinGroup
+     *       phase being repeatedly restarted by membership changes, or something in PC's close
+     *       path that prevents the consumer from cleanly leaving the group.</li>
+     * </ul>
+     *
+     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>
+     * @see <a href="docs/BUG_857_INVESTIGATION.md">Investigation doc</a>
      */
     @Tag("performance")
     @Test
