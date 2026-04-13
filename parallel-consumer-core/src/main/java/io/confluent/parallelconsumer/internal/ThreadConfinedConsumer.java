@@ -52,15 +52,19 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
     }
 
     private void checkThread(String methodName) {
+        Thread current = Thread.currentThread();
         Thread owner = this.ownerThread;
-        if (owner != null && Thread.currentThread() != owner) {
+        if (owner != null && current != owner) {
             String msg = "Consumer." + methodName + "() called from thread '" +
-                    Thread.currentThread().getName() + "' (id:" + Thread.currentThread().getId() +
+                    current.getName() + "' (id:" + current.getId() +
                     ") but consumer is owned by thread '" + owner.getName() +
-                    "' (id:" + owner.getId() + "). Only wakeup() is thread-safe. See #857.";
+                    "' (id:" + owner.getId() + ", alive:" + owner.isAlive() +
+                    "). Only wakeup() is thread-safe. See #857.";
             log.error(msg);
             throw new IllegalStateException(msg);
         }
+        log.trace("Consumer.{}() on thread '{}' (owner: {})", methodName, current.getName(),
+                owner != null ? owner.getName() : "unclaimed");
     }
 
     // --- Thread-unsafe method overrides (all check thread before delegating) ---

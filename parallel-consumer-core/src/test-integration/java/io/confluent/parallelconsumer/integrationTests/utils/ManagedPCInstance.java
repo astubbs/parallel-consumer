@@ -61,6 +61,8 @@ public class ManagedPCInstance implements Runnable {
 
     @Getter
     private volatile ParallelEoSStreamProcessor<String, String> parallelConsumer;
+    /** Keep a reference to the raw consumer so we can ensure it's fully closed before creating a new one */
+    private volatile KafkaConsumer<String, String> lastConsumer;
     private volatile boolean started = false;
 
     @ToString.Exclude
@@ -81,10 +83,12 @@ public class ManagedPCInstance implements Runnable {
     public void run() {
         org.slf4j.MDC.put(MDC_INSTANCE_ID, "Runner-" + instanceId);
 
-        // Wait for the previous PC to fully close — including its internal threads finishing.
-        // Without this, the old PC's broker poll thread may still be in consumer.poll() when
-        // the new PC joins the group, causing ConcurrentModificationException or rebalance
-        // instability. See #857.
+        // Wait for the previous PC to fully close — including its internal threads finishing
+        // and the KafkaConsumer being closed on the poll thread. PC.close() blocks until
+        // the control thread finishes, which waits for the poll thread (brokerPollSubsystem
+        // .closeAndWait), which closes the consumer. So by the time isClosedOrFailed() returns
+        // true, the consumer should be fully closed and deregistered from the group.
+        // See #857.
         if (parallelConsumer != null) {
             int waitMs = 0;
             while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000) {
@@ -99,9 +103,6 @@ public class ManagedPCInstance implements Runnable {
             if (waitMs >= 10_000) {
                 log.warn("Instance {} previous PC did not close within 10s, proceeding anyway", instanceId);
             }
-            // Note: we intentionally don't add extra settling time here. The isClosedOrFailed()
-            // check should be sufficient — adding artificial delays actually reduces test
-            // throughput and makes the ProgressTracker more likely to declare "no progress".
         }
 
         started = true;
@@ -114,6 +115,7 @@ public class ManagedPCInstance implements Runnable {
                     "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
         }
         KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
+        this.lastConsumer = newConsumer;
 
         this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
                 .ordering(config.order)
