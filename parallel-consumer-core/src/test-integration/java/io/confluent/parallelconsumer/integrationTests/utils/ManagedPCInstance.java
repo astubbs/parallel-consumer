@@ -61,6 +61,7 @@ public class ManagedPCInstance implements Runnable {
 
     @Getter
     private volatile ParallelEoSStreamProcessor<String, String> parallelConsumer;
+    @Getter
     private volatile boolean started = false;
 
     @ToString.Exclude

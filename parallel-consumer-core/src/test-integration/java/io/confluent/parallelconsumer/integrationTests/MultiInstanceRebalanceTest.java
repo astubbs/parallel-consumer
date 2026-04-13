@@ -310,6 +310,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                     .untilAsserted(() -> {
                         log.trace("Processed-count: {}", getAllConsumedKeys(allPCRunners).size());
                         if (progressTracker.hasProgressNotBeenMade()) {
+                            // Dump full state of every PC instance to diagnose the stall
+                            dumpInstanceState(allPCRunners);
                             expectedKeys.removeAll(getAllConsumedKeys(allPCRunners));
                             throw progressTracker.constructError(msg("No progress, missing keys: {}.", expectedKeys));
                         }
@@ -356,6 +358,45 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                 .hasSizeLessThan((int) (expectedMessageCount * percentageDuplicateTolerance)); // in some env, there are a lot more. i.e. Jenkins running parallel suits
 
 
+    }
+
+    /**
+     * Dump the internal state of every PC instance when a stall is detected.
+     * This tells us exactly what each component thinks is happening:
+     * - Is the PC alive or dead?
+     * - How many records are queued in shards vs out for processing?
+     * - What's the partition assignment?
+     * - Is the consumer paused?
+     * - What does the WorkManager think about incomplete offsets?
+     */
+    private void dumpInstanceState(List<ManagedPCInstance> instances) {
+        log.error("=== STALL DETECTED — dumping all instance state ===");
+        for (var instance : instances) {
+            var pc = instance.getParallelConsumer();
+            if (pc == null) {
+                log.error("  Instance {}: PC is null (never started?), started={}", instance.getInstanceId(), instance.isStarted());
+                continue;
+            }
+            try {
+                var wm = pc.getWm();
+                log.error("  Instance {}: closed/failed={}, failureCause={}, started={}, " +
+                                "queuedInShards={}, outForProcessing={}, incompleteOffsets={}, " +
+                                "pausedPartitions={}, consumedKeys={}",
+                        instance.getInstanceId(),
+                        pc.isClosedOrFailed(),
+                        pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
+                        instance.isStarted(),
+                        wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                        wm.getNumberRecordsOutForProcessing(),
+                        wm.getNumberOfIncompleteOffsets(),
+                        pc.getPausedPartitionSize(),
+                        instance.getConsumedKeys().size()
+                );
+            } catch (Exception e) {
+                log.error("  Instance {}: error dumping state: {}", instance.getInstanceId(), e.getMessage());
+            }
+        }
+        log.error("=== END STATE DUMP ===");
     }
 
     private boolean noneHaveFailed(List<ManagedPCInstance> pcs) {
