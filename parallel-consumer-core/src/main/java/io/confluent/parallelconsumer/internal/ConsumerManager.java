@@ -132,9 +132,19 @@ public class ConsumerManager<K, V> {
         return records != null ? records : new ConsumerRecords<>(UniMaps.of());
     }
 
+    private volatile int assignmentSizeCache = 0;
+
     protected void updateCache() {
         metaCache = consumer.groupMetadata();
         pausedPartitionSizeCache = consumer.paused().size();
+        assignmentSizeCache = consumer.assignment().size();
+    }
+
+    /**
+     * Cached assignment size, safe to read from any thread. Updated during poll.
+     */
+    public int getAssignmentSize() {
+        return assignmentSizeCache;
     }
 
     /**

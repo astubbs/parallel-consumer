@@ -379,21 +379,29 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
             }
             try {
                 var wm = pc.getWm();
+                // Check if the shard manager has any processing shards at all
+                var sm = wm.getSm();
+                long totalWorkTracked = sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
+                boolean hasIncompletes = wm.hasIncompleteOffsets();
+
                 log.error("  Instance {}: closed/failed={}, failureCause={}, started={}, " +
-                                "queuedInShards={}, outForProcessing={}, incompleteOffsets={}, " +
+                                "assignedPartitions={}, queuedInShards={}, outForProcessing={}, " +
+                                "incompleteOffsets={}, hasIncompletes={}, " +
                                 "pausedPartitions={}, consumedKeys={}",
                         instance.getInstanceId(),
                         pc.isClosedOrFailed(),
                         pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
                         instance.isStarted(),
-                        wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                        pc.getAssignmentSize(),
+                        totalWorkTracked,
                         wm.getNumberRecordsOutForProcessing(),
                         wm.getNumberOfIncompleteOffsets(),
+                        hasIncompletes,
                         pc.getPausedPartitionSize(),
                         instance.getConsumedKeys().size()
                 );
             } catch (Exception e) {
-                log.error("  Instance {}: error dumping state: {}", instance.getInstanceId(), e.getMessage());
+                log.error("  Instance {}: error dumping state: {}", instance.getInstanceId(), e.getMessage(), e);
             }
         }
         log.error("=== END STATE DUMP ===");

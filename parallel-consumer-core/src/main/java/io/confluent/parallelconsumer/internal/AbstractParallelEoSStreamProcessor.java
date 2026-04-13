@@ -677,6 +677,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return brokerPollSubsystem.getPausedPartitionSize();
     }
 
+    /**
+     * Cached assignment size from the last poll. Safe to read from any thread.
+     */
+    public int getAssignmentSize() {
+        return consumerManager.getAssignmentSize();
+    }
+
     private void waitForClose(Duration timeout) throws TimeoutException, ExecutionException {
         log.info("Waiting on closed state...");
         while (!state.equals(CLOSED)) {
