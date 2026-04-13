@@ -139,10 +139,35 @@ public class ManagedPCInstance implements Runnable {
         });
     }
 
+    /** True while a background close is in progress — prevents toggle from restarting prematurely */
+    private volatile boolean closePending = false;
+
     public void stop() {
         log.info("Stopping instance {}", instanceId);
         started = false;
         parallelConsumer.close();
+    }
+
+    /**
+     * Non-blocking stop: signals close and returns immediately. The close completes
+     * in a background thread. Use this from the chaos monkey so it isn't blocked for
+     * 30-40s while the PC shuts down. The {@link #closePending} flag prevents
+     * {@link #toggle} from restarting until close finishes.
+     */
+    public void stopAsync() {
+        log.info("Async stopping instance {}", instanceId);
+        started = false;
+        closePending = true;
+        var pcToClose = parallelConsumer;
+        new Thread(() -> {
+            try {
+                pcToClose.close();
+            } catch (Exception e) {
+                log.warn("Instance {} background close error: {}", instanceId, e.getMessage());
+            } finally {
+                closePending = false;
+            }
+        }, "pc-close-" + instanceId).start();
     }
 
     /**
@@ -169,8 +194,12 @@ public class ManagedPCInstance implements Runnable {
     }
 
     public void toggle(ExecutorService pcExecutor) {
+        if (closePending) {
+            log.trace("Instance {} toggle skipped — close still pending", instanceId);
+            return;
+        }
         if (started) {
-            stop();
+            stopAsync(); // non-blocking so the chaos monkey isn't frozen during close
         } else {
             start(pcExecutor);
         }
