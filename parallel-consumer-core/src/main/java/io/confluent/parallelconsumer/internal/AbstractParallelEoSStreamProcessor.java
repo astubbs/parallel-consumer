@@ -110,7 +110,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Getter(PROTECTED)
     private final Optional<ProducerManager<K, V>> producerManager;
 
-    private final org.apache.kafka.clients.consumer.Consumer<K, V> consumer;
+    /**
+     * All consumer access goes through ConsumerManager (which wraps with ThreadConfinedConsumer).
+     * No raw Consumer<K,V> reference is held — enforced by ArchUnit. See #857.
+     */
+    private final ConsumerManager<K, V> consumerManager;
 
     /**
      * The pool which is used for running the users' supplied function
@@ -195,6 +199,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Used to request a commit asap
      */
     private final AtomicBoolean commitCommand = new AtomicBoolean(false);
+
+    /**
+     * Lock for offset commit operations. Replaces synchronized(commitCommand) for commit execution
+     * to allow tryLock() semantics in rebalance callbacks, preventing the deadlock in #857.
+     */
+    private final java.util.concurrent.locks.ReentrantLock commitLock = new java.util.concurrent.locks.ReentrantLock();
 
     /**
      * Multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} to have in our processing queue, in order to make
@@ -284,14 +294,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         options = newOptions;
         this.shutdownTimeout = options.getShutdownTimeout();
         this.drainTimeout = options.getDrainTimeout();
-        this.consumer = options.getConsumer();
+        this.consumerManager = module.consumerManager();
 
         validateConfiguration();
 
         module.setParallelEoSStreamProcessor(this);
 
         log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
-                newOptions.getConsumer().groupMetadata().groupId(),
+                consumerManager.groupMetadata().groupId(),
                 newOptions);
         //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
         pcMetrics = module.pcMetrics();
@@ -331,14 +341,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void validateConfiguration() {
         options.validate();
 
-        checkGroupIdConfigured(consumer);
-        checkNotSubscribed(consumer);
-        checkAutoCommitIsDisabled(consumer);
+        checkGroupIdConfigured();
+        checkNotSubscribed(options.getConsumer());
+        checkAutoCommitIsDisabled(options.getConsumer());
     }
 
-    private void checkGroupIdConfigured(final org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
+    private void checkGroupIdConfigured() {
         try {
-            consumer.groupMetadata();
+            var metadata = consumerManager.groupMetadata();
+            if (metadata == null) {
+                throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
+                        "configured GroupId on your Consumer?");
+            }
+        } catch (IllegalArgumentException e) {
+            throw e; // rethrow our own
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
                     "configured GroupId on your Consumer?", e);
@@ -381,27 +397,27 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public void subscribe(Collection<String> topics) {
         log.debug("Subscribing to {}", topics);
-        consumer.subscribe(topics, this);
+        consumerManager.subscribe(topics, this);
     }
 
     @Override
     public void subscribe(Pattern pattern) {
         log.debug("Subscribing to {}", pattern);
-        consumer.subscribe(pattern, this);
+        consumerManager.subscribe(pattern, this);
     }
 
     @Override
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener callback) {
         log.debug("Subscribing to {}", topics);
         usersConsumerRebalanceListener = Optional.of(callback);
-        consumer.subscribe(topics, this);
+        consumerManager.subscribe(topics, this);
     }
 
     @Override
     public void subscribe(Pattern pattern, ConsumerRebalanceListener callback) {
         log.debug("Subscribing to {}", pattern);
         usersConsumerRebalanceListener = Optional.of(callback);
-        consumer.subscribe(pattern, this);
+        consumerManager.subscribe(pattern, this);
     }
 
     /**
@@ -420,8 +436,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            // commit any offsets from revoked partitions BEFORE truncation
-            commitOffsetsThatAreReady();
+            // Try to commit offsets for revoked partitions, but don't block if the control
+            // thread is already mid-commit. Blocking here deadlocks: the poll thread (us)
+            // holds the rebalance callback, and the control thread's commitSync() needs the
+            // poll thread to be responsive. If we can't commit, it's safe — the offsets will
+            // be re-delivered to the new assignee. See #857.
+            tryCommitOffsetsOnRevoke();
 
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
@@ -439,6 +459,35 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
+     * Non-blocking attempt to commit offsets during partition revocation. Uses tryLock semantics
+     * on the commitCommand monitor to avoid deadlocking with the control thread.
+     * <p>
+     * If the lock is already held (control thread is mid-commit), we skip the commit. This is
+     * safe because Kafka will re-deliver uncommitted records to the new partition assignee.
+     * <p>
+     * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a> —
+     * the original synchronized(commitCommand) call in onPartitionsRevoked caused a deadlock
+     * between the poll thread and the control thread under rebalance churn.
+     */
+    private void tryCommitOffsetsOnRevoke() {
+        if (commitLock.tryLock()) {
+            try {
+                log.debug("Acquired commitLock on revoke, committing offsets");
+                committer.retrieveOffsetsAndCommit();
+                clearCommitCommand();
+                this.lastCommitTime = Instant.now();
+            } catch (Exception e) {
+                log.warn("Failed to commit offsets during revoke: {}", e.getMessage());
+            } finally {
+                commitLock.unlock();
+            }
+        } else {
+            log.info("Skipping offset commit during partition revocation — control thread is mid-commit. " +
+                    "Uncommitted offsets will be re-delivered to the new assignee. See #857.");
+        }
+    }
+
+    /**
      * Delegate to {@link WorkManager}
      *
      * @see WorkManager#onPartitionsAssigned
@@ -448,6 +497,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
         wm.onPartitionsAssigned(partitions);
+        // Reset the throttle flag — Kafka clears its internal pause state on reassignment,
+        // so our flag must match. Without this, shouldThrottle() may re-pause the new
+        // partitions immediately if stale shard counts make it think we're overloaded.
+        // See #857.
+        brokerPollSubsystem.onPartitionsAssigned();
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
     }
@@ -629,6 +683,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return brokerPollSubsystem.getPausedPartitionSize();
     }
 
+    /**
+     * Cached assignment size from the last poll. Safe to read from any thread.
+     */
+    public int getAssignmentSize() {
+        return consumerManager.getAssignmentSize();
+    }
+
     private void waitForClose(Duration timeout) throws TimeoutException, ExecutionException {
         log.info("Waiting on closed state...");
         while (!state.equals(CLOSED)) {
@@ -755,7 +816,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void maybeCloseConsumer() {
         if (isResponsibleForCommits()) {
-            consumer.close();
+            consumerManager.close(Duration.ofSeconds(10));
         }
     }
 
@@ -881,6 +942,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
+        log.trace("Control loop: blocking on mailbox for {}, shouldCommit={}, queuedInShards={}, outForProcessing={}",
+                timeToBlockFor, shouldTryCommitNow,
+                wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                wm.getNumberRecordsOutForProcessing());
         processWorkCompleteMailBox(timeToBlockFor);
 
         //
@@ -1305,12 +1370,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Visible for testing
      */
     protected void commitOffsetsThatAreReady() throws TimeoutException, InterruptedException {
-        log.trace("Synchronizing on commitCommand...");
-        synchronized (commitCommand) {
+        log.trace("Acquiring commitLock...");
+        commitLock.lock();
+        try {
             log.debug("Committing offsets that are ready...");
             committer.retrieveOffsetsAndCommit();
             clearCommitCommand();
             this.lastCommitTime = Instant.now();
+        } finally {
+            commitLock.unlock();
         }
     }
 

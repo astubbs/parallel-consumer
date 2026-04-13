@@ -15,6 +15,11 @@
     <name>Confluent Parallel Consumer SmallRye Mutiny</name>
     <artifactId>parallel-consumer-mutiny</artifactId>
 
+    <properties>
+        <!-- Mutiny's Multi implements java.util.concurrent.Flow.Publisher which requires Java 9+ -->
+        <release.target>9</release.target>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.confluent.parallelconsumer</groupId>

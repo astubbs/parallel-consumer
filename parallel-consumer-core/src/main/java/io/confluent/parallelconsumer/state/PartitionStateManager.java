@@ -102,6 +102,7 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     @Override
     public void onPartitionsAssigned(Collection<TopicPartition> assignedPartitions) {
         log.debug("Partitions assigned: {}", assignedPartitions);
+        log.trace("Epoch map before assignment: {}", partitionsAssignmentEpochs);
 
         for (final TopicPartition partitionAssignment : assignedPartitions) {
             boolean isAlreadyAssigned = this.partitionStates.containsKey(partitionAssignment);
@@ -256,9 +257,10 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private void incrementPartitionAssignmentEpoch(final Collection<TopicPartition> partitions) {
         for (final TopicPartition partition : partitions) {
-            Long epoch = partitionsAssignmentEpochs.getOrDefault(partition, PartitionState.KAFKA_OFFSET_ABSENCE);
-            epoch++;
-            partitionsAssignmentEpochs.put(partition, epoch);
+            Long oldEpoch = partitionsAssignmentEpochs.getOrDefault(partition, PartitionState.KAFKA_OFFSET_ABSENCE);
+            Long newEpoch = oldEpoch + 1;
+            partitionsAssignmentEpochs.put(partition, newEpoch);
+            log.trace("Epoch for {} incremented: {} -> {}", partition, oldEpoch, newEpoch);
         }
     }
 
