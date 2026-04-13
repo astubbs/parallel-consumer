@@ -60,9 +60,16 @@ public class ConsumerManager<K, V> {
     /**
      * Prime the metadata cache so that groupMetadata() returns a valid value before the poll
      * thread starts. Must be called after construction, before any thread claims ownership.
+     * <p>
+     * Silently handles errors (e.g., missing group.id) — validation happens later in
+     * the PC constructor's checkGroupIdConfigured().
      */
     void init() {
-        updateCache();
+        try {
+            updateCache();
+        } catch (Exception e) {
+            log.trace("Could not prime cache during init (will be validated later): {}", e.getMessage());
+        }
     }
     private boolean commitRequested;
 

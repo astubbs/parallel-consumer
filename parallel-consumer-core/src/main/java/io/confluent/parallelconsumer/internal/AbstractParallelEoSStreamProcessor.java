@@ -348,7 +348,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private void checkGroupIdConfigured() {
         try {
-            consumerManager.groupMetadata();
+            var metadata = consumerManager.groupMetadata();
+            if (metadata == null) {
+                throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
+                        "configured GroupId on your Consumer?");
+            }
+        } catch (IllegalArgumentException e) {
+            throw e; // rethrow our own
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
                     "configured GroupId on your Consumer?", e);

@@ -99,7 +99,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Tag("performance")
     @Test
     void largeNumberOfInstances() {
-        resetKafkaContainer(); // fresh broker — chaos tests leave heavy state
+
         numPartitions = 80;
         int numberOfPcsToRun = 12;
         int expectedMessageCount = 500000;
@@ -117,7 +117,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Tag("performance")
     @Test
     void cooperativeStickyRebalanceShouldNotStall() {
-        resetKafkaContainer();
+
         numPartitions = 30;
         int numberOfPcsToRun = 4;
         int expectedMessageCount = 100_000;
@@ -137,7 +137,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Tag("performance")
     @Test
     void gentleChaosRebalance() {
-        resetKafkaContainer();
+
         numPartitions = 30;
         int numberOfPcsToRun = 6;
         int expectedMessageCount = 200_000;
