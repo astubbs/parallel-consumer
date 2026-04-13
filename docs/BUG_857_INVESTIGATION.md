@@ -206,6 +206,44 @@ This is NOT a PC bug — it's the eager rebalance protocol's fundamental limitat
 
 Upgraded epoch mismatch logging from DEBUG to WARN. Result: ZERO epoch drops in failing runs. Records are not being silently dropped at registration time — they're genuinely not being polled because the consumer has no assigned partitions.
 
+## Final Breakthrough: Non-blocking stopAsync()
+
+The dominant remaining cause of test failure was the **chaos monkey blocking on close()** for 30-40 seconds (worker pool shutdown 10s + poll thread close 30s). During this block, no other instances were toggled, the system appeared frozen, and the ProgressTracker declared "no progress" after 11 seconds.
+
+**Fix:** Added `stopAsync()` which closes the PC in a background thread. The chaos monkey's `toggle()` uses `stopAsync()` so it continues running. A `closePending` flag prevents toggle from restarting while close is still in progress.
+
+**Result: 9/10 pass (90%)** on the aggressive 12-instance, 500ms chaos test. Up from ~20% at the start of the investigation.
+
+### Final test results summary
+
+| Test | Pass Rate | Notes |
+|------|-----------|-------|
+| Full unit test suite | 100% | Only pre-existing timing flake |
+| Lifecycle test (rapid toggle) | 5/5 (100%) | |
+| Gentle chaos (6 instances, 3s) | 3/3 (100%) | |
+| Cooperative sticky (4 instances, 3s) | 3/3 (100%) | |
+| **Aggressive chaos (12 instances, 500ms)** | **9/10 (90%)** | Acceptance: 80%+ |
+
+### What was fixed (production code)
+
+1. **commitCommand deadlock** — `ReentrantLock.tryLock()` in `onPartitionsRevoked` (the #857 root cause)
+2. **ConcurrentModificationException prevention** — `updateCache()` moved after `pollingBroker=false`
+3. **Counter drift** — `adjustOutForProcessingOnRevoke()` in `WorkManager`
+4. **Throttle flag** — `pausedForThrottling` reset on partition assignment
+5. **ThreadConfinedConsumer** — runtime thread-confinement enforcement on all consumer methods
+6. **Raw consumer field removed** — all access through `ConsumerManager` via PCModule DI
+7. **ArchUnit rules** — compile-time consumer/producer field isolation
+
+### What was fixed (test infrastructure)
+
+1. **ManagedPCInstance** — extracted from inner class with exception classification
+2. **Non-blocking stopAsync()** — chaos monkey no longer freezes on close()
+3. **started flag** — moved to `start()` to prevent double-submission
+4. **closePending guard** — prevents toggle during background close
+5. **Fresh container strategy** — `resetKafkaContainer()` for performance tests
+6. **State dump** — comprehensive PC state logged on stall detection
+7. **Focused lifecycle test** — 50 rapid toggles, 5/5 pass
+
 ## Test Infrastructure Improvements
 
 As part of this investigation, we also:
