@@ -7,18 +7,18 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.confluent.parallelconsumer</groupId>
+    <groupId>io.github.astubbs.parallelconsumer</groupId>
     <artifactId>parallel-consumer-parent</artifactId>
-    <name>Confluent Parallel Consumer</name>
-    <version>0.5.3.4-SNAPSHOT</version>
+    <name>Parallel Consumer</name>
+    <version>0.6.0.0-SNAPSHOT</version>
     <description>Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with key concurrency and extendable non-blocking IO processing.
     </description>
-    <url>https://confluent.io</url>
+    <url>https://github.com/astubbs/parallel-consumer</url>
     <inceptionYear>2020</inceptionYear>
 
     <organization>
-        <name>Confluent, Inc.</name>
-        <url>https://confluent.io</url>
+        <name>Antony Stubbs</name>
+        <url>https://github.com/astubbs</url>
     </organization>
 
     <licenses>
@@ -42,21 +42,21 @@
 
     <developers>
         <developer>
-            <id>antony@confluent.io</id>
+            <id>antony.stubbs</id>
             <name>Antony Stubbs</name>
-            <email>antony@confluent.io</email>
-            <url>https://confluent.io</url>
-            <organization>Confluent</organization>
-            <organizationUrl>https://confluent.io</organizationUrl>
+            <email>antony.stubbs@gmail.com</email>
+            <url>https://github.com/astubbs</url>
+            <organization>Antony Stubbs</organization>
+            <organizationUrl>https://github.com/astubbs</organizationUrl>
             <timezone>Europe/London</timezone>
         </developer>
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com:confluentinc/parallel-consumer.git</connection>
-        <developerConnection>scm:git:git@github.com:confluentinc/parallel-consumer.git</developerConnection>
-        <url>https://github.com/confluentinc/parallel-consumer.git</url>
-        <tag>0.5.3.2</tag>
+        <connection>scm:git:git://github.com:astubbs/parallel-consumer.git</connection>
+        <developerConnection>scm:git:git@github.com:astubbs/parallel-consumer.git</developerConnection>
+        <url>https://github.com/astubbs/parallel-consumer.git</url>
+        <tag>HEAD</tag>
     </scm>
 
     
@@ -201,7 +201,7 @@
                                             <onlyWhenRelease>false</onlyWhenRelease>
                                             <failWhenParentIsSnapshot>false</failWhenParentIsSnapshot>
                                             <excludes>
-                                                <exclude>io.confluent.parallelconsumer:</exclude>
+                                                <exclude>io.github.astubbs.parallelconsumer:</exclude>
                                             </excludes>
                                         </requireReleaseDeps>
                                     </rules>
@@ -234,6 +234,13 @@
                                 <goals>
                                     <goal>sign</goal>
                                 </goals>
+                                <configuration>
+                                    <!-- loopback mode required for headless CI (no TTY for passphrase prompt) -->
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
                             </execution>
                         </executions>
                     </plugin>
@@ -592,7 +599,7 @@
                     <aggregate>true</aggregate>
                     <licenseSets>
                         <licenseSet>
-                            <inlineHeader>Copyright (C) ${license.git.copyrightYears} ${project.organization.name}
+                            <inlineHeader>Copyright (C) 2020-${license.git.copyrightYears} Confluent, Inc. and contributors
                             </inlineHeader>
                             <excludes>
                                 <exclude>**/release-pom.xml</exclude>
