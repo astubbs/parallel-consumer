@@ -43,7 +43,7 @@ ifdef::env-github[]
 :warning-caption: :warning:
 endif::[]
 
-image:https://maven-badges.herokuapp.com/maven-central/io.confluent.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/io.confluent.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
+image:https://maven-badges.herokuapp.com/maven-central/io.github.astubbs.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/io.github.astubbs.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
 
 // Github actions disabled since codecov
 //image:https://github.com/confluentinc/parallel-consumer/actions/workflows/maven.yml/badge.svg[Java 8 Unit Test GitHub] +
@@ -390,15 +390,17 @@ This library is copyright Confluent Inc, and licensed under the Apache License V
 
 === Maven
 
-This project is available in maven central, https://repo1.maven.org/maven2/io/confluent/parallelconsumer/[repo1], along with SNAPSHOT builds (starting with 0.5-SNAPSHOT) in https://oss.sonatype.org/content/repositories/snapshots/io/confluent/parallelconsumer/[repo1's SNAPSHOTS repo].
+NOTE: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates. The original upstream project is no longer actively maintained.
 
-Latest version can be seen https://search.maven.org/artifact/io.confluent.parallelconsumer/parallel-consumer-core[here].
+This project is available in Maven Central, https://repo1.maven.org/maven2/io/github/astubbs/parallelconsumer/[repo1].
+
+Latest version can be seen https://search.maven.org/artifact/io.github.astubbs.parallelconsumer/parallel-consumer-core[here].
 
 Where `${project.version}` is the version to be used:
 
-* group ID: `io.confluent.parallelconsumer`
+* group ID: `io.github.astubbs.parallelconsumer`
 * artifact ID: `parallel-consumer-core`
-* version: image:https://maven-badges.herokuapp.com/maven-central/io.confluent.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/io.confluent.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
+* version: image:https://maven-badges.herokuapp.com/maven-central/io.github.astubbs.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/io.github.astubbs.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
 
 .Core Module Dependency
 [source,xml,indent=0]
@@ -1091,6 +1093,22 @@ Note::
 `mvn compile` - Due to a bug in Maven's handling of test-jar dependencies - running `mvn compile` fails, use `mvn test-compile` instead.
 See https://github.com/confluentinc/parallel-consumer/issues/162[issue #162]
 and this https://stackoverflow.com/questions/4786881/why-is-test-jar-dependency-required-for-mvn-compile[Stack Overflow question].
+
+=== Build Scripts
+
+Helper scripts are in the `bin/` directory:
+
+[qanda]
+Quick local build (compile + unit tests)::
+`bin/build.sh`
+
+Full CI build with all tests (unit + integration)::
+`bin/ci-build.sh`
+
+CI build against a specific Kafka version::
+`bin/ci-build.sh 3.9.1`
+
+The GitHub Actions CI workflow uses `bin/ci-build.sh`, so running it locally reproduces the CI environment.
 
 === Testing
 

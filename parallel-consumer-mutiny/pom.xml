@@ -1,28 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (C) 2020-2025 Confluent, Inc.
+    Copyright (C) 2020-2026 Confluent, Inc.
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>parallel-consumer-parent</artifactId>
-        <groupId>io.confluent.parallelconsumer</groupId>
-        <version>0.5.3.4-SNAPSHOT</version>
+        <groupId>io.github.astubbs.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <name>Confluent Parallel Consumer SmallRye Mutiny</name>
+    <name>Parallel Consumer SmallRye Mutiny</name>
     <artifactId>parallel-consumer-mutiny</artifactId>
+
+    <properties>
+        <!-- Mutiny's Multi implements java.util.concurrent.Flow.Publisher which requires Java 9+ -->
+        <release.target>9</release.target>
+    </properties>
 
     <dependencies>
         <dependency>
-            <groupId>io.confluent.parallelconsumer</groupId>
+            <groupId>io.github.astubbs.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.confluent.parallelconsumer</groupId>
+            <groupId>io.github.astubbs.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
             <classifier>tests</classifier>
