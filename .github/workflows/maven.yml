@@ -43,6 +43,11 @@ jobs:
       fail-fast: false
       matrix:
         ak: [ 2.8.1, 3.9.1 ]
+        experimental: [ false ]
+        include:
+          - ak: "'[3.9.1,5)'"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
     name: "AK ${{ matrix.ak }}"
     runs-on: ubuntu-latest
     steps:
