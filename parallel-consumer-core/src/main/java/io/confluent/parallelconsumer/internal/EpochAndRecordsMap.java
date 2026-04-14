@@ -7,6 +7,7 @@ package io.confluent.parallelconsumer.internal;
 import io.confluent.parallelconsumer.state.PartitionStateManager;
 import lombok.NonNull;
 import lombok.Value;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -18,6 +19,7 @@ import java.util.*;
  *
  * @see BrokerPollSystem#partitionAssignmentEpoch
  */
+@Slf4j
 @Value
 public class EpochAndRecordsMap<K, V> {
 
@@ -27,6 +29,15 @@ public class EpochAndRecordsMap<K, V> {
         poll.partitions().forEach(partition -> {
             var records = poll.records(partition);
             Long epochOfPartition = pm.getEpochOfPartition(partition);
+            if (epochOfPartition == null) {
+                // Race: poll() returned records for a partition before onPartitionsAssigned()
+                // has fired. This is more likely with Kafka 2.x's eager rebalance protocol.
+                // Safe to skip — these records haven't been committed, so Kafka will re-deliver
+                // them on the next poll after the assignment callback completes.
+                log.warn("Skipping {} records for partition {} — no epoch assigned yet. " +
+                        "Records will be re-delivered on next poll after assignment completes.", records.size(), partition);
+                return;
+            }
             RecordsAndEpoch entry = new RecordsAndEpoch(partition, epochOfPartition, records);
             recordMap.put(partition, entry);
         });

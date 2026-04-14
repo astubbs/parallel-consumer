@@ -248,11 +248,12 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
-     * @return the current epoch of the partition
+     * @return the current epoch of the partition, or null if not yet assigned
      */
     public Long getEpochOfPartition(TopicPartition partition) {
         return partitionsAssignmentEpochs.get(partition);
     }
+
 
     private void incrementPartitionAssignmentEpoch(final Collection<TopicPartition> partitions) {
         for (final TopicPartition partition : partitions) {
