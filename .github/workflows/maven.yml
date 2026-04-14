@@ -33,7 +33,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Build and verify (unit + integration)
-        run: ./mvnw --batch-mode verify -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2
+        run: bin/ci-build.sh
 
   # Kafka version matrix — oldest and newest supported versions
   kafka-matrix:
