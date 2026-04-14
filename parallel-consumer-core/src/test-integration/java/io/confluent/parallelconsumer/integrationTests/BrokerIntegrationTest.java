@@ -55,8 +55,33 @@ public abstract class BrokerIntegrationTest<K, V> {
      */
     public static KafkaContainer kafkaContainer = createKafkaContainer(null);
 
+    /**
+     * Derives the Confluent Platform version from the Apache Kafka client version so that
+     * the broker under test matches the client. The CI matrix overrides {@code kafka.version}
+     * via {@code -Dkafka.version=X.Y.Z}, so we read it at runtime from the client jar.
+     * <p>
+     * Mapping: CP major = AK major + 4 (e.g., AK 2.8 → CP 6.2, AK 3.9 → CP 7.9).
+     */
+    static String deriveCpKafkaImage() {
+        String akVersion = org.apache.kafka.common.utils.AppInfoParser.getVersion();
+        log.info("Kafka client version detected: {}", akVersion);
+
+        // Parse major.minor from the AK version
+        String[] parts = akVersion.split("\\.");
+        int akMajor = Integer.parseInt(parts[0]);
+        int akMinor = Integer.parseInt(parts[1]);
+
+        // CP major = AK major + 4, CP minor = AK minor
+        int cpMajor = akMajor + 4;
+        int cpMinor = akMinor;
+
+        String cpImage = "confluentinc/cp-kafka:" + cpMajor + "." + cpMinor + ".0";
+        log.info("Using CP Kafka image: {} (derived from AK {})", cpImage, akVersion);
+        return cpImage;
+    }
+
     public static KafkaContainer createKafkaContainer(String logSegmentSize) {
-        KafkaContainer base = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.6.0"))
+        KafkaContainer base = new KafkaContainer(DockerImageName.parse(deriveCpKafkaImage()))
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1") //transaction.state.log.replication.factor
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "1") //transaction.state.log.min.isr
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS", "1") //transaction.state.log.num.partitions
