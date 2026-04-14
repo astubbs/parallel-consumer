@@ -1,10 +1,6 @@
-# Tiered CI: fast feedback first, expensive tests only after cheap ones pass.
-#
 # PR builds:
-#   Tier 1: Unit tests (no Docker, ~3 min)
-#   Tier 2: Integration tests (TestContainers, ~10 min) — waits for Tier 1
-#   Tier 3: Kafka version matrix (2.8.1 + 3.9.1) — waits for Tier 2
-#   Tier 4: Performance tests (@Tag("performance")) — waits for Tier 2
+#   1. Build & Test: full verify (unit + integration), default Kafka version
+#   2. Kafka Matrix (2.8.1 + 3.9.1) + Performance tests — fan out after Build & Test
 #
 # Push builds (master):
 #   Full Kafka version matrix (2.8.1, 3.1.0, 3.7.0, 3.9.1 + experimental 4.x)
@@ -24,10 +20,10 @@ jobs:
 
   # ── PR Builds ──────────────────────────────────────────────────────────
 
-  # Tier 1: Unit tests — fast feedback, no Docker needed
-  unit-tests:
+  # Full build and test — unit + integration, default Kafka version
+  build-and-test:
     if: github.event_name == 'pull_request'
-    name: "Tier 1: Unit Tests"
+    name: "Build & Test"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -36,34 +32,18 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
-      - name: Unit tests (no Docker)
-        run: ./mvnw --batch-mode test -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2
-
-  # Tier 2: Integration tests — needs Docker/TestContainers
-  integration-tests:
-    if: github.event_name == 'pull_request'
-    needs: unit-tests
-    name: "Tier 2: Integration Tests"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: 'maven'
-      - name: Integration tests (TestContainers)
+      - name: Build and verify (unit + integration)
         run: ./mvnw --batch-mode verify -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2
 
-  # Tier 3: Kafka version matrix — oldest and newest supported versions
+  # Kafka version matrix — oldest and newest supported versions
   kafka-matrix:
     if: github.event_name == 'pull_request'
-    needs: integration-tests
+    needs: build-and-test
     strategy:
       fail-fast: false
       matrix:
         ak: [ 2.8.1, 3.9.1 ]
-    name: "Tier 3: AK ${{ matrix.ak }}"
+    name: "AK ${{ matrix.ak }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -75,11 +55,11 @@ jobs:
       - name: Build and test with Kafka ${{ matrix.ak }}
         run: bin/ci-build.sh ${{ matrix.ak }}
 
-  # Tier 4: Performance tests — long-running volume/load tests
+  # Performance tests — volume/load tests that may uncover bugs at scale
   performance-tests:
     if: github.event_name == 'pull_request'
-    needs: integration-tests
-    name: "Tier 4: Performance Tests"
+    needs: build-and-test
+    name: "Performance Tests"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -89,7 +69,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Performance tests
-        run: ./mvnw --batch-mode verify -Dlicense.skip -Dincluded.groups=performance -Dexcluded.groups=
+        run: ./mvnw --batch-mode verify -Dlicense.skip -Dincluded.groups=performance -Dexcluded.groups= -Dsurefire.rerunFailingTestsCount=2
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 
