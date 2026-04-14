@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (C) 2020-2025 Confluent, Inc.
+    Copyright (C) 2020-2026 Confluent, Inc.
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -14,6 +14,11 @@
 
     <name>Confluent Parallel Consumer SmallRye Mutiny</name>
     <artifactId>parallel-consumer-mutiny</artifactId>
+
+    <properties>
+        <!-- Mutiny's Multi implements java.util.concurrent.Flow.Publisher which requires Java 9+ -->
+        <release.target>9</release.target>
+    </properties>
 
     <dependencies>
         <dependency>
