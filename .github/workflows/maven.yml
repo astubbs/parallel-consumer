@@ -69,7 +69,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Performance tests
-        run: ./mvnw --batch-mode verify -Dlicense.skip -Dincluded.groups=performance -Dexcluded.groups= -Dsurefire.rerunFailingTestsCount=2
+        run: bin/performance-test.sh
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 
