@@ -1,0 +1,19 @@
+name: PR Dependency Check
+
+on:
+  pull_request_target:
+    types: [opened, edited, closed, reopened]
+
+permissions:
+  issues: read
+  pull-requests: read
+  checks: write
+
+jobs:
+  check_dependencies:
+    runs-on: ubuntu-latest
+    name: Check Dependencies
+    steps:
+    - uses: astubbs/dependencies-action@feat/auto-unblock-children-on-merge
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
