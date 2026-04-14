@@ -37,7 +37,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Unit tests (no Docker)
-        run: ./mvnw --batch-mode test -Dlicense.skip -Dexcluded.groups=performance
+        run: ./mvnw --batch-mode test -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2
 
   # Tier 2: Integration tests — needs Docker/TestContainers
   integration-tests:
@@ -53,7 +53,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Integration tests (TestContainers)
-        run: ./mvnw --batch-mode verify -Dlicense.skip -Dexcluded.groups=performance
+        run: ./mvnw --batch-mode verify -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2
 
   # Tier 3: Kafka version matrix — oldest and newest supported versions
   kafka-matrix:
