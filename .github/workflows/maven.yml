@@ -55,6 +55,19 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  # Duplicate code detection — runs in parallel with tests
+  duplicate-detection:
+    if: github.event_name == 'pull_request'
+    name: "Duplicate Code Check"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run jscpd
+        run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull --min-lines 6 --min-tokens 70
+
   # ── Push Builds (master) ───────────────────────────────────────────────
 
   # Full Kafka version matrix as safety net
