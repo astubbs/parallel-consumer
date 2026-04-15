@@ -51,7 +51,7 @@ jobs:
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml'
+          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -86,6 +86,6 @@ jobs:
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml'
+          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
           flags: ak-${{ matrix.ak }}
           token: ${{ secrets.CODECOV_TOKEN }}
