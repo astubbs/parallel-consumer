@@ -68,7 +68,40 @@ jobs:
         with:
           node-version: '22'
       - name: Run jscpd
-        run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull --min-lines 6 --min-tokens 70
+        run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull,json --output jscpd-report --min-lines 6 --min-tokens 70
+      - name: Post duplicate report to PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'jscpd-report/jscpd-report.json';
+            if (!fs.existsSync(path)) { console.log('No report found'); return; }
+            const report = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const stats = report.statistics;
+            const total = stats.total;
+            let body = `## Duplicate Code Report\n\n`;
+            body += `| Metric | Value |\n|--------|-------|\n`;
+            body += `| Files analyzed | ${total.sources} |\n`;
+            body += `| Clones found | ${total.clones} |\n`;
+            body += `| Duplicated lines | ${total.duplicatedLines} (${total.percentage}%) |\n\n`;
+            if (report.duplicates && report.duplicates.length > 0) {
+              body += `<details><summary>Duplicate blocks (${report.duplicates.length})</summary>\n\n`;
+              for (const d of report.duplicates.slice(0, 30)) {
+                const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
+                const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
+                body += `- **${d.lines} lines** duplicated:\n  \`${f1}:${d.firstFile.startLoc.line}\` ↔ \`${f2}:${d.secondFile.startLoc.line}\`\n`;
+              }
+              if (report.duplicates.length > 30) body += `\n...and ${report.duplicates.length - 30} more\n`;
+              body += `\n</details>\n`;
+            }
+            const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existing = comments.data.find(c => c.body.includes('## Duplicate Code Report'));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
 
   # SpotBugs static analysis — finds null derefs, concurrency issues, resource leaks
   spotbugs:
@@ -84,13 +117,13 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Compile and run SpotBugs
-        run: ./mvnw --batch-mode -Pci compile spotbugs:check -Dlicense.skip -Dspotbugs.failOnError=false -pl parallel-consumer-core -am
-      - name: Upload SpotBugs results
+        run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -Dlicense.skip -pl parallel-consumer-core -am
+      - name: Post SpotBugs annotations on PR
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: jwgmeligmeyling/spotbugs-github-action@v1.2
         with:
-          name: spotbugs-report
           path: '**/target/spotbugsXml.xml'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   # Dependency vulnerability scanning — checks for known CVEs
   dependency-scan:
@@ -131,6 +164,41 @@ jobs:
         with:
           name: pit-report
           path: '**/target/pit-reports/**'
+      - name: Post PIT summary to PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const glob = require('glob');
+            const files = glob.sync('**/target/pit-reports/**/mutations.csv');
+            if (files.length === 0) { console.log('No PIT report found'); return; }
+            let killed = 0, survived = 0, noCov = 0, total = 0;
+            for (const f of files) {
+              const lines = fs.readFileSync(f, 'utf8').split('\n').filter(l => l.trim());
+              for (const line of lines) {
+                total++;
+                if (line.includes('KILLED')) killed++;
+                else if (line.includes('SURVIVED')) survived++;
+                else if (line.includes('NO_COVERAGE')) noCov++;
+              }
+            }
+            const score = total > 0 ? ((killed / total) * 100).toFixed(1) : '0';
+            let body = `## Mutation Testing (PIT) Report\n\n`;
+            body += `| Metric | Value |\n|--------|-------|\n`;
+            body += `| Mutations generated | ${total} |\n`;
+            body += `| Killed (detected) | ${killed} |\n`;
+            body += `| Survived (missed) | ${survived} |\n`;
+            body += `| No coverage | ${noCov} |\n`;
+            body += `| **Mutation score** | **${score}%** |\n\n`;
+            body += `Full HTML report available as artifact: \`pit-report\`\n`;
+            const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existing = comments.data.find(c => c.body.includes('## Mutation Testing (PIT) Report'));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 
