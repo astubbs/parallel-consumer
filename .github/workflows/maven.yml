@@ -53,6 +53,7 @@ jobs:
         with:
           files: '**/target/site/jacoco/jacoco.xml'
           flags: ${{ matrix.suite }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 
@@ -87,3 +88,4 @@ jobs:
         with:
           files: '**/target/site/jacoco/jacoco.xml'
           flags: ak-${{ matrix.ak }}
+          token: ${{ secrets.CODECOV_TOKEN }}
