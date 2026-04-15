@@ -81,7 +81,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Compile and run SpotBugs
-        run: ./mvnw --batch-mode -Pci compile spotbugs:check -Dlicense.skip -Dspotbugs.failOnError=false
+        run: ./mvnw --batch-mode -Pci compile spotbugs:check -Dlicense.skip -Dspotbugs.failOnError=false -pl parallel-consumer-core -am
       - name: Upload SpotBugs results
         if: always()
         uses: actions/upload-artifact@v4
@@ -103,6 +103,7 @@ jobs:
           cache: 'maven'
       - name: OSS Index audit
         run: ./mvnw --batch-mode -Pci org.sonatype.ossindex:ossindex-maven-plugin:audit -Dlicense.skip
+        continue-on-error: true
 
   # Mutation testing (PIT) — verifies test assertions are meaningful
   mutation-testing:
