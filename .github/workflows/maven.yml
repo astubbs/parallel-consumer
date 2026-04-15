@@ -29,15 +29,16 @@ jobs:
         include:
           - suite: unit
             name: "Unit Tests"
-            cmd: "./mvnw --batch-mode -Pci test -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2"
+            cmd: "bin/ci-unit-test.sh"
           - suite: integration
             name: "Integration Tests"
-            cmd: "./mvnw --batch-mode -Pci verify -DskipUTs=true -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2"
+            cmd: "bin/ci-integration-test.sh"
           - suite: performance
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -60,6 +61,7 @@ jobs:
     if: github.event_name == 'pull_request'
     name: "Duplicate Code Check"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
@@ -73,6 +75,7 @@ jobs:
     if: github.event_name == 'pull_request'
     name: "SpotBugs"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -94,6 +97,7 @@ jobs:
     if: github.event_name == 'pull_request'
     name: "Dependency Vulnerabilities"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -110,6 +114,7 @@ jobs:
     if: github.event_name == 'pull_request'
     name: "Mutation Testing (PIT)"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -145,6 +150,7 @@ jobs:
     continue-on-error: ${{ matrix.experimental }}
     name: "AK: ${{ matrix.ak }} (${{ matrix.name }})"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
