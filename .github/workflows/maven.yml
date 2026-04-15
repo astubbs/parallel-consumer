@@ -68,6 +68,64 @@ jobs:
       - name: Run jscpd
         run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull --min-lines 6 --min-tokens 70
 
+  # SpotBugs static analysis — finds null derefs, concurrency issues, resource leaks
+  spotbugs:
+    if: github.event_name == 'pull_request'
+    name: "SpotBugs"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      - name: Compile and run SpotBugs
+        run: ./mvnw --batch-mode -Pci compile spotbugs:check -Dlicense.skip -Dspotbugs.failOnError=false
+      - name: Upload SpotBugs results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotbugs-report
+          path: '**/target/spotbugsXml.xml'
+
+  # Dependency vulnerability scanning — checks for known CVEs
+  dependency-scan:
+    if: github.event_name == 'pull_request'
+    name: "Dependency Vulnerabilities"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      - name: OSS Index audit
+        run: ./mvnw --batch-mode -Pci org.sonatype.ossindex:ossindex-maven-plugin:audit -Dlicense.skip
+
+  # Mutation testing (PIT) — verifies test assertions are meaningful
+  mutation-testing:
+    if: github.event_name == 'pull_request'
+    name: "Mutation Testing (PIT)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      - name: Run PIT mutation testing
+        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -Dthreads=4 -pl parallel-consumer-core
+        continue-on-error: true
+      - name: Upload PIT report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-report
+          path: '**/target/pit-reports/**'
+
   # ── Push Builds (master) ───────────────────────────────────────────────
 
   # Full Kafka version matrix as safety net
