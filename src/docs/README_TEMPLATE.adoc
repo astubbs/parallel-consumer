@@ -1100,6 +1100,12 @@ Helper scripts are in the `bin/` directory:
 Quick local build (compile + unit tests)::
 `bin/build.sh`
 
+Unit tests only (no Docker needed)::
+`bin/ci-unit-test.sh`
+
+Integration tests only (requires Docker for TestContainers)::
+`bin/ci-integration-test.sh`
+
 Full CI build with all tests (unit + integration)::
 `bin/ci-build.sh`
 
@@ -1109,7 +1115,7 @@ CI build against a specific Kafka version::
 Performance test suite (also `bin/performance-test.cmd` on Windows)::
 `bin/performance-test.sh`
 
-The GitHub Actions CI workflow uses `bin/ci-build.sh`, so running it locally reproduces the CI environment.
+All `ci-*` scripts use the `-Pci` Maven profile which enables license checking and disables parallel test execution. The GitHub Actions CI workflow uses these scripts, so running them locally reproduces the CI environment.
 
 === Performance Tests
 
