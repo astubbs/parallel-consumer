@@ -84,3 +84,10 @@ The default behavior on macOS dev machines is `format` mode (auto-fixes headers)
 
 - **GitHub Actions**: `.github/workflows/maven.yml` - runs on push/PR to master with Kafka version matrix.
 - **Semaphore** (Confluent internal): `.semaphore/semaphore.yml` - primary CI for upstream.
+- **Code coverage**: JaCoCo reports are uploaded to [Codecov](https://app.codecov.io/gh/astubbs/parallel-consumer). PRs fail if overall coverage drops by more than 1%.
+
+### Required secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `CODECOV_TOKEN` | Codecov upload token — required because branch protection is enabled. Get it from [Codecov settings](https://app.codecov.io/gh/astubbs/parallel-consumer/settings). |
