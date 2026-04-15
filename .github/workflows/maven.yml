@@ -1,6 +1,7 @@
 # PR builds:
-#   1. Build & Test: full verify (unit + integration), default Kafka version
-#   2. Kafka Matrix (3.9.1 + experimental 4.x) + Performance tests — fan out after Build & Test
+#   1. Unit, Integration, Performance — all in parallel with fail-fast
+#      (if unit tests fail at ~5 min, integration + performance are cancelled)
+#   2. Kafka Matrix (3.9.1 + experimental 4.x) — gated on all tests passing
 #
 # Push builds (master):
 #   Full Kafka version matrix (3.1.0, 3.7.0, 3.9.1 + experimental 4.x)
@@ -20,10 +21,23 @@ jobs:
 
   # ── PR Builds ──────────────────────────────────────────────────────────
 
-  # Full build and test — unit + integration, default Kafka version
-  build-and-test:
+  # All test suites in parallel — fail-fast cancels the rest if any fails
+  test:
     if: github.event_name == 'pull_request'
-    name: "Build & Test"
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - suite: unit
+            name: "Unit Tests"
+            cmd: "./mvnw --batch-mode -Pci test -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2"
+          - suite: integration
+            name: "Integration Tests"
+            cmd: "./mvnw --batch-mode -Pci verify -DskipUTs=true -Dlicense.skip -Dexcluded.groups=performance -Dsurefire.rerunFailingTestsCount=2"
+          - suite: performance
+            name: "Performance Tests"
+            cmd: "bin/performance-test.sh"
+    name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -32,13 +46,13 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
-      - name: Build and verify (unit + integration)
-        run: bin/ci-build.sh
+      - name: ${{ matrix.name }}
+        run: ${{ matrix.cmd }}
 
-  # Kafka version matrix — oldest and newest supported versions
+  # Kafka version matrix — gated on all test suites passing
   kafka-matrix:
     if: github.event_name == 'pull_request'
-    needs: build-and-test
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -59,22 +73,6 @@ jobs:
           cache: 'maven'
       - name: Build and test with Kafka ${{ matrix.ak }}
         run: bin/ci-build.sh ${{ matrix.ak }}
-
-  # Performance tests — volume/load tests that may uncover bugs at scale
-  performance-tests:
-    if: github.event_name == 'pull_request'
-    needs: build-and-test
-    name: "Performance Tests"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: 'maven'
-      - name: Performance tests
-        run: bin/performance-test.sh
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 
