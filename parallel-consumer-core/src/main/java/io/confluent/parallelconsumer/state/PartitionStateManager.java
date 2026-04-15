@@ -76,10 +76,17 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private final PCMetrics pcMetrics;
 
+    /**
+     * Cached instance — creating throwaway OffsetMapCodecManagers on every partition assignment
+     * leaked metrics (each instance registered duplicate timers/counters). See #859, #233.
+     */
+    private final OffsetMapCodecManager<K, V> offsetMapCodecManager;
+
     public PartitionStateManager(PCModule<K, V> module, ShardManager<K, V> sm) {
         this.sm = sm;
         this.module = module;
         this.pcMetrics = module.pcMetrics();
+        this.offsetMapCodecManager = new OffsetMapCodecManager<>(module);
         initMetrics();
     }
 
@@ -121,8 +128,7 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         incrementPartitionAssignmentEpoch(assignedPartitions);
 
         try {
-            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(module); // todo remove throw away instance creation - #233
-            var partitionStates = om.loadPartitionStateForAssignment(assignedPartitions);
+            var partitionStates = offsetMapCodecManager.loadPartitionStateForAssignment(assignedPartitions);
             this.partitionStates.putAll(partitionStates);
             initPartitionCounters(assignedPartitions);
 

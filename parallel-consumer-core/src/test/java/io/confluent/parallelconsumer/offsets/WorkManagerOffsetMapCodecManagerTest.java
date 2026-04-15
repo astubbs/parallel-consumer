@@ -80,10 +80,9 @@ class WorkManagerOffsetMapCodecManagerTest {
     @Mock
     ConsumerRecord<String, String> mockCr;
 
-    @BeforeEach
-    void setupMock() {
-        injectSucceededWorkAtOffset(highestSucceeded);
-    }
+    // Removed separate @BeforeEach setupMock() — it depended on state being initialized
+    // by setup() first, but JUnit 5 doesn't guarantee @BeforeEach ordering.
+    // The injectSucceededWorkAtOffset(highestSucceeded) call is now at the end of setup().
 
     private void injectSucceededWorkAtOffset(long offset) {
         Mockito.doReturn(offset).when(mockCr).offset();
@@ -125,6 +124,10 @@ class WorkManagerOffsetMapCodecManagerTest {
         wm = module.workManager();
         wm.onPartitionsAssigned(UniLists.of(tp));
         offsetCodecManager = new OffsetMapCodecManager<>(module);
+
+        // Was a separate @BeforeEach (setupMock) but JUnit 5 doesn't guarantee ordering
+        // between @BeforeEach methods. Must run after state is initialized.
+        injectSucceededWorkAtOffset(highestSucceeded);
     }
 
     @BeforeAll
