@@ -1,0 +1,11 @@
+coverage:
+  status:
+    project:
+      default:
+        # Fail if overall coverage drops from the base branch
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        # Don't enforce a minimum on new code — just track it
+        informational: true
