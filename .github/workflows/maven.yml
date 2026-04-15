@@ -156,7 +156,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
       - name: Run PIT mutation testing
-        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -Dthreads=4 -pl parallel-consumer-core
+        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -Dthreads=4 -pl parallel-consumer-core -am
         continue-on-error: true
       - name: Upload PIT report
         if: always()
@@ -170,8 +170,8 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const glob = require('glob');
-            const files = glob.sync('**/target/pit-reports/**/mutations.csv');
+            const { execSync } = require('child_process');
+            const files = execSync('find . -path "*/pit-reports/*/mutations.csv" -type f').toString().trim().split('\n').filter(f => f);
             if (files.length === 0) { console.log('No PIT report found'); return; }
             let killed = 0, survived = 0, noCov = 0, total = 0;
             for (const f of files) {
