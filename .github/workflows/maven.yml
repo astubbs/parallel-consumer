@@ -61,86 +61,50 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Duplicate code detection - runs in parallel with tests
-  # Compares PR vs base branch and fails if duplication exceeds 3%
+  # Duplicate code detection - uses PMD CPD for Java-aware block detection.
+  # Compares PR vs base branch and fails on increase.
   duplicate-detection:
     if: github.event_name == 'pull_request'
     name: "Duplicate Code Check"
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      PMD_VERSION: '7.9.0'
+      CPD_MIN_TOKENS: '70'
+      CPD_DIRS: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src'
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run jscpd on base branch
+      - name: Install PMD
+        run: |
+          wget -q "https://github.com/pmd/pmd/releases/download/pmd_releases%2F${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip"
+          unzip -q "pmd-dist-${PMD_VERSION}-bin.zip"
+          echo "$PWD/pmd-bin-${PMD_VERSION}/bin" >> $GITHUB_PATH
+      - name: Run CPD on base branch
         run: |
           git checkout ${{ github.event.pull_request.base.sha }} --quiet 2>/dev/null || true
-          npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters json --output jscpd-base --min-lines 6 --min-tokens 70 2>/dev/null || true
+          pmd cpd --dir $CPD_DIRS --language java --minimum-tokens $CPD_MIN_TOKENS --format xml > cpd-base.xml 2>/dev/null || true
           git checkout ${{ github.sha }} --quiet
-      - name: Run jscpd on PR branch
-        run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull,json --output jscpd-report --min-lines 6 --min-tokens 70 --threshold 3
+      - name: Run CPD on PR branch
+        run: |
+          pmd cpd --dir $CPD_DIRS --language java --minimum-tokens $CPD_MIN_TOKENS --format xml > cpd-pr.xml || true
+      - name: Install xml2js
+        run: npm install --no-save xml2js
       - name: Post duplicate report and annotate new clones
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
-            const { loadReport, findNewClones, buildComment, MAX_PCT, MAX_PCT_INCREASE } = require('./bin/ci-duplicate-report.js');
-            const prReport = loadReport('jscpd-report/jscpd-report.json');
-            if (!prReport) { console.log('No PR report found'); return; }
-            const baseReport = loadReport('jscpd-base/jscpd-report.json');
-            const prStats = prReport.statistics.total;
-            const baseStats = baseReport ? baseReport.statistics.total : null;
-            const pct = parseFloat(prStats.percentage);
-            const pctDelta = baseStats ? pct - parseFloat(baseStats.percentage) : 0;
-            const pctFail = pct > MAX_PCT;
-            const increaseFail = baseStats && pctDelta > MAX_PCT_INCREASE;
-            const shouldFail = pctFail || increaseFail;
-            const newClones = findNewClones(prReport, baseReport);
-            const body = buildComment(prReport, baseReport, newClones, shouldFail, pctFail, increaseFail, pctDelta);
-            const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
-            const existing = comments.data.find(c => c.body.includes('Duplicate Code Report'));
-            if (existing) {
-              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
-            }
-            // Annotate new clones as PR review comments
-            if (newClones.length > 0) {
-              const { data: files } = await github.rest.pulls.listFiles({ owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number });
-              const changedFiles = new Set(files.map(f => f.filename));
-              for (const d of newClones.slice(0, 10)) {
-                const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
-                const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
-                // Only annotate files that are part of this PR's diff
-                for (const [file, line, other, otherLine] of [
-                  [f1, d.firstFile.startLoc.line, f2, d.secondFile.startLoc.line],
-                  [f2, d.secondFile.startLoc.line, f1, d.firstFile.startLoc.line]
-                ]) {
-                  if (changedFiles.has(file)) {
-                    try {
-                      await github.rest.pulls.createReviewComment({
-                        owner: context.repo.owner,
-                        repo: context.repo.repo,
-                        pull_number: context.issue.number,
-                        commit_id: context.sha,
-                        path: file,
-                        line: parseInt(line),
-                        body: `:warning: **Duplicate code detected** - ${d.lines} lines duplicated with \`${other}:${otherLine}\``
-                      });
-                    } catch (e) {
-                      console.log(`Could not annotate ${file}:${line} - ${e.message}`);
-                    }
-                    break;
-                  }
-                }
-              }
-            }
-            if (shouldFail) {
-              core.setFailed('Duplicate code check failed - see PR comment for details');
-            }
+            const { analyzeAndReport } = require('./bin/ci-duplicate-report.js');
+            await analyzeAndReport({ github, context, core, prXmlPath: 'cpd-pr.xml', baseXmlPath: 'cpd-base.xml' });
 
   # File similarity detection - finds files that are semantically similar overall
   file-similarity:
