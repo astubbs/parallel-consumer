@@ -180,9 +180,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
+      # Excluded tests are incompatible with PIT's bytecode instrumentation
+      # (anonymous inner class with captured state + time-sensitive behavior).
+      # They still run in the normal unit test suite.
       - name: Run PIT mutation testing
-        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -Dthreads=4 -pl parallel-consumer-core -am
-        continue-on-error: true
+        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -DexcludedTestClasses="io.confluent.parallelconsumer.MockConsumerTestWithSaslAuthenticationException" -Dthreads=4 -pl parallel-consumer-core -am
       - name: Upload PIT report
         if: always()
         uses: actions/upload-artifact@v4
@@ -197,28 +199,33 @@ jobs:
             const fs = require('fs');
             const { execSync } = require('child_process');
             const files = execSync('find . -path "*/pit-reports/*/mutations.csv" -type f').toString().trim().split('\n').filter(f => f);
-            if (files.length === 0) { console.log('No PIT report found'); return; }
-            let killed = 0, survived = 0, noCov = 0, total = 0;
-            for (const f of files) {
-              const lines = fs.readFileSync(f, 'utf8').split('\n').filter(l => l.trim());
-              for (const line of lines) {
-                total++;
-                if (line.includes('KILLED')) killed++;
-                else if (line.includes('SURVIVED')) survived++;
-                else if (line.includes('NO_COVERAGE')) noCov++;
+            let body;
+            if (files.length === 0) {
+              body = `## :x: Mutation Testing (PIT) Report\n\n`;
+              body += `**PIT did not produce a report.** Most commonly this means a test failed in the baseline (PIT runs all tests unmodified first to establish green) and PIT aborted before mutating. See the "Run PIT mutation testing" step logs for the failing test, then either fix it or add it to \`-DexcludedTestClasses\` in the workflow.\n`;
+            } else {
+              let killed = 0, survived = 0, noCov = 0, total = 0;
+              for (const f of files) {
+                const lines = fs.readFileSync(f, 'utf8').split('\n').filter(l => l.trim());
+                for (const line of lines) {
+                  total++;
+                  if (line.includes('KILLED')) killed++;
+                  else if (line.includes('SURVIVED')) survived++;
+                  else if (line.includes('NO_COVERAGE')) noCov++;
+                }
               }
+              const score = total > 0 ? ((killed / total) * 100).toFixed(1) : '0';
+              body = `## Mutation Testing (PIT) Report\n\n`;
+              body += `| Metric | Value |\n|--------|-------|\n`;
+              body += `| Mutations generated | ${total} |\n`;
+              body += `| Killed (detected) | ${killed} |\n`;
+              body += `| Survived (missed) | ${survived} |\n`;
+              body += `| No coverage | ${noCov} |\n`;
+              body += `| **Mutation score** | **${score}%** |\n\n`;
+              body += `Full HTML report available as artifact: \`pit-report\`\n`;
             }
-            const score = total > 0 ? ((killed / total) * 100).toFixed(1) : '0';
-            let body = `## Mutation Testing (PIT) Report\n\n`;
-            body += `| Metric | Value |\n|--------|-------|\n`;
-            body += `| Mutations generated | ${total} |\n`;
-            body += `| Killed (detected) | ${killed} |\n`;
-            body += `| Survived (missed) | ${survived} |\n`;
-            body += `| No coverage | ${noCov} |\n`;
-            body += `| **Mutation score** | **${score}%** |\n\n`;
-            body += `Full HTML report available as artifact: \`pit-report\`\n`;
             const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
-            const existing = comments.data.find(c => c.body.includes('## Mutation Testing (PIT) Report'));
+            const existing = comments.data.find(c => c.body.includes('Mutation Testing (PIT) Report'));
             if (existing) {
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
             } else {
