@@ -61,7 +61,8 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Duplicate code detection -runs in parallel with tests
+  # Duplicate code detection - runs in parallel with tests
+  # Compares PR vs base branch and fails if duplication exceeds 3%
   duplicate-detection:
     if: github.event_name == 'pull_request'
     name: "Duplicate Code Check"
@@ -69,35 +70,64 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run jscpd
-        run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull,json --output jscpd-report --min-lines 6 --min-tokens 70
+      - name: Run jscpd on base branch
+        run: |
+          git checkout ${{ github.event.pull_request.base.sha }} --quiet 2>/dev/null || true
+          npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters json --output jscpd-base --min-lines 6 --min-tokens 70 2>/dev/null || true
+          git checkout ${{ github.sha }} --quiet
+      - name: Run jscpd on PR branch
+        run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull,json --output jscpd-report --min-lines 6 --min-tokens 70 --threshold 3
       - name: Post duplicate report to PR
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const path = 'jscpd-report/jscpd-report.json';
-            if (!fs.existsSync(path)) { console.log('No report found'); return; }
-            const report = JSON.parse(fs.readFileSync(path, 'utf8'));
-            const stats = report.statistics;
-            const total = stats.total;
+            const prPath = 'jscpd-report/jscpd-report.json';
+            const basePath = 'jscpd-base/jscpd-report.json';
+            if (!fs.existsSync(prPath)) { console.log('No PR report found'); return; }
+            const pr = JSON.parse(fs.readFileSync(prPath, 'utf8'));
+            const prStats = pr.statistics.total;
+            let baseStats = null;
+            if (fs.existsSync(basePath)) {
+              const base = JSON.parse(fs.readFileSync(basePath, 'utf8'));
+              baseStats = base.statistics.total;
+            }
             let body = `## Duplicate Code Report\n\n`;
-            body += `| Metric | Value |\n|--------|-------|\n`;
-            body += `| Files analyzed | ${total.sources} |\n`;
-            body += `| Clones found | ${total.clones} |\n`;
-            body += `| Duplicated lines | ${total.duplicatedLines} (${total.percentage}%) |\n\n`;
-            if (report.duplicates && report.duplicates.length > 0) {
-              body += `<details><summary>Duplicate blocks (${report.duplicates.length})</summary>\n\n`;
-              for (const d of report.duplicates.slice(0, 30)) {
+            body += `| Metric | PR | Base | Delta |\n|--------|-----|------|-------|\n`;
+            const delta = (pr, base, fmt) => {
+              if (base === null) return '-';
+              const d = pr - base;
+              return d === 0 ? '0' : (d > 0 ? `+${fmt ? fmt(d) : d}` : `${fmt ? fmt(d) : d}`);
+            };
+            const bClones = baseStats ? baseStats.clones : null;
+            const bLines = baseStats ? baseStats.duplicatedLines : null;
+            const bPct = baseStats ? baseStats.percentage : null;
+            body += `| Clones | ${prStats.clones} | ${bClones !== null ? bClones : '-'} | ${delta(prStats.clones, bClones)} |\n`;
+            body += `| Duplicated lines | ${prStats.duplicatedLines} | ${bLines !== null ? bLines : '-'} | ${delta(prStats.duplicatedLines, bLines)} |\n`;
+            body += `| Duplication % | ${prStats.percentage}% | ${bPct !== null ? bPct + '%' : '-'} | ${delta(parseFloat(prStats.percentage), bPct !== null ? parseFloat(bPct) : null, d => d.toFixed(2) + '%')} |\n\n`;
+            let shouldFail = false;
+            if (parseFloat(prStats.percentage) > 3) {
+              body += `**FAIL: duplication exceeds 3% threshold**\n\n`;
+              shouldFail = true;
+            }
+            if (baseStats && prStats.clones > baseStats.clones + 2) {
+              body += `**FAIL: PR introduces ${prStats.clones - baseStats.clones} new duplicate blocks (tolerance: 2)**\n\n`;
+              shouldFail = true;
+            }
+            if (pr.duplicates && pr.duplicates.length > 0) {
+              body += `<details><summary>Duplicate blocks (${pr.duplicates.length})</summary>\n\n`;
+              for (const d of pr.duplicates.slice(0, 30)) {
                 const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
                 const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
-                body += `- **${d.lines} lines** duplicated:\n  \`${f1}:${d.firstFile.startLoc.line}\` ↔ \`${f2}:${d.secondFile.startLoc.line}\`\n`;
+                body += `- **${d.lines} lines** duplicated:\n  \`${f1}:${d.firstFile.startLoc.line}\` <-> \`${f2}:${d.secondFile.startLoc.line}\`\n`;
               }
-              if (report.duplicates.length > 30) body += `\n...and ${report.duplicates.length - 30} more\n`;
+              if (pr.duplicates.length > 30) body += `\n...and ${pr.duplicates.length - 30} more\n`;
               body += `\n</details>\n`;
             }
             const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
@@ -106,6 +136,9 @@ jobs:
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
             } else {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
+            if (shouldFail) {
+              core.setFailed('Duplicate code check failed - see PR comment for details');
             }
 
   # SpotBugs static analysis -finds null derefs, concurrency issues, resource leaks
