@@ -82,60 +82,61 @@ jobs:
           git checkout ${{ github.sha }} --quiet
       - name: Run jscpd on PR branch
         run: npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull,json --output jscpd-report --min-lines 6 --min-tokens 70 --threshold 3
-      - name: Post duplicate report to PR
+      - name: Post duplicate report and annotate new clones
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const prPath = 'jscpd-report/jscpd-report.json';
-            const basePath = 'jscpd-base/jscpd-report.json';
-            if (!fs.existsSync(prPath)) { console.log('No PR report found'); return; }
-            const pr = JSON.parse(fs.readFileSync(prPath, 'utf8'));
-            const prStats = pr.statistics.total;
-            let baseStats = null;
-            if (fs.existsSync(basePath)) {
-              const base = JSON.parse(fs.readFileSync(basePath, 'utf8'));
-              baseStats = base.statistics.total;
-            }
-            let body = `## Duplicate Code Report\n\n`;
-            body += `| Metric | PR | Base | Delta |\n|--------|-----|------|-------|\n`;
-            const delta = (pr, base, fmt) => {
-              if (base === null) return '-';
-              const d = pr - base;
-              return d === 0 ? '0' : (d > 0 ? `+${fmt ? fmt(d) : d}` : `${fmt ? fmt(d) : d}`);
-            };
-            const bClones = baseStats ? baseStats.clones : null;
-            const bLines = baseStats ? baseStats.duplicatedLines : null;
-            const bPct = baseStats ? baseStats.percentage : null;
-            body += `| Clones | ${prStats.clones} | ${bClones !== null ? bClones : '-'} | ${delta(prStats.clones, bClones)} |\n`;
-            body += `| Duplicated lines | ${prStats.duplicatedLines} | ${bLines !== null ? bLines : '-'} | ${delta(prStats.duplicatedLines, bLines)} |\n`;
-            body += `| Duplication % | ${prStats.percentage}% | ${bPct !== null ? bPct + '%' : '-'} | ${delta(parseFloat(prStats.percentage), bPct !== null ? parseFloat(bPct) : null, d => d.toFixed(2) + '%')} |\n\n`;
-            let shouldFail = false;
-            if (parseFloat(prStats.percentage) > 3) {
-              body += `**FAIL: duplication exceeds 3% threshold**\n\n`;
-              shouldFail = true;
-            }
-            if (baseStats && prStats.clones > baseStats.clones + 2) {
-              body += `**FAIL: PR introduces ${prStats.clones - baseStats.clones} new duplicate blocks (tolerance: 2)**\n\n`;
-              shouldFail = true;
-            }
-            if (pr.duplicates && pr.duplicates.length > 0) {
-              body += `<details><summary>Duplicate blocks (${pr.duplicates.length})</summary>\n\n`;
-              for (const d of pr.duplicates.slice(0, 30)) {
-                const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
-                const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
-                body += `- **${d.lines} lines** duplicated:\n  \`${f1}:${d.firstFile.startLoc.line}\` <-> \`${f2}:${d.secondFile.startLoc.line}\`\n`;
-              }
-              if (pr.duplicates.length > 30) body += `\n...and ${pr.duplicates.length - 30} more\n`;
-              body += `\n</details>\n`;
-            }
+            const { loadReport, findNewClones, buildComment, MAX_PCT, MAX_PCT_INCREASE } = require('./bin/ci-duplicate-report.js');
+            const prReport = loadReport('jscpd-report/jscpd-report.json');
+            if (!prReport) { console.log('No PR report found'); return; }
+            const baseReport = loadReport('jscpd-base/jscpd-report.json');
+            const prStats = prReport.statistics.total;
+            const baseStats = baseReport ? baseReport.statistics.total : null;
+            const pct = parseFloat(prStats.percentage);
+            const pctDelta = baseStats ? pct - parseFloat(baseStats.percentage) : 0;
+            const pctFail = pct > MAX_PCT;
+            const increaseFail = baseStats && pctDelta > MAX_PCT_INCREASE;
+            const shouldFail = pctFail || increaseFail;
+            const newClones = findNewClones(prReport, baseReport);
+            const body = buildComment(prReport, baseReport, newClones, shouldFail, pctFail, increaseFail, pctDelta);
             const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
-            const existing = comments.data.find(c => c.body.includes('## Duplicate Code Report'));
+            const existing = comments.data.find(c => c.body.includes('Duplicate Code Report'));
             if (existing) {
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
             } else {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
+            // Annotate new clones as PR review comments
+            if (newClones.length > 0) {
+              const { data: files } = await github.rest.pulls.listFiles({ owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number });
+              const changedFiles = new Set(files.map(f => f.filename));
+              for (const d of newClones.slice(0, 10)) {
+                const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
+                const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
+                // Only annotate files that are part of this PR's diff
+                for (const [file, line, other, otherLine] of [
+                  [f1, d.firstFile.startLoc.line, f2, d.secondFile.startLoc.line],
+                  [f2, d.secondFile.startLoc.line, f1, d.firstFile.startLoc.line]
+                ]) {
+                  if (changedFiles.has(file)) {
+                    try {
+                      await github.rest.pulls.createReviewComment({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        pull_number: context.issue.number,
+                        commit_id: context.sha,
+                        path: file,
+                        line: parseInt(line),
+                        body: `:warning: **Duplicate code detected** - ${d.lines} lines duplicated with \`${other}:${otherLine}\``
+                      });
+                    } catch (e) {
+                      console.log(`Could not annotate ${file}:${line} - ${e.message}`);
+                    }
+                    break;
+                  }
+                }
+              }
             }
             if (shouldFail) {
               core.setFailed('Duplicate code check failed - see PR comment for details');
