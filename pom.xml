@@ -1008,18 +1008,21 @@
         </pluginManagement>
     </build>
 
+    <!--
+      Repository order matters: Maven queries sequentially and does not fall
+      through automatically on a hang. Put the fastest/most-covering repo first
+      so most artifacts resolve on the first hit; custom repos only consulted
+      for artifacts that aren't on Central. See .mvn/maven.config for the
+      per-connection timeouts that guard against any repo stalling.
+    -->
     <repositories>
-        <repository>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-        </repository>
         <repository>
             <id>central</id>
             <url>https://repo1.maven.org/maven2/</url>
         </repository>
         <repository>
-            <id>jitpack.io</id>
-            <url>https://jitpack.io</url>
+            <id>confluent</id>
+            <url>https://packages.confluent.io/maven/</url>
         </repository>
         <repository>
             <id>astubbs-truth-generator</id>
