@@ -9,7 +9,6 @@ import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.TopicPartition;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -28,10 +27,6 @@ class ParallelEoSSStreamProcessorRebalancedTest extends ParallelEoSStreamProcess
     public void setupAsyncConsumerTestBase() {
         setupTopicNames();
         setupClients();
-    }
-
-    @AfterEach()
-    public void close() {
     }
 
     @ParameterizedTest

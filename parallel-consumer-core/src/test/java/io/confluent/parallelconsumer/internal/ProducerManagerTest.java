@@ -19,6 +19,8 @@ import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -76,7 +78,17 @@ class ProducerManagerTest {
     void setup() {
         setup(ParallelConsumerOptions.<String, String>builder()
                 .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
-                .commitLockAcquisitionTimeout(ofSeconds(2)));
+                // 10s (was 2s): 2s is too tight on a CI JVM under PIT instrumentation.
+                .commitLockAcquisitionTimeout(ofSeconds(10)));
+    }
+
+    // This class doesn't extend AbstractParallelEoSStreamProcessorTestBase, so
+    // nothing else resets Awaitility between tests. Not closing pc here on purpose:
+    // buildModule() overrides close() as a no-op so each test manages its own pc
+    // lifecycle explicitly (by design, to inspect mid-commit state).
+    @AfterEach
+    void tearDown() {
+        Awaitility.reset();
     }
 
     private void setup(ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder) {
@@ -318,7 +330,9 @@ class ProducerManagerTest {
             {
                 var msg = "wait for first record to finish";
                 log.debug(msg);
-                await(msg).untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
+                // 20s (was default 10s): tight under PIT's instrumented JVM
+                await(msg).atMost(ofSeconds(20))
+                        .untilAsserted(() -> assertThat(pc.getWorkMailBox()).hasSize(1));
             }
 
             // send another record, register the work
@@ -338,7 +352,7 @@ class ProducerManagerTest {
             // blocks, as offset 1 is blocked sending and so cannot acquire commit lock
             var msg = "Ensure expected produce lock is now held by blocked worker thread";
             log.debug(msg);
-            await(msg).untilTrue(blockedOn1);
+            await(msg).atMost(ofSeconds(20)).untilTrue(blockedOn1);
 
 
             var commitBlocks = new BlockedThreadAsserter();
@@ -354,12 +368,13 @@ class ProducerManagerTest {
             }, () -> {
                 log.debug("Unblocking offset processing offset1Mutex...");
                 offset1Mutex.countDown();
-            }, ofSeconds(10));
+            }, ofSeconds(20)); // was 10s; too tight under PIT
 
             //
-            await().untilAsserted(() -> Truth.assertWithMessage("commit should now have unlocked and returned")
-                    .that(commitBlocks.functionHasCompleted())
-                    .isTrue());
+            await().atMost(ofSeconds(20))
+                    .untilAsserted(() -> Truth.assertWithMessage("commit should now have unlocked and returned")
+                            .that(commitBlocks.functionHasCompleted())
+                            .isTrue());
 
 
             final int nextExpectedOffset = 2; // as only first of two work completed
