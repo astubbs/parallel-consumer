@@ -12,6 +12,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.SaslAuthenticationException;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
@@ -42,6 +43,17 @@ import static pl.tlinkowski.unij.api.UniLists.of;
 class MockConsumerTestWithSaslAuthenticationException {
 
     private final String topic = MockConsumerTestWithSaslAuthenticationException.class.getSimpleName();
+
+    // Field so @AfterEach can close it. This class doesn't extend
+    // AbstractParallelEoSStreamProcessorTestBase, so no base-class cleanup runs.
+    private ParallelEoSStreamProcessor<String, String> parallelConsumer;
+
+    @AfterEach
+    void close() {
+        if (parallelConsumer != null && !parallelConsumer.isClosedOrFailed()) {
+            parallelConsumer.close();
+        }
+    }
 
     /**
      * Test that the mock consumer works as expected
@@ -76,7 +88,7 @@ class MockConsumerTestWithSaslAuthenticationException {
                 .consumer(mockConsumer)
                 .saslAuthenticationRetryTimeout(Duration.ofSeconds(25L)) // set retry to 25 seconds.
                 .build();
-        var parallelConsumer = new ParallelEoSStreamProcessor<String, String>(options);
+        parallelConsumer = new ParallelEoSStreamProcessor<>(options);
         parallelConsumer.subscribe(of(topic));
 
         // MockConsumer is not a correct implementation of the Consumer contract - must manually rebalance++ - or use LongPollingMockConsumer
@@ -96,10 +108,11 @@ class MockConsumerTestWithSaslAuthenticationException {
             });
         });
 
-        // temporarily set the wait timeout (reset is handled by the base class
-        // @AfterEach so it runs even if the assertion below fails)
-        Awaitility.setDefaultTimeout(Duration.ofSeconds(50));
-        Awaitility.await().untilAsserted(() -> {
+        // Scope the timeout locally (don't mutate Awaitility's global default —
+        // that was leaking across tests under PIT's different ordering, since
+        // this class doesn't have base-class Awaitility.reset() cleanup).
+        // 90s: 20s mock-failure window + retry budget + PIT's instrumented-JVM slowdown.
+        Awaitility.await().atMost(Duration.ofSeconds(90)).untilAsserted(() -> {
             assertThat(records).hasSize(3);
         });
     }
