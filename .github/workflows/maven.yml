@@ -62,59 +62,25 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # Duplicate code detection using both PMD CPD and jscpd engines.
-  # Both are fast (~15s each) and give different perspectives - PMD CPD
-  # understands Java syntax, jscpd is language-agnostic token matching.
-  # Results are combined into one PR comment for cross-validation.
+  # See https://github.com/astubbs/duplicate-code-cross-check
   duplicate-detection:
     if: github.event_name == 'pull_request'
     name: "Duplicate Code Check"
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      PMD_VERSION: '7.9.0'
-      CPD_MIN_TOKENS: '70'
-      CPD_DIRS: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src'
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@v5
+      - uses: astubbs/duplicate-code-cross-check@main
         with:
-          distribution: 'temurin'
-          java-version: '17'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install PMD
-        run: |
-          wget -q "https://github.com/pmd/pmd/releases/download/pmd_releases%2F${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip"
-          unzip -q "pmd-dist-${PMD_VERSION}-bin.zip"
-          echo "$PWD/pmd-bin-${PMD_VERSION}/bin" >> $GITHUB_PATH
-      - name: Run both engines on base branch
-        run: |
-          git checkout ${{ github.event.pull_request.base.sha }} --quiet 2>/dev/null || true
-          pmd cpd --dir $CPD_DIRS --language java --minimum-tokens $CPD_MIN_TOKENS --format xml > cpd-base.xml 2>/dev/null || true
-          npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters json --output jscpd-base --min-lines 6 --min-tokens 70 2>/dev/null || true
-          git checkout ${{ github.sha }} --quiet
-      - name: Run both engines on PR branch
-        run: |
-          pmd cpd --dir $CPD_DIRS --language java --minimum-tokens $CPD_MIN_TOKENS --format xml > cpd-pr.xml || true
-          npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull,json --output jscpd-report --min-lines 6 --min-tokens 70 || true
-      - name: Install xml2js
-        run: npm install --no-save xml2js
-      - name: Post combined duplicate report
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { analyzeAndReport } = require('./bin/ci-duplicate-report.js');
-            await analyzeAndReport({
-              github, context, core,
-              prXmlPath: 'cpd-pr.xml',
-              baseXmlPath: 'cpd-base.xml',
-              prJscpdPath: 'jscpd-report/jscpd-report.json',
-              baseJscpdPath: 'jscpd-base/jscpd-report.json'
-            });
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src'
+          cpd-max-duplication: '5'
+          jscpd-max-duplication: '4'
 
   # File similarity detection - finds files that are semantically similar overall
   file-similarity:
