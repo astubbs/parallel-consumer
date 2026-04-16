@@ -13,7 +13,7 @@
 const fs = require('fs');
 
 const MAX_PCT = 3;
-const MAX_PCT_INCREASE = 0.5;
+const MAX_PCT_INCREASE = 0.1;
 
 function loadReport(path) {
   if (!fs.existsSync(path)) return null;
