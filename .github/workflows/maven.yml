@@ -35,7 +35,7 @@ jobs:
     if: github.event_name == 'pull_request'
     name: "Prepare Maven Cache"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -57,7 +57,10 @@ jobs:
           - suite: unit
             name: "Unit Tests"
             cmd: "bin/ci-unit-test.sh"
-            timeout: 30
+            timeout: 20
+          # TODO: tighten integration/performance to 30m once we have 5+
+          # consecutive successful runs consistently under 20m. Current 60m
+          # buffer is for Maven Central network variance we've observed.
           - suite: integration
             name: "Integration Tests"
             cmd: "bin/ci-integration-test.sh"
