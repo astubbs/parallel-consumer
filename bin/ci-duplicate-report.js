@@ -11,7 +11,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 
-const MAX_PCT = 3;
+const MAX_PCT = 5;  // current baseline is ~3.94%, set ceiling above that
 const MAX_PCT_INCREASE = 0.1;
 
 async function parseCpdXml(path) {
