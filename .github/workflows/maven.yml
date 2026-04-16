@@ -12,9 +12,15 @@ on:
     branches: [ master ]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
 
@@ -109,6 +115,9 @@ jobs:
     name: "SpotBugs"
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -204,6 +213,8 @@ jobs:
   # Full Kafka version matrix as safety net
   build:
     if: github.event_name == 'push'
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
