@@ -25,9 +25,31 @@ jobs:
 
   # ── PR Builds ──────────────────────────────────────────────────────────
 
+  # Pre-warm the Maven dependency cache so the three test jobs can start
+  # with everything local. Without this, each job races to download the
+  # same deps from Maven Central, and if Central is slow, they all stall.
+  # TODO: If this extra serial step doesn't consistently help, remove it
+  # and rely on per-job caching + longer timeouts instead. Trade-off is
+  # wall-clock time (adds ~1-2 min serial) vs reliability vs flaky networks.
+  prepare-deps:
+    if: github.event_name == 'pull_request'
+    name: "Prepare Maven Cache"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      - name: Download all dependencies
+        run: ./mvnw --batch-mode -Pci dependency:go-offline -Dlicense.skip -DincludeScope=test -U
+
   # All test suites in parallel -fail-fast cancels the rest if any fails
   test:
     if: github.event_name == 'pull_request'
+    needs: prepare-deps
     strategy:
       fail-fast: true
       matrix:
@@ -35,15 +57,18 @@ jobs:
           - suite: unit
             name: "Unit Tests"
             cmd: "bin/ci-unit-test.sh"
+            timeout: 30
           - suite: integration
             name: "Integration Tests"
             cmd: "bin/ci-integration-test.sh"
+            timeout: 60
           - suite: performance
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
+            timeout: 60
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
