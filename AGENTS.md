@@ -140,7 +140,7 @@ PR builds run these jobs in parallel (fail-fast cancels others if any fails):
 | **Integration Tests** | `bin/ci-integration-test.sh` | Failsafe tests, TestContainers |
 | **Performance Tests** | `bin/performance-test.sh` | `@Tag("performance")` volume tests |
 | **SpotBugs** | Maven spotbugs plugin | Static analysis for bugs |
-| **Duplicate Code Check** | jscpd | Detect copy-paste code |
+| **Duplicate Code Check** | PMD CPD | Detect Java copy-paste blocks (base-vs-PR comparison) |
 | **Dependency Vulnerabilities** | GitHub dependency-review-action | CVE scanning |
 | **Mutation Testing (PIT)** | pitest-maven | Test quality verification |
 
