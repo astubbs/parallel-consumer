@@ -44,14 +44,30 @@ function countTotalLines(dirs) {
   }
 }
 
-function deltaIcon(d) {
-  return d > 0 ? ':small_red_triangle:' : d < 0 ? ':small_red_triangle_down:' : ':heavy_minus_sign:';
+function deltaEmoji(d, isPercentage) {
+  // Celebratory/approving for decreases, suspicious for increases, neutral for no change.
+  // Ramp up the reaction based on magnitude.
+  if (d === 0) return ':heavy_minus_sign:';
+  if (d < 0) {
+    const mag = Math.abs(d);
+    // Big decrease -> heart. Modest decrease -> thumbs up. Tiny decrease -> smile.
+    if (isPercentage ? mag >= 1 : mag >= 20) return ':heart:';
+    if (isPercentage ? mag >= 0.1 : mag >= 5) return ':thumbsup:';
+    return ':slightly_smiling_face:';
+  }
+  // Increase: small = side-eye, moderate = monocle, large = skeptical
+  const mag = d;
+  if (isPercentage ? mag >= 1 : mag >= 20) return ':face_with_raised_eyebrow:';
+  if (isPercentage ? mag >= 0.1 : mag >= 5) return ':face_with_monocle:';
+  return ':face_with_diagonal_mouth:';
 }
 
 function fmtDelta(d, suffix) {
-  if (d === 0) return `${deltaIcon(d)} 0`;
+  const isPct = (suffix === '%');
+  const emoji = deltaEmoji(d, isPct);
+  if (d === 0) return `${emoji} 0`;
   const s = suffix || '';
-  return d > 0 ? `${deltaIcon(d)} +${d}${s}` : `${deltaIcon(d)} ${d}${s}`;
+  return d > 0 ? `${emoji} +${d}${s}` : `${emoji} ${d}${s}`;
 }
 
 // ── PMD CPD ───────────────────────────────────────────────────────────
