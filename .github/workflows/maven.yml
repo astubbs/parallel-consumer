@@ -1,5 +1,5 @@
 # PR builds:
-#   Unit, Integration, Performance — all in parallel with fail-fast
+#   Unit, Integration, Performance - all in parallel with fail-fast
 #   (if unit tests fail at ~5 min, integration + performance are cancelled)
 #
 # Push builds (master):
@@ -14,19 +14,18 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  checks: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-
 jobs:
 
   # ── PR Builds ──────────────────────────────────────────────────────────
 
-  # All test suites in parallel — fail-fast cancels the rest if any fails
+  # All test suites in parallel -fail-fast cancels the rest if any fails
   test:
     if: github.event_name == 'pull_request'
     strategy:
@@ -62,7 +61,7 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Duplicate code detection — runs in parallel with tests
+  # Duplicate code detection -runs in parallel with tests
   duplicate-detection:
     if: github.event_name == 'pull_request'
     name: "Duplicate Code Check"
@@ -109,15 +108,12 @@ jobs:
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
             }
 
-  # SpotBugs static analysis — finds null derefs, concurrency issues, resource leaks
+  # SpotBugs static analysis -finds null derefs, concurrency issues, resource leaks
   spotbugs:
     if: github.event_name == 'pull_request'
     name: "SpotBugs"
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -134,15 +130,12 @@ jobs:
           path: '**/target/spotbugsXml.xml'
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  # Dependency vulnerability scanning — GitHub's own dependency review
+  # Dependency vulnerability scanning -GitHub's own dependency review
   dependency-scan:
     if: github.event_name == 'pull_request'
     name: "Dependency Vulnerabilities"
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/dependency-review-action@v4
@@ -150,7 +143,7 @@ jobs:
           fail-on-severity: high
           comment-summary-in-pr: always
 
-  # Mutation testing (PIT) — verifies test assertions are meaningful
+  # Mutation testing (PIT) -verifies test assertions are meaningful
   mutation-testing:
     if: github.event_name == 'pull_request'
     name: "Mutation Testing (PIT)"
@@ -213,8 +206,6 @@ jobs:
   # Full Kafka version matrix as safety net
   build:
     if: github.event_name == 'push'
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix:
