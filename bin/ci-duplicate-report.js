@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 /**
  * Compares jscpd duplicate detection results between base and PR branches.
- * Posts a PR comment with the comparison and annotates new clones on the diff.
- *
- * Expected env vars (set by github-script action):
- *   GITHUB_TOKEN, GITHUB_REPOSITORY, PR_NUMBER
+ * Posts a PR comment with the comparison and annotates genuinely new clones.
  *
  * Expected files:
  *   jscpd-report/jscpd-report.json  (PR branch results)
  *   jscpd-base/jscpd-report.json    (base branch results, optional)
  */
 const fs = require('fs');
+const crypto = require('crypto');
 
 const MAX_PCT = 3;
 const MAX_PCT_INCREASE = 0.1;
@@ -20,22 +18,21 @@ function loadReport(path) {
   return JSON.parse(fs.readFileSync(path, 'utf8'));
 }
 
-function cloneKey(d) {
-  const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
-  const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
-  return `${f1}:${d.firstFile.startLoc.line}-${d.firstFile.endLoc.line}|${f2}:${d.secondFile.startLoc.line}-${d.secondFile.endLoc.line}`;
+function cloneContentHash(d) {
+  // Hash the fragment content so we match by what the code IS, not where it is
+  const content = d.fragment || '';
+  return crypto.createHash('md5').update(content).digest('hex');
 }
 
 function findNewClones(prReport, baseReport) {
   if (!baseReport || !baseReport.duplicates) return prReport.duplicates || [];
-  const baseKeys = new Set(baseReport.duplicates.map(cloneKey));
-  return (prReport.duplicates || []).filter(d => !baseKeys.has(cloneKey(d)));
+  const baseHashes = new Set(baseReport.duplicates.map(cloneContentHash));
+  return (prReport.duplicates || []).filter(d => !baseHashes.has(cloneContentHash(d)));
 }
 
 function buildComment(prReport, baseReport, newClones, shouldFail, pctFail, increaseFail, pctDelta) {
   const prStats = prReport.statistics.total;
   const baseStats = baseReport ? baseReport.statistics.total : null;
-  const pct = parseFloat(prStats.percentage);
   const cloneDelta = baseStats ? prStats.clones - baseStats.clones : 0;
 
   const icon = shouldFail ? ':x:' : ':white_check_mark:';
@@ -56,7 +53,7 @@ function buildComment(prReport, baseReport, newClones, shouldFail, pctFail, incr
   body += `| Max increase vs base | +${MAX_PCT_INCREASE}% | ${increaseFail ? ':x: FAIL' : ':white_check_mark: Pass'} (${baseStats ? (pctDelta >= 0 ? '+' : '') + pctDelta.toFixed(2) + '%' : 'no base'}) |\n\n`;
 
   if (newClones.length > 0) {
-    body += `### :new: New duplicate blocks introduced (${newClones.length})\n\n`;
+    body += `### :warning: New clones introduced by this PR (${newClones.length})\n\n`;
     for (const d of newClones.slice(0, 20)) {
       const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
       const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
@@ -64,20 +61,11 @@ function buildComment(prReport, baseReport, newClones, shouldFail, pctFail, incr
     }
     if (newClones.length > 20) body += `\n...and ${newClones.length - 20} more\n`;
     body += '\n';
-  }
-
-  if (prReport.duplicates && prReport.duplicates.length > 0) {
-    body += `<details><summary>:mag: All duplicate blocks (${prReport.duplicates.length})</summary>\n\n`;
-    for (const d of prReport.duplicates.slice(0, 40)) {
-      const f1 = d.firstFile.name.replace(/^.*parallel-consumer\//, '');
-      const f2 = d.secondFile.name.replace(/^.*parallel-consumer\//, '');
-      body += `- **${d.lines} lines**: \`${f1}:${d.firstFile.startLoc.line}\` <-> \`${f2}:${d.secondFile.startLoc.line}\`\n`;
-    }
-    if (prReport.duplicates.length > 40) body += `\n...and ${prReport.duplicates.length - 40} more\n`;
-    body += `\n</details>\n`;
+  } else if (baseStats) {
+    body += `No new clones introduced by this PR.\n\n`;
   }
 
   return body;
 }
 
-module.exports = { loadReport, findNewClones, buildComment, cloneKey, MAX_PCT, MAX_PCT_INCREASE };
+module.exports = { loadReport, findNewClones, buildComment, cloneContentHash, MAX_PCT, MAX_PCT_INCREASE };
