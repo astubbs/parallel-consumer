@@ -75,7 +75,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: astubbs/duplicate-code-cross-check@main
+      - uses: astubbs/duplicate-code-cross-check@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src'
