@@ -142,6 +142,28 @@ jobs:
               core.setFailed('Duplicate code check failed - see PR comment for details');
             }
 
+  # File similarity detection - finds files that are semantically similar overall
+  file-similarity:
+    if: github.event_name == 'pull_request'
+    name: "File Similarity Check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astubbs/duplicate-code-detection-tool@feat/base-vs-pr-comparison
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src'
+          file_extensions: 'java'
+          ignore_below: 30
+          fail_above: 80
+          warn_above: 50
+          one_comment: true
+          compare_with_base: true
+          max_increase: 10
+
   # SpotBugs static analysis -finds null derefs, concurrency issues, resource leaks
   spotbugs:
     if: github.event_name == 'pull_request'
