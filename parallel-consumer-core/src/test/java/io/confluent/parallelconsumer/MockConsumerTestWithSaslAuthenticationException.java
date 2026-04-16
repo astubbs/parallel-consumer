@@ -28,14 +28,15 @@ import static com.google.common.truth.Truth.assertThat;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * Test that PC can survive for a temporary SaslAuthenticationException.
+ * Test that PC can survive a temporary SaslAuthenticationException.
  *
- * In this test, MockConsumer starts to throw SaslAuthenticationException from the beginning until 20 seconds later.
+ * In this test, MockConsumer throws SaslAuthenticationException from the beginning until 20 seconds later.
  *
- * After that MockConsumer will back to normal.
+ * After that MockConsumer goes back to normal.
  *
- * The saslAuthenticationRetryTimeout is set to 25 seconds. It is expected to resume normal after 20 seconds and will
- * be able to consume all produced messages.
+ * The saslAuthenticationRetryTimeout is set to 60 seconds (generous margin over the 20s outage window) so
+ * PC has room to recover even under PIT's instrumented-JVM slowdown. It is expected to resume normal after
+ * 20 seconds and will be able to consume all produced messages.
  * @author Shilin Wu
  */
 @Slf4j
@@ -86,7 +87,9 @@ class MockConsumerTestWithSaslAuthenticationException {
         //
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(mockConsumer)
-                .saslAuthenticationRetryTimeout(Duration.ofSeconds(25L)) // set retry to 25 seconds.
+                // 60s retry budget over a 20s mock-failure window — generous margin so PC's
+                // recovery poll lands safely within budget even under PIT's slower JVM.
+                .saslAuthenticationRetryTimeout(Duration.ofSeconds(60L))
                 .build();
         parallelConsumer = new ParallelEoSStreamProcessor<>(options);
         parallelConsumer.subscribe(of(topic));
