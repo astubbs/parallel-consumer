@@ -180,11 +180,8 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
-      # Excluded tests are incompatible with PIT's bytecode instrumentation
-      # (anonymous inner class with captured state + time-sensitive behavior).
-      # They still run in the normal unit test suite.
       - name: Run PIT mutation testing
-        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -DexcludedTestClasses="io.confluent.parallelconsumer.MockConsumerTestWithSaslAuthenticationException" -Dthreads=4 -pl parallel-consumer-core -am
+        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -Dthreads=4 -pl parallel-consumer-core -am
       - name: Upload PIT report
         if: always()
         uses: actions/upload-artifact@v4

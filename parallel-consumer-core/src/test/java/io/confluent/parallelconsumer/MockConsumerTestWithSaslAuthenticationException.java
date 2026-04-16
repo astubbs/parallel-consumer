@@ -96,14 +96,12 @@ class MockConsumerTestWithSaslAuthenticationException {
             });
         });
 
-        // temporarily set the wait timeout
+        // temporarily set the wait timeout (reset is handled by the base class
+        // @AfterEach so it runs even if the assertion below fails)
         Awaitility.setDefaultTimeout(Duration.ofSeconds(50));
-        //
         Awaitility.await().untilAsserted(() -> {
             assertThat(records).hasSize(3);
         });
-
-        Awaitility.reset();
     }
 
     private void addRecords(MockConsumer<String, String> mockConsumer) {

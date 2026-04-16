@@ -84,6 +84,7 @@ The default behavior on macOS dev machines is `format` mode (auto-fixes headers)
 
 ### Git Safety
 - **NEVER commit or push without explicitly asking the user first.** Wait for approval. This is the #1 rule.
+- **When creating a stacked PR, include `depends on #N` in the PR description** (where `#N` is the parent PR it stacks on). This fork runs a PR dependency gating action (see `.github/workflows/check-dependencies.yml`) which blocks child PRs from merging until the parent is merged. One `depends on` line per parent. Keep the list accurate if the chain changes.
 - Branch off master for upstream contributor cherry-picks so PRs show only their change.
 - Never commit without tests and documentation in the same pass.
 - Run tests before committing. If they fail, fix them first.
