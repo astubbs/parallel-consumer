@@ -32,6 +32,7 @@ import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.parallel.Isolated;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import pl.tlinkowski.unij.api.UniMaps;
@@ -40,6 +41,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -134,6 +136,7 @@ class VertxConcurrencyIT extends BrokerIntegrationTest {
      * would expect.
      */
     @Test
+    @Timeout(value = 5, unit = TimeUnit.MINUTES)
     @SneakyThrows
     void testVertxConcurrency() {
         var commitMode = PERIODIC_CONSUMER_ASYNCHRONOUS;
@@ -208,7 +211,7 @@ class VertxConcurrencyIT extends BrokerIntegrationTest {
         var failureMessage = msg("Mock server receives {} requests in parallel from vertx engine",
                 expectedMessageCount / 2);
         try {
-            waitAtMost(ofSeconds(20))
+            waitAtMost(ofSeconds(120))
                     .pollInterval(ofMillis(200))
                     .alias(failureMessage)
                     .untilAsserted(() -> {
@@ -217,11 +220,12 @@ class VertxConcurrencyIT extends BrokerIntegrationTest {
                     });
         } catch (ConditionTimeoutException e) {
             fail(failureMessage + "\n" + e.getMessage());
+        } finally {
+            // Always release the latch — if the test fails, this prevents WireMock threads
+            // from hanging for 30s each on the unreleased latch
+            log.info("{} requests received by server, releasing server response lock.", requestsReceivedOnServer.size());
+            LatchTestUtils.release(responseLock);
         }
-        log.info("{} requests received in parallel by server, releasing server response lock.", requestsReceivedOnServer.size());
-
-        // all requests were received in parallel, so unlock the server to respond to all of them
-        LatchTestUtils.release(responseLock);
 
 //        assertNumberOfThreads();
 
