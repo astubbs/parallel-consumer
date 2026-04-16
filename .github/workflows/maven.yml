@@ -61,8 +61,10 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Duplicate code detection - uses PMD CPD for Java-aware block detection.
-  # Compares PR vs base branch and fails on increase.
+  # Duplicate code detection using both PMD CPD and jscpd engines.
+  # Both are fast (~15s each) and give different perspectives - PMD CPD
+  # understands Java syntax, jscpd is language-agnostic token matching.
+  # Results are combined into one PR comment for cross-validation.
   duplicate-detection:
     if: github.event_name == 'pull_request'
     name: "Duplicate Code Check"
@@ -88,23 +90,31 @@ jobs:
           wget -q "https://github.com/pmd/pmd/releases/download/pmd_releases%2F${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip"
           unzip -q "pmd-dist-${PMD_VERSION}-bin.zip"
           echo "$PWD/pmd-bin-${PMD_VERSION}/bin" >> $GITHUB_PATH
-      - name: Run CPD on base branch
+      - name: Run both engines on base branch
         run: |
           git checkout ${{ github.event.pull_request.base.sha }} --quiet 2>/dev/null || true
           pmd cpd --dir $CPD_DIRS --language java --minimum-tokens $CPD_MIN_TOKENS --format xml > cpd-base.xml 2>/dev/null || true
+          npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters json --output jscpd-base --min-lines 6 --min-tokens 70 2>/dev/null || true
           git checkout ${{ github.sha }} --quiet
-      - name: Run CPD on PR branch
+      - name: Run both engines on PR branch
         run: |
           pmd cpd --dir $CPD_DIRS --language java --minimum-tokens $CPD_MIN_TOKENS --format xml > cpd-pr.xml || true
+          npx jscpd@4 --pattern "**/*.java" --ignore "**/target/**,**/node_modules/**" --reporters consoleFull,json --output jscpd-report --min-lines 6 --min-tokens 70 || true
       - name: Install xml2js
         run: npm install --no-save xml2js
-      - name: Post duplicate report and annotate new clones
+      - name: Post combined duplicate report
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const { analyzeAndReport } = require('./bin/ci-duplicate-report.js');
-            await analyzeAndReport({ github, context, core, prXmlPath: 'cpd-pr.xml', baseXmlPath: 'cpd-base.xml' });
+            await analyzeAndReport({
+              github, context, core,
+              prXmlPath: 'cpd-pr.xml',
+              baseXmlPath: 'cpd-base.xml',
+              prJscpdPath: 'jscpd-report/jscpd-report.json',
+              baseJscpdPath: 'jscpd-base/jscpd-report.json'
+            });
 
   # File similarity detection - finds files that are semantically similar overall
   file-similarity:
