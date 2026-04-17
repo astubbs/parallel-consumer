@@ -213,34 +213,37 @@ jobs:
           java-version: '17'
           cache: 'maven'
       # Restore PIT history for incremental analysis — only re-mutates
-      # code that changed since last run.
+      # code that changed since last run. PIT writes its history to /tmp/
+      # with a filename derived from groupId.artifactId.version, ignoring
+      # explicit -DhistoryInputLocation CLI flags when -DwithHistory is set.
       - name: Restore PIT history cache
         uses: actions/cache@v4
         with:
-          path: parallel-consumer-core/target/pit-history
+          path: /tmp/*_pitest_history.bin
           key: pit-history-${{ github.base_ref }}-${{ hashFiles('**/src/main/**/*.java') }}
           restore-keys: |
             pit-history-${{ github.base_ref }}-
             pit-history-
-      # -DargLine=""           strips Jacoco from PIT minions (PIT has its own coverage)
+      # -DargLine="-Xmx1g"    gives minion JVMs 1GB heap (default is too small,
+      #                        causes MEMORY_ERROR) and strips Jacoco (PIT has
+      #                        its own coverage).
       # -DtimeoutConstant/Factor  generous per-mutation timeout for CI hardware
       # -Dthreads=1            I/O-bound tests; parallelism adds contention not speed
-      # -DwithHistory          incremental: skips re-mutating unchanged code
+      # -DwithHistory          incremental: skips re-mutating unchanged code.
+      #                        PIT writes history to /tmp/{groupId}.{artifactId}...
+      #                        which we cache above via actions/cache.
       # targetClasses: internal.* only — the core engine where mutations matter most.
-      #   Broadening to io.confluent.parallelconsumer.* hit GitHub's 6h job cap.
+      #   Broadening to io.confluent.parallelconsumer.* hit GitHub's 6h job cap (#41).
       - name: Run PIT mutation testing
         run: |
-          mkdir -p parallel-consumer-core/target/pit-history
           ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
             -Dlicense.skip \
             -DtargetClasses="io.confluent.parallelconsumer.internal.*" \
             -DtargetTests="io.confluent.parallelconsumer.*" \
-            -DargLine="" \
+            -DargLine="-Xmx1g" \
             -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
             -Dthreads=1 \
             -DwithHistory \
-            -DhistoryInputLocation=target/pit-history/history.bin \
-            -DhistoryOutputLocation=target/pit-history/history.bin \
             -pl parallel-consumer-core -am
       - name: Upload PIT report
         if: always()
