@@ -217,8 +217,12 @@ jobs:
       # exclusions played whack-a-mole. Fixed at source (5d9f022b), no exclusions
       # needed. Base-class @AfterEach Awaitility.reset() stays as a general
       # leakage guard.
+      # -DargLine="" strips Jacoco's javaagent from PIT's minion JVMs.
+      # PIT computes its own coverage — Jacoco just doubles the
+      # instrumentation overhead and pushes slow tests past the
+      # coverage-phase budget on CI's weaker hardware.
       - name: Run PIT mutation testing
-        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -Dthreads=4 -pl parallel-consumer-core -am
+        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -DargLine="" -Dthreads=4 -pl parallel-consumer-core -am
       - name: Upload PIT report
         if: always()
         uses: actions/upload-artifact@v4
