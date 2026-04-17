@@ -87,39 +87,47 @@ class MockConsumerTestWithCommitTimeoutException {
         parallelConsumer.onPartitionsAssigned(of(tp));
         mockConsumer.updateBeginningOffsets(startOffsets);
 
-        //
-        new Thread() {
-            public void run() {
-                addRecords(mockConsumer);
-            }
-        }.start();
+        // Daemon thread: must NOT survive past this test method, or when it wakes
+        // from sleep it'll addRecord() on a closed mockConsumer and throw an
+        // uncaught exception that PIT attributes to whatever test is running next
+        // in the same minion JVM. We also interrupt it and close PC in the finally
+        // block.
+        Thread recordAdder = new Thread(() -> addRecords(mockConsumer), "commit-timeout-record-adder");
+        recordAdder.setDaemon(true);
+        recordAdder.start();
 
-        //
-        ConcurrentLinkedQueue<RecordContext<String, String>> records = new ConcurrentLinkedQueue<>();
-        parallelConsumer.poll(recordContexts -> {
-            recordContexts.forEach(recordContext -> {
-                log.warn("Processing: {}", recordContext);
-                records.add(recordContext);
+        try {
+            //
+            ConcurrentLinkedQueue<RecordContext<String, String>> records = new ConcurrentLinkedQueue<>();
+            parallelConsumer.poll(recordContexts -> {
+                recordContexts.forEach(recordContext -> {
+                    log.warn("Processing: {}", recordContext);
+                    records.add(recordContext);
+                });
             });
-        });
 
-        // temporarily set the wait timeout
-        Awaitility.setDefaultTimeout(Duration.ofSeconds(50));
-        //
-        Awaitility.await().untilAsserted(() -> {
-            assertThat(records).hasSize(10);
-        });
-
-        Awaitility.reset();
+            // Scope the timeout locally (don't mutate Awaitility's global default —
+            // that was leaking across tests if the assertion below throws before reset()).
+            Awaitility.await().atMost(Duration.ofSeconds(50)).untilAsserted(() -> {
+                assertThat(records).hasSize(10);
+            });
+        } finally {
+            recordAdder.interrupt();
+            parallelConsumer.close();
+        }
     }
 
     private void addRecords(MockConsumer<String, String> mockConsumer) {
-        for(int i = 0; i < 10; i++) {
-            mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, i, "key", "value"));
+        for (int i = 0; i < 10; i++) {
             try {
+                mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, i, "key", "value"));
                 Thread.sleep(1000L);
+            } catch (IllegalStateException e) {
+                // mockConsumer was closed - test has ended, stop quietly
+                return;
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                Thread.currentThread().interrupt();
+                return;
             }
         }
     }
