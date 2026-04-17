@@ -1,120 +1,331 @@
-# This workflow will build a Java project with Maven
-# For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-maven
+# PR builds:
+#   Unit, Integration, Performance - all in parallel with fail-fast
+#   (if unit tests fail at ~5 min, integration + performance are cancelled)
+#
+# Push builds (master):
+#   Full Kafka version matrix (3.1.0, 3.7.0, 3.9.1 + experimental 4.x)
 
-# Tests disabled due to flakiness with under resourced github test machines. Confluent Jira works fine. Will fix later.
 name: Build and Test
 
 on:
   push:
+    branches: [ master ]
   pull_request:
 
-# Cancel in-progress runs when a new commit is pushed to the same branch/PR
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Fast build on push - uses default Kafka version from pom.xml
-  build:
-    if: github.event_name == 'push'
-    name: "Build (default AK)"
-    runs-on: ubuntu-latest
 
+  # ── PR Builds ──────────────────────────────────────────────────────────
+
+  # Pre-warm the Maven dependency cache so the three test jobs can start
+  # with everything local. Without this, each job races to download the
+  # same deps from Maven Central, and if Central is slow, they all stall.
+  # TODO: If this extra serial step doesn't consistently help, remove it
+  # and rely on per-job caching + longer timeouts instead. Trade-off is
+  # wall-clock time (adds ~1-2 min serial) vs reliability vs flaky networks.
+  prepare-deps:
+    if: github.event_name == 'pull_request'
+    name: "Prepare Maven Cache"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # Explicit cache steps below instead of setup-java's built-in
+          # `cache: maven`. Built-in uses actions/cache under the hood,
+          # which does NOT save when the primary key was a hit. Once an
+          # early run populates a partial cache (e.g. Central timed out
+          # on one POM), every subsequent run restores the same gap and
+          # can never write the completed version back. Rotating save
+          # key below forces a save every run.
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+      - name: Download all dependencies
+        run: ./mvnw --batch-mode -Pci dependency:go-offline -Dlicense.skip -DincludeScope=test -U
+      - name: Save Maven cache (rotating key)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}-${{ github.run_id }}
 
-      #     - name: Setup JDK 1.9
-      #       uses: actions/setup-java@v1
-      #       with:
-      #         java-version: 1.9
+  # All test suites in parallel -fail-fast cancels the rest if any fails
+  test:
+    if: github.event_name == 'pull_request'
+    needs: prepare-deps
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - suite: unit
+            name: "Unit Tests"
+            cmd: "bin/ci-unit-test.sh"
+            timeout: 15
+          # TODO: tighten integration/performance to 30m once we have 5+
+          # consecutive successful runs consistently under 20m. Current 60m
+          # buffer is for Maven Central network variance we've observed.
+          - suite: integration
+            name: "Integration Tests"
+            cmd: "bin/ci-integration-test.sh"
+            timeout: 60
+          - suite: performance
+            name: "Performance Tests"
+            cmd: "bin/performance-test.sh"
+            timeout: 60
+    name: "${{ matrix.name }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # Explicit restore (no save) so we can fall back via
+          # restore-keys to the rotating-key cache prepare-deps saved.
+          # setup-java's built-in `cache: maven` has no restore-keys
+          # support, so it would miss prepare-deps' `...-{run_id}` key.
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+      - name: ${{ matrix.name }}
+        run: ${{ matrix.cmd }}
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          flags: ${{ matrix.suite }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
-      #    - name: Show java 1.9 home
-      # /opt/hostedtoolcache/jdk/9.0.7/x64
-      #      run: which java
+  # Duplicate code detection using both PMD CPD and jscpd engines.
+  # See https://github.com/astubbs/duplicate-code-cross-check
+  duplicate-detection:
+    if: github.event_name == 'pull_request'
+    name: "Duplicate Code Check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astubbs/duplicate-code-cross-check@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src'
+          cpd-max-duplication: '5'
+          jscpd-max-duplication: '4'
 
-      - name: Setup JDK 17
-        uses: actions/setup-java@v5
+  # File similarity detection - finds files that are semantically similar overall
+  file-similarity:
+    if: github.event_name == 'pull_request'
+    name: "File Similarity Check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astubbs/duplicate-code-detection-tool@feat/base-vs-pr-comparison
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src'
+          file_extensions: 'java'
+          ignore_below: 30
+          fail_above: 80
+          warn_above: 50
+          one_comment: true
+          compare_with_base: true
+          max_increase: 10
+
+  # SpotBugs static analysis -finds null derefs, concurrency issues, resource leaks
+  spotbugs:
+    if: github.event_name == 'pull_request'
+    name: "SpotBugs"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
+      - name: Compile and run SpotBugs
+        run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -Dlicense.skip -pl parallel-consumer-core -am
+      - name: Post SpotBugs annotations on PR
+        if: always()
+        uses: jwgmeligmeyling/spotbugs-github-action@v1.2
+        with:
+          path: '**/target/spotbugsXml.xml'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      #    - name: Show java version
-      #      run: java -version
-
-      #     - name: Show mvn version
-      #       run: mvn -version
-
-      #    - name: Build with Maven on Java 13
-      #      run: mvn -B package --file pom.xml
-
-
-      # done automatically now
-      #      - name: Cache Maven packages
-      #        uses: actions/cache@v2.1.7
-      #        with:
-      #          path: ~/.m2/repository
-      #          key: ${{ runner.os }}-m2
-      #          restore-keys: ${{ runner.os }}-m2
-
-      - name: Build and Test
-        run: bin/ci-build.sh
-
-#     - name: Archive test results
-#       if: ${{ always() }}
-#       uses: actions/upload-artifact@v2
-#       with:
-#         name: test-reports
-#         path: target/**-reports/*
-#         retention-days: 14
-#
-#     - name: Archive surefire test results
-#       if: ${{ always() }}
-#       uses: actions/upload-artifact@v2
-#       with:
-#         name: test-reports
-#         path: target/surefire-reports/*
-#         retention-days: 14
-
-  # Full Kafka version matrix on pull requests
-  build-matrix:
+  # Dependency vulnerability scanning -GitHub's own dependency review
+  dependency-scan:
     if: github.event_name == 'pull_request'
+    name: "Dependency Vulnerabilities"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: always
+
+  # Mutation testing (PIT) - verifies test assertions are meaningful.
+  # Non-blocking: posts a PR comment with mutation score but doesn't
+  # gate merge. TODO: move to self-hosted performance runner for speed.
+  mutation-testing:
+    if: github.event_name == 'pull_request'
+    name: "Mutation Testing (PIT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      # Restore PIT history for incremental analysis — only re-mutates
+      # code that changed since last run. PIT writes its history to /tmp/
+      # with a filename derived from groupId.artifactId.version, ignoring
+      # explicit -DhistoryInputLocation CLI flags when -DwithHistory is set.
+      - name: Restore PIT history cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/*_pitest_history.bin
+          key: pit-history-${{ github.base_ref }}-${{ hashFiles('**/src/main/**/*.java') }}
+          restore-keys: |
+            pit-history-${{ github.base_ref }}-
+            pit-history-
+      # -DjvmArgs=-Xmx1g      gives minion JVMs 1GB heap (default too small,
+      #                        causes MEMORY_ERROR / UNKNOWN_ERROR crashes).
+      # -DargLine=             strips Jacoco's javaagent from minions (PIT has
+      #                        its own coverage). Separate from jvmArgs.
+      # -DtimeoutConstant/Factor  generous per-mutation timeout for CI hardware
+      # -Dthreads=1            I/O-bound tests; parallelism adds contention not speed
+      # -DwithHistory          incremental: skips re-mutating unchanged code.
+      #                        PIT writes history to /tmp/{groupId}.{artifactId}...
+      #                        which we cache above via actions/cache.
+      # targetClasses: internal.* only — the core engine where mutations matter most.
+      #   Broadening to io.confluent.parallelconsumer.* hit GitHub's 6h job cap (#41).
+      - name: Run PIT mutation testing
+        run: |
+          ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
+            -Dlicense.skip \
+            -DtargetClasses="io.confluent.parallelconsumer.internal.*" \
+            -DtargetTests="io.confluent.parallelconsumer.*" \
+            -DjvmArgs=-Xmx1g \
+            -DargLine= \
+            -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
+            -Dthreads=1 \
+            -DwithHistory \
+            -pl parallel-consumer-core -am
+      - name: Upload PIT report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-report
+          path: '**/target/pit-reports/**'
+      - name: Post PIT summary to PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+            const files = execSync('find . -path "*/pit-reports/*/mutations.csv" -type f').toString().trim().split('\n').filter(f => f);
+            let body;
+            if (files.length === 0) {
+              body = `## :x: Mutation Testing (PIT) Report\n\n`;
+              body += `**PIT did not produce a report.** Most commonly this means a test failed in the baseline (PIT runs all tests unmodified first to establish green) and PIT aborted before mutating. See the "Run PIT mutation testing" step logs for the failing test, then either fix it or add it to \`-DexcludedTestClasses\` in the workflow.\n`;
+            } else {
+              let killed = 0, survived = 0, noCov = 0, total = 0;
+              for (const f of files) {
+                const lines = fs.readFileSync(f, 'utf8').split('\n').filter(l => l.trim());
+                for (const line of lines) {
+                  total++;
+                  if (line.includes('KILLED')) killed++;
+                  else if (line.includes('SURVIVED')) survived++;
+                  else if (line.includes('NO_COVERAGE')) noCov++;
+                }
+              }
+              const score = total > 0 ? ((killed / total) * 100).toFixed(1) : '0';
+              body = `## Mutation Testing (PIT) Report\n\n`;
+              body += `| Metric | Value |\n|--------|-------|\n`;
+              body += `| Mutations generated | ${total} |\n`;
+              body += `| Killed (detected) | ${killed} |\n`;
+              body += `| Survived (missed) | ${survived} |\n`;
+              body += `| No coverage | ${noCov} |\n`;
+              body += `| **Mutation score** | **${score}%** |\n\n`;
+              body += `Full HTML report available as artifact: \`pit-report\`\n`;
+            }
+            const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existing = comments.data.find(c => c.body.includes('Mutation Testing (PIT) Report'));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
+
+  # ── Push Builds (master) ───────────────────────────────────────────────
+
+  # Full Kafka version matrix as safety net
+  build:
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
-        # Why not? because we can.
-        # 2.0.1, 2.1.1, 2.2.2, 2.3.1, 2.4.1 don't work - needs zstd and some kafka client libs.
-        # Doesn't mean it couldn't be modified slightly to work...
-        #ak: [ 2.5.1, 2.6.1, 2.7.0, 2.8.1, 3.0.1, 3.1.0 ]
-        # 25 and 26 include a dep with a vulnerability which ossindex fails the build for
-        ak: [ 2.8.1, 3.1.0, 3.5.0, 3.7.0, 3.9.1 ]
-        #ak: [ 2.7.0 ]
-        #jdk: [ '-P jvm8-release -Djvm8.location=/opt/hostedtoolcache/Java_Zulu_jdk/8.0.332-9/x64', '' ]
-        # TG currently targets 11, so can't run the tests on 8 https://github.com/astubbs/truth-generator/issues/114
+        ak: [ 3.1.0, 3.7.0, 3.9.1 ]
         experimental: [ false ]
-        name: [ "Stable AK version" ]
+        name: [ "Stable" ]
         include:
-          # AK 2.4 not supported
-          #           - ak: "'[2.4.1,2.5)'" # currently failing
-          #             experimental: true
-          #             name: "Oldest AK breaking version 2.4.1+ (below 2.5.0) expected to fail"
-          - ak: "'[3.1.0,4)'"
+          - ak: "'[3.9.1,5)'"
             experimental: true
-            name: "Newest AK version 3.1.0+?"
-
+            name: "Newest AK (4.x?)"
     continue-on-error: ${{ matrix.experimental }}
     name: "AK: ${{ matrix.ak }} (${{ matrix.name }})"
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup JDK 17
-        uses: actions/setup-java@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
-
       - name: Build and Test
         run: bin/ci-build.sh ${{ matrix.ak }}
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          flags: ak-${{ matrix.ak }}
+          token: ${{ secrets.CODECOV_TOKEN }}

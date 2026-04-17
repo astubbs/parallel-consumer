@@ -22,4 +22,6 @@ fi
   -Pci \
   clean verify \
   $KAFKA_VERSION_ARG \
-  -Dlicense.skip
+  -Dlicense.skip \
+  -Dexcluded.groups=performance \
+  -Dsurefire.rerunFailingTestsCount=2

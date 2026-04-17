@@ -81,12 +81,23 @@
         <skipITs>${skipTests}</skipITs>
         <skipUTs>${skipTests}</skipUTs>
 
+        <!-- JUnit 5 test groups (failsafe). Override on the command line:
+             -Dgroups=performance         (run only performance tests)
+             -Dexcluded.groups=           (run everything including performance)
+             -Dexcluded.groups=transactions,performance  (skip multiple groups) -->
+        <included.groups></included.groups>
+        <excluded.groups>performance</excluded.groups>
+
         <!-- version numbers -->
         <!-- plugins -->
         <mycila.version>5.0.0</mycila.version>
         <lombok.version>1.18.28</lombok.version>
         <auto-service.version>1.1.1</auto-service.version>
         <surefire.version>3.2.5</surefire.version>
+        <spotbugs.version>4.8.6</spotbugs.version>
+        <spotbugs-maven-plugin.version>4.8.6.6</spotbugs-maven-plugin.version>
+        <pitest.version>1.17.4</pitest.version>
+        <pitest-junit5.version>1.2.2</pitest-junit5.version>
 
         <!-- core -->
         <slf4j.version>2.0.13</slf4j.version>
@@ -706,6 +717,11 @@
                     <skipTests>${skipTests}</skipTests>
                     <skipITs>${skipITs}</skipITs>
                     <parallel>methods</parallel>
+                    <!-- Performance tests are excluded by default and run on dedicated hardware via the
+                         performance.yml workflow on a self-hosted runner. Override with -Dgroups=performance
+                         to run only performance tests, or -Dexcluded.groups= to run everything. -->
+                    <groups>${included.groups}</groups>
+                    <excludedGroups>${excluded.groups}</excludedGroups>
                 </configuration>
             </plugin>
             <plugin>
@@ -725,7 +741,49 @@
                             <goal>report</goal>
                         </goals>
                     </execution>
+                    <execution>
+                        <id>prepare-agent-integration</id>
+                        <goals>
+                            <goal>prepare-agent-integration</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report-integration</id>
+                        <phase>post-integration-test</phase>
+                        <goals>
+                            <goal>report-integration</goal>
+                        </goals>
+                    </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>${spotbugs-maven-plugin.version}</version>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Medium</threshold>
+                    <xmlOutput>true</xmlOutput>
+                </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.github.spotbugs</groupId>
+                        <artifactId>spotbugs</artifactId>
+                        <version>${spotbugs.version}</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
+            <plugin>
+                <groupId>org.pitest</groupId>
+                <artifactId>pitest-maven</artifactId>
+                <version>${pitest.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-junit5-plugin</artifactId>
+                        <version>${pitest-junit5.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -950,18 +1008,21 @@
         </pluginManagement>
     </build>
 
+    <!--
+      Repository order matters: Maven queries sequentially and does not fall
+      through automatically on a hang. Put the fastest/most-covering repo first
+      so most artifacts resolve on the first hit; custom repos only consulted
+      for artifacts that aren't on Central. See .mvn/maven.config for the
+      per-connection timeouts that guard against any repo stalling.
+    -->
     <repositories>
-        <repository>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-        </repository>
         <repository>
             <id>central</id>
             <url>https://repo1.maven.org/maven2/</url>
         </repository>
         <repository>
-            <id>jitpack.io</id>
-            <url>https://jitpack.io</url>
+            <id>confluent</id>
+            <url>https://packages.confluent.io/maven/</url>
         </repository>
         <repository>
             <id>astubbs-truth-generator</id>
