@@ -197,15 +197,14 @@ jobs:
           comment-summary-in-pr: always
 
   # Mutation testing (PIT) - verifies test assertions are meaningful.
-  # Non-blocking: runs and posts a PR comment with the mutation score,
-  # but doesn't gate merge. PIT's mutation phase is too slow (~45-60 min)
-  # to be a required check. The PR comment is the notification mechanism.
+  # Non-blocking: posts a PR comment with mutation score but doesn't
+  # gate merge. TODO: move to self-hosted performance runner for speed.
   mutation-testing:
     if: github.event_name == 'pull_request'
     name: "Mutation Testing (PIT)"
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 1440
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -213,23 +212,36 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
-      # Root-caused the "~85s PIT-baseline cliff" we used to hit: two Mock* test
-      # classes (EarlyClose, CommitTimeoutException) leaked non-daemon threads
-      # that woke from Thread.sleep() during the next test and threw
-      # IllegalStateException on a closed MockConsumer. PIT attributed the
-      # uncaught exception to whichever test was running next, which is why
-      # exclusions played whack-a-mole. Fixed at source (5d9f022b), no exclusions
-      # needed. Base-class @AfterEach Awaitility.reset() stays as a general
-      # leakage guard.
-      # -DargLine=""  strips Jacoco's javaagent from PIT's minion JVMs
-      #               (PIT computes its own coverage; Jacoco doubles overhead).
-      # -DtimeoutConstant=30000 -DtimeoutFactor=3.0
-      #               PIT caps each mutation run at baseline*factor+constant.
-      #               Defaults (1.25 / 4s) are too tight for CI's slower
-      #               hardware — 23/76 mutations were timing out. 3x + 30s
-      #               gives enough headroom.
+      # Restore PIT history for incremental analysis — only re-mutates
+      # code that changed since last run.
+      - name: Restore PIT history cache
+        uses: actions/cache@v4
+        with:
+          path: parallel-consumer-core/target/pit-history
+          key: pit-history-${{ github.base_ref }}-${{ hashFiles('**/src/main/**/*.java') }}
+          restore-keys: |
+            pit-history-${{ github.base_ref }}-
+            pit-history-
+      # -DargLine=""           strips Jacoco from PIT minions (PIT has its own coverage)
+      # -DtimeoutConstant/Factor  generous per-mutation timeout for CI hardware
+      # -Dthreads=1            I/O-bound tests; parallelism adds contention not speed
+      # -DwithHistory          incremental: skips re-mutating unchanged code
+      # targetClasses: internal.* only — the core engine where mutations matter most.
+      #   Broadening to io.confluent.parallelconsumer.* hit GitHub's 6h job cap.
       - name: Run PIT mutation testing
-        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -DargLine="" -DtimeoutConstant=30000 -DtimeoutFactor=3.0 -Dthreads=4 -pl parallel-consumer-core -am
+        run: |
+          mkdir -p parallel-consumer-core/target/pit-history
+          ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
+            -Dlicense.skip \
+            -DtargetClasses="io.confluent.parallelconsumer.internal.*" \
+            -DtargetTests="io.confluent.parallelconsumer.*" \
+            -DargLine="" \
+            -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
+            -Dthreads=1 \
+            -DwithHistory \
+            -DhistoryInputLocation=target/pit-history/history.bin \
+            -DhistoryOutputLocation=target/pit-history/history.bin \
+            -pl parallel-consumer-core -am
       - name: Upload PIT report
         if: always()
         uses: actions/upload-artifact@v4
