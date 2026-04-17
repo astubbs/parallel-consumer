@@ -224,9 +224,10 @@ jobs:
           restore-keys: |
             pit-history-${{ github.base_ref }}-
             pit-history-
-      # -DargLine="-Xmx1g"    gives minion JVMs 1GB heap (default is too small,
-      #                        causes MEMORY_ERROR) and strips Jacoco (PIT has
-      #                        its own coverage).
+      # -DjvmArgs=-Xmx1g      gives minion JVMs 1GB heap (default too small,
+      #                        causes MEMORY_ERROR / UNKNOWN_ERROR crashes).
+      # -DargLine=             strips Jacoco's javaagent from minions (PIT has
+      #                        its own coverage). Separate from jvmArgs.
       # -DtimeoutConstant/Factor  generous per-mutation timeout for CI hardware
       # -Dthreads=1            I/O-bound tests; parallelism adds contention not speed
       # -DwithHistory          incremental: skips re-mutating unchanged code.
@@ -240,7 +241,8 @@ jobs:
             -Dlicense.skip \
             -DtargetClasses="io.confluent.parallelconsumer.internal.*" \
             -DtargetTests="io.confluent.parallelconsumer.*" \
-            -DargLine="-Xmx1g" \
+            -DjvmArgs=-Xmx1g \
+            -DargLine= \
             -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
             -Dthreads=1 \
             -DwithHistory \
