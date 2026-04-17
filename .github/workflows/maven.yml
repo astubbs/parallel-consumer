@@ -209,20 +209,16 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'maven'
-      # Four tests previously failed PIT's green baseline. Two were fixed at source
-      # (broken @AfterEach override in ParallelEoSSStreamProcessorRebalancedTest;
-      # standalone ProducerManagerTest missing cleanup; tight bare Awaitility
-      # timeouts — see recent test commits). Two remain excluded because they hit
-      # PIT's coverage-phase per-test timeout (~85s relative to minion start) that
-      # no documented config knob raises:
-      #   - MockConsumerTestWithSaslAuthenticationException: wall-clock SASL retry
-      #     loop that doesn't complete under PIT's instrumentation in the budget.
-      #   - PCMetricsTest: processes 1500 records through PC's pipeline, which is
-      #     genuinely slow under Jacoco + PIT instrumentation.
-      # Both tracked in https://github.com/astubbs/parallel-consumer/issues/39.
-      # Base-class @AfterEach Awaitility.reset() stays as a general leakage guard.
+      # Root-caused the "~85s PIT-baseline cliff" we used to hit: two Mock* test
+      # classes (EarlyClose, CommitTimeoutException) leaked non-daemon threads
+      # that woke from Thread.sleep() during the next test and threw
+      # IllegalStateException on a closed MockConsumer. PIT attributed the
+      # uncaught exception to whichever test was running next, which is why
+      # exclusions played whack-a-mole. Fixed at source (5d9f022b), no exclusions
+      # needed. Base-class @AfterEach Awaitility.reset() stays as a general
+      # leakage guard.
       - name: Run PIT mutation testing
-        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -DexcludedTestClasses="io.confluent.parallelconsumer.MockConsumerTestWithSaslAuthenticationException,io.confluent.parallelconsumer.PCMetricsTest" -Dthreads=4 -pl parallel-consumer-core -am
+        run: ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage -Dlicense.skip -DtargetClasses="io.confluent.parallelconsumer.*" -DtargetTests="io.confluent.parallelconsumer.*" -Dthreads=4 -pl parallel-consumer-core -am
       - name: Upload PIT report
         if: always()
         uses: actions/upload-artifact@v4
