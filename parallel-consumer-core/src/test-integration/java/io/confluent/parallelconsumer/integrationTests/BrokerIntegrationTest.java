@@ -60,7 +60,7 @@ public abstract class BrokerIntegrationTest<K, V> {
      * the broker under test matches the client. The CI matrix overrides {@code kafka.version}
      * via {@code -Dkafka.version=X.Y.Z}, so we read it at runtime from the client jar.
      * <p>
-     * Mapping: CP major = AK major + 4 (e.g., AK 2.8 → CP 6.2, AK 3.9 → CP 7.9).
+     * Mapping: CP major = AK major + 4 (e.g., AK 3.1 → CP 7.1, AK 3.9 → CP 7.9).
      */
     static String deriveCpKafkaImage() {
         String akVersion = org.apache.kafka.common.utils.AppInfoParser.getVersion();

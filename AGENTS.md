@@ -20,11 +20,20 @@ This is a community-maintained fork of `confluentinc/parallel-consumer` (the ups
 # Quick local build (compile + unit tests)
 bin/build.sh
 
-# Full CI build with all tests (unit + integration)
+# Unit tests only (no Docker needed)
+bin/ci-unit-test.sh
+
+# Integration tests only (requires Docker for TestContainers)
+bin/ci-integration-test.sh
+
+# Full CI build with all tests against a Kafka version matrix (used by push-to-master CI)
 bin/ci-build.sh
 
 # Full CI build against a specific Kafka version
 bin/ci-build.sh 3.9.1
+
+# Performance tests only (requires substantial hardware)
+bin/performance-test.sh
 ```
 
 ## Module Structure
@@ -59,11 +68,17 @@ bin/ci-build.sh 3.9.1
 - **Lombok**: Used extensively (builders, getters, logging). IntelliJ Lombok plugin required.
 - **EditorConfig**: Enforced via `.editorconfig` - 4-space indent for Java, 120 char line length.
 - **License headers**: Managed by `license-maven-plugin` (Mycila). Use `-Dlicense.skip` locally to skip checks.
+- **Copyright rules for this fork**:
+  - Do not change copyright headers on existing files unless the file has substantive code changes in the same commit
+  - Do not bump copyright years as an incidental or standalone change
+  - The `NOTICE` file at repo root contains the legal attribution structure for the fork
+  - New files written entirely for the fork should not claim Confluent copyright
+  - Always pass `-Dlicense.skip` to Maven to prevent the license plugin from auto-bumping years
 - **Google Truth**: Used for test assertions alongside JUnit 5 and Mockito.
 
 ## CI
 
-- **`.github/workflows/maven.yml`** — Build and test on every push/PR. Push uses default Kafka version, PRs run the full version matrix. Includes concurrency cancellation.
+- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run unit, integration, and performance tests in parallel (via `bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`). Push to master runs the full Kafka version matrix (3.1.0, 3.7.0, 3.9.1 + experimental 4.x) via `bin/ci-build.sh`. Includes concurrency cancellation, SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
 
