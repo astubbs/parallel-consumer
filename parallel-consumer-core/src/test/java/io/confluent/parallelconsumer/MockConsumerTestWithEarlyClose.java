@@ -85,39 +85,49 @@ class MockConsumerTestWithEarlyClose {
         parallelConsumer.onPartitionsAssigned(of(tp));
         mockConsumer.updateBeginningOffsets(startOffsets);
 
-        //
-        new Thread() {
-            public void run() {
-                addRecords(mockConsumer);
-            }
-        }.start();
+        // Daemon thread: must NOT survive past this test method, or when it wakes
+        // from sleep it'll addRecord() on a closed mockConsumer and throw an
+        // uncaught exception that PIT attributes to whatever test is running next
+        // in the same minion JVM. We also interrupt it explicitly in the finally
+        // block to stop the loop promptly.
+        Thread recordAdder = new Thread(() -> addRecords(mockConsumer), "early-close-record-adder");
+        recordAdder.setDaemon(true);
+        recordAdder.start();
 
-        //
-        ConcurrentLinkedQueue<RecordContext<String, String>> records = new ConcurrentLinkedQueue<>();
-        parallelConsumer.poll(recordContexts -> {
-            recordContexts.forEach(recordContext -> {
-                log.warn("Processing: {}", recordContext);
-                records.add(recordContext);
-            });
-        });
         try {
-            Thread.sleep(5000L);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+            //
+            ConcurrentLinkedQueue<RecordContext<String, String>> records = new ConcurrentLinkedQueue<>();
+            parallelConsumer.poll(recordContexts -> {
+                recordContexts.forEach(recordContext -> {
+                    log.warn("Processing: {}", recordContext);
+                    records.add(recordContext);
+                });
+            });
+            try {
+                Thread.sleep(5000L);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
 
-        log.info("Trying to close...");
-        parallelConsumer.close(); // request close after 5 seconds
-        log.info("Close successful!");
+            log.info("Trying to close...");
+            parallelConsumer.close(); // request close after 5 seconds
+            log.info("Close successful!");
+        } finally {
+            recordAdder.interrupt();
+        }
     }
 
     private void addRecords(MockConsumer<String, String> mockConsumer) {
-        for(int i = 0; i < 100000; i++) {
-            mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, i, "key", "value"));
+        for (int i = 0; i < 100000; i++) {
             try {
+                mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, i, "key", "value"));
                 Thread.sleep(1000L);
+            } catch (IllegalStateException e) {
+                // mockConsumer was closed - test has ended, stop quietly
+                return;
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                Thread.currentThread().interrupt();
+                return;
             }
         }
     }
