@@ -1,0 +1,105 @@
+# Publishes to Maven Central on every push to master.
+#
+# The pom.xml version is the source of truth:
+#   - Versions ending in -SNAPSHOT  -> publish snapshot
+#   - Versions without -SNAPSHOT    -> publish release + create git tag + GitHub release
+#
+# To cut a release: open a PR that strips -SNAPSHOT, merge it. CI will publish.
+# Then open another PR bumping to the next -SNAPSHOT.
+#
+# Required GitHub secrets:
+#   MAVEN_CENTRAL_USERNAME   - Sonatype Central Portal token username
+#   MAVEN_CENTRAL_PASSWORD   - Sonatype Central Portal token password
+#   MAVEN_GPG_PRIVATE_KEY    - Armored GPG private key (gpg --export-secret-keys --armor KEYID)
+#   MAVEN_GPG_PASSPHRASE     - Passphrase for the GPG key
+
+name: Publish to Maven Central
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:  # allow manual re-runs
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false  # never cancel a publish mid-flight
+
+permissions:
+  contents: write  # needed to create tags and releases
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # need full history for tag creation
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+          # Configure Maven settings.xml with Sonatype credentials and GPG
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Read project version
+        id: version
+        run: |
+          VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-SNAPSHOT ]]; then
+            echo "is_snapshot=true" >> "$GITHUB_OUTPUT"
+            echo "Detected SNAPSHOT version: $VERSION"
+          else
+            echo "is_snapshot=false" >> "$GITHUB_OUTPUT"
+            echo "Detected RELEASE version: $VERSION"
+          fi
+
+      - name: Check tag does not exist (releases only)
+        if: steps.version.outputs.is_snapshot == 'false'
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists - aborting to prevent re-release"
+            exit 1
+          fi
+
+      - name: Deploy to Maven Central
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          ./mvnw --batch-mode \
+            -Pmaven-central \
+            -Pci \
+            clean deploy \
+            -DskipTests \
+            -Dlicense.skip
+
+      - name: Create git tag (releases only)
+        if: steps.version.outputs.is_snapshot == 'false'
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub release (releases only)
+        if: steps.version.outputs.is_snapshot == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes
