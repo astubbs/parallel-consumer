@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniSets;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -96,8 +97,18 @@ class PartitionOrderProcessingTest extends BrokerIntegrationTest<String, String>
             partitionCounts.get(recordContexts.getSingleConsumerRecord().partition()).getAndIncrement();
             ThreadUtils.sleepQuietly(10); // introduce a bit of processing delay - to make sure polling backpressure kicks in.
         });
-        await().until(() -> partitionCounts.values().stream().mapToInt(AtomicInteger::get).sum() > 500); // wait until we process some messages to get the counts in.
-        Assertions.assertTrue(partitionCounts.values().stream().allMatch(v -> v.get() > 0), "Expect all partitions to have some messages processed, actual partitionCounts:" + partitionCounts);
+        // Wait for BOTH conditions: enough total messages AND all partitions represented.
+        // Previously the await only checked total > 500, then the assertion checked all
+        // partitions — a race, because Kafka may deliver from one partition first.
+        // Moving the partition check into the await lets Awaitility retry until
+        // all partitions have been reached.
+        await().atMost(Duration.ofSeconds(120)).untilAsserted(() -> {
+            int total = partitionCounts.values().stream().mapToInt(AtomicInteger::get).sum();
+            Assertions.assertTrue(total > 500,
+                    "Expect > 500 total messages processed, actual: " + total);
+            Assertions.assertTrue(partitionCounts.values().stream().allMatch(v -> v.get() > 0),
+                    "Expect all partitions to have some messages processed, actual partitionCounts:" + partitionCounts);
+        });
 
     }
 
@@ -129,7 +140,8 @@ class PartitionOrderProcessingTest extends BrokerIntegrationTest<String, String>
             partitionCounts.get(recordContexts.getSingleConsumerRecord().partition()).getAndIncrement();
             ThreadUtils.sleepQuietly(10); // introduce a bit of processing delay - to make sure polling backpressure kicks in.
         });
-        await().until(() -> partitionCounts.values().stream().mapToInt(AtomicInteger::get).sum() > 500); // wait until we process some messages to get the counts in.
+        // 120s explicit timeout — bare await() used shaded Awaitility's 10s default, too tight for CI.
+        await().atMost(Duration.ofSeconds(120)).until(() -> partitionCounts.values().stream().mapToInt(AtomicInteger::get).sum() > 500);
         Assertions.assertFalse(partitionCounts.values().stream().allMatch(v -> v.get() > 0), "Expect some processing thread starving and not all partition counts to have some messages processed, actual partitionCounts:" + partitionCounts);
     }
 

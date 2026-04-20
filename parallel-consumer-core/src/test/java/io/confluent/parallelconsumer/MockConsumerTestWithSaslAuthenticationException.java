@@ -12,6 +12,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.SaslAuthenticationException;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
@@ -27,14 +28,16 @@ import static com.google.common.truth.Truth.assertThat;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * Test that PC can survive for a temporary SaslAuthenticationException.
+ * Test that PC can survive a temporary SaslAuthenticationException.
  *
- * In this test, MockConsumer starts to throw SaslAuthenticationException from the beginning until 20 seconds later.
+ * In this test, MockConsumer throws SaslAuthenticationException from the beginning for 8 seconds, then
+ * goes back to normal.
  *
- * After that MockConsumer will back to normal.
- *
- * The saslAuthenticationRetryTimeout is set to 25 seconds. It is expected to resume normal after 20 seconds and will
- * be able to consume all produced messages.
+ * The saslAuthenticationRetryTimeout is set to 30 seconds (generous margin over the 8s outage window) so
+ * PC has room to recover. The whole test fits comfortably inside PIT's per-test baseline coverage budget
+ * (which caps around ~80s). The earlier 20s outage + 25s retry version intermittently failed PIT's baseline
+ * because the total runtime scraped that cap. Test still verifies the same property: PC recovers if the
+ * retry budget exceeds the outage window.
  * @author Shilin Wu
  */
 @Slf4j
@@ -43,12 +46,25 @@ class MockConsumerTestWithSaslAuthenticationException {
 
     private final String topic = MockConsumerTestWithSaslAuthenticationException.class.getSimpleName();
 
+    // Field so @AfterEach can close it. This class doesn't extend
+    // AbstractParallelEoSStreamProcessorTestBase, so no base-class cleanup runs.
+    private ParallelEoSStreamProcessor<String, String> parallelConsumer;
+
+    @AfterEach
+    void close() {
+        if (parallelConsumer != null && !parallelConsumer.isClosedOrFailed()) {
+            parallelConsumer.close();
+        }
+    }
+
     /**
      * Test that the mock consumer works as expected
      */
     @Test
     void mockConsumer() {
-        final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 20000L);
+        // 8s mock-failure window (was 20s) — keeps total test runtime well within PIT's baseline
+        // per-test budget while still triggering PC's SASL retry path meaningfully.
+        final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 8000L);
         var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized ConsumerRecords<String, String> poll(Duration timeout) {
@@ -74,9 +90,11 @@ class MockConsumerTestWithSaslAuthenticationException {
         //
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(mockConsumer)
-                .saslAuthenticationRetryTimeout(Duration.ofSeconds(25L)) // set retry to 25 seconds.
+                // 30s retry budget over an 8s mock-failure window — generous margin (22s) for
+                // PC's recovery poll even under PIT's slower JVM.
+                .saslAuthenticationRetryTimeout(Duration.ofSeconds(30L))
                 .build();
-        var parallelConsumer = new ParallelEoSStreamProcessor<String, String>(options);
+        parallelConsumer = new ParallelEoSStreamProcessor<>(options);
         parallelConsumer.subscribe(of(topic));
 
         // MockConsumer is not a correct implementation of the Consumer contract - must manually rebalance++ - or use LongPollingMockConsumer
@@ -96,14 +114,13 @@ class MockConsumerTestWithSaslAuthenticationException {
             });
         });
 
-        // temporarily set the wait timeout
-        Awaitility.setDefaultTimeout(Duration.ofSeconds(50));
-        //
-        Awaitility.await().untilAsserted(() -> {
+        // Scope the timeout locally (don't mutate Awaitility's global default — that was leaking
+        // across tests under PIT's different ordering, since this class doesn't have base-class
+        // Awaitility.reset() cleanup).
+        // 45s: 8s mock-failure window + retry + PIT's JVM slowdown, with headroom.
+        Awaitility.await().atMost(Duration.ofSeconds(45)).untilAsserted(() -> {
             assertThat(records).hasSize(3);
         });
-
-        Awaitility.reset();
     }
 
     private void addRecords(MockConsumer<String, String> mockConsumer) {
