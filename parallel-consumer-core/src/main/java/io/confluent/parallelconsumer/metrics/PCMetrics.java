@@ -246,7 +246,7 @@ public class PCMetrics {
         this.registeredMeters.remove(meterId);
     }
 
-    public void removeMetersByPrefixAndCommonTags(String meterNamePrefix) {
+    public synchronized void removeMetersByPrefixAndCommonTags(String meterNamePrefix) {
         if (this.isClosed.get()) {
             //Already closed metrics subsystem - ignore
             log.debug("Trying to remove meters when metrics subsystem is already closed.");

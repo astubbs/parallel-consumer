@@ -114,6 +114,9 @@ class MockConsumerTestWithEarlyClose {
             log.info("Close successful!");
         } finally {
             recordAdder.interrupt();
+            if (!parallelConsumer.isClosedOrFailed()) {
+                parallelConsumer.close();
+            }
         }
     }
 
