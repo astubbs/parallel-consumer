@@ -91,7 +91,9 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
         });
 
         // metrics show processing is complete
-        await().untilAsserted(() -> {
+        // 120s budget (was default 10s) - matches the atMost budgets elsewhere in this method,
+        // and gives headroom under PIT's instrumented JVM processing 1500 records.
+        await().atMost(Duration.ofSeconds(120)).untilAsserted(() -> {
             log.info("counterP0: {}, counterP1: {}", counterP0.get(), counterP1.get());
             log.info(registry.getMetersAsString());
             assertThat(registeredGaugeValueFor(PCMetricsDef.NUM_PAUSED_PARTITIONS)).isEqualTo(2);
@@ -177,7 +179,7 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
         numberToBlockAt.set(5000);
         latchPartition0.countDown();
         latchPartition1.countDown();
-        await().untilAsserted(() -> {
+        await().atMost(Duration.ofSeconds(120)).untilAsserted(() -> {
             assertThat(counterP0.get()).isEqualTo(quantityP0);
         });
 
