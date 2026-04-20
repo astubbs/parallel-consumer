@@ -21,7 +21,7 @@ fi
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
-  $KAFKA_VERSION_ARG \
+  ${KAFKA_VERSION_ARG:+"$KAFKA_VERSION_ARG"} \
   -Dlicense.skip \
   -Dexcluded.groups=performance \
   -Dsurefire.rerunFailingTestsCount=2
