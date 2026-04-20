@@ -1,0 +1,82 @@
+# Performance test suite, run on a self-hosted Windows runner with Docker Desktop.
+#
+# These tests are tagged @Tag("performance") and excluded from the regular CI
+# build because they need substantial hardware (CPU, memory, disk). They run
+# on dedicated machines where the user has labelled their runner with the
+# "performance" custom label.
+#
+# Triggers:
+#   - workflow_dispatch (manual)   - primary trigger
+#   - schedule (weekly)            - automated regression check
+#   - NOT on PRs from forks        - self-hosted runners + untrusted code = bad
+#
+# See docs/SELF_HOSTED_RUNNER.md for one-time runner setup instructions.
+
+name: Performance Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      kafka_version:
+        description: 'Kafka version to test against (default: project default)'
+        required: false
+        type: string
+        default: ''
+  schedule:
+    # Weekly on Sunday at 02:00 UTC
+    - cron: '0 2 * * 0'
+
+concurrency:
+  # Only run one performance test at a time per branch - they're slow and resource-heavy
+  group: performance-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  performance:
+    name: "Performance suite (self-hosted)"
+    # Targets a self-hosted runner labelled "performance" running Windows.
+    # The "self-hosted" label is automatic; "windows" and "performance" are
+    # added when the runner is registered. See docs/SELF_HOSTED_RUNNER.md.
+    runs-on: [self-hosted, windows, performance]
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # Don't cache here - self-hosted runners persist .m2 across runs already
+          cache: ''
+
+      - name: Show environment
+        shell: cmd
+        run: |
+          java -version
+          docker --version
+          docker info
+
+      - name: Run performance tests
+        shell: cmd
+        env:
+          KAFKA_VERSION: ${{ inputs.kafka_version }}
+        run: |
+          if defined KAFKA_VERSION (
+            call bin\performance-test.cmd -Dkafka.version=%KAFKA_VERSION%
+          ) else (
+            call bin\performance-test.cmd
+          )
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-reports-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 30
