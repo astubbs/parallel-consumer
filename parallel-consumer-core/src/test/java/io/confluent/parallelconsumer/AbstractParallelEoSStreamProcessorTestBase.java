@@ -21,6 +21,7 @@ import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Serdes;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import pl.tlinkowski.unij.api.UniLists;
@@ -144,6 +145,12 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
 
     @AfterEach
     public void close() {
+        // Reset Awaitility's global thread-local timeout state so per-test overrides
+        // (e.g. setDefaultTimeout) don't leak into other tests under non-deterministic
+        // test order (PIT baseline/mutations surface this; surefire's default ordering
+        // happens to mask it). Runs even if the test body threw.
+        Awaitility.reset();
+
         // don't try to close if error'd (at least one test purposefully creates an error to tests error handling) - we
         // don't want to bubble up an error here that we expect from here.
         if (!parentParallelConsumer.isClosedOrFailed()) {
