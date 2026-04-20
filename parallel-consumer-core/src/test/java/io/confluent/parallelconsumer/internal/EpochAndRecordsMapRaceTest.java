@@ -119,6 +119,38 @@ class EpochAndRecordsMapRaceTest {
     }
 
     /**
+     * Multi-partition poll where only some partitions have an epoch assigned.
+     * The assigned partition's records should be accepted while the unassigned
+     * partition's records are skipped in the same map construction call.
+     */
+    @Test
+    void mixedPartitionPollSkipsOnlyUnassignedPartitions() {
+        TopicPartition tp1 = new TopicPartition(topic, 1);
+
+        // Assign only tp (partition 0), NOT tp1 (partition 1)
+        wm.onPartitionsAssigned(UniLists.of(tp));
+        assertThat(pm.getEpochOfPartition(tp)).isEqualTo(0L);
+        assertThat(pm.getEpochOfPartition(tp1)).isNull();
+
+        // poll returns records for both partitions
+        ConsumerRecords<String, String> poll = new ConsumerRecords<>(UniMaps.of(
+                tp, UniLists.of(
+                        new ConsumerRecord<>(topic, 0, 0, "key-0", "value")
+                ),
+                tp1, UniLists.of(
+                        new ConsumerRecord<>(topic, 1, 0, "key-1", "value"),
+                        new ConsumerRecord<>(topic, 1, 1, "key-1b", "value")
+                )
+        ));
+        EpochAndRecordsMap<String, String> recordsMap = new EpochAndRecordsMap<>(poll, pm);
+
+        // Only tp (assigned) should be in the map; tp1 (unassigned) should be skipped
+        assertThat(recordsMap.partitions()).containsExactly(tp);
+        assertThat(recordsMap.count()).isEqualTo(1);
+        assertThat(recordsMap.records(tp).getEpochOfPartitionAtPoll()).isEqualTo(0L);
+    }
+
+    /**
      * When epoch is already present (normal case), records are processed normally.
      */
     @Test

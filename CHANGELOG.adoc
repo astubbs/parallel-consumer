@@ -14,6 +14,23 @@ ifndef::github_name[]
 toc::[]
 endif::[]
 
+== 0.6.0.0
+
+=== Breaking
+
+* Maven coordinates rebranded from `io.confluent.parallelconsumer` to `io.github.astubbs.parallelconsumer`. Update your dependency declarations.
+
+=== Fixes
+
+* fix: null epoch race condition in EpochAndRecordsMap - poll() returning records before onPartitionsAssigned() no longer causes NPE; records are safely skipped and re-delivered
+* fix: test pollution from leaked threads and Awaitility global state across test classes
+
+=== Improvements
+
+* ci: modernized GitHub Actions CI with parallel test suites (unit, integration, performance), SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning
+* ci: added publish workflow for automated Maven Central deployment
+* docs: updated README and added upstream PR analysis report
+
 == 0.5.3.4
 
 === Fixes
