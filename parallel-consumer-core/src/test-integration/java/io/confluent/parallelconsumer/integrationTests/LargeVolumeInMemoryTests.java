@@ -58,8 +58,7 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
                 .commitMode(commitMode)
                 .build());
 
-//        int quantityOfMessagesToProduce = 1_000_000;
-        int quantityOfMessagesToProduce = 500;
+        int quantityOfMessagesToProduce = 1_000_000;
 
         List<ConsumerRecord<String, String>> records = ktu.generateRecords(quantityOfMessagesToProduce);
         ktu.send(consumerSpy, records);
