@@ -14,6 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     name: Check Dependencies
     steps:
-    - uses: astubbs/dependencies-action@a09974c # feat/auto-unblock-children-on-merge
+    - uses: astubbs/dependencies-action@a09974c14e84fb3e4c0df10c04f17bdc6ccc8878 # feat/auto-unblock-children-on-merge
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
