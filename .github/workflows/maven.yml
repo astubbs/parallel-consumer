@@ -1,9 +1,16 @@
 # PR builds:
-#   Unit, Integration, Performance - all in parallel with fail-fast
-#   (if unit tests fail at ~5 min, integration + performance are cancelled)
+#   Default Kafka version (3.9.1) split into unit, integration, and performance
+#   suites in parallel for fast feedback, plus an experimental Kafka 4.x
+#   compatibility check.
 #
 # Push builds (master):
-#   Full Kafka version matrix (3.1.0, 3.7.0, 3.9.1 + experimental 4.x)
+#   Single full build on default Kafka version (3.9.1) to gate SNAPSHOT publishing.
+#
+# Caching strategy:
+#   All jobs use explicit cache/restore with restore-keys fallback to the
+#   prepare-deps rotating cache. Do NOT use setup-java's built-in `cache: maven`
+#   anywhere - its immutable keys can freeze an incomplete cache permanently.
+#   See docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md
 
 name: Build and Test
 
@@ -23,14 +30,11 @@ concurrency:
 
 jobs:
 
-  # ── PR Builds ──────────────────────────────────────────────────────────
+  # ── Shared ────────────────────────────────────────────────────────────
 
-  # Pre-warm the Maven dependency cache so the three test jobs can start
-  # with everything local. Without this, each job races to download the
-  # same deps from Maven Central, and if Central is slow, they all stall.
-  # TODO: If this extra serial step doesn't consistently help, remove it
-  # and rely on per-job caching + longer timeouts instead. Trade-off is
-  # wall-clock time (adds ~1-2 min serial) vs reliability vs flaky networks.
+  # Pre-warm the Maven dependency cache so all downstream jobs start with
+  # everything local. Without this, jobs on Azure West US regions hit
+  # Maven Central CDN timeouts (see docs/solutions/build-errors/).
   prepare-deps:
     name: "Prepare Maven Cache"
     runs-on: ubuntu-latest
@@ -41,13 +45,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          # Explicit cache steps below instead of setup-java's built-in
-          # `cache: maven`. Built-in uses actions/cache under the hood,
-          # which does NOT save when the primary key was a hit. Once an
-          # early run populates a partial cache (e.g. Central timed out
-          # on one POM), every subsequent run restores the same gap and
-          # can never write the completed version back. Rotating save
-          # key below forces a save every run.
+          # No `cache: maven` - see caching strategy note at top of file
       - name: Restore Maven cache
         uses: actions/cache/restore@v4
         with:
@@ -64,21 +62,21 @@ jobs:
           path: ~/.m2/repository
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}-${{ github.run_id }}
 
-  # All test suites in parallel -fail-fast cancels the rest if any fails
+  # ── PR Builds ──────────────────────────────────────────────────────────
+
+  # Default Kafka version: split suites for fast, parallel feedback.
+  # Uses the same scripts as local development (ci-unit-test.sh, etc.)
   test:
     if: github.event_name == 'pull_request'
     needs: prepare-deps
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - suite: unit
             name: "Unit Tests"
             cmd: "bin/ci-unit-test.sh"
             timeout: 15
-          # TODO: tighten integration/performance to 30m once we have 5+
-          # consecutive successful runs consistently under 20m. Current 60m
-          # buffer is for Maven Central network variance we've observed.
           - suite: integration
             name: "Integration Tests"
             cmd: "bin/ci-integration-test.sh"
@@ -96,10 +94,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          # Explicit restore (no save) so we can fall back via
-          # restore-keys to the rotating-key cache prepare-deps saved.
-          # setup-java's built-in `cache: maven` has no restore-keys
-          # support, so it would miss prepare-deps' `...-{run_id}` key.
       - name: Restore Maven cache
         uses: actions/cache/restore@v4
         with:
@@ -115,6 +109,37 @@ jobs:
         with:
           files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
           flags: ${{ matrix.suite }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Experimental Kafka 4.x compatibility check. Non-blocking.
+  test-kafka-compat:
+    if: github.event_name == 'pull_request'
+    needs: prepare-deps
+    name: "Kafka Compat (experimental 4.x)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+      - name: Build and Test (Kafka 4.x)
+        run: bin/ci-build.sh '[3.9.1,5)'
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          flags: ak-experimental
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # Duplicate code detection using both PMD CPD and jscpd engines.
@@ -168,13 +193,20 @@ jobs:
     name: "SpotBugs"
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: prepare-deps
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'maven'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
       - name: Restore SpotBugs baseline
         id: spotbugs-baseline
         uses: actions/cache/restore@v4
@@ -236,7 +268,7 @@ jobs:
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
             }
 
-  # Dependency vulnerability scanning -GitHub's own dependency review
+  # Dependency vulnerability scanning - GitHub's own dependency review
   dependency-scan:
     if: github.event_name == 'pull_request'
     name: "Dependency Vulnerabilities"
@@ -258,13 +290,20 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 300
+    needs: prepare-deps
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'maven'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
       # Restore PIT history for incremental analysis — only re-mutates
       # code that changed since last run. PIT writes its history to /tmp/
       # with a filename derived from groupId.artifactId.version, ignoring
@@ -356,13 +395,20 @@ jobs:
     name: "SpotBugs Baseline"
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: prepare-deps
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'maven'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
       - name: Compile and generate SpotBugs XML
         run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -Dlicense.skip -pl parallel-consumer-core -am
       - name: Convert SpotBugs results to exclude filter
@@ -393,37 +439,33 @@ jobs:
           path: .spotbugs-baseline.xml
           key: spotbugs-baseline-${{ github.ref_name }}-${{ hashFiles('**/src/main/**/*.java') }}
 
-  # Full Kafka version matrix as safety net
+  # Single full build on default Kafka version to gate SNAPSHOT publishing.
+  # Uses the same ci-build.sh script that PRs use for Kafka compat testing.
   build:
     if: github.event_name == 'push'
     needs: prepare-deps
-    strategy:
-      fail-fast: false
-      matrix:
-        ak: [ 3.1.0, 3.7.0, 3.9.1 ]
-        experimental: [ false ]
-        name: [ "Stable" ]
-        include:
-          - ak: "'[3.9.1,5)'"
-            experimental: true
-            name: "Newest AK (4.x?)"
-    continue-on-error: ${{ matrix.experimental }}
-    name: "AK: ${{ matrix.ak }} (${{ matrix.name }})"
+    name: "Build and Test"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'maven'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
       - name: Build and Test
-        run: bin/ci-build.sh ${{ matrix.ak }}
+        run: bin/ci-build.sh
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
           files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
-          flags: ak-${{ matrix.ak }}
+          flags: default
           token: ${{ secrets.CODECOV_TOKEN }}

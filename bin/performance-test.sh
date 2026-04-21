@@ -15,6 +15,7 @@ set -euo pipefail
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
+  -DskipUTs=true \
   -Dincluded.groups=performance \
   -Dexcluded.groups= \
   -Dlicense.skip \
