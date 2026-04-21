@@ -96,3 +96,7 @@ The pom.xml version drives publishing — there is no `maven-release-plugin` dan
 - `MAVEN_CENTRAL_PASSWORD` — Sonatype Central Portal token password
 - `MAVEN_GPG_PRIVATE_KEY` — Armored GPG private key for signing artifacts
 - `MAVEN_GPG_PASSPHRASE` — Passphrase for the GPG key
+
+## Documented Solutions
+
+`docs/solutions/` - documented solutions to past problems and workflow patterns, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
