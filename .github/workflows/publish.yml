@@ -16,8 +16,11 @@
 name: Publish to Maven Central
 
 on:
-  push:
+  # Only publish after CI passes - workflow_run triggers when "Build and Test" completes
+  workflow_run:
+    workflows: ["Build and Test"]
     branches: [ master ]
+    types: [completed]
   workflow_dispatch:  # allow manual re-runs
 
 concurrency:
@@ -30,6 +33,8 @@ permissions:
 jobs:
   publish:
     name: Publish
+    # Skip if CI failed (workflow_run fires on both success and failure)
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
 
     steps:
