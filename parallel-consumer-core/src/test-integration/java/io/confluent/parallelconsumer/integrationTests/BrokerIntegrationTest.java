@@ -62,22 +62,30 @@ public abstract class BrokerIntegrationTest<K, V> {
      * <p>
      * Mapping: CP major = AK major + 4 (e.g., AK 3.1 → CP 7.1, AK 3.9 → CP 7.9).
      */
+    private static final String FALLBACK_CP_IMAGE = "confluentinc/cp-kafka:7.9.0";
+
     static String deriveCpKafkaImage() {
         String akVersion = org.apache.kafka.common.utils.AppInfoParser.getVersion();
         log.info("Kafka client version detected: {}", akVersion);
 
-        // Parse major.minor from the AK version
-        String[] parts = akVersion.split("\\.");
-        int akMajor = Integer.parseInt(parts[0]);
-        int akMinor = Integer.parseInt(parts[1]);
+        try {
+            // Strip pre-release suffixes (e.g. "4.0.0-SNAPSHOT" -> "4.0.0")
+            String cleanVersion = akVersion.split("-")[0];
+            String[] parts = cleanVersion.split("\\.");
+            int akMajor = Integer.parseInt(parts[0]);
+            int akMinor = Integer.parseInt(parts[1]);
 
-        // CP major = AK major + 4, CP minor = AK minor
-        int cpMajor = akMajor + 4;
-        int cpMinor = akMinor;
+            // CP major = AK major + 4, CP minor = AK minor
+            int cpMajor = akMajor + 4;
+            int cpMinor = akMinor;
 
-        String cpImage = "confluentinc/cp-kafka:" + cpMajor + "." + cpMinor + ".0";
-        log.info("Using CP Kafka image: {} (derived from AK {})", cpImage, akVersion);
-        return cpImage;
+            String cpImage = "confluentinc/cp-kafka:" + cpMajor + "." + cpMinor + ".0";
+            log.info("Using CP Kafka image: {} (derived from AK {})", cpImage, akVersion);
+            return cpImage;
+        } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
+            log.warn("Could not parse Kafka version '{}', falling back to {}", akVersion, FALLBACK_CP_IMAGE, e);
+            return FALLBACK_CP_IMAGE;
+        }
     }
 
     public static KafkaContainer createKafkaContainer(String logSegmentSize) {
