@@ -844,6 +844,12 @@
                         <goals>
                             <goal>test-jar</goal>
                         </goals>
+                        <configuration>
+                            <!-- Don't produce a test-jar when there are no test classes
+                                 (e.g. the parent pom module or examples). Otherwise an empty
+                                 test-jar gets generated, signed, and uploaded to Maven Central. -->
+                            <skipIfEmpty>true</skipIfEmpty>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
