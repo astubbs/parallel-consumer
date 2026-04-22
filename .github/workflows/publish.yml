@@ -83,9 +83,18 @@ jobs:
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
+          # Unified publish path: central-publishing-maven-plugin handles both
+          # snapshots and releases. For snapshots it PUTs directly to the Central
+          # Portal snapshot endpoint; for releases it bundles, validates, and
+          # auto-publishes via the Portal API. Requires SNAPSHOT publishing to be
+          # enabled on the namespace in central.sonatype.com/publishing/namespaces.
+          #
+          # -pl exclusion: examples are sample code, not library artifacts; skip them
+          # from the deploy reactor.
           ./mvnw --batch-mode \
             -Pmaven-central \
             -Pci \
+            -pl '!:parallel-consumer-examples,!:parallel-consumer-example-core,!:parallel-consumer-example-metrics,!:parallel-consumer-example-streams,!:parallel-consumer-example-vertx,!:parallel-consumer-example-reactor' \
             clean deploy \
             -DskipTests \
             -Dlicense.skip

@@ -59,7 +59,6 @@
         <tag>HEAD</tag>
     </scm>
 
-    
     <properties>
         <source.version>17</source.version>
         <release.target>8</release.target>
@@ -258,7 +257,7 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.8.0</version>
+                        <version>0.10.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -844,6 +843,12 @@
                         <goals>
                             <goal>test-jar</goal>
                         </goals>
+                        <configuration>
+                            <!-- Don't produce a test-jar when there are no test classes
+                                 (e.g. the parent pom module or examples). Otherwise an empty
+                                 test-jar gets generated, signed, and uploaded to Maven Central. -->
+                            <skipIfEmpty>true</skipIfEmpty>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

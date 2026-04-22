@@ -25,4 +25,27 @@
         <module>parallel-consumer-example-reactor</module>
     </modules>
 
+    <!-- Examples are sample code, not library artifacts. Don't publish them to Maven Central.
+         Note: in central-publishing-maven-plugin 0.8.0, setting skipPublishing=true on a module
+         that is last in the reactor order skipped the ENTIRE aggregated bundle upload (not
+         just that module). Plugin 0.9.0+ evaluates skipPublishing per-module and artifact,
+         which is what we rely on now (pom.xml pins 0.10.0). -->
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>
