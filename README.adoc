@@ -31,7 +31,8 @@ endif::[]
 :sectanchors: true
 
 :github_name: parallel-consumer
-:base_url: https://github.com/confluentinc/{github_name}
+:base_confluent_url: https://github.com/confluentinc/{github_name}
+:base_url: https://github.com/astubbs/{github_name}
 :issues_link: {base_url}/issues
 
 
@@ -45,24 +46,38 @@ endif::[]
 
 image:https://maven-badges.herokuapp.com/maven-central/io.github.astubbs.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/io.github.astubbs.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
 
-// Github actions disabled since codecov
-//image:https://github.com/confluentinc/parallel-consumer/actions/workflows/maven.yml/badge.svg[Java 8 Unit Test GitHub] +
-//^(^^full^ ^test^ ^suite^ ^currently^ ^running^ ^only^ ^on^ ^Confluent^ ^internal^ ^CI^ ^server^^)^
+image:https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml/badge.svg?branch=master[link=https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml,Build and Test]
 
 // travis badges temporarily disabled as travis isn't running CI currently
 //image:https://travis-ci.com/astubbs/parallel-consumer.svg?branch=master["Build Status", link="https://travis-ci.com/astubbs/parallel-consumer"] image:https://codecov.io/gh/astubbs/parallel-consumer/branch/master/graph/badge.svg["Coverage",https://codecov.io/gh/astubbs/parallel-consumer]
 
 Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with *key concurrency* and *extendable non-blocking IO* processing.
 
-Confluent's https://www.confluent.io/confluent-accelerators/#parallel-consumer[product page for the project is here].
+IMPORTANT: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates (`io.github.astubbs.parallelconsumer`). The original upstream project is no longer actively maintained.
+
+Confluent's https://www.confluent.io/confluent-accelerators/#parallel-consumer[product page for the original project is here].
 
 TIP: If you like this project, please ⭐ Star it in GitHub to show your appreciation, help us gauge popularity of the project and allocate resources.
 
-NOTE: This is not a part of the Confluent commercial support offering, except through consulting engagements.
+NOTE: This is a community-maintained project with no commercial support.
 See the <<Support and Issues>> section for more information.
 
-IMPORTANT: This project has been stable and reached its initial target feature set in Q1 2021.
-It is actively maintained by the CSID team at Confluent.
+[[when-to-use]]
+== When to use this library (vs KIP-932 Share Groups)
+
+The Kafka landscape has shifted since this library's 2021 stable release. *KIP-932 Share Groups* is now GA on Confluent Cloud and ships with Confluent Platform 8.2 / Apache Kafka 4.2. It covers a large part of what people historically reached for Parallel Consumer to do, at the broker level rather than in a client wrapper.
+
+*Share Groups (broker-native):* many-to-many consumer↔partition mapping, per-message ack, broker-side delivery counts with poison-message protection, elastic scaling decoupled from partition count. Unordered queue semantics -- "RabbitMQ on Kafka". Already wrapped by Spring Kafka via `ShareConsumerFactory`.
+
+*Parallel Consumer (client-side):* keeps the partition model and adds *per-key parallelism* on top. Messages within a key stay ordered; different keys run concurrently; concurrency is independent of partition count.
+
+The two are not strict alternatives -- they solve different problems.
+
+[TIP]
+====
+* If you want unordered queue semantics on Kafka 4.2+, reach for *Share Groups*. The "partitions are fixed, I need more consumers" motivation is now solved at the broker.
+* If you need *key-level ordering with concurrency beyond partition count*, reach for *Parallel Consumer*. Nothing else does that cleanly today.
+====
 
 [[intro]]
 This library lets you process messages in parallel via a single Kafka Consumer meaning you can increase consumer parallelism without increasing the number of partitions in the topic you intend to process.
@@ -283,7 +298,7 @@ The user just has to provide a function to extract from the message the HTTP cal
 
 === Illustrative Performance Example
 
-.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VolumeTests.java[VolumeTests.java])
+.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
 These performance comparison results below, even though are based on real performance measurement results, are for illustrative purposes.
 To see how the performance of the tool is related to instance counts, partition counts, key distribution and how it would relate to the vanilla client.
 Actual results will vary wildly depending upon the setup being deployed into.
@@ -374,7 +389,7 @@ As an illustrative example of relative performance, given:
 
 == Support and Issues
 
-If you encounter any issues, or have any suggestions or future requests, please create issues in the {issues_link}[github issue tracker].
+If you encounter any issues, or have any suggestions or future requests, please create issues in the {issues_link}[fork issue tracker].
 Issues will be dealt with on a good faith, best efforts basis, by the small team maintaining this library.
 
 We also encourage participation, so if you have any feature ideas etc, please get in touch, and we will help you work on submitting a PR!
@@ -382,17 +397,15 @@ We also encourage participation, so if you have any feature ideas etc, please ge
 NOTE: We are very interested to hear about your experiences!
 And please vote on your favourite issues!
 
-If you have questions or find a bug, raise an https://github.com/astubbs/parallel-consumer/issues[issue] on GitHub.
+If you have questions or find a bug, raise an {issues_link}[issue] on GitHub.
 
 == License
 
-This library is copyright Confluent Inc, and licensed under the Apache License Version 2.0.
+This library is copyright Confluent, Inc. and contributors, and licensed under the Apache License Version 2.0.
 
 == Usage
 
 === Maven
-
-NOTE: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates. The original upstream project is no longer actively maintained.
 
 This project is available in Maven Central, https://repo1.maven.org/maven2/io/github/astubbs/parallelconsumer/[repo1].
 
@@ -470,7 +483,7 @@ After this setup, one then has the choice of interfaces:
 * `JStreamVertxParallelStreamProcessor`
 
 There is another interface: `ParallelConsumer` which is integrated, however there is currently no immediate implementation.
-See {issues_link}/12[issue #12], and the `ParallelConsumer` JavaDoc:
+See {base_confluent_url}/issues/12[issue #12], and the `ParallelConsumer` JavaDoc:
 
 [source,java]
 ----
@@ -653,21 +666,6 @@ image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fb
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/io/confluent/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
 
-[[confluent-cloud]]
-=== Confluent Cloud
-
-. Provision your fully managed Kafka cluster in Confluent Cloud
-.. Sign up for https://www.confluent.io/confluent-cloud/tryfree/[Confluent Cloud], a fully-managed Apache Kafka service.
-.. After you log in to Confluent Cloud, click on `Add cloud environment` and name the environment `learn-kafka`.
-Using a new environment keeps your learning resources separate from your other Confluent Cloud resources.
-.. Click on https://confluent.cloud/learn[LEARN] and follow the instructions to launch a Kafka cluster and to enable Schema Registry.
-. Access the client configuration settings
-.. From the Confluent Cloud Console, navigate to your Kafka cluster.
-From the `Clients` view, get the connection information customized to your cluster (select `Java`).
-.. Create new credentials for your Kafka cluster, and then Confluent Cloud will show a configuration block with your new credentials automatically populated (make sure `show API keys` is checked).
-.. Use these settings presented to https://docs.confluent.io/clients-kafka-java/current/overview.html[configure your clients].
-. Use these clients for steps outlined in the <<common_preparation>> section.
-
 [[upgrading]]
 == Upgrading
 
@@ -796,7 +794,7 @@ You can access the retry count of a record through it's wrapped `WorkContainer` 
 .Example retry delay function implementing exponential backoff
 [source,java,indent=0]
 ----
-        final double multiplier = 2.0;
+        final double multiplier = 0.5;
         final int baseDelaySecond = 1;
 
         ParallelConsumerOptions.<String, String>builder()
@@ -1351,13 +1349,19 @@ Helper scripts are in the `bin/` directory:
 Quick local build (compile + unit tests)::
 `bin/build.sh`
 
+Unit tests only (no Docker needed)::
+`bin/ci-unit-test.sh`
+
+Integration tests only (requires Docker for TestContainers)::
+`bin/ci-integration-test.sh`
+
 Full CI build with all tests (unit + integration)::
 `bin/ci-build.sh`
 
 CI build against a specific Kafka version::
 `bin/ci-build.sh 3.9.1`
 
-The GitHub Actions CI workflow uses `bin/ci-build.sh`, so running it locally reproduces the CI environment.
+All `ci-*` scripts use the `-Pci` Maven profile which enables license checking and disables parallel test execution. The GitHub Actions CI workflow uses these scripts, so running them locally reproduces the CI environment.
 
 === Releasing
 
@@ -1573,6 +1577,23 @@ NOTE:: Dependency version bumps are not listed here.
 ifndef::github_name[]
 toc::[]
 endif::[]
+
+== 0.6.0.0
+
+=== Breaking
+
+* Maven coordinates rebranded from `io.confluent.parallelconsumer` to `io.github.astubbs.parallelconsumer`. Update your dependency declarations.
+
+=== Fixes
+
+* fix: null epoch race condition in EpochAndRecordsMap - poll() returning records before onPartitionsAssigned() no longer causes NPE; records are safely skipped and re-delivered
+* fix: test pollution from leaked threads and Awaitility global state across test classes
+
+=== Improvements
+
+* ci: modernized GitHub Actions CI with parallel test suites (unit, integration, performance), SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning
+* ci: added publish workflow for automated Maven Central deployment
+* docs: updated README and added upstream PR analysis report
 
 == 0.5.3.4
 
@@ -2015,4 +2036,5 @@ without operational burden or harming the clusters performance
 ** Throttle control and broker liveliness management
 ** Clean draining shutdown cycle
 //:leveloffset: -1 - Duplicate key leveloffset (attempted merging values +1 and -1): https://github.com/whelk-io/asciidoc-template-maven-plugin/issues/118
+
 
