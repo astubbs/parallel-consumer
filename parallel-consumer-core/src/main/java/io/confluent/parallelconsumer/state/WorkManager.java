@@ -106,6 +106,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+        // Adjust numberRecordsOutForProcessing BEFORE the partition state cleanup removes
+        // work from shards. After pm.onPartitionsRevoked, entries will be gone and we can't
+        // count them. See #857 — without this, the counter stays inflated permanently.
+        adjustOutForProcessingOnRevoke(partitions);
         pm.onPartitionsRevoked(partitions);
         onPartitionsRemoved(partitions);
     }
@@ -115,8 +119,32 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
+        adjustOutForProcessingOnRevoke(partitions);
         pm.onPartitionsLost(partitions);
         onPartitionsRemoved(partitions);
+    }
+
+    /**
+     * Adjust numberRecordsOutForProcessing to account for in-flight work that belonged
+     * to the revoked partitions. Must be called BEFORE pm.onPartitionsRevoked/Lost which
+     * removes entries from shards.
+     * <p>
+     * These work items were dispatched to the worker pool but may never complete through
+     * the mailbox (e.g., if the PC is being closed). Without this adjustment, the counter
+     * stays permanently inflated, calculateQuantityToRequest() returns 0, and no new work
+     * is ever distributed - causing the silent stall in #857.
+     */
+    private void adjustOutForProcessingOnRevoke(Collection<TopicPartition> partitions) {
+        long inflightForRemovedPartitions = sm.countInflightForPartitions(partitions);
+        if (inflightForRemovedPartitions > 0) {
+            log.info("Adjusting numberRecordsOutForProcessing by -{} for revoked partitions (was {})",
+                    inflightForRemovedPartitions, numberRecordsOutForProcessing);
+            numberRecordsOutForProcessing -= (int) inflightForRemovedPartitions;
+            if (numberRecordsOutForProcessing < 0) {
+                log.warn("numberRecordsOutForProcessing went negative ({}), resetting to 0", numberRecordsOutForProcessing);
+                numberRecordsOutForProcessing = 0;
+            }
+        }
     }
 
     void onPartitionsRemoved(final Collection<TopicPartition> partitions) {
