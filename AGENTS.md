@@ -6,7 +6,7 @@ Project context for AI coding agents (Claude Code, Copilot, Cursor, etc.).
 
 Parallel Consumer is a Java library that enables concurrent message processing from Apache Kafka with a single consumer, avoiding the need to increase partition counts. It maintains ordering guarantees (by partition or key) while processing messages in parallel.
 
-This is a community-maintained fork of `confluentinc/parallel-consumer` (the upstream is no longer actively maintained), published to Maven Central as `io.github.astubbs.parallelconsumer`.
+This is a community-maintained fork of `confluentinc/parallel-consumer` (the upstream is no longer actively maintained), published to Maven Central as `bz.stub.parallelconsumer`.
 
 ## Build Requirements
 

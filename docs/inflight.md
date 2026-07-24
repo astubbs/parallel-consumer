@@ -6,7 +6,7 @@
 
 ## 0.6.0 — first fork release (off `master`)
 
-The fork's debut is the **rebrand already on `master`** (`io.github.astubbs.parallelconsumer`, Java 8,
+The fork's debut is the **rebrand already on `master`** (`bz.stub.parallelconsumer`, Java 8,
 Jabel intact). It builds green and **already snapshot-published** (5 successful publish runs on
 2026-04-22; the Central snapshot has likely aged out of the ~90-day retention since). No Java-baseline
 change. Release = strip `-SNAPSHOT` → `0.6.0.0` and merge to `master`. Release blockers are tracked by
