@@ -128,7 +128,11 @@
                     <cleanTargetDir>false</cleanTargetDir>
                     <useHas>false</useHas>
                     <useGetterForLegacyClasses>true</useGetterForLegacyClasses>
-                    <releaseTarget>8</releaseTarget>
+                    <!-- Keep at 11: bumping this to 17 re-triggers the Lombok @StandardException
+                         constructor-generation cascade during Truth-subject generation and breaks the
+                         build. 11 targets the generated test code and is unrelated to the library's
+                         Java 17 runtime baseline. -->
+                    <releaseTarget>11</releaseTarget>
                     <classes>
                         <class>io.confluent.parallelconsumer.PollContext</class>
                         <class>io.confluent.parallelconsumer.ParallelEoSStreamProcessor</class>

@@ -186,8 +186,11 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
 
     protected void instantiateConsumerProducer() {
         LongPollingMockConsumer<String, String> consumer = new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
-        MockProducer<String, String> producer = new MockProducer<>(true,
-                Serdes.String().serializer(), Serdes.String().serializer());
+        // Forward-compatible MockProducer ctor: (autoComplete, Partitioner, keySerializer, valueSerializer).
+        // The 3-arg (autoComplete, ks, vs) overload was removed in Kafka 4.0; this 4-arg form exists in both 3.9 and 4.x.
+        // Null Partitioner is tolerated for our test usage (autoComplete=true bypasses real partitioning).
+        MockProducer<String, String> producer = new MockProducer<String, String>(true,
+                null, Serdes.String().serializer(), Serdes.String().serializer());
 
         this.producerSpy = spy(producer);
         this.consumerSpy = spy(consumer);
