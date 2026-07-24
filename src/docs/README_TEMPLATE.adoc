@@ -44,7 +44,7 @@ ifdef::env-github[]
 :warning-caption: :warning:
 endif::[]
 
-image:https://maven-badges.herokuapp.com/maven-central/io.github.astubbs.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/io.github.astubbs.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
+image:https://maven-badges.herokuapp.com/maven-central/bz.stub.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/bz.stub.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
 
 image:https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml/badge.svg?branch=master[link=https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml,Build and Test]
 
@@ -53,7 +53,7 @@ image:https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml/b
 
 Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with *key concurrency* and *extendable non-blocking IO* processing.
 
-IMPORTANT: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates (`io.github.astubbs.parallelconsumer`). The original upstream project is no longer actively maintained.
+IMPORTANT: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates (`bz.stub.parallelconsumer`). The original upstream project is no longer actively maintained.
 
 Confluent's https://www.confluent.io/confluent-accelerators/#parallel-consumer[product page for the original project is here].
 
@@ -407,13 +407,13 @@ This library is copyright Confluent, Inc. and contributors, and licensed under t
 
 This project is available in Maven Central, https://repo1.maven.org/maven2/io/github/astubbs/parallelconsumer/[repo1].
 
-Latest version can be seen https://search.maven.org/artifact/io.github.astubbs.parallelconsumer/parallel-consumer-core[here].
+Latest version can be seen https://search.maven.org/artifact/bz.stub.parallelconsumer/parallel-consumer-core[here].
 
 Where `${project.version}` is the version to be used:
 
-* group ID: `io.github.astubbs.parallelconsumer`
+* group ID: `bz.stub.parallelconsumer`
 * artifact ID: `parallel-consumer-core`
-* version: image:https://maven-badges.herokuapp.com/maven-central/io.github.astubbs.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/io.github.astubbs.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
+* version: image:https://maven-badges.herokuapp.com/maven-central/bz.stub.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/bz.stub.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
 
 .Core Module Dependency
 [source,xml,indent=0]

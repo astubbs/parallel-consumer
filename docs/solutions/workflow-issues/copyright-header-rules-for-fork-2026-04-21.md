@@ -25,7 +25,7 @@ tags:
 
 ## Context
 
-The `astubbs/parallel-consumer` repository is an Apache 2.0 fork of `confluentinc/parallel-consumer`, rebranded under `io.github.astubbs.parallelconsumer` Maven coordinates. During the `dev/rebrand-fork` branch review, three copyright header problems surfaced:
+The `astubbs/parallel-consumer` repository is an Apache 2.0 fork of `confluentinc/parallel-consumer`, rebranded under `bz.stub.parallelconsumer` Maven coordinates. During the `dev/rebrand-fork` branch review, three copyright header problems surfaced:
 
 1. **License plugin auto-bumps years**: The `license-maven-plugin` (Mycila) auto-bumps copyright year ranges when run without `-Dlicense.skip`. A routine pom.xml property addition caused `parallel-consumer-mutiny/pom.xml` to silently gain a year bump from `2020-2025` to `2020-2026` as an unintended side effect.
 
