@@ -1,0 +1,74 @@
+# In-flight & parked work
+
+> Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
+> can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
+> from `git log`. Keep it current when context-switching. Last updated: 2026-07-24.
+
+## 0.6.0 — first fork release (off `master`)
+
+The fork's debut is the **rebrand already on `master`** (`io.github.astubbs.parallelconsumer`, Java 8,
+Jabel intact). It builds green and **already snapshot-published** (5 successful publish runs on
+2026-04-22; the Central snapshot has likely aged out of the ~90-day retention since). No Java-baseline
+change. Release = strip `-SNAPSHOT` → `0.6.0.0` and merge to `master`. Release blockers are tracked by
+Antony separately (not in this doc).
+
+**Release mechanics:** no `maven-release-plugin`; the pom `<version>` is the single source of truth.
+Merge to `master` → `.github/workflows/publish.yml` runs after "Build and Test" succeeds and deploys via
+the `maven-central` profile (`central-publishing-maven-plugin`, GPG signed). A non-`-SNAPSHOT` version
+also tags `v<version>` and cuts a GitHub release. See `AGENTS.md` "Releasing".
+
+## 0.7.x — Java baseline + Kafka 4 (branch `feat/java-17-baseline`, PR #53 — draft)
+
+WIP toward Kafka 4 support. **The only reason to move off Java 8 is Kafka 4.** kafka-clients 4.x require
+**Java 11** (brokers/tools require 17, but PC only depends on the client lib); the target baseline is
+Java 11 — "support at least what Kafka supports; don't be stricter than them."
+
+Approaches still open (decided when the work actually starts):
+- **Remove Jabel + rewrite** the code's Java 14+ switch-expressions/text-block to Java 11 syntax — real
+  refactor, ~9 core files incl. the offset-encoding hot path (`BitSetEncoder`, `RunLengthEncoder`,
+  `EncodedOffsetPair`, `OffsetBitSet`) + 2 test files + 1 text block.
+- **Keep Jabel at `--release 11`** — currently breaks Lombok `@StandardException` constructor generation
+  (25 errors); unproven whether a Lombok bump / processor-order tweak fixes it. If so → Java 11 with
+  **zero source refactor**. Worth trying first.
+- **Native Java 17** — zero source changes but stricter than Kafka's clients (drops Java 11-16 users).
+  Dispreferred.
+
+Jabel is what lets `javac` accept Java 17 syntax while emitting older-release bytecode — that's how the
+code "does Java 8" today; keep it at `release 8` and no change is needed at all. PR #53 currently holds a
+provisional state (Jabel removed, `release=17`) plus the Kafka 4 research docs (which live on that branch).
+
+**Kafka 4 units still to do** (plan: `docs/plans/2026-04-23-001-feat-apache-kafka-4-support-plan.md`, on
+the PR #53 branch):
+- **Unit 2** — bump `kafka.version` `3.9.1` → `4.2.x`; update the TestContainers CP image
+  (`BrokerIntegrationTest.FALLBACK_CP_IMAGE`, currently `confluentinc/cp-kafka:7.9.0`).
+- **Unit 3** — migrate deprecated/removed-in-4.0 APIs: `ProducerWrapper.sendOffsetsToTransaction(Map,String)`;
+  `MockConsumer(OffsetResetStrategy)` → String ctor; `new ConsumerGroupMetadata(String)` → `groupMetadata()`.
+- **Unit 4** — downstream module audit under Kafka 4.2.
+- **Unit 5** — CI: flip `test-kafka-compat` to a blocking Kafka 3.9.1 regression check; main build on 4.2.
+- **Unit 6** — docs for Kafka 4.2 default + 3.9.1 compat.
+- **Deferred further:** `parallel-consumer-share` module (KIP-932 Share Groups); exception-class
+  custom-ctor simplification.
+
+## In-flight on other branches / worktrees
+
+- **`bugs/859-pcmetrics-leak-v2`** (worktree `.claude/worktrees/dev-cc`) — 5 commits ahead of master,
+  clean tree. Fixes PCMetrics memory leak (#859): duplicate Micrometer meter re-registration on
+  partition assignment/revocation. Touches `PCMetrics.java`, `PartitionStateManager.java`; has
+  regression tests (`PCMetricsTest859.java`) + a P1-review-hardening pass. **Ready/near-ready for PR.**
+  Stacks on cherry-picks #893 (offset accuracy on assignment) and #905 (max-queued-records-per-shard metric).
+- **`bugs/857-paused-consumption-multi-consumers-bug`** — silent-stall-after-rebalance. **Root cause
+  found + fixed:** `synchronized(commitCommand)` deadlock between poll thread (`onPartitionsRevoked`)
+  and control thread (`commitOffsetsThatAreReady`), replaced with `ReentrantLock.tryLock()`. Chaos test
+  ~20%→~80%; residual failures are a test-harness `ConcurrentModificationException`, not production.
+  5 fixes, "ready for PR." (Memory note is old — re-verify before relying on it.) Relates to upstream
+  PR #548 (same deadlock) and issues #326/#541/#546. User weighing a larger single-thread refactor
+  (merge poll + control threads) to kill this bug class.
+- **`bugs/912-vertx-stream-memory-leak`** — clear JStream deque on close (#912).
+- **`fix/909-stale-container-replacement`** — regression test for stale container at same offset.
+- **`astubbs/orca`** (worktree `/Users/astubbs/orca/workspaces/parallel-consumer/orca`) — 9 ahead / 9
+  behind master, diverged, clean. CI/tooling: Claude Code Review + PR Assistant workflows, PR-dependency
+  -check workflow, CI matrix tweaks. Stale-ish; needs rebase onto master.
+- **Upstream-PR isolation branches:** `upstream-pr-893`, `upstream-pr-905`, `pr-909-temp`,
+  `cherry-pick/893-offset-reset`, `cherry-pick/905-max-shard-metric`, `refactor/test-hardening`.
+- **Stale/backup:** `backup/*` (pre-rebase snapshots), `dev-cc` & `master-confluent` (pinned at
+  pre-rebrand `7f290122`), `dev/self-hosted-runner`, 4× `dependabot/maven/*`.
