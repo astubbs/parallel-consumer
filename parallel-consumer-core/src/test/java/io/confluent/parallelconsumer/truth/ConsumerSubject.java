@@ -16,7 +16,7 @@ import org.apache.kafka.common.TopicPartition;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
-import javax.annotation.Generated;
+import javax.annotation.processing.Generated;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;

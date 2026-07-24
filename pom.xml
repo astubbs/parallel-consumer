@@ -61,7 +61,7 @@
 
     <properties>
         <source.version>17</source.version>
-        <release.target>8</release.target>
+        <release.target>17</release.target>
 
         <!-- when running mvn locally from cmd line, use default jvm for jvm8 - by default uses the runtime JVM -->
         <jvm.location>${java.home}</jvm.location>
@@ -114,7 +114,6 @@
         <flogger.version>0.8</flogger.version>
         <mockito.version>5.12.0</mockito.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
-        <jabel.version>1.0.0</jabel.version>
         <logback.version>1.5.19</logback.version>
         <micrometer-core.version>1.13.0</micrometer-core.version>
     </properties>
@@ -271,14 +270,6 @@
     </profiles>
 
     <dependencies>
-        <!-- Build dependency -->
-        <dependency>
-            <groupId>com.github.bsideup.jabel</groupId>
-            <artifactId>jabel-javac-plugin</artifactId>
-            <version>${jabel.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
         <!-- Main -->
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -670,16 +661,7 @@
                             <artifactId>lombok</artifactId>
                             <version>${lombok.version}</version>
                         </path>
-                        <!-- jabel setup-->
-                        <path>
-                            <groupId>com.github.bsideup.jabel</groupId>
-                            <artifactId>jabel-javac-plugin</artifactId>
-                            <version>${jabel.version}</version>
-                        </path>
                     </annotationProcessorPaths>
-                    <!-- enable language preview features -->
-                    <source>${source.version}</source>
-                    <target>${release.target}</target>
                     <release>${release.target}</release>
                     <annotationProcessors>
                         <annotationProcessor>lombok.launch.AnnotationProcessorHider$AnnotationProcessor

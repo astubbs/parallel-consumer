@@ -82,7 +82,7 @@ class CoreAppTest {
         @Override
         Producer<String, String> getKafkaProducer() {
             var stringSerializer = Serdes.String().serializer();
-            return new MockProducer<>(true, stringSerializer, stringSerializer);
+            return new MockProducer<String, String>(true, null, stringSerializer, stringSerializer);
         }
 
         @Override

@@ -74,7 +74,7 @@ class VertxAppTest {
 
         @Override
         Producer<String, String> getKafkaProducer() {
-            return new MockProducer<>(true, null, null);
+            return new MockProducer<String, String>(true, null, null, null);
         }
 
         @Override
