@@ -108,7 +108,6 @@
 
         <!-- tests deps-->
         <junit.version>6.1.2</junit.version>
-        <junit.platform.version>1.10.2</junit.platform.version>
         <testcontainers.version>1.19.8</testcontainers.version>
         <truth.version>1.3.0</truth.version>
         <flogger.version>0.8</flogger.version>
@@ -322,14 +321,14 @@
         <dependency>
             <groupId>org.junit.platform</groupId>
             <artifactId>junit-platform-launcher</artifactId>
-            <version>${junit.platform.version}</version>
+            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <!-- Junit Pioneer pulls in an older version - force the matched version -->
             <groupId>org.junit.platform</groupId>
             <artifactId>junit-platform-commons</artifactId>
-            <version>${junit.platform.version}</version>
+            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
