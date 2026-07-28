@@ -89,17 +89,17 @@
 
         <!-- version numbers -->
         <!-- plugins -->
-        <mycila.version>5.0.0</mycila.version>
-        <lombok.version>1.18.28</lombok.version>
+        <mycila.version>5.1.1</mycila.version>
+        <lombok.version>1.18.46</lombok.version>
         <auto-service.version>1.1.1</auto-service.version>
-        <surefire.version>3.2.5</surefire.version>
-        <spotbugs.version>4.8.6</spotbugs.version>
-        <spotbugs-maven-plugin.version>4.8.6.6</spotbugs-maven-plugin.version>
-        <pitest.version>1.17.4</pitest.version>
-        <pitest-junit5.version>1.2.2</pitest-junit5.version>
+        <surefire.version>3.5.6</surefire.version>
+        <spotbugs.version>4.10.3</spotbugs.version>
+        <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
+        <pitest.version>1.25.8</pitest.version>
+        <pitest-junit5.version>1.2.3</pitest-junit5.version>
 
         <!-- core -->
-        <slf4j.version>2.0.13</slf4j.version>
+        <slf4j.version>2.0.18</slf4j.version>
         <kafka.version>3.9.1</kafka.version>
         <version.unij>0.1.3</version.unij>
 
@@ -107,15 +107,24 @@
         <parallel-tests>true</parallel-tests>
 
         <!-- tests deps-->
-        <junit.version>5.10.2</junit.version>
-        <junit.platform.version>1.10.2</junit.platform.version>
-        <testcontainers.version>1.19.8</testcontainers.version>
-        <truth.version>1.3.0</truth.version>
-        <flogger.version>0.8</flogger.version>
-        <mockito.version>5.12.0</mockito.version>
+        <junit.version>5.14.4</junit.version>
+        <junit.platform.version>1.14.4</junit.platform.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
+        <truth.version>1.4.5</truth.version>
+        <flogger.version>0.9</flogger.version>
+        <mockito.version>5.23.0</mockito.version>
+        <!-- Aligns byte-buddy with what mockito 5.23 requires (it ships 1.17.7). The ancient
+             wiremock-jre8 2.35.2 otherwise drags in byte-buddy 1.12.18, which wins the conflict
+             and lacks the JAVA_V21 field mockito 5.23 needs -> MockitoInitializationException.
+             Remove this pin once wiremock 3.x (a deferred major) drops the stale transitive.
+             Test/provided scope only - not in the shipped artifact. See docs/inflight.md. -->
+        <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
-        <logback.version>1.6.0</logback.version>
+        <logback.version>1.6.1</logback.version>
+        <!-- Held at 1.13.0: keep the micrometer family version-aligned with
+             micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
+             prometheus package rename is migrated). See docs/inflight.md. -->
         <micrometer-core.version>1.13.0</micrometer-core.version>
     </properties>
 
@@ -236,7 +245,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
-                        <version>3.1.0</version>
+                        <version>3.2.8</version>
                         <executions>
                             <execution>
                                 <id>sign-artifacts</id>
@@ -257,7 +266,7 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.10.0</version>
+                        <version>0.11.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -335,7 +344,7 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
-            <version>3.24.2</version>
+            <version>3.27.7</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -384,13 +393,25 @@
         <dependency>
             <groupId>one.util</groupId>
             <artifactId>streamex</artifactId>
-            <version>0.8.2</version>
+            <version>0.9.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Pin byte-buddy so mockito 5.23 gets the version it needs (see byte-buddy.version
+                 property); overrides the stale 1.12.18 pulled transitively by wiremock-jre8. -->
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-core</artifactId>
@@ -430,7 +451,7 @@
             <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
-                <version>3.18.0</version>
+                <version>3.20.0</version>
             </dependency>
             <dependency>
                 <groupId>com.google.truth</groupId>
@@ -453,12 +474,12 @@
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
-                <version>33.2.0-jre</version>
+                <version>33.6.0-jre</version>
             </dependency>
             <dependency>
                 <groupId>me.tongfei</groupId>
                 <artifactId>progressbar</artifactId>
-                <version>0.10.1</version>
+                <version>0.10.2</version>
                 <scope>test</scope>
             </dependency>
             <dependency>
@@ -527,7 +548,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-help-plugin</artifactId>
-                <version>3.4.0</version>
+                <version>3.5.2</version>
                 <executions>
                     <execution>
                         <id>show-profiles</id>
@@ -591,7 +612,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-release-plugin</artifactId>
-                <version>3.0.1</version>
+                <version>3.3.1</version>
                 <configuration>
                     <autoVersionSubmodules>true</autoVersionSubmodules>
                     <tagNameFormat>v@{project.version}</tagNameFormat>
@@ -676,7 +697,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.12.1</version>
+                <version>3.15.0</version>
                 <configuration>
                     <annotationProcessorPaths>
                         <path>
@@ -752,7 +773,7 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.11</version>
+                <version>0.8.15</version>
                 <executions>
                     <execution>
                         <goals>
@@ -813,7 +834,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
-                <version>3.4.1</version>
+                <version>3.6.3</version>
                 <executions>
                     <execution>
                         <id>enforce-versions</id>
@@ -856,7 +877,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.3.0</version>
+                <version>3.5.1</version>
                 <executions>
                     <execution>
                         <goals>
@@ -874,7 +895,7 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
-                <version>3.4.0</version>
+                <version>3.6.1</version>
                 <executions>
                     <!-- integration test sources -->
                     <execution>
@@ -937,7 +958,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.7.0</version>
+                <version>3.12.0</version>
                 <configuration>
                     <sourcepath>${delombok.output}</sourcepath>
                     <sourcepath>${delombok.output}</sourcepath>
@@ -966,7 +987,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.0</version>
+                <version>3.4.0</version>
                 <executions>
                     <execution>
                         <id>attach-sources</id>
@@ -979,7 +1000,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>
-                <version>3.6.1</version>
+                <version>3.11.0</version>
                 <executions>
                     <execution>
                         <phase>initialize</phase>
@@ -993,7 +1014,15 @@
                 <!-- for use in idea -->
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>versions-maven-plugin</artifactId>
-                <version>2.16.2</version>
+                <version>2.21.0</version>
+                <configuration>
+                    <!-- Risk-averse upgrade policy: ignore pre-releases (alpha/beta/-Mn/RC) and
+                         Confluent -ce/-ccs kafka builds. Combine with -DallowMajorUpdates=false to
+                         cap to newest non-major. Applies to display-*-updates / update-* goals. -->
+                    <!-- multiModuleProjectDirectory = reactor root (bin/ only exists there);
+                         ${project.basedir} would be wrong for child modules. -->
+                    <rulesUri>file://${maven.multiModuleProjectDirectory}/bin/deps-version-rules.xml</rulesUri>
+                </configuration>
             </plugin>
         </plugins>
 
@@ -1018,7 +1047,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-install-plugin</artifactId>
-                    <version>3.1.1</version>
+                    <version>3.1.4</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -1028,12 +1057,12 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-resources-plugin</artifactId>
-                    <version>3.3.1</version>
+                    <version>3.5.0</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-dependency-plugin</artifactId>
-                    <version>3.6.1</version>
+                    <version>3.11.0</version>
                 </plugin>
             </plugins>
         </pluginManagement>
