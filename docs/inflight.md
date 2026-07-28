@@ -106,3 +106,32 @@ the sequenced items after #57 lands. (Backlog source: `src/docs/development/upst
 - **Issue #40** — dedup `MockConsumer*` test classes (test-only; duplication bot keeps flagging these).
 - **#915 batch construction strategy** (cherry-pick upstream, closes 4-yr issue #266) — medium effort.
 - **DLQ** (#310 / revive #366) — most-demanded missing feature; large, idea-bank spec not a live branch.
+
+## CI reliability / gate issues (follow-up work)
+
+Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
+all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
+**Unit Tests, Integration Tests, Performance Tests**. Everything else is advisory. Track and fix:
+
+- **`Integration Tests` is flaky (required → blocks merges).** Fails intermittently on TestContainers
+  Kafka broker startup: `BrokerIntegrationTest.ensureTopic` → `TimeoutException` (e.g. 1 error / 104 in
+  PR #56, `TransactionMarkersTest.setup`). Because it's a *required* check, each flake blocks an
+  otherwise-green PR. **Fix:** harden broker/topic setup (longer/again-with-backoff waits) and/or add
+  Surefire/Failsafe `rerunFailingTestsCount` for setup-timeout errors. Highest priority — it's the only
+  flaky *required* gate.
+- **`Duplicate Code (jscpd)` absolute cap is below baseline → fails on EVERY PR.** jscpd cap is 4% but
+  the codebase baseline is already 4.22% (85 clones), so the absolute-limit rule red-flags all PRs even
+  when "max increase vs base" is +0.00% (as in #56). PMD CPD is fine (3.60% < 5%). **Fix:** raise
+  `INPUT_JSCPD_MAX_PCT` above baseline (e.g. 5%, matching PMD) and rely on the max-increase-vs-base gate,
+  which is the real safety net. Not a merge blocker (advisory), but noisy on every PR.
+- **`Kafka Compat (experimental 4.x)` is known-broken until the Kafka 4 migration.** Compile failure
+  under kafka-clients 4.x (`MockProducer<>` type inference in `AbstractParallelEoSStreamProcessorTestBase`,
+  and the removed-API set in 0.7.x "Unit 3" above). **Fix:** mark the job `continue-on-error` /
+  non-blocking until 0.7.x lands so it stops red-flagging unrelated PRs. Advisory, not a blocker.
+- **`Mutation Testing (PIT)` cascades from any flaky test.** PIT requires a fully green suite, so a
+  single flaky/timeout test aborts the whole run ("1 test did not pass without mutation"). **Fix:**
+  depends on the Integration flake fix; consider not gating PIT on the integration suite. Advisory.
+- **Path-filter inconsistency.** `Build and Test` (and `SpotBugs Baseline`) are *skipped* on docs-only
+  PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
+  changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
+  docs-only change runs a consistent (or fully skipped) set.
