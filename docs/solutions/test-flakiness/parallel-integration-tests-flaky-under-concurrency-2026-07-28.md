@@ -13,8 +13,8 @@ symptoms:
   - "InternalRuntimeException: No progress beyond N records after 1 rounds"
   - "On GitHub-hosted 2-core runners the same parallelism produces ~28 failures (CPU starvation), not ~2"
 root_cause: concurrency_race
-resolution_type: pending
-severity: medium
+resolution_type: config_change
+severity: low
 tags:
   - flaky-tests
   - parallel-tests
@@ -131,7 +131,7 @@ each broker serves its fork's tests **sequentially → uncontended**. Result:
 |---|---|---|
 | thread-parallel (`-Dparallel-tests=true`), 1 shared broker | ~2/104 flake per run | ~90 s (when it passed) |
 | **forked, `forkCount=4`, broker-per-fork — Mac** | **5/5 green** | **~4:06** |
-| **forked, `forkCount=4` — GitHub-hosted CI** | **green** | **6:33** (vs ~11:38 sequential) |
+| **forked, `forkCount=4` — GitHub-hosted CI** | **green** | **6:16** (vs ~11:38 sequential) |
 
 So forked mode is **reliable AND faster than sequential everywhere** (Mac ~38% faster than GitHub, but
 GitHub-hosted forked also works — the self-hosted runner is *extra* speed, not required). It also does

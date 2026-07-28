@@ -3,12 +3,17 @@
 #
 # Why this exists:
 #   The integration and performance suites are I/O-bound (Kafka via
-#   TestContainers) and JUnit is configured to run them 20x concurrently by
-#   default. The `ci` Maven profile disables that concurrency (likely resource
-#   contention on GitHub's 2-core hosted runners; the tests run parallel by
-#   default off-CI, so they are parallel-safe). A self-hosted machine has the
-#   cores and RAM to run them in parallel, so we re-enable it here with
-#   -Dparallel-tests=true. See docs/SELF_HOSTED_RUNNER.md.
+#   TestContainers) and slow. The `ci` Maven profile runs them sequentially
+#   (JUnit concurrency disabled - likely resource contention on GitHub's 2-core
+#   hosted runners). A self-hosted machine has the cores and RAM to parallelise,
+#   so we do - but each suite uses a different, suite-appropriate mechanism (see
+#   the matrix below):
+#     - integration: forked per-broker mode (-DforkCount=4 -DreuseForks=true) -
+#       each JVM fork gets its own broker, so tests never contend one shared
+#       broker. Reliable AND parallel. (Thread-parallel on a shared broker is
+#       flaky - it surfaced a real deadlock, #857.)
+#     - performance: in-JVM thread parallelism (-Dparallel-tests=true).
+#   See docs/SELF_HOSTED_RUNNER.md.
 #
 # Triggers:
 #   - workflow_dispatch (manual)   - primary trigger

@@ -8,8 +8,9 @@
 # Usage: bin/ci-integration-test.sh [extra-maven-args...]
 #
 # Extra args are forwarded to Maven. The self-hosted runner workflow passes
-# -Dparallel-tests=true to re-enable JUnit's concurrent execution (the ci
-# profile disables it for GitHub-hosted 2-core runners). See
+# -DforkCount=4 -DreuseForks=true to run integration in forked per-broker mode
+# (each JVM fork gets its own broker - reliable AND parallel; the ci profile
+# runs sequentially on GitHub-hosted 2-core runners). See
 # docs/SELF_HOSTED_RUNNER.md.
 
 set -euo pipefail

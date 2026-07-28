@@ -6,7 +6,7 @@
 # Run only the performance test suite (tests tagged @Tag("performance")).
 # These are excluded from the regular CI build because they take a long time
 # and need substantial hardware. The self-hosted runner workflow
-# (.github/workflows/performance.yml) calls this script.
+# (.github/workflows/self-hosted-tests.yml) calls this script.
 #
 # Usage: bin/performance-test.sh [extra-maven-args...]
 

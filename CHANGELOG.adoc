@@ -20,7 +20,7 @@ endif::[]
 
 === Build & CI
 
-* New `Self-Hosted Tests` workflow runs the integration and performance suites on a self-hosted runner (a Proxmox Linux VM or a Mac) with JUnit's concurrent test execution re-enabled (`-Dparallel-tests=true`), which the `ci` profile disables for GitHub's 2-core hosted runners. Manual/scheduled only, never on PRs; the GitHub-hosted PR gate is unchanged. See link:docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md]. Replaces the earlier Windows-only performance workflow.
+* New `Self-Hosted Tests` workflow runs the integration and performance suites on a self-hosted runner (a Proxmox Linux VM or a Mac), parallelised on real hardware where the `ci` profile runs them sequentially for GitHub's 2-core hosted runners. Integration runs in forked per-broker mode (`-DforkCount=4 -DreuseForks=true`, each JVM fork gets its own broker); performance uses in-JVM thread parallelism (`-Dparallel-tests=true`). Manual/scheduled only, never on PRs; the GitHub-hosted PR gate is unchanged. See link:docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md]. Replaces the earlier Windows-only performance workflow.
 
 == 0.6.0.0
 

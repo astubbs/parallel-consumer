@@ -124,7 +124,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   Enabling JUnit thread-parallelism (`-Dparallel-tests=true`) made integration flaky (~2/104 per run,
   rotating) because all ~104 tests contend ONE shared TestContainers broker. **Fix:** run failsafe
   **forked** (`-DforkCount=4 -DreuseForks=true`) so each JVM fork gets its own broker — reliable (5/5 Mac;
-  green GitHub-hosted 6:33 vs ~11:38 sequential) and faster, and it masks nothing (each test runs on an
+  green GitHub-hosted 6:16 vs ~11:38 sequential) and faster, and it masks nothing (each test runs on an
   uncontended broker). Wired into `maven.yml` (GitHub-hosted) + `self-hosted-tests.yml`. **Key finding:**
   the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure maps to the REAL **#857** deadlock
   (`synchronized(commitCommand)` in `onPartitionsRevoked`), *not* test flakiness — contention was exposing

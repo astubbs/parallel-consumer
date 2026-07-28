@@ -22,24 +22,30 @@ licensing. On a Proxmox box, a small Linux VM is the fastest and simplest path.
 ## Where the speedup comes from
 
 The integration and performance suites are **I/O-bound** - most of their time is
-spent waiting on Kafka via TestContainers, not on CPU. JUnit is configured to
-run them 20x concurrently by default:
+spent waiting on Kafka via TestContainers, not on CPU. The `ci` Maven profile
+runs them sequentially (`parallel-tests=false` in pom.xml), most likely because
+20 Kafka containers fighting over GitHub's 2 hosted cores caused resource
+contention. A self-hosted machine has the cores and RAM to actually parallelise,
+so the workflow does - but each suite uses a **different, suite-appropriate**
+mechanism:
 
-```properties
-# parallel-consumer-core/src/test/resources/junit-platform.properties
-junit.jupiter.execution.parallel.enabled=${parallel-tests}
-junit.jupiter.execution.parallel.config.dynamic.factor=20
-```
+- **Integration: forked per-broker mode** (`-DforkCount=4 -DreuseForks=true`).
+  Each JVM fork gets its **own** TestContainers broker and runs sequentially
+  within itself, so tests never contend one shared broker. This is reliable
+  **and** parallel - it was the fix for the flakiness described below. (Naive
+  JUnit thread-parallelism on one shared broker - `-Dparallel-tests=true` - is
+  ~7-10x faster but flaky, and it surfaced a real main-code deadlock, #857;
+  forked mode avoids the contention without masking anything.)
 
-The `ci` Maven profile sets `parallel-tests=false` (pom.xml). There's no comment
-recording why, but the likely reason is resource contention: 20 Kafka containers
-fighting over GitHub's 2 hosted cores. Note the tests run parallel by default
-*outside* the `ci` profile, so they are designed to be parallel-safe. A
-self-hosted machine has the cores and RAM to actually run them concurrently, so
-the workflow passes `-Dparallel-tests=true` to re-enable it. **That flag is the
-intended win** - but measure it (see [below](#measuring-the-speedup)); if the
-suite doesn't speed up, or tests flake, that tells you the bottleneck is
-elsewhere (Docker throughput, a genuinely order-dependent test).
+- **Performance: in-JVM thread parallelism** (`-Dparallel-tests=true`). JUnit is
+  configured to run these concurrently by default (see
+  `junit.jupiter.execution.parallel.*` in
+  `parallel-consumer-core/src/test/resources/junit-platform.properties`); the
+  performance leg re-enables that on real cores.
+
+Measure it (see [below](#measuring-the-speedup)); if a suite doesn't speed up
+that tells you the bottleneck is elsewhere (Docker throughput, a genuinely
+order-dependent test).
 
 ## What you get
 
@@ -175,31 +181,36 @@ Measure it on the runner itself, where the hardware and container behaviour are
 real:
 
 ```bash
-# baseline: parallelism off (what CI does today)
+# baseline: sequential (what the ci profile does)
 time bin/ci-integration-test.sh
 
-# with the runner's setting: parallelism on
-time bin/ci-integration-test.sh -Dparallel-tests=true
+# with the runner's setting: forked per-broker mode (what the workflow runs)
+time bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true
 ```
 
 ### What we measured (2026-07-28) - short version
 
-Re-enabling `parallel-tests` was tested on GitHub-hosted runners (PR #66) and a
+Integration parallelism was tested on GitHub-hosted runners (PR #66) and a
 self-hosted Mac (`mac-laptop`, M2, 12 cores):
 
-- **Speed:** unit ~30% faster, performance ~20% faster, and integration **~7-10×
-  faster** on the 12-core Mac (~70-92 s vs ~11.5 min sequential).
-- **On GitHub's 2-core runners, parallel integration is unusable** (~28 timeout
+- **Naive thread-parallelism (`-Dparallel-tests=true`) is fast but flaky.** On
+  the 12-core Mac it was **~7-10× faster** (~70-92 s vs ~11.5 min sequential),
+  but ~2 of 104 tests flaked per run - a different set each time, all
+  timing/timeout races on the **one shared broker** all ~104 tests contend.
+  Lowering the parallelism factor and doubling Docker RAM had no effect. One of
+  those failures (`RebalanceEoSDeadlockTest`) turned out to be a **real main-code
+  deadlock (#857)**, not test flakiness - so we did not loosen timeouts to go
+  green.
+- **Forked per-broker mode (`-DforkCount=4 -DreuseForks=true`) is the fix** - and
+  what the workflow now runs. Each JVM fork gets its own broker, so tests never
+  contend: reliable **and** parallel. Measured **5/5 green** on the Mac (~4:06)
+  and green on GitHub-hosted (6:16 vs ~11:38 sequential). It masks nothing -
+  each test runs on an uncontended broker, just N-way in parallel.
+- **On GitHub's 2-core runners, thread-parallelism was unusable** (~28 timeout
   failures from CPU starvation) - which is why the `ci` profile keeps
-  `parallel-tests=false`. Enable parallelism **only** on a self-hosted runner with
-  real cores.
-- **Even on real cores, integration is not cleanly green:** ~2 of 104 flake per
-  run, a different set each time, all timing/timeout races. Lowering the
-  parallelism factor and doubling Docker RAM both had no effect - it's
-  test-level concurrency flakiness, not resource contention.
+  `parallel-tests=false` as the sequential default.
 
-Full diagnosis, the four measured runs, and the fix (test hardening) are in the
-findings doc:
+Full diagnosis, the measured runs, and the resolution are in the findings doc:
 [`docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md`](solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md).
 
 ## Security & trust model
