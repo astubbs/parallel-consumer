@@ -16,16 +16,18 @@ import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
 import io.confluent.parallelconsumer.state.ModelUtils;
 import lombok.Getter;
 import lombok.Setter;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import one.util.streamex.IntStreamEx;
 import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.IsolationLevel;
+import org.apache.kafka.common.errors.TopicExistsException;
+import pl.tlinkowski.unij.api.UniLists;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterEach;
@@ -258,16 +260,47 @@ public class KafkaClientUtils implements AutoCloseable {
         }
     }
 
-    @SneakyThrows
+    /**
+     * Create a single named topic and block until the broker confirms it exists, tolerating a
+     * topic that already exists (idempotent).
+     * <p>
+     * Prefer this over calling {@code getAdmin().createTopics(...)} directly: it waits for creation
+     * to actually complete, avoiding the flaky "topic not ready yet" races a bare or short-timeout
+     * call produces on a cold or loaded CI broker.
+     */
+    public CreateTopicsResult createTopic(String name, int numPartitions) {
+        return createTopicsBlocking(UniLists.of(new NewTopic(name, numPartitions, (short) 1)));
+    }
+
     public List<NewTopic> createTopics(int numTopics) {
         List<NewTopic> newTopics = IntStreamEx.range(numTopics)
                 .mapToObj(i
                         -> new NewTopic("in-" + i + "-" + nextInt(), empty(), empty()))
                 .toList();
-        getAdmin().createTopics(newTopics)
-                .all()
-                .get();
+        createTopicsBlocking(newTopics);
         return newTopics;
+    }
+
+    /**
+     * Shared blocking topic create: submits the topics and waits (unbounded, matching the other
+     * integration-test admin waits) for the broker to confirm creation. Tolerates
+     * {@link TopicExistsException} so callers can "ensure" a topic idempotently; any other failure
+     * propagates as a {@link RuntimeException} rather than being silently swallowed.
+     */
+    private CreateTopicsResult createTopicsBlocking(List<NewTopic> newTopics) {
+        CreateTopicsResult result = getAdmin().createTopics(newTopics);
+        try {
+            result.all().get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (ExecutionException e) {
+            if (!(e.getCause() instanceof TopicExistsException)) {
+                throw new RuntimeException(e);
+            }
+            // topic already exists — idempotent create, fine
+        }
+        return result;
     }
 
     public List<String> produceMessages(String topicName, long numberToSend) throws InterruptedException, ExecutionException {

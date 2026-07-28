@@ -113,12 +113,13 @@ Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were c
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
 **Unit Tests, Integration Tests, Performance Tests**. Everything else is advisory. Track and fix:
 
-- **`Integration Tests` is flaky (required → blocks merges).** Fails intermittently on TestContainers
-  Kafka broker startup: `BrokerIntegrationTest.ensureTopic` → `TimeoutException` (e.g. 1 error / 104 in
-  PR #56, `TransactionMarkersTest.setup`). Because it's a *required* check, each flake blocks an
-  otherwise-green PR. **Fix:** harden broker/topic setup (longer/again-with-backoff waits) and/or add
-  Surefire/Failsafe `rerunFailingTestsCount` for setup-timeout errors. High priority — a flaky
-  *required* gate.
+- **`Integration Tests` was flaky (required → blocked merges) — FIX IN FLIGHT (PR #63).** Failed
+  intermittently on `BrokerIntegrationTest.ensureTopic` → `TimeoutException` (e.g. #56, #61). Root cause:
+  `ensureTopic` was a drifted duplicate of `KafkaClientUtils.createTopics` that waited only
+  `.get(1, TimeUnit.SECONDS)`, so topic creation on a cold/loaded CI broker timed out and hard-failed.
+  **Fix (PR #63):** consolidate onto one blocking `KafkaClientUtils.createTopic` helper (unbounded wait,
+  classifies `TopicExistsException`); `ensureTopic` delegates. Not a `rerunFailingTestsCount` band-aid —
+  removes the cause. Remove this note once #63 merges.
 - **`@StandardException` compile flake (intermittent → hits the *required* Unit Tests gate).** A
   main-source annotation-processing race: Lombok's generated exception constructors are sometimes not
   visible when their callers are type-checked, giving `error: constructor ... cannot be applied to given

@@ -16,18 +16,14 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
-import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.List;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -147,16 +143,9 @@ public abstract class BrokerIntegrationTest<K, V> {
     }
 
     protected CreateTopicsResult ensureTopic(String topic, int numPartitions) {
-        NewTopic e1 = new NewTopic(topic, numPartitions, (short) 1);
-        CreateTopicsResult topics = kcu.getAdmin().createTopics(UniLists.of(e1));
-        try {
-            Void all = topics.all().get(1, TimeUnit.SECONDS);
-        } catch (ExecutionException e) {
-            // fine
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-        return topics;
+        // Delegates to the canonical blocking helper so topic-creation logic lives in one place
+        // (avoids the drift that reintroduced a flaky short timeout here). See KafkaClientUtils#createTopic.
+        return kcu.createTopic(topic, numPartitions);
     }
 
     protected List<String> produceMessages(int quantity) {
