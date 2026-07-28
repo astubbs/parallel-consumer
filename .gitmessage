@@ -1,0 +1,18 @@
+# <type>(<scope>): <subject>   (<= 72 chars, imperative; e.g.
+#   "fix: replace stale work container on rebalance (#909)")
+#
+# Body: what changed and why (wrap ~72). Reference the upstream issue/PR in the
+# subject as "(#NNN)" when it maps to one, as the existing history does.
+#
+# --- Upstream trailers -------------------------------------------------------
+# For commits that relate to upstream confluentinc/parallel-consumer, UNCOMMENT
+# and fill in what applies (delete the rest). Comment/blank lines are stripped
+# by git, so an untouched template adds nothing. Not needed for fork-only work
+# (rebrand, release, dependabot, formatting). Field names follow Debian DEP-3.
+# The machine-readable cache is src/docs/development/upstream-map.yaml -- update
+# the matching entry there too.
+#
+# Upstream-Issue: confluentinc/parallel-consumer#NNN
+# Upstream-PR: confluentinc/parallel-consumer#NNN
+# Forwarded: <upstream comment URL | no | not-needed>
+# Applied-Upstream: <no | commit:SHA | VERSION>
