@@ -148,9 +148,14 @@ exactly why we did **not** loosen timeouts to go green (see AGENTS.md "Be EXTREM
 tests").
 
 **The road (two steps):**
-1. **(this)** Adopt forked/per-broker parallelism for a reliable, fast functional suite.
-2. **(next)** Merge #29's #857 lock fixes, then retry **full thread-parallelism on a shared broker** — the
-   deliberate contended-broker stress test — to *validate* the deadlock is gone rather than avoided.
+1. **(done)** Adopt forked/per-broker parallelism for a reliable, fast functional suite.
+2. **(DEFERRED — do not start yet)** Once #857/#29 is actually finished and merged **on its own merits**,
+   retry **full thread-parallelism on a shared broker** — the deliberate contended-broker stress test — to
+   *validate* the deadlock is gone rather than avoided. Deferred because #29 is a ~454-line WIP concurrency
+   refactor (new `ThreadConfinedConsumer`, "root cause still open", chaos test 9/10) on a different base
+   with merge conflicts — merging unfinished main code just to test parallel would violate the "be
+   extremely careful modifying tests/main code under stress" rule. `-Dparallel-tests=true` (thread-parallel
+   on one broker) is the reproducer to re-run **after** #857 lands.
 
 ## Prevention
 
