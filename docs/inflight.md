@@ -117,8 +117,18 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   Kafka broker startup: `BrokerIntegrationTest.ensureTopic` → `TimeoutException` (e.g. 1 error / 104 in
   PR #56, `TransactionMarkersTest.setup`). Because it's a *required* check, each flake blocks an
   otherwise-green PR. **Fix:** harden broker/topic setup (longer/again-with-backoff waits) and/or add
-  Surefire/Failsafe `rerunFailingTestsCount` for setup-timeout errors. Highest priority — it's the only
-  flaky *required* gate.
+  Surefire/Failsafe `rerunFailingTestsCount` for setup-timeout errors. High priority — a flaky
+  *required* gate.
+- **`@StandardException` compile flake (intermittent → hits the *required* Unit Tests gate).** A
+  main-source annotation-processing race: Lombok's generated exception constructors are sometimes not
+  visible when their callers are type-checked, giving `error: constructor ... cannot be applied to given
+  types` / `recursive constructor invocation`. Non-deterministic — the *same code* passes or fails
+  between runs (the `logback 1.5.19 → 1.6.0` bump build `30311773374` failed on it; logback is a red
+  herring, `test`-scope). **Distinct** from the Integration flake above (compile-time, not broker
+  startup) and also caught the release pipeline's maiden publish run. **Fix:** simplify/harden the
+  exception-class constructors — drop the custom `(String, Throwable, Object... args)` ctor, or stop
+  applying `@StandardException` to classes that declare their own ctor (the deferred "exception-class
+  custom-ctor simplification" in the 0.7.x plan). Do this before trusting the release pipeline.
 - **`Duplicate Code (jscpd)` absolute cap is below baseline → fails on EVERY PR.** jscpd cap is 4% but
   the codebase baseline is already 4.22% (85 clones), so the absolute-limit rule red-flags all PRs even
   when "max increase vs base" is +0.00% (as in #56). PMD CPD is fine (3.60% < 5%). **Fix:** raise
