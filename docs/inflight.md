@@ -114,6 +114,40 @@ the sequenced items after #57 lands. (Backlog source: `src/docs/development/upst
 - **#915 batch construction strategy** (cherry-pick upstream, closes 4-yr issue #266) — medium effort.
 - **DLQ** (#310 / revive #366) — most-demanded missing feature; large, idea-bank spec not a live branch.
 
+## Deferred dependency upgrades (branch `deps/cap-non-major-upgrades`, 2026-07-29)
+
+Ahead of the 0.6.0.0 patch release we bumped **every dependency + build plugin to its newest
+*non-major* version** and deliberately capped anything whose only newer release is a major (fork /
+patch-release risk aversion). Enforced with `versions-maven-plugin` `-DallowMajorUpdates=false` plus a
+ruleset (`bin/deps-version-rules.xml`) that also ignores pre-releases (alpha/beta/`-Mn`/RC/snapshot)
+and Confluent `-ce`/`-ccs` Kafka builds — without the `-ce` filter, kafka "latest" mis-resolves to
+`8.3.0-ce` (a Confluent build), not Apache. Build is green (`mvn -Dlicense.skip -DskipTests verify`, all
+11 modules). **The following were intentionally NOT taken and still need updating later:**
+
+**Majors — need a deliberate migration (not for a patch release):**
+- **kafka-clients / kafka-streams / kafka-streams-test-utils** `3.9.1 → 4.3.1` — Apache Kafka 4;
+  requires the Java 11 baseline. Already tracked above under **0.7.x — Java baseline + Kafka 4** (Unit 2).
+- **junit-jupiter** `5.14.4 → 6.1.2` + **junit-platform** `1.14.4 → 6.1.2` — JUnit 6 requires Java 17;
+  blocked by the same Java-baseline move. Do it with the Kafka 4 / Java-baseline work.
+- **org.testcontainers:testcontainers** `1.21.4 → 2.0.5` — Testcontainers 2.x (core artifact only; the
+  `kafka`/`postgresql`/`junit-jupiter` TC modules already moved to 1.21.4 in this pass).
+- **io.vertx** vertx-junit5 / vertx-web-client `4.5.31 → 5.1.5` — Vert.x 5.
+- **io.smallrye.reactive:mutiny** `2.9.5 → 3.3.0` — Mutiny 3.
+- **com.github.tomakehurst:wiremock-jre8** `2.35.2 → 3.0.1` — WireMock 3 (artifact renamed to
+  `org.wiremock:wiremock`; test-only).
+
+**Micrometer family — source-incompatible, held back even though it's NOT a major:**
+- **micrometer-core** (`1.13.0`) + **micrometer-registry-prometheus** (`1.12.2`) → latest `1.17.x`.
+  Micrometer 1.13 renamed the Prometheus registry package `io.micrometer.prometheus` →
+  `io.micrometer.prometheusmetrics` (and reworked the artifact), so `example-metrics/CoreApp.java` fails
+  to compile against 1.17. Both are pinned with in-pom comments. **To upgrade:** migrate the `CoreApp`
+  imports + registry construction, then bump the whole micrometer family together (keep the two aligned).
+
+**Build plugins — only pre-releases available, held by the risk policy:**
+- Maven-4-era plugins offered only as betas/milestones: `maven-clean/deploy/install/jar/resources/source/
+  compiler` `4.0.0-beta-*`; `maven-surefire`/`maven-failsafe` `3.6.0-M1`; `maven-site-plugin` `4.0.0-M16`
+  (left at `4.0.0-M15`). Revisit once these reach GA.
+
 ## CI reliability / gate issues (follow-up work)
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Risk-averse patch-release ruleset for versions-maven-plugin.
+     ignoreVersion type="regex" is FULL-MATCH (Pattern.matches), so each regex
+     must match the entire version string. We exclude:
+       - pre-releases: alpha / beta / milestone (-Mn) / RC / CR / snapshot / preview / EA
+       - Confluent Kafka builds (-ce / -ccs) so kafka stays on the Apache line
+     Major bumps are excluded separately via -DallowMajorUpdates=false. -->
+<ruleset comparisonMethod="maven"
+         xmlns="http://www.mojohaus.org/versions-maven-plugin/rule/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.mojohaus.org/versions-maven-plugin/rule/2.0.0 https://www.mojohaus.org/versions-maven-plugin/xsd/rule-2.0.0.xsd">
+    <ignoreVersions>
+        <ignoreVersion type="regex">(?i).*alpha.*</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*beta.*</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*milestone.*</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*-m\d+</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*-rc\d*.*</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*-cr\d*.*</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*snapshot.*</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*preview.*</ignoreVersion>
+        <ignoreVersion type="regex">(?i).*-ea\d*.*</ignoreVersion>
+        <ignoreVersion type="regex">.*-ce</ignoreVersion>
+        <ignoreVersion type="regex">.*-ccs</ignoreVersion>
+    </ignoreVersions>
+</ruleset>

@@ -26,6 +26,10 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+            <!-- Pinned to 1.12.x: micrometer 1.13+ renamed the registry package
+                 io.micrometer.prometheus -> io.micrometer.prometheusmetrics, which breaks
+                 CoreApp.java. Bump together with micrometer-core when migrating that import.
+                 See docs/inflight.md "Deferred dependency upgrades". -->
             <version>1.12.2</version>
         </dependency>
         <!-- end::exampleDep[] -->
