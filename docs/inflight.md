@@ -128,13 +128,20 @@ and Confluent `-ce`/`-ccs` Kafka builds — without the `-ce` filter, kafka "lat
 - **kafka-clients / kafka-streams / kafka-streams-test-utils** `3.9.1 → 4.3.1` — Apache Kafka 4;
   requires the Java 11 baseline. Already tracked above under **0.7.x — Java baseline + Kafka 4** (Unit 2).
 - **junit-jupiter** `5.14.4 → 6.1.2` + **junit-platform** `1.14.4 → 6.1.2` — JUnit 6 requires Java 17;
-  blocked by the same Java-baseline move. Do it with the Kafka 4 / Java-baseline work.
+  blocked by the same Java-baseline move. Do it with the Kafka 4 / Java-baseline work. **Second blocker:**
+  `archunit-junit5` will not run on JUnit 6 and there is no `archunit-junit6` engine yet (TNG/ArchUnit
+  [#1556](https://github.com/TNG/ArchUnit/issues/1556)) — the ArchUnit tests must be migrated/re-wired
+  before the JUnit 6 bump can land.
 - **org.testcontainers:testcontainers** `1.21.4 → 2.0.5` — Testcontainers 2.x (core artifact only; the
   `kafka`/`postgresql`/`junit-jupiter` TC modules already moved to 1.21.4 in this pass).
 - **io.vertx** vertx-junit5 / vertx-web-client `4.5.31 → 5.1.5` — Vert.x 5.
 - **io.smallrye.reactive:mutiny** `2.9.5 → 3.3.0` — Mutiny 3.
 - **com.github.tomakehurst:wiremock-jre8** `2.35.2 → 3.0.1` — WireMock 3 (artifact renamed to
-  `org.wiremock:wiremock`; test-only).
+  `org.wiremock:wiremock`; test-only). **Side effect while it stays on 2.x:** wiremock-jre8 2.35.2 drags
+  in an ancient `net.bytebuddy:byte-buddy 1.12.18` that wins the version conflict and lacks the `JAVA_V21`
+  field mockito 5.23 needs (`MockitoInitializationException` → every Mockito unit test errors). Worked
+  around by pinning `byte-buddy`/`byte-buddy-agent` to `1.17.7` (mockito's version) in
+  `dependencyManagement` (`byte-buddy.version` property). **Remove that pin when wiremock moves to 3.x.**
 
 **Micrometer family — source-incompatible, held back even though it's NOT a major:**
 - **micrometer-core** (`1.13.0`) + **micrometer-registry-prometheus** (`1.12.2`) → latest `1.17.x`.

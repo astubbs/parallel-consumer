@@ -113,6 +113,12 @@
         <truth.version>1.4.5</truth.version>
         <flogger.version>0.9</flogger.version>
         <mockito.version>5.23.0</mockito.version>
+        <!-- Aligns byte-buddy with what mockito 5.23 requires (it ships 1.17.7). The ancient
+             wiremock-jre8 2.35.2 otherwise drags in byte-buddy 1.12.18, which wins the conflict
+             and lacks the JAVA_V21 field mockito 5.23 needs -> MockitoInitializationException.
+             Remove this pin once wiremock 3.x (a deferred major) drops the stale transitive.
+             Test/provided scope only - not in the shipped artifact. See docs/inflight.md. -->
+        <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
         <logback.version>1.6.1</logback.version>
@@ -394,6 +400,18 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Pin byte-buddy so mockito 5.23 gets the version it needs (see byte-buddy.version
+                 property); overrides the stale 1.12.18 pulled transitively by wiremock-jre8. -->
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-core</artifactId>
@@ -997,6 +1015,14 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>versions-maven-plugin</artifactId>
                 <version>2.21.0</version>
+                <configuration>
+                    <!-- Risk-averse upgrade policy: ignore pre-releases (alpha/beta/-Mn/RC) and
+                         Confluent -ce/-ccs kafka builds. Combine with -DallowMajorUpdates=false to
+                         cap to newest non-major. Applies to display-*-updates / update-* goals. -->
+                    <!-- multiModuleProjectDirectory = reactor root (bin/ only exists there);
+                         ${project.basedir} would be wrong for child modules. -->
+                    <rulesUri>file://${maven.multiModuleProjectDirectory}/bin/deps-version-rules.xml</rulesUri>
+                </configuration>
             </plugin>
         </plugins>
 
