@@ -1377,16 +1377,16 @@ All `ci-*` scripts use the `-Pci` Maven profile which enables license checking a
 
 === Releasing
 
-Releases use `maven-release-plugin` to bake the release version into a commit, then publish that commit when its PR merges. `master` is always a `-SNAPSHOT`; snapshots publish automatically on every push to `master`.
+Releases use `maven-release-plugin` and are *tag-as-truth*: `release:prepare` tags the release commit, and the workflow deploys that exact tag. `master` is always a `-SNAPSHOT`; snapshots publish automatically on every push to `master`.
 
 To cut a release:
 
-. Run the *Prepare Release* workflow (Actions tab), supplying the release version (e.g. `0.6.0.0`) and the next development version (e.g. `0.6.0.1-SNAPSHOT`). It runs `release:prepare` (poms only, no build) and opens a `release: <version>` PR containing the two version commits.
-. Review and merge that PR with a *merge-commit or rebase — not squash* (squash drops the release commit; the publish job guards against it).
-. On merge, `.github/workflows/publish.yml` finds the `[maven-release-plugin] prepare release` commit, deploys it to Maven Central, tags `v<version>`, and creates a GitHub release. `master` returns to the next `-SNAPSHOT` automatically.
+. Run the *Release* workflow (Actions tab), supplying the release version (e.g. `0.6.0.0`) and the next development version (e.g. `0.6.0.1-SNAPSHOT`). Tick *Dry run* first to rehearse with no side effects.
+. It runs `release:prepare` (poms only, no build; tags `v<version>` and pushes the two version commits to `master`), then checks out that tag and deploys it to Maven Central via `.github/workflows/release.yml`, then creates a GitHub release. `master` returns to the next `-SNAPSHOT` automatically.
 
 Required GitHub repository secrets:
 
+* `RELEASE_PAT` — fine-grained PAT (repo Contents: write) owned by a repo admin, so `release:prepare` can push to `master` (the "Repository admin" role must be in the `master` ruleset's bypass list)
 * `MAVEN_CENTRAL_USERNAME` — Sonatype Central Portal token username
 * `MAVEN_CENTRAL_PASSWORD` — Sonatype Central Portal token password
 * `MAVEN_GPG_PRIVATE_KEY` — Armored GPG private key for signing artifacts
