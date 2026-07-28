@@ -2,7 +2,7 @@
 
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
-> from `git log`. Keep it current when context-switching. Last updated: 2026-07-24.
+> from `git log`. Keep it current when context-switching. Last updated: 2026-07-28.
 
 ## 0.6.0 — first fork release (off `master`)
 
@@ -51,11 +51,14 @@ the PR #53 branch):
 
 ## In-flight on other branches / worktrees
 
-- **`bugs/859-pcmetrics-leak-v2`** (worktree `.claude/worktrees/dev-cc`) — 5 commits ahead of master,
-  clean tree. Fixes PCMetrics memory leak (#859): duplicate Micrometer meter re-registration on
-  partition assignment/revocation. Touches `PCMetrics.java`, `PartitionStateManager.java`; has
-  regression tests (`PCMetricsTest859.java`) + a P1-review-hardening pass. **Ready/near-ready for PR.**
-  Stacks on cherry-picks #893 (offset accuracy on assignment) and #905 (max-queued-records-per-shard metric).
+- **`fix/859-metrics-leak-plus-cherrypicks`** (**PR #57, open**; worktree `.claude/worktrees/dev-cc`) —
+  5 commits ahead of master, rebased clean, targets `master`. Fixes PCMetrics memory leak (#859):
+  duplicate Micrometer meter re-registration on partition assignment/revocation. Owns `PCMetrics.java`,
+  `PCMetricsDef.java`, `PartitionState.java`, `PartitionStateManager.java`, `ShardManager.java`;
+  regression test `PCMetricsTest859.java` + a P1-review-hardening pass. **Now bundles** cherry-picks
+  #893 (offset accuracy on assignment) and #905 (max-queued-records-per-shard metric) into the one PR
+  rather than a stack. Supersedes the old 3-deep cherry-pick stack (closed **#42** → open-then-closed
+  **#43** → closed **#45**); the old `bugs/859-pcmetrics-leak-v2` branch still exists on origin.
 - **`bugs/857-paused-consumption-multi-consumers-bug`** — silent-stall-after-rebalance. **Root cause
   found + fixed:** `synchronized(commitCommand)` deadlock between poll thread (`onPartitionsRevoked`)
   and control thread (`commitOffsetsThatAreReady`), replaced with `ReentrantLock.tryLock()`. Chaos test
@@ -63,7 +66,10 @@ the PR #53 branch):
   5 fixes, "ready for PR." (Memory note is old — re-verify before relying on it.) Relates to upstream
   PR #548 (same deadlock) and issues #326/#541/#546. User weighing a larger single-thread refactor
   (merge poll + control threads) to kill this bug class.
-- **`bugs/912-vertx-stream-memory-leak`** — clear JStream deque on close (#912).
+- **`bugs/912-vertx-stream-memory-leak`** — clear JStream deque on close (#912). Fix + regression test
+  (`JStreamMemoryLeakTest912`) committed and pushed to origin; **no PR yet.** Touches only the vertx
+  module (`JStream*Processor.java`) — isolated from core. Production memory leak (issue #912, Jan 2026).
+  **Ready to resume:** rebase onto master → open PR.
 - **`fix/909-stale-container-replacement`** — regression test for stale container at same offset.
 - **`astubbs/orca`** (worktree `/Users/astubbs/orca/workspaces/parallel-consumer/orca`) — 9 ahead / 9
   behind master, diverged, clean. CI/tooling: Claude Code Review + PR Assistant workflows, PR-dependency
@@ -72,3 +78,31 @@ the PR #53 branch):
   `cherry-pick/893-offset-reset`, `cherry-pick/905-max-shard-metric`, `refactor/test-hardening`.
 - **Stale/backup:** `backup/*` (pre-rebase snapshots), `dev-cc` & `master-confluent` (pinned at
   pre-rebrand `7f290122`), `dev/self-hosted-runner`, 4× `dependabot/maven/*`.
+
+## Parallel-safe work while PR #57 is in flight
+
+PR #57 owns the metrics/state core: `metrics/PCMetrics.java`, `metrics/PCMetricsDef.java`,
+`state/PartitionState.java`, `state/PartitionStateManager.java`, `state/ShardManager.java`. The verdicts
+below are purely about **file collision with #57** — pick parallel-safe work to avoid rebase churn; run
+the sequenced items after #57 lands. (Backlog source: `src/docs/development/upstream-pr-analysis.adoc`.)
+
+**Collides with #57 → sequence after it merges (do NOT run in parallel):**
+- **#857** deadlock fix (`bugs/857-...`) — touches `PartitionState`/`PartitionStateManager`. Fixed &
+  "ready for PR" but shares files. Pair with #909 as one post-#57 rebalance-correctness stream.
+- **#909** stale-container replacement (`fix/909-stale-container-replacement`) — touches `ShardManager`.
+- **#51** virtual threads (`features/enable-virtual-threads`) — also edits `PCMetrics.java`.
+
+**Parallel-safe (no overlap with #57), ranked by readiness:**
+- **#912 vertx memory leak** — *ready*, branch done & pushed, just needs rebase + PR (see above). Best
+  immediate parallel pick.
+- **0.6.0.0 release** (`release/0.6.0.0`, PR #56, worktree `.claude/worktrees/pc-release`) — pom/docs
+  only. Already running in parallel.
+- **Logging-verbosity cleanup** — batch issues #629/#631/#640 into one PR (`ConsumerOffsetCommitter`,
+  `RemovedPartitionState`, `AbstractParallelEoSStreamProcessor`). Low-effort, high-ROI.
+- **Security dep bumps** — #851 (postgres), #913 (assertj); pom-only. Logback already in flight on
+  `ci/tag-triggered-release` (bumped 1.5.19→1.6.0).
+- **Contributor-friction build fixes** — #162 (mvn compile without test-jar), #861 (`ManagedTruth` not
+  found), #906 (pom version mismatch). Small, unblocks external contributors.
+- **Issue #40** — dedup `MockConsumer*` test classes (test-only; duplication bot keeps flagging these).
+- **#915 batch construction strategy** (cherry-pick upstream, closes 4-yr issue #266) — medium effort.
+- **DLQ** (#310 / revive #366) — most-demanded missing feature; large, idea-bank spec not a live branch.
