@@ -7,9 +7,14 @@ here (versioned, greppable, zero per-item ceremony) instead of as GitHub issues.
 
 **This is the index for all refactor work.** It also catalogues the abandoned
 draft branches and prior closed PRs so their ideas aren't lost - each with what it
-did, whether it's still relevant, and any linked issue. The *full verdicts* on the
-prior closed PRs stay in `src/docs/development/upstream-pr-analysis.adoc` (Part 2);
-this file keeps the actionable pointers.
+did, whether it's still relevant, and any linked issue. Why so many draft-looking
+branches? This fork was never meant to be the project's primary - it was astubbs's
+personal experiment space, so it accumulated a lot of half-finished spikes. Now
+that the fork *is* the primary, the plan is to **mine those drafts for ideas and
+then clean them up**, not blindly delete them (see the branch catalogue below).
+The *full verdicts* on the prior closed PRs stay in
+`src/docs/development/upstream-pr-analysis.adoc` (Part 2); this file keeps the
+actionable pointers.
 
 ## How to use it
 
@@ -19,6 +24,9 @@ this file keeps the actionable pointers.
   deferred, size/risk, payoff, links). Small point-fixes can stay as bare markers.
 - **Grouped by file** so items surface when you're editing that file and so edits
   cluster (fewer merge conflicts); cross-cutting/architectural items go up top.
+- **Breaking changes** (user-visible API/behaviour) go in their own section below,
+  **not** here with the non-breaking refactors - they're gated on a major-version
+  bump, so they need to be picked up as a batch at release time, not folded in ad hoc.
 - **Graduation rule:** an item only becomes a branch/PR when you actually start it.
   If it maps to an upstream issue, link it - don't duplicate it.
 - **Not** for: in-flight work (`docs/inflight.md`), fork↔upstream mapping
@@ -27,9 +35,40 @@ this file keeps the actionable pointers.
 
 **Reference convention** (same as the changelog): bare `#NN` = this fork
 (astubbs/parallel-consumer); `upstream #NN` = confluentinc/parallel-consumer.
+Note that fork **branch names encode the upstream number** (`bugs/857-...`,
+`fix/909-...`), so a number seen in a branch name is the *upstream* issue, not a
+fork issue - spell those out as `upstream #NN` in prose to avoid the ambiguity.
 Prior draft PRs (`upstream #NNN`) are astubbs's closed-unmerged upstream PRs, and
 `origin/<branch>` are abandoned fork drafts - both **design references, not code to
-resurrect** (they've bitrotted).
+resurrect** (they've bitrotted). Branch refs are pinned to the short SHA they point
+at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
+
+---
+
+## Breaking changes queued for next major version
+
+API/behaviour changes that are ready in principle but must wait for a major-version
+bump (current line is 0.6.x). Unlike the internal refactors below - which are
+non-breaking and can land any time - these change the public, user-visible surface,
+so they are **release-gated**: do not fold them into a minor/patch. Collected here
+so a major-release prep can action them in one pass.
+
+- **Remove the deprecated `commitInterval` options** -
+  `internal/AbstractParallelEoSStreamProcessor.java` L87-103.
+- **Remove the accreting deprecated `ParallelConsumerOptions` fields** (L282-286,
+  L361-363, L500-502) **and retire the temporary Kafka-compat work-around flag**
+  (L564) - `ParallelConsumerOptions.java`.
+- **Remove the JStream API** (deprecate first) - design ref
+  `origin/refactor/deprecate-jstream` @8a8f6508.
+- **Rename the enum to the standard pattern** (public enum rename) -
+  `origin/refactor/minor-changes` @193bbf80.
+- **Evaluate for breakage at the bump:** adopt `@ParametersAreNonnullByDefault`
+  (`origin/improvements/nonnull-default` @684c02a0) and add a JPMS `module-info`
+  (`origin/improvements/module-info` @d74f5e8b) - both tighten the published
+  contract and can break downstream callers / module-path consumers.
+- **Version-gated API work** already tracked under Cross-cutting: `upstream #186`
+  (thread-safe public APIs, labelled *ver:1.0* blocker) and `upstream #172`
+  (1.0 release train).
 
 ---
 
@@ -41,39 +80,40 @@ Do not start one casually.
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
 - **upstream #200** - "Consider a shared-nothing architecture, to reduce thread
   complexity" - the canonical tracker ("the ultimate simplification would be to
-  eliminate the separate poller thread"). Would also kill the #857 deadlock class
+  eliminate the separate poller thread"). Would also kill the `upstream #857` deadlock class
   (poll vs control thread on `commitCommand`).
 - Design ref: draft `upstream #270` (Partition Events). Abandoned branches:
-  `origin/improvements/interrupt-reason` (the interrupting-poll model - wake a
-  blocking poll when work arrives), `origin/improvements/poller-bus-actor` (poller
-  as an actor), `origin/improvements/rebalance-messages` (rebalance via messages),
-  `origin/refactor/control-loop`, `origin/refactor/extract-controller` (extract a
-  `SubscriptionHandler` interface, pull Poll up), `origin/refactor/infinite-retry`
+  `origin/improvements/interrupt-reason` @93a06fe0 (the interrupting-poll model - wake a
+  blocking poll when work arrives), `origin/improvements/poller-bus-actor` @b1598f21 (poller
+  as an actor), `origin/improvements/rebalance-messages` @49e977bf (rebalance via messages),
+  `origin/refactor/control-loop` @c3a0f28a, `origin/refactor/extract-controller` @25db90e3 (extract a
+  `SubscriptionHandler` interface, pull Poll up), `origin/refactor/infinite-retry` @80feb470
   (move timeout-retry into the controller; poller just forwards the error),
-  `origin/refactor/function-runner`, `origin/massive-refactor` (the umbrella attempt).
+  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
 
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
   rebalance listener + deprecated options in one class. Design ref: draft
-  `upstream #488`. Branch `origin/refactor/state-machine` (extract the lifecycle
+  `upstream #488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
   state machine). Do alongside the #200 work; high risk.
 
 ### Actor / IPC message bus for commits & results
 - Replace shared-state coordination with a lightweight actor/mailbox. Design refs:
   drafts `upstream #524` (commit-command actor), `upstream #325` (lambda actor queue
-  IPC). Branches: `origin/improvements/lambda-actor-bus` (the bus),
-  `origin/improvements/commit-command-actor`,
-  `origin/improvements/async-process-send-results-using-actor` (process send-results
+  IPC). Branches: `origin/improvements/lambda-actor-bus` @da7dc92c (the bus),
+  `origin/improvements/commit-command-actor` @1c50225e,
+  `origin/improvements/async-process-send-results-using-actor` @00f35016 (process send-results
   via actor instead of a blocking `future.get` - relates to draft `upstream #356`),
-  `origin/improvements/transactions-dont-block` (non-blocking tx, depends on the
-  actor system), `origin/improvements/{scheduled-commit,actor-scheduled,remove-commit-queue}`.
+  `origin/improvements/transactions-dont-block` @17f019b8 (non-blocking tx, depends on the
+  actor system), `origin/improvements/scheduled-commit` @b6f0a542,
+  `origin/improvements/actor-scheduled` @4db0da0f, `origin/improvements/remove-commit-queue` @381d6997.
   Only meaningful as part of the #200 rework.
 
 ### Remove static state (unblocks parallel test execution)
 - Several classes hold static state only to satisfy tests, forcing serial test
   runs. Design refs: drafts `upstream #405` (remove static state), `upstream #126`
   (remove static manipulation in tests) → enables `upstream #143` (parallel tests).
-  Branches `origin/improvements/remove-static` and `.../remove-static-use-pcmodule`
+  Branches `origin/improvements/remove-static` @c34ee4a4 and `.../remove-static-use-pcmodule` @806b505e
   (replace static state with PCModule DI). Concrete sites under the offsets/state
   files below. **Still relevant.**
 
@@ -85,7 +125,8 @@ Do not start one casually.
 - **upstream #884** - "Parallel Consumer is 30x slower than normal consumer" - the
   headline perf issue to characterise before/after any hot-path change.
 - Shard-count caching (O(n) scan → cached): design ref draft `upstream #530`;
-  branches `origin/improvements/{cache-counts,set-to-list,headset}` (cache / headSet
+  branches `origin/improvements/cache-counts` @f99e6b60, `origin/improvements/set-to-list` @7ada9918,
+  `origin/improvements/headset` @3e67fe7d (cache / headSet
   the counts; "push TreeSet construction up to source"). **Concrete, still relevant.**
 - Engine/queue and encoding experiments: see the idea-bank section below.
 
@@ -104,7 +145,7 @@ Do not start one casually.
 
 ### offsets/OffsetSimultaneousEncoder.java
 - L218: large offset ranges (→ `Integer.MAX_VALUE`) are slow - scans could be
-  skipped by passing in the known incompletes map (draft: `origin/refactor/encode-with-incompletes-direct`).
+  skipped by passing in the known incompletes map (draft: `origin/refactor/encode-with-incompletes-direct` @fa56ff18).
 - L214: run-length range capped at `Short.MAX_VALUE`, could double. L227: move the
   per-offset loop into the encoder subtypes. L212: inline into the WorkManager
   partition loop. L90-91: static state for test serialisation (see cross-cutting).
@@ -126,7 +167,7 @@ Do not start one casually.
 
 ### state/PartitionStateManager.java
 - L123 was a throwaway `OffsetMapCodecManager` per assignment (upstream #233); PR #57
-  cached it (the #859 leak site), but the broader #233 refactor remains.
+  cached it (the `upstream #859` leak site), but the broader #233 refactor remains.
 
 ### state/WorkContainer.java
 - L42: instance field working around static state - folds into static-state removal.
@@ -134,11 +175,12 @@ Do not start one casually.
 ### internal/AbstractParallelEoSStreamProcessor.java
 - God class (see cross-cutting). L930: `todo move into WorkManager` (misplaced
   "enough work?" check). L531: brittle Kafka-consumer-by-classname string check.
-  Deprecated `commitInterval` options to delete at next major (L87-103).
+  Deprecated `commitInterval` options to delete (L87-103) - **breaking**, see
+  [Breaking changes queued for next major version](#breaking-changes-queued-for-next-major-version).
 
 ### internal/ProducerManager.java
 - L162: `syncBeginTransaction()` is `private synchronized` (locks on `this`) -
-  lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics #859
+  lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `upstream #859`
   fix); low priority, separate concern. L265: brute-force transaction-commit retry.
 
 ### internal/DynamicLoadFactor.java
@@ -150,8 +192,9 @@ Do not start one casually.
   be redundant now that modules don't use the internal threading system.
 
 ### ParallelConsumerOptions.java (573 lines)
-- Accreting deprecated fields (L282-286, L361-363, L500-502) to remove at next major;
-  L564 temporary Kafka-compat work-around flag to retire.
+- Accreting deprecated fields (L282-286, L361-363, L500-502) and the L564 temporary
+  Kafka-compat work-around flag - both **breaking to remove**, see
+  [Breaking changes queued for next major version](#breaking-changes-queued-for-next-major-version).
 
 ### ParallelEoSStreamProcessor.java
 - L80: extract the wrapping function into its own class so it's directly reusable.
@@ -163,62 +206,68 @@ Do not start one casually.
 
 ## Abandoned draft branches (idea bank)
 
-Never-merged fork branches - **design references only** (bitrotted). The
+Never-merged fork branches - **design references only** (bitrotted). These are the
+experimental spikes from when this fork was astubbs's personal playground rather
+than the project's primary; kept so their ideas can be mined before the branches
+are eventually pruned. Each is pinned to the short SHA it points at as of the seed
+date, so if a branch is later deleted or moved we still know what it was. The
 thread-model / actor / static-state / shard-caching clusters are listed under
 Cross-cutting above; the rest:
 
 **Perf: engine & queue experiments** → mostly dead-ends; ideas for upstream #884:
-- `origin/features/disrupter` - LMAX Disruptor engine experiment.
-- `origin/direct-ringbuffer`, `origin/ringbuffer-batch` - ring-buffer engine.
-- `origin/refactor/double-ended-queue` - block on work submission to the pool
+- `origin/features/disrupter` @9473ab39 - LMAX Disruptor engine experiment.
+- `origin/direct-ringbuffer` @c247d89c, `origin/ringbuffer-batch` @ee942830 - ring-buffer engine.
+- `origin/refactor/double-ended-queue` @58a2b997 - block on work submission to the pool
   instead of on results (backpressure).
-- `origin/refactor/worker-queues` - worker-queue rework.
-- `origin/refactor/gpt3-central-queue-direct-pull` - central queue, direct pull
+- `origin/refactor/worker-queues` @a616de9e - worker-queue rework.
+- `origin/refactor/gpt3-central-queue-direct-pull` @7e775a11 - central queue, direct pull
   (noted: poller-throttling issue, didn't help).
-- `origin/refactor/gpt3-queue-management-with-msg-push` - central distribution via
+- `origin/refactor/gpt3-queue-management-with-msg-push` @9ee80ffb - central distribution via
   actor message, batch-100.
-- `origin/external-engine-higher-pressure` - backpressure/pressure system for the
+- `origin/external-engine-higher-pressure` @944808e9 - backpressure/pressure system for the
   vertx/reactor external engines (fractional steps).
-- `origin/predictive-offset-payloads` - approximate in-flight per partition from the
+- `origin/predictive-offset-payloads` @fa4a79bd - approximate in-flight per partition from the
   offset range.
-- `origin/features/least-loaded` - incomplete futures as a loading proxy (→ draft
+- `origin/features/least-loaded` @278cc0a5 - incomplete futures as a loading proxy (→ draft
   `upstream #473` / issue `upstream #394`, least-loaded broker).
 
 **Offset encoding** → relevant to the offsets/*Encoder items above:
-- `origin/refactor/encode-with-incompletes-direct` - invoke the encoder with known
+- `origin/refactor/encode-with-incompletes-direct` @fa56ff18 - invoke the encoder with known
   incompletes directly instead of iterating (the `OffsetSimultaneousEncoder` L218 hot-spot).
-- `origin/refactor/continuous-encode-22`, `origin/continuous-encode` - split
+- `origin/refactor/continuous-encode-22` @0b98d4de, `origin/continuous-encode` @25340f89 - split
   run-length sequence/entry; continuous encoding (draft `upstream #46`).
-- `origin/encoders-truncate-themselves` - push truncation into the encoders.
+- `origin/encoders-truncate-themselves` @8d3903b9 - push truncation into the encoders.
 
 **Offsets/state classes** → tie to upstream #233 / #200:
-- `origin/refactors/offsets-class`, `.../offsets-class-partition-state` - introduce
+- `origin/refactors/offsets-class` @6916467a, `.../offsets-class-partition-state` @d79f47bd - introduce
   an `Offset` type used by `PartitionState`.
-- `origin/refactors/refactor-psm-and-ps`, `origin/partition-state` - PSM/PS rework.
+- `origin/refactors/refactor-psm-and-ps` @e2d512b4, `origin/partition-state` @a5be4885 - PSM/PS rework.
 
 **API / interface**:
-- `origin/features/producer-facade` - **DEAD-END, conclusion recorded**: "doesn't
+- `origin/features/producer-facade` @d7a118c0 - **DEAD-END, conclusion recorded**: "doesn't
   make sense to have a producer facade." Don't revisit.
-- `origin/features/consumer-interface`, `origin/refactor/interface` - Consumer /
+- `origin/features/consumer-interface` @e67833f8, `origin/refactor/interface` @400643c8 - Consumer /
   interface naming (→ cohesive-API draft `upstream #303`).
-- `origin/refactor/deprecate-jstream` - deprecate the JStream API.
-- `origin/move-cons-to-pc` - move the consumer into PC (old/new styles verified equal).
-- `origin/refactor/minor-changes` - rename enum to the standard pattern.
-- `origin/improvements/nonnull-default` - adopt `@ParametersAreNonnullByDefault`.
-- `origin/improvements/module-info` - add JPMS `module-info`.
-- `origin/improvements/loom` - Loom/Virtual-Threads POC → **superseded by upstream #908**.
-- `origin/custom-thread-pool` - customisable `ThreadPoolExecutor` (→ upstream #78; also
-  subsumed by #908).
+- `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API (breaking removal is
+  queued under *Breaking changes queued for next major version*).
+- `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
+- `origin/refactor/minor-changes` @193bbf80 - rename enum to the standard pattern (breaking; see
+  *Breaking changes queued for next major version*).
+- `origin/improvements/nonnull-default` @684c02a0 - adopt `@ParametersAreNonnullByDefault`.
+- `origin/improvements/module-info` @d74f5e8b - add JPMS `module-info`.
+- `origin/improvements/loom` @32ebac17 - Loom/Virtual-Threads POC → **superseded by upstream #908**.
+- `origin/custom-thread-pool` @8e7f56c9 - customisable `ThreadPoolExecutor` (→ upstream #78; also
+  subsumed by `upstream #908`).
 
 **Test infrastructure**:
-- `origin/refactor/chaos-broker`, `.../chaos-broker-challage-test`,
-  `.../test-consumer-disconnect` - ChaosBroker / broker-disconnect testing (draft
+- `origin/refactor/chaos-broker` @1b9bd385, `.../chaos-broker-challage-test` @c9acb00c,
+  `.../test-consumer-disconnect` @6a968074 - ChaosBroker / broker-disconnect testing (draft
   `upstream #345`, issue `upstream #203`).
-- `origin/refactor/test-hardening` - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M.
-- `origin/refactor/empty-tests` - remove/implement the empty placeholder tests (draft `upstream #496`).
-- `origin/improvements/test-perf`, `.../multi-topic-test` - test perf / multi-topic.
-- `origin/client-factory` - client-factory config to prevent client reuse (draft `upstream #106`).
-- `origin/slf4j-no-logger` - warn when no SLF4J logger is bound (→ `upstream #139`; UX, not a refactor).
+- `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M.
+- `origin/refactor/empty-tests` @5f8b3dba - remove/implement the empty placeholder tests (draft `upstream #496`).
+- `origin/improvements/test-perf` @932210b6, `.../multi-topic-test` @dd3ad77b - test perf / multi-topic.
+- `origin/client-factory` @9636c33d - client-factory config to prevent client reuse (draft `upstream #106`).
+- `origin/slf4j-no-logger` @9c9396b8 - warn when no SLF4J logger is bound (→ `upstream #139`; UX, not a refactor).
 
 ---
 
