@@ -117,8 +117,8 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   intermittently on `BrokerIntegrationTest.ensureTopic` → `TimeoutException` (e.g. #56, #61). Root cause:
   `ensureTopic` was a drifted duplicate of `KafkaClientUtils.createTopics` that waited only
   `.get(1, TimeUnit.SECONDS)`, so topic creation on a cold/loaded CI broker timed out and hard-failed.
-  **Fix (PR #63):** consolidate onto one blocking `KafkaClientUtils.createTopic` helper (unbounded wait,
-  classifies `TopicExistsException`); `ensureTopic` delegates. Not a `rerunFailingTestsCount` band-aid —
+  **Fix (PR #63):** consolidate onto one blocking `KafkaClientUtils.createTopic` helper (generous 60s
+  bound with a clear timeout message, classifies `TopicExistsException`); `ensureTopic` delegates. Not a `rerunFailingTestsCount` band-aid —
   removes the cause. Remove this note once #63 merges.
 - **`@StandardException` compile flake (intermittent → hits the *required* Unit Tests gate).** A
   main-source annotation-processing race: Lombok's generated exception constructors are sometimes not

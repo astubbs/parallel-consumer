@@ -52,7 +52,7 @@ The two had drifted: same operation, one robust, one with a too-tight timeout. T
 
 Consolidate onto a single blocking helper in the canonical util and delegate:
 
-- `KafkaClientUtils.createTopic(String name, int numPartitions)` + a shared private `createTopicsBlocking(List<NewTopic>)` that waits unbounded (matching the other integration-test admin waits) and tolerates only `TopicExistsException` (idempotent "ensure"); any other failure propagates instead of being silently swallowed.
+- `KafkaClientUtils.createTopic(String name, int numPartitions)` + a shared private `createTopicsBlocking(List<NewTopic>)` that waits with a generous 60s bound (vs the flaky 1s) and throws a clear timeout message if the broker is genuinely unresponsive — bounded so a dead broker fails fast rather than hanging until the CI timeout. Tolerates only `TopicExistsException` (idempotent "ensure"); any other failure propagates instead of being silently swallowed.
 - `BrokerIntegrationTest.ensureTopic(...)` now just calls `kcu.createTopic(...)`.
 - `KafkaClientUtils.createTopics(int)` routes through the same shared method too — one implementation, no drift.
 

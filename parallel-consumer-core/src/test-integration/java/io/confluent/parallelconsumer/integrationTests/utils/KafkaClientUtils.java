@@ -27,12 +27,12 @@ import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.IsolationLevel;
 import org.apache.kafka.common.errors.TopicExistsException;
-import pl.tlinkowski.unij.api.UniLists;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.KafkaContainer;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +40,8 @@ import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -282,18 +284,27 @@ public class KafkaClientUtils implements AutoCloseable {
     }
 
     /**
-     * Shared blocking topic create: submits the topics and waits (unbounded, matching the other
-     * integration-test admin waits) for the broker to confirm creation. Tolerates
-     * {@link TopicExistsException} so callers can "ensure" a topic idempotently; any other failure
-     * propagates as a {@link RuntimeException} rather than being silently swallowed.
+     * Generous bound for topic creation. Far above the ~sub-second a healthy broker needs (the old
+     * 1s bound here was the flake), but bounded so a genuinely unresponsive broker fails fast with a
+     * clear message instead of hanging the test until the outer CI timeout.
+     */
+    private static final int TOPIC_CREATE_TIMEOUT_SECONDS = 60;
+
+    /**
+     * Shared blocking topic create: submits the topics and waits for the broker to confirm creation.
+     * Tolerates {@link TopicExistsException} so callers can "ensure" a topic idempotently; any other
+     * failure propagates as a {@link RuntimeException} rather than being silently swallowed.
      */
     private CreateTopicsResult createTopicsBlocking(List<NewTopic> newTopics) {
         CreateTopicsResult result = getAdmin().createTopics(newTopics);
         try {
-            result.all().get();
+            result.all().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
+        } catch (TimeoutException e) {
+            throw new RuntimeException("Timed out after " + TOPIC_CREATE_TIMEOUT_SECONDS
+                    + "s waiting for the broker to create topics " + newTopics, e);
         } catch (ExecutionException e) {
             if (!(e.getCause() instanceof TopicExistsException)) {
                 throw new RuntimeException(e);
