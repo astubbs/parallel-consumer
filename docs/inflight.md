@@ -3,6 +3,13 @@
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
 > from `git log`. Keep it current when context-switching. Last updated: 2026-07-28.
+>
+> **The durable fork↔upstream mapping now lives in a machine-readable cache:**
+> [`src/docs/development/upstream-map.yaml`](../src/docs/development/upstream-map.yaml) is the
+> source of truth for which fork branch/PR maps to which upstream issue/PR and its status
+> (editorial analysis in `src/docs/development/upstream-pr-analysis.adoc`). This file stays for
+> *transient* working notes -- what's parked/in-flight right now. When adding a branch that maps
+> to an upstream issue/PR, record the mapping in `upstream-map.yaml`, not (only) here.
 
 ## 0.6.0 — first fork release (off `master`)
 

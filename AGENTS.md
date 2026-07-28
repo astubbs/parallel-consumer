@@ -121,3 +121,47 @@ Multiple agents/sessions often work in parallel git worktrees (kept under `.clau
 ## Documented Solutions
 
 `docs/solutions/` - documented solutions to past problems and workflow patterns, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+
+## Upstream tracking
+
+This is a maintained hard fork of the effectively-archived `confluentinc/parallel-consumer`. We keep a durable, machine-readable cache of the fork↔upstream relationship so it never has to be re-derived from scratch:
+
+- **`src/docs/development/upstream-map.yaml`** — the **source of truth** for the *facts*: which fork branch/PR maps to which upstream issue/PR, its work group, and current status. Its header documents the schema. Validate/render with `scripts/upstream-map.py {validate,table,refs}`.
+- **`src/docs/development/upstream-pr-analysis.adoc`** — the *editorial* analysis (rankings, verdicts, recommended merge order). When prose and manifest disagree, **the manifest wins for facts**. Manifest entries link back to `.adoc` section anchors via `adoc_anchor`.
+- **`docs/inflight.md`** — *transient* cross-branch working notes only.
+
+**When you start work that maps to an upstream issue/PR, add or update its entry in `upstream-map.yaml`** (don't just note it in prose). Design follows Debian DEP-3, Yocto `Upstream-Status:`, and OpenShift's `UPSTREAM:` fork conventions.
+
+### Branch naming
+
+Branches encode the upstream number: `bugs/857-...`, `fix/909-...`, `cherry-pick/893-...`, `upstream-pr-905`. Keep this — it makes the mapping greppable and matches the manifest's `fork.branches`.
+
+### Commit trailers
+
+Commits that relate to upstream carry DEP-3-style trailers so provenance lives in the commit itself:
+
+```
+Upstream-Issue: confluentinc/parallel-consumer#857
+Upstream-PR: confluentinc/parallel-consumer#548
+Forwarded: <upstream comment URL | no | not-needed>
+Applied-Upstream: <no | commit:SHA | VERSION>
+```
+
+Enable the editor prompt once per checkout: `git config commit.template .gitmessage`. Keep the existing subject convention (`... (#893)`, `cherry-pick Confluent #905`). **Trailers are not enforced** — they only fit upstream-related commits, not fork-only work (rebrand, release, dependabot, formatting). Use judgement.
+
+### Backlinking upstream
+
+When we fix something downstream, we comment on the matching upstream issue/PR so users (who mostly don't know the fork exists) can find the fix. Driven by the manifest:
+
+```
+scripts/upstream-backlink.sh <entry-id>            # DRY-RUN (default): prints target + comment, posts nothing
+scripts/upstream-backlink.sh --post <entry-id>     # actually comment (prompts; needs gh auth)
+```
+
+Two generic templates in `scripts/backlink-templates/`: `fix-backlink` (a fix is available in the fork) and `fork-awareness` (this is now maintained in a fork). For anything needing a tailored explanation, set a per-entry **`backlink`** field in `upstream-map.yaml` (it supports `{{FORK_REPO}}` / `{{FORK_REF}}` / `{{SUMMARY}}` / `{{ID}}`) - it overrides the template so the public wording lives in the source of truth, not a separate file (see the `bug-859-pcmetrics-leak` entry). Use **plain cross-repo references, never `Fixes/Closes`** (they don't auto-close cross-repo and we're not closing anyone's issue) — one respectful comment per item. After posting, paste the printed `forwarded:` snippet back into the entry in `upstream-map.yaml` (this is also what makes future runs skip the target). The helper is anti-spam by design: idempotent skip of already-forwarded targets, per-run cap (`--max`), inter-post delay, and a status guard so unfinished work can't be announced as fixed.
+
+### Checking upstream for new activity
+
+`scripts/upstream-sweep.sh` (read-only) lists upstream issues/PRs updated since the manifest's `last_swept` and flags drift on tracked refs (recorded `open` but now closed/merged). `--since <date>` overrides the window; `--publish` updates a single fork tracking issue (guarded, never spams). Run it periodically to catch new reports from users who don't know the fork exists.
+
+The full per-item backlink plan, anti-spam details, and the sweep design live in [`src/docs/development/upstream-backlink-plan.md`](src/docs/development/upstream-backlink-plan.md).
