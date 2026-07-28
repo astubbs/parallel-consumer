@@ -97,6 +97,29 @@ weakness into a 28-failure catastrophe via CPU starvation).
    surface (they rotate). Related in-flight flaky-test work: #63 (topic-creation consolidation),
    `fix/flaky-ensure-topic-timeout`.
 
+### Verified: sequential-on-runner is offload-only; the real win is parallel-after-hardening (2026-07-28)
+
+The `laptop-sequential-poc.yml` workflow ran the integration suite **sequentially** on `mac-laptop`
+(GitHub run 30342379083) and was **green** - 0 flakes. Apples-to-apples on the **same commit**, both
+sequential:
+
+| Integration (sequential) | Duration |
+|---|---|
+| GitHub-hosted, 2-core (PR #68) | 11m38s (698s) |
+| `mac-laptop`, 12-core | 12m00s (720s) |
+
+**The laptop is ~3% *slower*, not faster** - and both pass. Sequential is I/O-bound (one Kafka
+round-trip at a time), so the 12 cores sit idle waiting; real hardware gives **no speed or reliability
+edge over GitHub for sequential**. The laptop's only sequential benefit is *offload* (no GitHub minutes).
+Its real advantage is **parallel** (~7-10×) - which is the flaky path.
+
+**Conclusion / how to use this:** sequential-on-laptop is not itself a win (GitHub already runs sequential
+just as reliably, slightly faster). Keep the self-hosted runner + this PoC as the **harness / building
+block for hardening the parallel tests** - a place to iterate on parallel reliability on real hardware
+(fast feedback: a full parallel run is ~90 s there). We may end up **not needing the runner** once the
+tests are hardened; keep it in back pocket. The real unlock remains (3): harden the timing-sensitive
+integration tests so *parallel* goes green.
+
 ## Prevention
 
 - When adding an integration test, avoid **absolute wall-clock deadlines** (`PT2S`, "within 30s"); these

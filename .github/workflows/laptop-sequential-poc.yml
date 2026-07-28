@@ -25,6 +25,11 @@ on:
   push:
     # Only pushes to this repo's branch (write access required) reach the runner.
     branches: [dev/self-hosted-runner]
+    # Don't burn a 12-min laptop run on docs-only changes.
+    paths-ignore:
+      - '**.md'
+      - '**.adoc'
+      - 'docs/**'
   workflow_dispatch:
 
 concurrency:
