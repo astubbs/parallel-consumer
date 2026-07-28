@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer.internal;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import lombok.experimental.StandardException;
 
 /**
  * Generic Parallel Consumer parent exception.
@@ -12,6 +11,15 @@ import lombok.experimental.StandardException;
  * @author Antony Stubbs
  * @see InternalRuntimeException RuntimeException version
  */
-@StandardException
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class InternalException extends Exception {
+
+    public InternalException(String message) {
+        super(message);
+    }
+
+    public InternalException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
 }

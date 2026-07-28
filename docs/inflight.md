@@ -127,6 +127,16 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   **Fix (PR #63):** consolidate onto one blocking `KafkaClientUtils.createTopic` helper (generous 60s
   bound with a clear timeout message, classifies `TopicExistsException`); `ensureTopic` delegates. Not a `rerunFailingTestsCount` band-aid —
   removes the cause. Remove this note once #63 merges.
+- **`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is flaky (unit →
+  hits the *required* Unit Tests gate).** A Mockito `verify()` interaction race: the assertion at
+  `ProducerWrapper.sendOffsetsToTransaction` (via `ProducerManager.initProducer`) intermittently reports
+  the interaction as not-as-expected (`MockitoAssertionError`, ~22s elapsed → looks timing-related).
+  Non-deterministic — failed 1/245 in a local `-pl core test` run, then passed 3/3 on isolated rerun.
+  **Distinct** from the Integration TestContainers flake (this is a pure unit/Mockito test, no broker)
+  and from the `@StandardException` compile flake (this is runtime interaction, not compilation).
+  Uncovered 2026-07-28 while validating the IRE fix. **Fix:** investigate the transaction/offset
+  interaction timing in the test (likely an Awaitility/async ordering assumption); consider
+  `rerunFailingTestsCount` as a stopgap since it's a *required* gate.
 - **`@StandardException` compile flake (intermittent → hits the *required* Unit Tests gate).** A
   main-source annotation-processing race: Lombok's generated exception constructors are sometimes not
   visible when their callers are type-checked, giving `error: constructor ... cannot be applied to given
@@ -137,6 +147,22 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   exception-class constructors — drop the custom `(String, Throwable, Object... args)` ctor, or stop
   applying `@StandardException` to classes that declare their own ctor (the deferred "exception-class
   custom-ctor simplification" in the 0.7.x plan). Do this before trusting the release pipeline.
+  **FIXED (`fix/standardexception-race-internalruntimeexception`, PR #65):** all 12 `@StandardException`
+  exception classes now hand-write their constructors, so *no* exception constructor depends on
+  annotation processing and the race is structurally impossible. Rollout was two-stage: (1) minimal fix
+  of `InternalRuntimeException` (the one class mixing `@StandardException` with a hand-written ctor
+  delegating via `this(...)` - the demonstrated fatal trigger), then (2) escalation to the remaining 11
+  pure classes after PR #65's own **PIT** run flaked *fatally* on them (`OffsetDecodingError`,
+  `NoEncodingPossibleException`, `ParallelConsumerException`, `ExceptionInUserFunctionException`, the
+  `*EncodingNotSupported*` family, etc.) - proving the "transient diagnostics recover" assumption wrong
+  and meeting the pre-set escalation criterion. To keep the near-identical boilerplate under the
+  duplication/file-similarity detectors, each class is **trimmed to only the constructors it (or a
+  subclass's `super(...)`) actually uses** rather than the full four: e.g. `OffsetDecodingError` keeps only
+  `(String, Throwable)`, the `RunLength*`/`NoEncodingPossible` classes only `(String)`,
+  `KafkaStreamsEncodingNotSupported` only its custom no-arg. `PCRetriableException` (public user-throwable)
+  keeps all four; `InternalRuntimeException` keeps its four + `(String, Throwable, Object...)` varargs
+  (now `super(...)`) + `msg()` factory. `ExceptionConstructorsTest` reflectively verifies whatever ctors
+  each class exposes. Public API unchanged for the classes users construct.
 - **`Duplicate Code (jscpd)` absolute cap is below baseline → fails on EVERY PR.** jscpd cap is 4% but
   the codebase baseline is already 4.22% (85 clones), so the absolute-limit rule red-flags all PRs even
   when "max increase vs base" is +0.00% (as in #56). PMD CPD is fine (3.60% < 5%). **Fix:** raise

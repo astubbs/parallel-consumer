@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2020-2022 Confluent, Inc.
  */
 
-import lombok.experimental.StandardException;
 
 /**
  * A user's processing function can throw this exception, which signals to PC that processing of the message has failed,
@@ -18,6 +17,23 @@ import lombok.experimental.StandardException;
  *
  * @author Antony Stubbs
  */
-@StandardException
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class PCRetriableException extends RuntimeException {
+
+    public PCRetriableException() {
+        super();
+    }
+
+    public PCRetriableException(String message) {
+        super(message);
+    }
+
+    public PCRetriableException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public PCRetriableException(Throwable cause) {
+        super(cause);
+    }
+
 }

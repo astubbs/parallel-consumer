@@ -5,13 +5,21 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import io.confluent.parallelconsumer.internal.InternalException;
-import lombok.experimental.StandardException;
 
 /**
  * Parent of the exceptions for when the {@link OffsetEncoder} cannot encode the given data.
  *
  * @author Antony Stubbs
  */
-@StandardException
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class EncodingNotSupportedException extends InternalException {
+
+    public EncodingNotSupportedException(String message) {
+        super(message);
+    }
+
+    public EncodingNotSupportedException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
 }
