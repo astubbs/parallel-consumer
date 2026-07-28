@@ -3,6 +3,9 @@
 .DS_Store
 CLAUDE.md
 
+# Local per-worktree ownership markers (see AGENTS.md "Worktree ownership")
+.worktree-owner
+
 # Compiled class file
 *.class
 
