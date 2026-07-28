@@ -1,21 +1,14 @@
-# Publishes to Maven Central after "Build and Test" passes on master.
+# Publishes a SNAPSHOT to Maven Central after "Build and Test" passes on master.
 #
-# Release model (version-in-committed-code, PR-based, tag on merge):
-#   - master is ALWAYS a -SNAPSHOT.
-#   - A release is cut by merging a "Prepare Release" PR (see prepare-release.yml),
-#     which lands two commits from maven-release-plugin:
-#       [maven-release-plugin] prepare release vX                (pom = X)
-#       [maven-release-plugin] prepare for next development ...   (pom = X+1-SNAPSHOT)
-#   - This job finds the "prepare release vX" commit whose tag doesn't exist yet,
-#     checks it out, deploys it as the release, then tags + GitHub-releases that SHA.
-#   - No release commit present -> deploys a snapshot from the master tip.
-#   Works with merge-commit OR rebase-and-merge (both preserve the release commit).
-#   Squashing collapses it away and is caught by the "Squash guard" step.
+# master is ALWAYS a -SNAPSHOT. Real releases are cut by release.yml (tag-as-truth), NOT here.
+# This workflow only ever publishes snapshots — it does not detect, tag, or release anything, and
+# it never scans git history. (An earlier version scanned history for a "prepare release" commit
+# and re-released an ancient upstream commit; that logic is deleted. See
+# docs/plans/2026-07-28-release-pipeline-hardening.md.)
 #
-# Required GitHub secrets:
-#   MAVEN_CENTRAL_USERNAME, MAVEN_CENTRAL_PASSWORD, MAVEN_GPG_PRIVATE_KEY, MAVEN_GPG_PASSPHRASE
+# Required secrets: MAVEN_CENTRAL_USERNAME, MAVEN_CENTRAL_PASSWORD, MAVEN_GPG_PRIVATE_KEY, MAVEN_GPG_PASSPHRASE
 
-name: Publish to Maven Central
+name: Publish snapshot to Maven Central
 
 on:
   workflow_run:
@@ -25,23 +18,21 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: false  # never cancel a publish mid-flight
+  group: publish-snapshot
+  cancel-in-progress: false
 
 permissions:
-  contents: write  # tags + releases
+  contents: read
 
 jobs:
-  publish:
-    name: Publish
+  publish-snapshot:
+    name: Publish snapshot
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v6
         with:
           ref: master
-          fetch-depth: 0  # full history + tags to find the release commit
 
       - name: Setup JDK 17
         uses: actions/setup-java@v5
@@ -55,70 +46,21 @@ jobs:
           gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
-      - name: Detect release commit
-        id: detect
+      - name: Guard - master must be a -SNAPSHOT
         run: |
-          # Find the most recent "[maven-release-plugin] prepare release <label>" commit
-          # whose tag <label> does not already exist. That is the SHA to release.
-          sha=""; label=""
-          while read -r c subject; do
-            case "$subject" in
-              "[maven-release-plugin] prepare release "*)
-                l="${subject##*prepare release }"
-                if ! git rev-parse "refs/tags/${l}" >/dev/null 2>&1; then
-                  sha="$c"; label="$l"; break
-                fi
-                ;;
-            esac
-          done < <(git log -30 --format='%H %s')
+          V=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+          case "$V" in
+            *-SNAPSHOT) echo "Publishing snapshot $V" ;;
+            *) echo "::error::master is at a non-SNAPSHOT version ($V). Releases go through release.yml, not this workflow."; exit 1 ;;
+          esac
 
-          if [ -n "$sha" ]; then
-            echo "mode=release" >> "$GITHUB_OUTPUT"
-            echo "sha=$sha"     >> "$GITHUB_OUTPUT"
-            echo "tag=$label"   >> "$GITHUB_OUTPUT"
-            echo "Release commit $sha -> tag $label"
-          else
-            echo "mode=snapshot" >> "$GITHUB_OUTPUT"
-            echo "No un-tagged release commit found; publishing a snapshot from the master tip."
-          fi
-
-      - name: Squash guard
-        if: steps.detect.outputs.mode == 'snapshot'
-        run: |
-          # A squashed release PR loses the "prepare release" commit but its intent survives
-          # in the squash commit subject (default = the PR title, "release: X"). Fail loudly
-          # rather than silently no-op the release.
-          if git log -5 --format='%s' | grep -qE '^release: ' \
-             && ! git log -5 --format='%s' | grep -q '\[maven-release-plugin\] prepare release'; then
-            echo "::error::A release PR looks SQUASHED - the '[maven-release-plugin] prepare release' commit is missing, so no release can be cut. Re-merge the release PR with a merge-commit or rebase (never squash)."
-            exit 1
-          fi
-
-      - name: Checkout release SHA
-        if: steps.detect.outputs.mode == 'release'
-        run: git checkout --detach ${{ steps.detect.outputs.sha }}
-
-      - name: Deploy to Maven Central
+      - name: Deploy snapshot to Maven Central
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
-          # central-publishing-maven-plugin handles both snapshot and release endpoints.
-          # Examples are sample code, not library artifacts - excluded from the deploy.
+          # Examples are sample code, not library artifacts — excluded from the deploy.
           ./mvnw --batch-mode -Pmaven-central -Pci \
             -pl '!:parallel-consumer-examples,!:parallel-consumer-example-core,!:parallel-consumer-example-metrics,!:parallel-consumer-example-streams,!:parallel-consumer-example-vertx,!:parallel-consumer-example-reactor' \
             clean deploy -DskipTests -Dlicense.skip
-
-      - name: Tag + GitHub release
-        if: steps.detect.outputs.mode == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.detect.outputs.tag }}"
-          SHA="${{ steps.detect.outputs.sha }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG" "$SHA"
-          git push origin "$TAG"
-          gh release create "$TAG" --title "$TAG" --target "$SHA" --generate-notes

@@ -595,15 +595,15 @@
                 <configuration>
                     <autoVersionSubmodules>true</autoVersionSubmodules>
                     <tagNameFormat>v@{project.version}</tagNameFormat>
-                    <!-- release:prepare only rewrites the poms and makes the two release
-                         commits ("prepare release X" + "prepare for next development
-                         iteration"). It does NOT build (preparationGoals=validate) and does
-                         NOT push (pushChanges=false) - the prepare-release workflow pushes the
-                         branch (commits only, no tag) into a PR, and publish.yml detects the
-                         "[maven-release-plugin] prepare release" commit once it lands on master
-                         and tags + publishes that exact SHA. See .github/workflows/. -->
+                    <!-- Tag-as-truth release (see .github/workflows/release.yml, dispatch-triggered):
+                         release:prepare rewrites the poms, makes the two release commits
+                         ("prepare release vX" + "prepare for next development iteration"), tags vX,
+                         and PUSHES them to master (pushChanges=true) using a repo-admin PAT that
+                         bypasses the master ruleset's pull_request requirement. preparationGoals=validate
+                         keeps prepare pom-only (no build); release.yml then checks out the exact tag vX
+                         and deploys it. The tag is the single source of truth - nothing scans history. -->
                     <preparationGoals>validate</preparationGoals>
-                    <pushChanges>false</pushChanges>
+                    <pushChanges>true</pushChanges>
                 </configuration>
             </plugin>
             <plugin>

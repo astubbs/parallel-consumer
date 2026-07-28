@@ -84,16 +84,26 @@ bin/performance-test.sh
 
 ## Releasing
 
-Version-in-committed-code, PR-based, tag-on-merge. `master` is **always** a `-SNAPSHOT`; the release version is baked into a commit by `maven-release-plugin`, and the release is published from that commit when its PR merges.
+**Tag-as-truth, dispatch-triggered.** `master` is **always** a `-SNAPSHOT`. A dispatch runs
+`maven-release-plugin`'s `release:prepare` (which tags the release commit) and then deploys **that exact
+tag** — nothing scans git history (an earlier history-scanning version re-released an ancient upstream
+commit; see `docs/plans/2026-07-28-release-pipeline-hardening.md`).
 
 **Cut a release:**
-1. Run the **Prepare Release** workflow (Actions → *Prepare Release* → *Run workflow*) with the release version (e.g. `0.6.0.0`) and next dev version (e.g. `0.6.0.1-SNAPSHOT`). It runs `mvn release:prepare` (rewrites the poms, makes the two release commits — **no build**) and opens a `release: <version>` PR.
-2. Review and **merge that PR with a merge-commit or rebase — NOT squash** (squash drops the release commit; `publish.yml` fails loudly if it happens).
-3. On merge, `publish.yml` finds the `[maven-release-plugin] prepare release` commit, deploys **that SHA** to Maven Central, tags `v<version>`, and cuts a GitHub release. `master` is already back on the next `-SNAPSHOT`.
+1. Run the **Release** workflow (Actions → *Release* → *Run workflow*) with the release version (e.g.
+   `0.6.0.0`) and next dev version (e.g. `0.6.0.1-SNAPSHOT`). Tick **Dry run** first to rehearse with no
+   commits/tags/deploy.
+2. It runs `release:prepare` (rewrites poms, makes the two release commits, tags `v<version>`, **pushes
+   to `master`** via `RELEASE_PAT`), refuses if master's latest *Build and Test* isn't green, then checks
+   out that tag and deploys it to Maven Central, then cuts a GitHub release. `master` ends on the next
+   `-SNAPSHOT`.
 
-Snapshots publish automatically on every push to `master`. Workflows: `prepare-release.yml` (prepare), `publish.yml` (deploy).
+Snapshots publish automatically on every push to `master` (`publish.yml`). Workflows: `release.yml`
+(release), `publish.yml` (snapshot-only).
 
-**Required GitHub repo secrets** for `publish.yml`:
+**Required GitHub repo secrets:**
+- `RELEASE_PAT` — fine-grained PAT (repo **Contents: write**) owned by a repo admin, so `release:prepare`
+  can push to `master`; the **"Repository admin" role must be in the master ruleset's bypass list**.
 - `MAVEN_CENTRAL_USERNAME` — Sonatype Central Portal token username
 - `MAVEN_CENTRAL_PASSWORD` — Sonatype Central Portal token password
 - `MAVEN_GPG_PRIVATE_KEY` — Armored GPG private key for signing artifacts
