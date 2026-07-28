@@ -171,8 +171,8 @@ workflow).
 
 ## Measuring the speedup
 
-The stated goal was a ~30% reduction. Measure it on the runner itself, where the
-hardware and container behaviour are real:
+Measure it on the runner itself, where the hardware and container behaviour are
+real:
 
 ```bash
 # baseline: parallelism off (what CI does today)
@@ -182,9 +182,25 @@ time bin/ci-integration-test.sh
 time bin/ci-integration-test.sh -Dparallel-tests=true
 ```
 
-Compare wall-clock. If the box has plenty of cores and the gain is smaller than
-hoped, raise `junit.jupiter.execution.parallel.config.dynamic.factor` (these
-tests are I/O-bound, so oversubscription helps) and re-measure.
+### What we measured (2026-07-28) - short version
+
+Re-enabling `parallel-tests` was tested on GitHub-hosted runners (PR #66) and a
+self-hosted Mac (`mac-laptop`, M2, 12 cores):
+
+- **Speed:** unit ~30% faster, performance ~20% faster, and integration **~7-10×
+  faster** on the 12-core Mac (~70-92 s vs ~11.5 min sequential).
+- **On GitHub's 2-core runners, parallel integration is unusable** (~28 timeout
+  failures from CPU starvation) - which is why the `ci` profile keeps
+  `parallel-tests=false`. Enable parallelism **only** on a self-hosted runner with
+  real cores.
+- **Even on real cores, integration is not cleanly green:** ~2 of 104 flake per
+  run, a different set each time, all timing/timeout races. Lowering the
+  parallelism factor and doubling Docker RAM both had no effect - it's
+  test-level concurrency flakiness, not resource contention.
+
+Full diagnosis, the four measured runs, and the fix (test hardening) are in the
+findings doc:
+[`docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md`](solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md).
 
 ## Security & trust model
 
