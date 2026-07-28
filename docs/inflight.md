@@ -120,6 +120,19 @@ Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were c
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
 **Unit Tests, Integration Tests, Performance Tests**. Everything else is advisory. Track and fix:
 
+- **Parallel integration flakiness — RESOLVED via forked per-broker mode (PR #68, "Step 1", 2026-07-28).**
+  Enabling JUnit thread-parallelism (`-Dparallel-tests=true`) made integration flaky (~2/104 per run,
+  rotating) because all ~104 tests contend ONE shared TestContainers broker. **Fix:** run failsafe
+  **forked** (`-DforkCount=4 -DreuseForks=true`) so each JVM fork gets its own broker — reliable (5/5 Mac;
+  green GitHub-hosted 6:33 vs ~11:38 sequential) and faster, and it masks nothing (each test runs on an
+  uncontended broker). Wired into `maven.yml` (GitHub-hosted) + `self-hosted-tests.yml`. **Key finding:**
+  the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure maps to the REAL **#857** deadlock
+  (`synchronized(commitCommand)` in `onPartitionsRevoked`), *not* test flakiness — contention was exposing
+  a real bug (hence AGENTS.md's new "be extremely careful modifying tests under stress" rule). Full
+  write-up: `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md`.
+  **"Step 2" DEFERRED:** retry full thread-parallel on a shared broker to *validate* the #857 deadlock is
+  gone (not merely avoided) — only **after** #857/#29 finishes and merges on its own merits (it's a
+  ~454-line WIP concurrency refactor, "root cause still open"). Reproducer for then: `-Dparallel-tests=true`.
 - **`Integration Tests` was flaky (required → blocked merges) — FIX IN FLIGHT (PR #63).** Failed
   intermittently on `BrokerIntegrationTest.ensureTopic` → `TimeoutException` (e.g. #56, #61). Root cause:
   `ensureTopic` was a drifted duplicate of `KafkaClientUtils.createTopics` that waited only
