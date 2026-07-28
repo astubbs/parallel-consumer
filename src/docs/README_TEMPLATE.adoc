@@ -1133,7 +1133,7 @@ Releases use `maven-release-plugin` and are *tag-as-truth*: `release:prepare` ta
 To cut a release:
 
 . Run the *Release* workflow (Actions tab), supplying the release version (e.g. `0.6.0.0`) and the next development version (e.g. `0.6.0.1-SNAPSHOT`). Tick *Dry run* first to rehearse with no side effects.
-. It runs `release:prepare` (poms only, no build; tags `v<version>` and pushes the two version commits to `master`), then checks out that tag and deploys it to Maven Central via `.github/workflows/release.yml`, then creates a GitHub release. `master` returns to the next `-SNAPSHOT` automatically.
+. It runs `release:prepare` (builds+installs the reactor to validate the release compiles, then tags `v<version>` and pushes the two version commits to `master`), then checks out that tag and deploys it to Maven Central via `.github/workflows/release.yml`, then creates a GitHub release. `master` returns to the next `-SNAPSHOT` automatically.
 
 Required GitHub repository secrets:
 

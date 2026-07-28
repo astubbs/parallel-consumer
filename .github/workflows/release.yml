@@ -81,13 +81,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: release:prepare (poms only; commits + tag vX; pushes to master)
+      - name: release:prepare (build+install, commits + tag vX; pushes to master)
+        # preparationGoals=clean install (in pom.xml): the modules cross-depend on core's test-jar,
+        # which only exists after core is packaged+installed, so a poms-only "validate" prepare cannot
+        # resolve it. -DskipTests keeps it fast; the "refuse red master" guard already gated on tests.
         run: |
           ./mvnw --batch-mode release:prepare \
             -DreleaseVersion=${{ inputs.releaseVersion }} \
             -DdevelopmentVersion=${{ inputs.developmentVersion }} \
             -DdryRun=${{ inputs.dryRun }} \
-            -Dlicense.skip -Darguments="-Dlicense.skip"
+            -Dlicense.skip -Darguments="-Dlicense.skip -DskipTests"
 
       - name: Deploy the release tag to Maven Central
         if: ${{ !inputs.dryRun }}

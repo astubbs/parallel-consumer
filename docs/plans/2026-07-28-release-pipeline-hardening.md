@@ -95,6 +95,17 @@ deliberate human gate. If PR review of the release itself is a hard requirement,
 (release-please)** is the robust PR-native choice; **Option 2 is not recommended** — it reintroduces the
 merge-strategy fragility we're trying to eliminate.
 
+## Correction (post dry-run, 2026-07-28)
+
+The first dry run failed at `release:prepare` phase 10/17 (`run-preparation-goals`): `preparationGoals=validate`
+could **not resolve `bz.stub.parallelconsumer:parallel-consumer-core:jar:tests`** — the vertx/reactor/mutiny
+modules depend on core's *test-jar*, which does not exist until core is packaged+installed, so a poms-only
+`validate` prepare tries Central and 404s. Fix: **`preparationGoals=clean install`** with `-DskipTests` (passed
+via `release.yml`'s `-Darguments`). Prepare now builds+installs the reactor (producing the test-jars, resolving
+cross-module deps, and proving the release-versioned poms compile) but skips test execution — the "refuse red
+master" guard already gates on a green test run. "Poms only, no build in prepare" was not achievable given the
+inter-module test-jar dependency. The dry run did its job: it caught this with zero side effects.
+
 ## Detailed design (Option 1)
 
 **`.github/workflows/release.yml`** — `workflow_dispatch` (inputs: `releaseVersion`, `developmentVersion`):
