@@ -32,6 +32,7 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 
 === Improvements
 
+* The project is renamed to *Kafka Parallel Consumer* (README and branding). Java package names (`io.confluent.parallelconsumer.*`) are unchanged, so imports are unaffected — only the Maven groupId changed (see Breaking).
 * feature: new `parallel-consumer-mutiny` module — SmallRye Mutiny (Quarkus) integration (upstream https://github.com/confluentinc/parallel-consumer/pull/891[#891]).
 * Commit-failure error logging now includes the offsets being committed, to aid diagnosis of failed commits (upstream https://github.com/confluentinc/parallel-consumer/pull/850[#850]).
 * Modernized CI (parallel unit/integration/performance suites, SpotBugs, PIT mutation testing, dependency scanning) and automated Maven Central publishing (https://github.com/astubbs/parallel-consumer/commit/b810e873[b810e873], https://github.com/astubbs/parallel-consumer/commit/2bcc74d9[2bcc74d9]).
@@ -39,12 +40,10 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 === Fixes
 
 * fix: null epoch race condition in EpochAndRecordsMap - poll() returning records before onPartitionsAssigned() no longer causes NPE; records are safely skipped and re-delivered (https://github.com/astubbs/parallel-consumer/commit/afde8c5e[afde8c5e]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/326[#326])
+* fix: `OffsetMapCodecManager` is kept instantiated so PC metrics are no longer recreated on every commit (upstream https://github.com/confluentinc/parallel-consumer/pull/892[#892]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/859[#859]).
 
-== 0.5.3.4
-
-=== Fixes
-
-* fix: keep instantiated OffsetMapCodecManager so that metrics will not be recreated every commit (#859)
+// There is no 0.5.3.4 release. The #892 metrics fix once tracked under a "0.5.3.4" heading here was
+// never published upstream as 0.5.3.4; it ships in this fork's 0.6.0.0 (folded into the Fixes above).
 
 == 0.5.3.3
 
