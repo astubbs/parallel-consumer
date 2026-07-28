@@ -137,6 +137,11 @@ So forked mode is **reliable AND faster than sequential everywhere** (Mac ~38% f
 GitHub-hosted forked also works — the self-hosted runner is *extra* speed, not required). It also does
 **not mask anything**: each test runs on an uncontended broker, like sequential, just N-way in parallel.
 
+`forkCount` is opt-in via CLI (`-DforkCount=4`); the failsafe default (unset ⇒ `forkCount=1`) preserves
+today's single-fork behaviour, so builds that don't pass it are unchanged. Memory scales with fork count
+(one broker per fork), so tune it to the runner — 4 fits the 12-core/16 GB Mac and GitHub-hosted; a
+2-core/low-RAM box should use fewer.
+
 **Crucially, this is only Step 1.** Removing contention makes the *functional* suite reliable, but a
 contended/slow broker is a real production condition and **"contended brokers must not cause failures"**
 is the real bar. Triaging the contended failures showed most were **test-tightness** (e.g.
