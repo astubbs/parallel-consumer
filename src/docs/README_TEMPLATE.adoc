@@ -53,9 +53,21 @@ image:https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml/b
 
 Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with *key concurrency* and *extendable non-blocking IO* processing.
 
-IMPORTANT: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates (`bz.stub.parallelconsumer`). The original upstream project is no longer actively maintained.
+[IMPORTANT]
+====
+This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-Confluent's https://www.confluent.io/confluent-accelerators/#parallel-consumer[product page for the original project is here].
+It is a *drop-in replacement*: the Java API and package (`io.confluent.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+
+[source,xml]
+----
+<dependency>
+    <groupId>bz.stub.parallelconsumer</groupId>
+    <artifactId>parallel-consumer-core</artifactId>
+    <version>0.6.0.0</version>
+</dependency>
+----
+====
 
 TIP: If you like this project, please ⭐ Star it in GitHub to show your appreciation, help us gauge popularity of the project and allocate resources.
 

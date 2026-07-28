@@ -53,9 +53,21 @@ image:https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml/b
 
 Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with *key concurrency* and *extendable non-blocking IO* processing.
 
-IMPORTANT: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates (`bz.stub.parallelconsumer`). The original upstream project is no longer actively maintained.
+[IMPORTANT]
+====
+This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-Confluent's https://www.confluent.io/confluent-accelerators/#parallel-consumer[product page for the original project is here].
+It is a *drop-in replacement*: the Java API and package (`io.confluent.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+
+[source,xml]
+----
+<dependency>
+    <groupId>bz.stub.parallelconsumer</groupId>
+    <artifactId>parallel-consumer-core</artifactId>
+    <version>0.6.0.0</version>
+</dependency>
+----
+====
 
 TIP: If you like this project, please ⭐ Star it in GitHub to show your appreciation, help us gauge popularity of the project and allocate resources.
 
@@ -1577,20 +1589,21 @@ endif::[]
 
 == 0.6.0.0
 
+First release of the community fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer] (upstream is no longer actively maintained). Drop-in compatible with upstream 0.5.x — the only required change is the Maven groupId (see Breaking below). Includes upstream fixes and features merged after upstream's last release (0.5.3.3) that were never published there.
+
 === Breaking
 
-* Maven coordinates rebranded from `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer` (https://github.com/astubbs/parallel-consumer/pull/55[#55]). Update your dependency declarations.
+* Maven coordinates rebranded from `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer` (https://github.com/astubbs/parallel-consumer/pull/55[#55]). Update your dependency declarations; the library API is otherwise unchanged from upstream.
+
+=== Improvements
+
+* feature: new `parallel-consumer-mutiny` module — SmallRye Mutiny (Quarkus) integration (upstream https://github.com/confluentinc/parallel-consumer/pull/891[#891]).
+* Commit-failure error logging now includes the offsets being committed, to aid diagnosis of failed commits (upstream https://github.com/confluentinc/parallel-consumer/pull/850[#850]).
+* Modernized CI (parallel unit/integration/performance suites, SpotBugs, PIT mutation testing, dependency scanning) and automated Maven Central publishing (https://github.com/astubbs/parallel-consumer/commit/b810e873[b810e873], https://github.com/astubbs/parallel-consumer/commit/2bcc74d9[2bcc74d9]).
 
 === Fixes
 
 * fix: null epoch race condition in EpochAndRecordsMap - poll() returning records before onPartitionsAssigned() no longer causes NPE; records are safely skipped and re-delivered (https://github.com/astubbs/parallel-consumer/commit/afde8c5e[afde8c5e]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/326[#326])
-* fix: test pollution from leaked threads and Awaitility global state across test classes (https://github.com/astubbs/parallel-consumer/commit/9e133ce0[9e133ce0])
-
-=== Improvements
-
-* ci: modernized GitHub Actions CI with parallel test suites (unit, integration, performance), SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning (https://github.com/astubbs/parallel-consumer/commit/b810e873[b810e873])
-* ci: added publish workflow for automated Maven Central deployment (https://github.com/astubbs/parallel-consumer/commit/2bcc74d9[2bcc74d9])
-* docs: updated README and added upstream PR analysis report (https://github.com/astubbs/parallel-consumer/commit/dc346dad[dc346dad])
 
 == 0.5.3.4
 
