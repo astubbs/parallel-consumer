@@ -16,6 +16,12 @@ ifndef::github_name[]
 toc::[]
 endif::[]
 
+== Unreleased
+
+=== Build & CI
+
+* New `Self-Hosted Tests` workflow runs the integration and performance suites on a self-hosted runner (a Proxmox Linux VM or a Mac) with JUnit's concurrent test execution re-enabled (`-Dparallel-tests=true`), which the `ci` profile disables for GitHub's 2-core hosted runners. Manual/scheduled only, never on PRs; the GitHub-hosted PR gate is unchanged. See link:docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md]. Replaces the earlier Windows-only performance workflow.
+
 == 0.6.0.0
 
 First release of the community fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer] (upstream is no longer actively maintained). Drop-in compatible with upstream 0.5.x — the only required change is the Maven groupId (see Breaking below). Includes upstream fixes and features merged after upstream's last release (0.5.3.3) that were never published there.

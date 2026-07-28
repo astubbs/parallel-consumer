@@ -283,7 +283,7 @@ jobs:
 
   # Mutation testing (PIT) - verifies test assertions are meaningful.
   # Non-blocking: posts a PR comment with mutation score but doesn't
-  # gate merge. TODO: move to self-hosted performance runner for speed.
+  # gate merge. TODO: move to the self-hosted runner (self-hosted-tests.yml) for speed.
   mutation-testing:
     if: github.event_name == 'pull_request'
     name: "Mutation Testing (PIT)"

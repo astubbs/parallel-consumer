@@ -1,0 +1,6 @@
+# Custom labels for self-hosted runners, so actionlint does not flag
+# `runs-on: [self-hosted, performance]` as an unknown label.
+# See .github/workflows/self-hosted-tests.yml and docs/SELF_HOSTED_RUNNER.md.
+self-hosted-runner:
+  labels:
+    - performance
