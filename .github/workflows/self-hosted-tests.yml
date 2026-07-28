@@ -66,16 +66,23 @@ jobs:
     timeout-minutes: 180
     strategy:
       # A single runner processes matrix entries one at a time; that's fine -
-      # the in-JVM parallelism (factor 20) is where the speedup comes from.
+      # integration parallelises across JVM forks (own broker each); performance
+      # uses in-JVM thread parallelism.
       fail-fast: false
       matrix:
         include:
           - suite: integration
             name: "Integration Tests"
             cmd: "bin/ci-integration-test.sh"
+            # Forked (process-parallel) mode: each fork gets its own broker, so tests
+            # don't contend one shared broker. Reliable AND parallel. See
+            # docs/solutions/test-flakiness/. (Thread-parallel -Dparallel-tests=true is
+            # flaky on the shared broker - it surfaced a real deadlock, #857.)
+            args: "-DforkCount=4 -DreuseForks=true"
           - suite: performance
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
+            args: "-Dparallel-tests=true"
     steps:
       - name: Skip if not selected
         id: gate
@@ -113,9 +120,9 @@ jobs:
         env:
           KAFKA_VERSION: ${{ github.event.inputs.kafka_version }}
         run: |
-          # -Dparallel-tests=true re-enables JUnit concurrent execution, which
-          # the ci profile turns off. This is the speedup on a beefy runner.
-          args=(-Dparallel-tests=true)
+          # Per-suite parallelism mode (see matrix `args`): integration uses forked
+          # per-broker mode (reliable); performance uses thread-parallel.
+          args=(${{ matrix.args }})
           if [ -n "$KAFKA_VERSION" ]; then
             args+=(-Dkafka.version="$KAFKA_VERSION")
           fi

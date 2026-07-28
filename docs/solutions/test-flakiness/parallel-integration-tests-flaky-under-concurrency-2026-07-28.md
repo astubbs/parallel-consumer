@@ -120,6 +120,38 @@ block for hardening the parallel tests** - a place to iterate on parallel reliab
 tests are hardened; keep it in back pocket. The real unlock remains (3): harden the timing-sensitive
 integration tests so *parallel* goes green.
 
+## Resolution: forked (per-broker) parallelism — and a real bug it surfaced (2026-07-28)
+
+The root cause is **one shared broker**, so the fix is to stop sharing it. Running failsafe with
+**`-DforkCount=4 -DreuseForks=true`** (process-level parallelism) gives **each JVM fork its own
+TestContainers broker**; with JUnit thread-parallelism off (`-Dparallel-tests=false`, the `ci` default)
+each broker serves its fork's tests **sequentially → uncontended**. Result:
+
+| Integration suite | Reliability | Wall-clock |
+|---|---|---|
+| thread-parallel (`-Dparallel-tests=true`), 1 shared broker | ~2/104 flake per run | ~90 s (when it passed) |
+| **forked, `forkCount=4`, broker-per-fork — Mac** | **5/5 green** | **~4:06** |
+| **forked, `forkCount=4` — GitHub-hosted CI** | **green** | **6:33** (vs ~11:38 sequential) |
+
+So forked mode is **reliable AND faster than sequential everywhere** (Mac ~38% faster than GitHub, but
+GitHub-hosted forked also works — the self-hosted runner is *extra* speed, not required). It also does
+**not mask anything**: each test runs on an uncontended broker, like sequential, just N-way in parallel.
+
+**Crucially, this is only Step 1.** Removing contention makes the *functional* suite reliable, but a
+contended/slow broker is a real production condition and **"contended brokers must not cause failures"**
+is the real bar. Triaging the contended failures showed most were **test-tightness** (e.g.
+`TransactionTimeoutsTest`'s intentional 1s/2s lock timeouts firing under load), **but**
+`RebalanceEoSDeadlockTest.noDeadlockOnRevoke` maps to a **genuine main-code deadlock — #857**
+(`onPartitionsRevoked` blocking on `synchronized(commitCommand)`), already being fixed in PR #29 with
+`ReentrantLock.tryLock()`. So the contention was *exposing a real bug*, not just flaky tests — which is
+exactly why we did **not** loosen timeouts to go green (see AGENTS.md "Be EXTREMELY careful modifying
+tests").
+
+**The road (two steps):**
+1. **(this)** Adopt forked/per-broker parallelism for a reliable, fast functional suite.
+2. **(next)** Merge #29's #857 lock fixes, then retry **full thread-parallelism on a shared broker** — the
+   deliberate contended-broker stress test — to *validate* the deadlock is gone rather than avoided.
+
 ## Prevention
 
 - When adding an integration test, avoid **absolute wall-clock deadlines** (`PT2S`, "within 30s"); these
