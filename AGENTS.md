@@ -54,6 +54,16 @@ bin/performance-test.sh
 
 ## Testing
 
+- **⚠️ Be EXTREMELY careful modifying tests to make them pass — especially under parallelism/stress.** We do
+  **not** work from a position of 100% confidence in the main code. A test that fails under concurrent load
+  or when the broker is contended may be exposing a **real main-code bug that only manifests under stress**,
+  not a flaky test. So **never** loosen a timeout, weaken/remove an assertion, add a retry, or serialize a
+  test just to get green until you have first determined *why* it fails: is it a **test-infra contention
+  artifact** (e.g. one shared TestContainers broker overloaded by many parallel tests) or a **genuine
+  concurrency bug** in the library? Prefer diagnostics that *separate* those (e.g. giving a test an
+  uncontended/own broker: if it then passes it was contention; if it still fails, investigate the code — do
+  not mask it). Loosening deadlines to go green can hide exactly the bugs this library exists to prevent.
+  When you do change a test, say in the commit/PR *which* of the two causes you established and how.
 - **Unit tests**: `mvn test` / surefire plugin. Source in `src/test/java/`.
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.

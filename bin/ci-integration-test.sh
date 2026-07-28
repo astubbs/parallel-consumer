@@ -5,7 +5,13 @@
 
 # Run integration tests only (failsafe, requires Docker for TestContainers).
 # Skips unit tests to avoid duplicate work.
-# Usage: bin/ci-integration-test.sh
+# Usage: bin/ci-integration-test.sh [extra-maven-args...]
+#
+# Extra args are forwarded to Maven. The self-hosted runner workflow passes
+# -DforkCount=4 -DreuseForks=true to run integration in forked per-broker mode
+# (each JVM fork gets its own broker - reliable AND parallel; the ci profile
+# runs sequentially on GitHub-hosted 2-core runners). See
+# docs/SELF_HOSTED_RUNNER.md.
 
 set -euo pipefail
 
@@ -15,4 +21,5 @@ set -euo pipefail
   -DskipUTs=true \
   -Dlicense.skip \
   -Dexcluded.groups=performance \
-  -Dsurefire.rerunFailingTestsCount=2
+  -Dsurefire.rerunFailingTestsCount=2 \
+  "$@"

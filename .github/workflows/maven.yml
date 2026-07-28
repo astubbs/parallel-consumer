@@ -79,7 +79,11 @@ jobs:
             timeout: 15
           - suite: integration
             name: "Integration Tests"
-            cmd: "bin/ci-integration-test.sh"
+            # Forked (process-parallel) mode: each JVM fork gets its own TestContainers
+            # broker, so tests don't contend one shared broker. Reliable AND parallel,
+            # without masking anything (each test runs on an uncontended broker). See
+            # docs/solutions/test-flakiness/. forkCount=4 matches the self-hosted measurement.
+            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
             timeout: 60
           - suite: performance
             name: "Performance Tests"
@@ -283,7 +287,7 @@ jobs:
 
   # Mutation testing (PIT) - verifies test assertions are meaningful.
   # Non-blocking: posts a PR comment with mutation score but doesn't
-  # gate merge. TODO: move to self-hosted performance runner for speed.
+  # gate merge. TODO: move to the self-hosted runner (self-hosted-tests.yml) for speed.
   mutation-testing:
     if: github.event_name == 'pull_request'
     name: "Mutation Testing (PIT)"
