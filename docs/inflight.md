@@ -147,14 +147,18 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   exception-class constructors — drop the custom `(String, Throwable, Object... args)` ctor, or stop
   applying `@StandardException` to classes that declare their own ctor (the deferred "exception-class
   custom-ctor simplification" in the 0.7.x plan). Do this before trusting the release pipeline.
-  **Partial fix applied (`fix/standardexception-race-internalruntimeexception`, PR TBD):**
-  `InternalRuntimeException` - the one class mixing `@StandardException` with a hand-written ctor that
-  delegated via `this(...)` to a generated ctor, and the demonstrated fatal trigger - now hand-writes all
-  its constructors (varargs ctor calls `super(...)` not `this(...)`), removing annotation processing from
-  it entirely. Local stress: 20/20 `clean compile` + 6/6 `clean install -DskipTests` green, IRE never in
-  any error. The other 11 pure-`@StandardException` classes are left as-is (they only emitted *transient*
-  diagnostics that recovered); escalate to the belt-and-suspenders all-12 hand-write only if a non-IRE
-  class ever flakes *fatally* on CI.
+  **FIXED (`fix/standardexception-race-internalruntimeexception`, PR #65):** all 12 `@StandardException`
+  exception classes now hand-write their constructors, so *no* exception constructor depends on
+  annotation processing and the race is structurally impossible. Rollout was two-stage: (1) minimal fix
+  of `InternalRuntimeException` (the one class mixing `@StandardException` with a hand-written ctor
+  delegating via `this(...)` - the demonstrated fatal trigger), then (2) escalation to the remaining 11
+  pure classes after PR #65's own **PIT** run flaked *fatally* on them (`OffsetDecodingError`,
+  `NoEncodingPossibleException`, `ParallelConsumerException`, `ExceptionInUserFunctionException`, the
+  `*EncodingNotSupported*` family, etc.) - proving the "transient diagnostics recover" assumption wrong
+  and meeting the pre-set escalation criterion. Each class keeps the four standard ctors
+  (`()`, `(String)`, `(String, Throwable)`, `(Throwable)`); `InternalRuntimeException` also keeps its
+  `(String, Throwable, Object...)` varargs ctor (now `super(...)`) + `msg()` factory, and
+  `KafkaStreamsEncodingNotSupported` keeps its custom no-arg ctor. Public API unchanged.
 - **`Duplicate Code (jscpd)` absolute cap is below baseline → fails on EVERY PR.** jscpd cap is 4% but
   the codebase baseline is already 4.22% (85 clones), so the absolute-limit rule red-flags all PRs even
   when "max increase vs base" is +0.00% (as in #56). PMD CPD is fine (3.60% < 5%). **Fix:** raise

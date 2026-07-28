@@ -5,7 +5,6 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import io.confluent.parallelconsumer.internal.InternalException;
-import lombok.experimental.StandardException;
 
 /*-
  * Error decoding offsets
@@ -14,6 +13,24 @@ import lombok.experimental.StandardException;
  *
  * @author Antony Stubbs
  */
-@StandardException
+// Constructors are hand-written (not Lombok @StandardException) to avoid a flaky
+// annotation-processing compile race - see InternalRuntimeException for the full explanation.
 public class OffsetDecodingError extends InternalException {
+
+    public OffsetDecodingError() {
+        super();
+    }
+
+    public OffsetDecodingError(String message) {
+        super(message);
+    }
+
+    public OffsetDecodingError(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public OffsetDecodingError(Throwable cause) {
+        super(cause);
+    }
+
 }
