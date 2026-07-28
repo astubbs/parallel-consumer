@@ -155,6 +155,30 @@ and Confluent `-ce`/`-ccs` Kafka builds — without the `-ce` filter, kafka "lat
   compiler` `4.0.0-beta-*`; `maven-surefire`/`maven-failsafe` `3.6.0-M1`; `maven-site-plugin` `4.0.0-M16`
   (left at `4.0.0-M15`). Revisit once these reach GA.
 
+### SpotBugs 4.10 surfaced 11 pre-existing concurrency findings (follow-up, not this PR)
+
+The `spotbugs 4.8.6 → 4.10.3` bump in this PR expanded the multithreading (`AT_*`) detectors, so the
+`SpotBugs` PR job reports **11 "new" bugs**. They are **not introduced here** — this PR changes no
+`src/main/**/*.java`; the CI baseline was just generated with the *old* 4.8.6, so 4.10.3's new detectors
+fire on **existing** code. All are in `parallel-consumer-core`, all real-looking thread-visibility/atomicity
+observations worth a proper look as their own task (several sit in the poll/control-thread coordination
+that the **#857** single-thread refactor is already reworking — fixing piecemeal now may conflict/be moot):
+
+- **`AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE`** (8) — non-atomic read-modify-write (e.g. `count++`) on a
+  shared field:
+  - `AbstractParallelEoSStreamProcessor.numberOfAssignedPartitions` (lines 420, 448, 463)
+  - `ConsumerManager` counters `noWakeups` (143, 226), `erroneousWakups` (201, 233), `correctPollWakeups` (111)
+- **`AT_STALE_THREAD_WRITE_OF_PRIMITIVE`** (3) — primitive written in one thread may not be visible to another
+  (missing `volatile`/sync):
+  - `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` (979)
+  - `ConsumerManager.commitRequested` (287)
+  - `RetryQueue.closed` (287)
+
+**Action:** don't block this deps PR. After merge, master's push build regenerates the SpotBugs baseline
+with 4.10.3, so these drop out of "new". Track the actual fixes (make the counters `AtomicInteger`/`Atomic
+Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
+.erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
+
 ## CI reliability / gate issues (follow-up work)
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
