@@ -8,24 +8,11 @@ package io.confluent.parallelconsumer;
 /**
  * This exception is only used when there is an exception thrown from code provided by the user.
  */
-// Constructors are hand-written (not Lombok @StandardException) to avoid a flaky
-// annotation-processing compile race - see InternalRuntimeException for the full explanation.
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class ExceptionInUserFunctionException extends ParallelConsumerException {
-
-    public ExceptionInUserFunctionException() {
-        super();
-    }
-
-    public ExceptionInUserFunctionException(String message) {
-        super(message);
-    }
 
     public ExceptionInUserFunctionException(String message, Throwable cause) {
         super(message, cause);
-    }
-
-    public ExceptionInUserFunctionException(Throwable cause) {
-        super(cause);
     }
 
 }

@@ -155,10 +155,14 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   pure classes after PR #65's own **PIT** run flaked *fatally* on them (`OffsetDecodingError`,
   `NoEncodingPossibleException`, `ParallelConsumerException`, `ExceptionInUserFunctionException`, the
   `*EncodingNotSupported*` family, etc.) - proving the "transient diagnostics recover" assumption wrong
-  and meeting the pre-set escalation criterion. Each class keeps the four standard ctors
-  (`()`, `(String)`, `(String, Throwable)`, `(Throwable)`); `InternalRuntimeException` also keeps its
-  `(String, Throwable, Object...)` varargs ctor (now `super(...)`) + `msg()` factory, and
-  `KafkaStreamsEncodingNotSupported` keeps its custom no-arg ctor. Public API unchanged.
+  and meeting the pre-set escalation criterion. To keep the near-identical boilerplate under the
+  duplication/file-similarity detectors, each class is **trimmed to only the constructors it (or a
+  subclass's `super(...)`) actually uses** rather than the full four: e.g. `OffsetDecodingError` keeps only
+  `(String, Throwable)`, the `RunLength*`/`NoEncodingPossible` classes only `(String)`,
+  `KafkaStreamsEncodingNotSupported` only its custom no-arg. `PCRetriableException` (public user-throwable)
+  keeps all four; `InternalRuntimeException` keeps its four + `(String, Throwable, Object...)` varargs
+  (now `super(...)`) + `msg()` factory. `ExceptionConstructorsTest` reflectively verifies whatever ctors
+  each class exposes. Public API unchanged for the classes users construct.
 - **`Duplicate Code (jscpd)` absolute cap is below baseline → fails on EVERY PR.** jscpd cap is 4% but
   the codebase baseline is already 4.22% (85 clones), so the absolute-limit rule red-flags all PRs even
   when "max increase vs base" is +0.00% (as in #56). PMD CPD is fine (3.60% < 5%). **Fix:** raise

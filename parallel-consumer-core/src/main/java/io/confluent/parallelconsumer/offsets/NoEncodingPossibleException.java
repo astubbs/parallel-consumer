@@ -11,24 +11,11 @@ import io.confluent.parallelconsumer.internal.InternalException;
  *
  * @author Antony Stubbs
  */
-// Constructors are hand-written (not Lombok @StandardException) to avoid a flaky
-// annotation-processing compile race - see InternalRuntimeException for the full explanation.
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class NoEncodingPossibleException extends InternalException {
-
-    public NoEncodingPossibleException() {
-        super();
-    }
 
     public NoEncodingPossibleException(String message) {
         super(message);
-    }
-
-    public NoEncodingPossibleException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    public NoEncodingPossibleException(Throwable cause) {
-        super(cause);
     }
 
 }

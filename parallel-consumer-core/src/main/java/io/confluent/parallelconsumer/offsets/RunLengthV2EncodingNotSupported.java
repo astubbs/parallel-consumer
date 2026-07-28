@@ -10,24 +10,11 @@ package io.confluent.parallelconsumer.offsets;
  *
  * @author Antony Stubbs
  */
-// Constructors are hand-written (not Lombok @StandardException) to avoid a flaky
-// annotation-processing compile race - see InternalRuntimeException for the full explanation.
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class RunLengthV2EncodingNotSupported extends EncodingNotSupportedException {
-
-    public RunLengthV2EncodingNotSupported() {
-        super();
-    }
 
     public RunLengthV2EncodingNotSupported(String message) {
         super(message);
-    }
-
-    public RunLengthV2EncodingNotSupported(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    public RunLengthV2EncodingNotSupported(Throwable cause) {
-        super(cause);
     }
 
 }

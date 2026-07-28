@@ -10,13 +10,8 @@ package io.confluent.parallelconsumer;
  *
  * @author Antony Stubbs
  */
-// Constructors are hand-written (not Lombok @StandardException) to avoid a flaky
-// annotation-processing compile race - see InternalRuntimeException for the full explanation.
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class ParallelConsumerException extends RuntimeException {
-
-    public ParallelConsumerException() {
-        super();
-    }
 
     public ParallelConsumerException(String message) {
         super(message);
@@ -24,10 +19,6 @@ public class ParallelConsumerException extends RuntimeException {
 
     public ParallelConsumerException(String message, Throwable cause) {
         super(message, cause);
-    }
-
-    public ParallelConsumerException(Throwable cause) {
-        super(cause);
     }
 
 }

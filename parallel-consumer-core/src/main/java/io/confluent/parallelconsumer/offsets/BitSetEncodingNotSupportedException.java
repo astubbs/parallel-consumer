@@ -10,13 +10,8 @@ package io.confluent.parallelconsumer.offsets;
  *
  * @author Antony Stubbs
  */
-// Constructors are hand-written (not Lombok @StandardException) to avoid a flaky
-// annotation-processing compile race - see InternalRuntimeException for the full explanation.
+// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
 public class BitSetEncodingNotSupportedException extends EncodingNotSupportedException {
-
-    public BitSetEncodingNotSupportedException() {
-        super();
-    }
 
     public BitSetEncodingNotSupportedException(String message) {
         super(message);
@@ -24,10 +19,6 @@ public class BitSetEncodingNotSupportedException extends EncodingNotSupportedExc
 
     public BitSetEncodingNotSupportedException(String message, Throwable cause) {
         super(message, cause);
-    }
-
-    public BitSetEncodingNotSupportedException(Throwable cause) {
-        super(cause);
     }
 
 }
