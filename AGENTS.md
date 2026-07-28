@@ -84,12 +84,14 @@ bin/performance-test.sh
 
 ## Releasing
 
-The pom.xml version drives publishing — there is no `maven-release-plugin` dance.
+Version-in-committed-code, PR-based, tag-on-merge. `master` is **always** a `-SNAPSHOT`; the release version is baked into a commit by `maven-release-plugin`, and the release is published from that commit when its PR merges.
 
 **Cut a release:**
-1. Open a PR removing `-SNAPSHOT` from `<version>` in the parent pom (e.g. `0.6.0.0-SNAPSHOT` → `0.6.0.0`)
-2. Merge it to master → CI publishes to Maven Central, tags `v0.6.0.0`, creates a GitHub release
-3. Open another PR bumping to the next snapshot (e.g. `0.6.0.1-SNAPSHOT`) and merge
+1. Run the **Prepare Release** workflow (Actions → *Prepare Release* → *Run workflow*) with the release version (e.g. `0.6.0.0`) and next dev version (e.g. `0.6.0.1-SNAPSHOT`). It runs `mvn release:prepare` (rewrites the poms, makes the two release commits — **no build**) and opens a `release: <version>` PR.
+2. Review and **merge that PR with a merge-commit or rebase — NOT squash** (squash drops the release commit; `publish.yml` fails loudly if it happens).
+3. On merge, `publish.yml` finds the `[maven-release-plugin] prepare release` commit, deploys **that SHA** to Maven Central, tags `v<version>`, and cuts a GitHub release. `master` is already back on the next `-SNAPSHOT`.
+
+Snapshots publish automatically on every push to `master`. Workflows: `prepare-release.yml` (prepare), `publish.yml` (deploy).
 
 **Required GitHub repo secrets** for `publish.yml`:
 - `MAVEN_CENTRAL_USERNAME` — Sonatype Central Portal token username

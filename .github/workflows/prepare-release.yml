@@ -1,0 +1,73 @@
+# One-click release preparation.
+#
+# Runs `mvn release:prepare`, which rewrites the poms and makes the two release commits
+# (it does NOT build or push - see the maven-release-plugin config in the root pom), then
+# pushes the branch and opens a PR. Review + merge that PR (merge-commit or rebase, NOT
+# squash); publish.yml then tags + publishes the release commit on merge.
+#
+# Note: the release PR is opened with GITHUB_TOKEN, so its "Build and Test" checks may not
+# auto-run (GitHub does not trigger workflows from token-created PRs). The code is unchanged
+# version-only bumps, and merging still runs Build and Test on master (which gates publish).
+# Provide a PAT as `token:` below if you want checks to run on the release PR itself.
+
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      releaseVersion:
+        description: 'Release version, e.g. 0.6.0.0'
+        required: true
+      developmentVersion:
+        description: 'Next development version, e.g. 0.6.0.1-SNAPSHOT'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Run release:prepare on a release branch
+        run: |
+          BRANCH="release/${{ inputs.releaseVersion }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          # preparationGoals=validate + pushChanges=false come from the pom; this only
+          # rewrites poms and makes the two commits. No build, no push, no tag pushed.
+          ./mvnw --batch-mode release:prepare \
+            -DreleaseVersion=${{ inputs.releaseVersion }} \
+            -DdevelopmentVersion=${{ inputs.developmentVersion }} \
+            -Dlicense.skip -Darguments="-Dlicense.skip"
+          git push origin "$BRANCH"
+
+      - name: Open the release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base master \
+            --head "release/${{ inputs.releaseVersion }}" \
+            --title "release: ${{ inputs.releaseVersion }}" \
+            --body "Automated release preparation for **${{ inputs.releaseVersion }}** via \`maven-release-plugin\`.
+
+          Contains the two version commits: \`release ${{ inputs.releaseVersion }}\` and \`prepare for next development iteration ${{ inputs.developmentVersion }}\`.
+
+          > **Merge with a merge-commit or rebase - NOT squash.** Squash collapses the release commit and the release won't publish (\`publish.yml\` has a guard that will fail the build if this happens).
+
+          On merge, \`publish.yml\` finds the \`[maven-release-plugin] prepare release\` commit, deploys it to Maven Central, tags \`v${{ inputs.releaseVersion }}\`, and cuts a GitHub release. master returns to \`${{ inputs.developmentVersion }}\`."

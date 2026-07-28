@@ -594,7 +594,16 @@
                 <version>3.0.1</version>
                 <configuration>
                     <autoVersionSubmodules>true</autoVersionSubmodules>
-                    <tagNameFormat>@{project.version}</tagNameFormat>
+                    <tagNameFormat>v@{project.version}</tagNameFormat>
+                    <!-- release:prepare only rewrites the poms and makes the two release
+                         commits ("prepare release X" + "prepare for next development
+                         iteration"). It does NOT build (preparationGoals=validate) and does
+                         NOT push (pushChanges=false) - the prepare-release workflow pushes the
+                         branch (commits only, no tag) into a PR, and publish.yml detects the
+                         "[maven-release-plugin] prepare release" commit once it lands on master
+                         and tags + publishes that exact SHA. See .github/workflows/. -->
+                    <preparationGoals>validate</preparationGoals>
+                    <pushChanges>false</pushChanges>
                 </configuration>
             </plugin>
             <plugin>
