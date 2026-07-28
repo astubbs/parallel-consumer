@@ -109,7 +109,27 @@ jobs:
         if: ${{ !inputs.dryRun }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "v${{ inputs.releaseVersion }}" --title "v${{ inputs.releaseVersion }}" --generate-notes
+        run: |
+          # Use our curated CHANGELOG.adoc section as the release notes (not --generate-notes). This step
+          # runs at tag vX (the deploy step already checked it out), so CHANGELOG.adoc is present. Extract
+          # the "== <releaseVersion>" AsciiDoc section, convert it to Markdown (GitHub renders Markdown:
+          # "=== Heading" -> "### Heading", AsciiDoc "https://url[text]" -> "[text](https://url)"), and pass
+          # it via --notes-file. Fall back to --generate-notes if the section is missing/empty so a release
+          # never fails for lack of notes.
+          notes="$(mktemp)"
+          awk -v h="== ${{ inputs.releaseVersion }}" '
+            $0 == h {grab=1; next}
+            /^== / && grab {exit}
+            grab && /^\/\// {next}
+            grab {print}
+          ' CHANGELOG.adoc \
+            | sed -E 's/^=== /### /; s#(https?://[^[]+)\[([^]]+)\]#[\2](\1)#g' > "$notes"
+          if [ -s "$notes" ]; then
+            gh release create "v${{ inputs.releaseVersion }}" --title "v${{ inputs.releaseVersion }}" --notes-file "$notes"
+          else
+            echo "::warning::No CHANGELOG section for ${{ inputs.releaseVersion }}; using auto-generated notes."
+            gh release create "v${{ inputs.releaseVersion }}" --title "v${{ inputs.releaseVersion }}" --generate-notes
+          fi
 
       - name: Clean release plugin state
         if: always()
