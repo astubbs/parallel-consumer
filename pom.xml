@@ -190,7 +190,17 @@
             <id>ci</id>
             <properties>
                 <license.mode>check</license.mode>
-                <parallel-tests>false</parallel-tests>
+                <!-- EXPERIMENT (ci/reenable-parallel-tests): parallel test execution was
+                     disabled in CI on suspicion it caused flaky tests. Re-enabling to
+                     measure current speed and reliability on GitHub-hosted runners.
+                     The tests are I/O-bound (Kafka via TestContainers) and JUnit is
+                     configured to run them concurrently (dynamic factor 20) - see
+                     parallel-consumer-core/src/test/resources/junit-platform.properties.
+                     Watch the surefire "Flaky Tests" summary in the CI logs: the
+                     integration suite reruns failures (rerunFailingTestsCount=2), so a
+                     flake reports as a Flaky Test rather than failing the build. Revert
+                     this to false if flakiness returns. -->
+                <parallel-tests>true</parallel-tests>
             </properties>
             <build>
                 <plugins>
