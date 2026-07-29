@@ -48,6 +48,22 @@
 
     <logger name="org.apache.kafka" level="warn"/>
 
+    <!-- ALWAYS ON despite the blanket warn above: offset-reset decisions are rare (one line each) and
+         contain the exact start position - the single number that solved the committedOffsetRemoved[latest]
+         nudge race. See docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md -->
+    <logger name="org.apache.kafka.clients.consumer.internals.SubscriptionState" level="info"/>
+
+    <!-- Standing harness: kafka-client bootstrap diagnostics. Flip to debug when hunting consumer
+         bootstrap / first-poll / group-membership issues - the client narrates its whole state machine;
+         instrument by un-silencing, not by patching. NB kafka-clients 3.5+ logs the fetch path under
+         AbstractFetch (not only Fetcher). See the solution doc above for the method. -->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.SubscriptionState" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.AbstractFetch" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.Fetcher" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.Metadata" level="debug"/>-->
+
     <!-- docker logs -->
     <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
 
