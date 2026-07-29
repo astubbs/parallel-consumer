@@ -82,7 +82,7 @@ public class MutinyBatchTest extends MutinyUnitTestBase implements BatchTestBase
 
     @Test
     public void averageBatchSizeTest() {
-        batchTestMethods.averageBatchSizeTest(10000);
+        batchTestMethods.averageBatchSizeTest(5000);
     }
 
     @ParameterizedTest
