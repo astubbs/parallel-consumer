@@ -381,7 +381,12 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
 
             getKcu().produceMessages(getTopic(), 1, "poll-bumper");
 
+            // DEBUG-BRANCH: correlate this await with the pcId-tagged consumer logs; extended window so a
+            // stall capture shows multiple kafka-client retry cycles (test still fails when stalled)
+            log.warn("DIAG first-poll await START: pcId={} topic={} groupId={}",
+                    tempPc.getMyId().orElse("?"), getTopic(), getKcu().getGroupId());
             Awaitility.await()
+                    .atMost(60, SECONDS)
                     .failFast(tempPc::isClosedOrFailed)
                     .untilAsserted(() -> {
                         assertThat(seenOffsets).isNotEmpty();

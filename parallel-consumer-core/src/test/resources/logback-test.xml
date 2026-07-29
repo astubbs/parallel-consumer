@@ -48,6 +48,18 @@
 
     <logger name="org.apache.kafka" level="warn"/>
 
+    <!-- DEBUG-BRANCH instrumentation (debug/committedoffset-firstpoll-stall): capture the Kafka CLIENT's
+         side of the committedOffsetRemoved first-poll stall - the PC side was already exonerated
+         (fresh RUNNING PC, counters at 0, poller not throttle-paused). These show group join/sync,
+         assignment, offset reset, and fetch round-trips during the 10s window where the first record
+         never arrives. Scoped to the stall-relevant internals - full org.apache.kafka DEBUG drowns the
+         run and over-perturbs timing. -->
+    <logger name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator" level="debug"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="debug"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.Fetcher" level="debug"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.SubscriptionState" level="debug"/>
+    <logger name="org.apache.kafka.clients.Metadata" level="debug"/>
+
     <!-- docker logs -->
     <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
 
