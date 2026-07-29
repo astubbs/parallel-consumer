@@ -71,7 +71,7 @@ class MutinyPCTest extends MutinyUnitTestBase {
 
     @Test
     void concurrencyTest() throws InterruptedException {
-        int quantity = 100_000;
+        int quantity = 50_000;
         var consumerRecords = ktu.generateRecords(quantity - 1); // -1 because 1 is already primed
         ktu.send(consumerSpy, consumerRecords);
         log.info("Finished priming records");

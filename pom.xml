@@ -105,6 +105,12 @@
 
         <!-- tests -->
         <parallel-tests>true</parallel-tests>
+        <!-- Unit-test (surefire) JVM forks = process-level parallelism. Default 1 (no forking); the `ci`
+             profile raises it to 1C (one fork per CPU core) so CI runs the unit suite in parallel across
+             JVMs. This is reliable because each fork is a separate process (no shared static state between
+             them) and single-threaded, unlike JUnit thread parallelism (`parallel-tests`) which contends on
+             static state. Forks are reused to amortise JVM startup. -->
+        <surefire.forkCount>1</surefire.forkCount>
 
         <!-- tests deps-->
         <junit.version>5.14.4</junit.version>
@@ -200,6 +206,11 @@
             <properties>
                 <license.mode>check</license.mode>
                 <parallel-tests>false</parallel-tests>
+                <!-- Parallelise the unit suite by FORKING JVMs (one per core) rather than JUnit threads:
+                     ~3x faster on a multi-core box and reliable (no cross-thread static-state contention, so
+                     it does not resurrect the thread-parallel flakes). On GitHub's 2-core runners 1C = 2 forks
+                     (well-matched, no CPU starvation); on the self-hosted box it scales up to the core count. -->
+                <surefire.forkCount>1C</surefire.forkCount>
             </properties>
             <build>
                 <plugins>
@@ -394,6 +405,13 @@
             <groupId>one.util</groupId>
             <artifactId>streamex</artifactId>
             <version>0.9.0</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Architecture rules (e.g. keep integration tests out of the unit suite) - all modules -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.3.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -733,6 +751,8 @@
                 <version>${surefire.version}</version>
                 <configuration>
                     <trimStackTrace>false</trimStackTrace>
+                    <forkCount>${surefire.forkCount}</forkCount>
+                    <reuseForks>true</reuseForks>
                     <excludes>
                         <!-- <exclude>**/*integration*/**/*.java</exclude> too aggressive? -->
                         <exclude>**/integrationTest*/**/*.java</exclude>

@@ -17,7 +17,7 @@ import java.util.Set;
 
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
 import static java.time.Duration.ofSeconds;
-import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Central point for asserting commits in integration tests against the brokers.

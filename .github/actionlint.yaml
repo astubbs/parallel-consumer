@@ -5,3 +5,4 @@ self-hosted-runner:
   labels:
     - performance
     - highcpu
+    - macOS

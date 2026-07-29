@@ -21,9 +21,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static java.lang.Thread.sleep;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
-import static org.testcontainers.shaded.org.hamcrest.Matchers.equalTo;
-import static org.testcontainers.shaded.org.hamcrest.Matchers.is;
+import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.is;
 
 @Slf4j
 public class DrainCloseTest extends BrokerIntegrationTest<String, String> {

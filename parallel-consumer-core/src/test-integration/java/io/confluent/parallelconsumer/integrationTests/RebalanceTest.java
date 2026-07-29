@@ -28,9 +28,9 @@ import java.util.stream.Stream;
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.REUSE_GROUP;
-import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
-import static org.testcontainers.shaded.org.hamcrest.Matchers.equalTo;
-import static org.testcontainers.shaded.org.hamcrest.Matchers.is;
+import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.is;
 
 /**
  * Tests around what should happen when rebalancing occurs
