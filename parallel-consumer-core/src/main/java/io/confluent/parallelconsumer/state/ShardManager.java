@@ -137,6 +137,20 @@ public class ShardManager<K, V> {
     }
 
     /**
+     * Count work containers that are in-flight (dispatched to worker pool) for the given partitions.
+     * Used by {@link WorkManager#onPartitionsRemoved} to adjust the outForProcessing counter
+     * when partitions are revoked, preventing the silent stall described in #857.
+     */
+    long countInflightForPartitions(Collection<TopicPartition> partitions) {
+        Set<TopicPartition> partitionSet = new HashSet<>(partitions);
+        return processingShards.values().stream()
+                .flatMap(shard -> shard.getEntries().values().stream())
+                .filter(WorkContainer::isInFlight)
+                .filter(wc -> partitionSet.contains(wc.getTopicPartition()))
+                .count();
+    }
+
+    /**
      * Remove only the work shards which are referenced from work from revoked partitions
      *
      * @param recordsFromRemovedPartition collection of work to scan to get keys of shards to remove
