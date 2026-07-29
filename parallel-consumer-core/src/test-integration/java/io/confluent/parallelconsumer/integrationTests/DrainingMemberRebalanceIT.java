@@ -112,12 +112,17 @@ class DrainingMemberRebalanceIT extends BrokerIntegrationTest<String, String> {
             // 1) GROUP LIVENESS: the rebalance must complete and B must make progress while A still drains.
             //    Pre-fix, A is protocol-absent: the join blocks on A up to max.poll.interval.ms (5 min
             //    default) and B consumes NOTHING inside this window.
+            // Threshold is ANY progress (>=1): the property is that the rebalance completes and B consumes
+            // AT ALL while A drains - pre-fix, B gets NOTHING (rebalance blocked on the zombie). A higher
+            // bar races A's bounded drain window (worker-pool force-interrupt) under load for no extra
+            // discrimination.
             await().alias("group progress while a member drains")
                     .atMost(45, SECONDS)
+                    .pollInterval(Duration.ofMillis(200))
                     .failFast(pcB::isClosedOrFailed)
                     .untilAsserted(() -> {
                         assertWithMessage("B (joined mid-drain) should be consuming while A drains")
-                                .that(processedByB.size()).isAtLeast(50);
+                                .that(processedByB.size()).isAtLeast(1);
                         assertWithMessage("A should still be draining while B progresses (else this run " +
                                 "did not exercise the mid-drain window and cannot discriminate)")
                                 .that(drainingCloser.isAlive()).isTrue();
