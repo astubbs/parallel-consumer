@@ -37,7 +37,7 @@ if [ -n "$BASE_REF" ]; then
   git fetch --no-tags -q origin "$BASE_REF" 2>/dev/null || true
   CHANGED=$(git diff --name-only "origin/${BASE_REF}" HEAD -- parallel-consumer-core/src/main/java/ 2>/dev/null \
     | sed -E 's#.*/src/main/java/##; s#/#.#g; s#\.java$##' \
-    | grep -E '^io\.confluent\.parallelconsumer\.' | paste -sd, -)
+    | { grep -E '^io\.confluent\.parallelconsumer\.' || true; } | paste -sd, -)
   if [ -z "$CHANGED" ]; then
     echo "PIT: no core main-source classes changed vs origin/${BASE_REF} - nothing to mutate, skipping."
     exit 0

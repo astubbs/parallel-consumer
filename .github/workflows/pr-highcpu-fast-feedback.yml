@@ -47,14 +47,14 @@ jobs:
       fail-fast: false           # each suite is independent
       matrix:
         include:
-          # EXPERIMENT: fork x threads. On top of process-forking we also enable JUnit method-parallelism
-          # (-Dparallel-tests=true, off in the ci profile). Forks reduced so forks x threads ~= cores. The
-          # project previously found thread-parallelism FLAKY (shared static state races, exposed #857) - this
-          # tests whether recent fixes changed that. If it's flaky/red, revert to fork-only (1C / 8).
+          # Fork-only sweet spot. (fork x threads was measured: SAFE - JUnit thread-parallelism no longer races,
+          # Unit went green - but NOT faster (forking already saturates the cores), so no reason to keep it.
+          # Useful finding for the inflight "Step 2" thread-parallelism question.)
+          # Unit: 1 fork PER CORE (1C = 32). Integration: 8 broker-forks (16 was slower).
           - suite-name: "Unit"
-            cmd: "bin/ci-unit-test.sh -DforkCount=8 -Dparallel-tests=true"
+            cmd: "bin/ci-unit-test.sh -DforkCount=1C"
           - suite-name: "Integration"
-            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true -Dparallel-tests=true"
+            cmd: "bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true"
           # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
           - suite-name: "Performance"
             cmd: "bin/performance-test.sh"
