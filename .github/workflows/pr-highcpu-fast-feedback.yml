@@ -1,0 +1,73 @@
+# Optional, NON-GATING fast feedback on a self-hosted high-CPU runner (many-core Linux, native Docker).
+#
+# Runs unit + integration + performance as separate matrix jobs concurrently on real cores - far faster
+# than GitHub's 2-core gate. The runner may be offline at any time, so these jobs are FYI only:
+# continue-on-error + not-required means an offline runner never blocks a merge (the required gate stays
+# GitHub-hosted, see maven.yml). When the runner is offline the jobs simply queue and are skipped by the guard.
+#
+# SECURITY (public repo + self-hosted runner): guarded to SAME-REPO pull requests only, so a fork PR's
+# untrusted code NEVER runs on the self-hosted machine (RCE). pull_request (no secrets), never pull_request_target.
+
+name: PR High-CPU Fast Feedback
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-highcpu-fast-feedback-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  highcpu-build-test:
+    name: "Build & Test - ${{ matrix.suite-name }} (high-CPU self-hosted, optional)"
+    # Same-repo PRs only: fork PRs are untrusted and must NOT execute on the self-hosted machine.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, highcpu]
+    continue-on-error: true      # optional / FYI - never a required gate (the runner may be offline)
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false           # unit / integration / performance run independently, in parallel
+      matrix:
+        include:
+          # forkCount capped so several concurrent jobs share the runner's many cores without oversubscribing.
+          - suite-name: "Unit"
+            cmd: "bin/ci-unit-test.sh -DforkCount=8"
+          # Each integration fork gets its own Testcontainers broker; keep 4 (RAM: 2 integ jobs ~= 8 brokers).
+          - suite-name: "Integration"
+            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+          - suite-name: "Performance"
+            cmd: "bin/performance-test.sh"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: ''
+
+      - name: Show environment
+        run: |
+          java -version
+          echo "cpus: $(nproc)"
+          docker --version
+          docker info | head -20
+
+      - name: ${{ matrix.suite-name }} tests
+        run: time ${{ matrix.cmd }}
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: highcpu-fast-feedback-reports-${{ matrix.suite-name }}-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 14

@@ -145,6 +145,14 @@ fallback.
 > GitHub's 2-core hosted runners, and it keeps the suite runnable when the PC is
 > off.
 
+### The `highcpu` runners (many-core Linux LXC, several instances)
+
+The heavy runner is a many-core Linux box running a Docker LXC with **several runner instances** (one per
+concurrent job), targeted by the [`PR High-CPU Fast Feedback`](../.github/workflows/pr-highcpu-fast-feedback.yml)
+workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). Unit, integration and performance
+run as separate matrix jobs in parallel. Provisioning it (OpenTofu + Ansible) and the on-demand power/boot
+control are generic infrastructure kept in a separate private infra repo, not here.
+
 ## Fallback behaviour (important)
 
 **There is no automatic fallback from a self-hosted runner to a GitHub-hosted
