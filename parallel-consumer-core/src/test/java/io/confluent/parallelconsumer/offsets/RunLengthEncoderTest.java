@@ -5,7 +5,6 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.SneakyThrows;
 import org.assertj.core.api.Assertions;
@@ -157,7 +156,14 @@ class RunLengthEncoderTest {
 
 
     /**
-     * Check RLv2 errors on integer overflow. Integer version of this test is very slow (1.5 minutes).
+     * A run-length encoder stores each run's length as a fixed-width integer: a {@code short} in v1
+     * ({@code RunLength}) and an {@code int} in v2 ({@code RunLengthV2}). This verifies that a run longer than
+     * that width can hold is rejected up-front with the version-appropriate {@link EncodingNotSupportedException}
+     * ({@link RunLengthV1EncodingNotSupported} for v1, {@link RunLengthV2EncodingNotSupported} for v2), rather
+     * than silently overflowing and writing a corrupt offset map.
+     * <p>
+     * Parameterised over every encoding version (v1 overflows a {@code short} at ~32K, v2 overflows an
+     * {@code int} at ~2.1B). It is fast for both despite those boundaries - see {@link #testRunLength} for why.
      */
     @SneakyThrows
     @ParameterizedTest()
@@ -171,12 +177,17 @@ class RunLengthEncoderTest {
         OffsetSimultaneousEncoder offsetSimultaneousEncoder
                 = new OffsetSimultaneousEncoder(KAFKA_OFFSET_ABSENCE, overflowedValue - 1, incompletes);
 
-        {
-            final OffsetEncoding.Version versionsToTest = v2;
-            testRunLength(overflowedValue, offsetSimultaneousEncoder, versionToTest);
-        }
+        testRunLength(overflowedValue, offsetSimultaneousEncoder, versionToTest);
     }
 
+    /**
+     * Encodes a small, normal run of completed/incomplete offsets (0-10) to build a realistic run-length
+     * stream, then injects a single completed offset far ahead so the open run's length exceeds the encoding's
+     * fixed-width capacity, and asserts the encoder throws the version-appropriate "run-length too big" error.
+     *
+     * @param overflowedValue an offset far enough past the previous one that the resulting run-length overflows
+     *                         the encoding's entry type (a {@code short} for v1, an {@code int} for v2)
+     */
     private static void testRunLength(long overflowedValue, OffsetSimultaneousEncoder offsetSimultaneousEncoder, OffsetEncoding.Version versionsToTest) throws EncodingNotSupportedException {
         RunLengthEncoder rl = new RunLengthEncoder(offsetSimultaneousEncoder, versionsToTest);
 
@@ -193,10 +204,17 @@ class RunLengthEncoderTest {
         rl.encodeIncompleteOffset(10); // 1
 
         // inject overflow offset
+        //
+        // The run-length is accumulated from the DELTA between an offset and the previous one
+        // (RunLengthEncoder.encodeRunLength: `delta = relativeOffset - previousRangeIndex`), NOT from the
+        // number of encode calls. So a single completed offset a huge distance past the previous one drives
+        // the run-length past the encoding's capacity in ONE step - exercising the exact same overflow path
+        // (Math.toIntExact / toShortExact) as counting up one-by-one, but without ~2.1 billion iterations
+        // (which made the v2/Integer case a ~1.5 minute test). A large delta is also a realistic input: gaps
+        // between completed offsets are themselves encoded as a run (see the RunLengthEncoder class doc).
         var errorAssertion = Assertions.assertThatThrownBy(() -> {
-            for (var relativeOffset : Range.range(11, overflowedValue)) {
-                rl.encodeCompletedOffset(relativeOffset);
-            }
+            rl.encodeCompletedOffset(11); // open a "completed" run at 11
+            rl.encodeCompletedOffset(overflowedValue); // one large delta -> run-length overflows Short (v1) / Integer (v2)
         });
 
         switch (versionsToTest) {
@@ -212,9 +230,23 @@ class RunLengthEncoderTest {
     }
 
     /**
-     * Test simultaneous encoder with run-length overflow errors fail gracefully.
+     * The {@link OffsetSimultaneousEncoder} runs every candidate encoding at once and keeps only those that can
+     * represent the input, dropping - gracefully, without failing the whole commit - any whose encoder throws
+     * {@link EncodingNotSupportedException}. This verifies that overflow is handled by dropping the offending
+     * encodings, not by crashing:
+     * <ul>
+     *   <li>{@code SHORT}: the run overflows only the {@code short}-width (v1) run-length encodings; wider
+     *       encodings still fit, so the map comes back with the survivors (2).</li>
+     *   <li>{@code INT}: the run overflows every candidate (the {@code int}-width v2 run-length, and the raw
+     *       bitset/bytebuffer encodings are too large to allocate for a ~2.1B span), so the map is empty.</li>
+     * </ul>
      * <p>
-     * Integer version of this test is very slow (1.5 minutes).
+     * Unlike {@link #vTwoIntegerOverflow}, this test cannot use the single-large-delta shortcut: the
+     * simultaneous encoder walks <em>every</em> offset in the range ({@link OffsetSimultaneousEncoder#invoke()}
+     * calls the per-offset encode for each one), so provoking an {@code int} overflow genuinely iterates ~2.1
+     * billion offsets - which is why the {@code INT} case is slow (~1.5 min). Making it fast needs a
+     * delta-aware {@code invoke()} (the run-length optimisation TODO on {@link OffsetSimultaneousEncoder}), a
+     * main-code change tracked in {@code docs/inflight.md} - not something to fake at the test level.
      */
     @ParameterizedTest
     @EnumSource(names = {"SHORT", "INT"}, mode = INCLUDE)
