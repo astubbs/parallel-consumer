@@ -377,6 +377,8 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
             // every record that will ever exist, making this await unwinnable at ANY timeout. That race
             // was this test's long-standing CI "flake" ([1]=latest only). See
             // BrokerIntegrationTest#awaitWithTopicNudge and the linked solution doc.
+            log.info("first-poll await: pcId={} topic={} groupId={}",
+                    tempPc.getMyId().orElse("?"), getTopic(), getKcu().getGroupId());
             var nudgesSent = new AtomicLong();
             awaitWithTopicNudge(tempPc, Duration.ofSeconds(1), Duration.ofSeconds(10), nudgesSent, () -> {
                 assertThat(seenOffsets).isNotEmpty();

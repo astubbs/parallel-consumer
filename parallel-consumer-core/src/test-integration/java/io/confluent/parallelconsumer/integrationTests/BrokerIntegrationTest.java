@@ -193,6 +193,9 @@ public abstract class BrokerIntegrationTest<K, V> {
                                        Duration atMost,
                                        AtomicLong nudgeCounter,
                                        ThrowingRunnable assertion) {
+        // correlation marker: ties this await to the consumer's own (pcId-tagged) client logs - the line
+        // that let the nudge-race capture be attributed to the right instance among 16 forks
+        log.info("awaitWithTopicNudge START: topic={} groupId={} atMost={}", getTopic(), getKcu().getGroupId(), atMost);
         try {
             Awaitility.await()
                     .pollInterval(pollInterval)
