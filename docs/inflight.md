@@ -371,3 +371,17 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.
+- **`PartitionStateCommittedOffsetIT.committedOffsetRemoved` — flaky awaitility timeout.**
+  `ConditionTimeoutException` after 10s (`expected not to be empty within 10 seconds`, `runPcUntilOffset` →
+  `committedOffsetRemoved`). Non-deterministic: within the same PR (#75) it has passed on GitHub-hosted while
+  failing on the self-hosted runner and vice-versa — so it is **not** runner-specific, it's a timing-sensitive
+  integration test. Likely adjacent to the #857 timing work; harden (longer/adaptive await, or fix the
+  underlying timing) rather than mask.
+- **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
+  resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
+  shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure
+  (`["failed","resolve"]`). On a network with a local resolver + search domain the name **resolves** to a LAN
+  IP, so the failure mode became *connection refused* and the assertion failed; on GitHub's public DNS it
+  passed. **Fixed** by pointing `getBadRequest()` at a **closed local port** (`127.0.0.1:1`) → deterministic
+  "connection refused" everywhere, no DNS. (Both sibling tests share the helper, so both assertions were
+  updated.) Found bringing up the self-hosted high-CPU runner.
