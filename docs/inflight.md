@@ -392,11 +392,19 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   polling (paused, long-poll cadence) and stays rebalance-responsive; guarded by `BrokerPollSystemDrainTest`
   (characterisation-first, flipped RED→GREEN). **Verified: neither PR #29 (#857) nor PR #31 (#909) fixed
   this** — they fix sibling mechanisms (assign-time throttle-pause reset + CME; stale-container
-  replacement) of the same "alive but not progressing" symptom; all three are non-conflicting. Next step
-  per the report: an **uber branch** merging #29 + #31 + PR #80, measured against #29's chaos run
-  (currently 10-20% residual stalls) and this report's forkCount=16 recipe. Route findings into the
-  **#857** investigation; revisit the `committedOffsetRemoved` await only after the stall is confirmed
-  gone.
+  replacement) of the same "alive but not progressing" symptom; all three are non-conflicting.
+  **SOLVED (2026-07-30): the `committedOffsetRemoved[latest]` failure itself turned out to be an
+  `auto.offset.reset=latest` NUDGE RACE in the test harness** — under contention the reset resolves
+  *after* `runPcUntilOffset`'s single pre-await bumper, positioning the consumer past all data forever
+  (unwinnable at any timeout; only ever the [latest] param — the unread tell). Captured via kafka-client
+  DEBUG (branch `debug/committedoffset-firstpoll-stall`): `SubscriptionState ... position 201` vs 201
+  records. NOT a product bug; the drain zombie found en route WAS. **Fix on PR #80:** shared
+  `BrokerIntegrationTest#awaitWithTopicNudge` (nudge-inside-the-await + timeout self-diagnosis), both
+  helpers refactored onto it (no copy-paste, no timeout bumped), deterministic `LatestResetTailNudgeIT`
+  guard (RED with old pattern ~23s / GREEN with primitive). Full story + diagnosability lessons:
+  `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`.
+  Remaining singles (`KafkaSanityTests`, `TransactionMarkersTest` — one uber-run sighting each) and
+  `MultiInstanceMetricsTest` stay tracked separately; production #857 remains #29's territory.
 - **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
   resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
   shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure

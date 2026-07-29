@@ -32,6 +32,15 @@ tags:
 
 # PartitionStateCommittedOffsetIT: the grumpy "flake" is a real silent stall, not a test-timeout bug
 
+> **UPDATE 2026-07-30 - the `committedOffsetRemoved` mystery is SOLVED**, with a final twist: it was an
+> `auto.offset.reset=latest` **nudge race in the test harness** - the reset resolving after the test's
+> single pre-await bumper leaves the consumer positioned past all data forever, making the await
+> unwinnable at ANY timeout. NOT a product stall, NOT broker distress (read this report's "broker-side
+> hypothesis" as since-disproven). The drain-path zombie found and fixed along the way remains a real
+> product bug. Mechanism, capture, fix (shared `awaitWithTopicNudge` + deterministic
+> `LatestResetTailNudgeIT` guard) and diagnosability lessons:
+> `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`.
+
 > **Research report, not a fix.** This documents what the diagnosis found so the finding is not lost, and
 > ties it into the open #857 silent-stall investigation. **No test was masked and no timeout was bumped** -
 > doing so would hide a real stall (see AGENTS.md "be EXTREMELY careful modifying tests under stress").
