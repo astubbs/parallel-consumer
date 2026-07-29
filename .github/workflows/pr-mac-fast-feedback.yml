@@ -1,0 +1,87 @@
+# Optional, NON-GATING fast feedback on the self-hosted macOS runner (mac-laptop).
+#
+# Runs the forked unit + integration suites on local multi-core hardware, which is much faster than the
+# GitHub-hosted 2-core gate (e.g. the forked unit suite ~1:39 vs GitHub's ~4-5 min). This is FYI only - the
+# required merge gate stays on always-on, sandboxed GitHub-hosted infra (see maven.yml). continue-on-error +
+# not-required means the laptop being asleep/offline never blocks a merge.
+#
+# The unit and integration suites are split into a matrix of two independent jobs so they can run
+# CONCURRENTLY - BUT that only happens if the mac has 2+ self-hosted runner INSTANCES registered (each
+# runner instance processes one job at a time). With a single instance the two jobs simply queue and run
+# back-to-back. Register a second runner instance on the mac (a second ./config.sh checkout) to actually
+# parallelise. See docs/SELF_HOSTED_RUNNER.md.
+#
+# SECURITY (public repo + self-hosted runner): the job is guarded to SAME-REPO pull requests only
+# (head.repo == this repo), so a fork PR's untrusted code NEVER runs on the home machine (RCE). We use
+# `pull_request` (untrusted-code trigger, no secrets exposed), never `pull_request_target`.
+
+name: PR Mac Fast Feedback
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-mac-fast-feedback-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mac-build-test:
+    name: "Build & Test - ${{ matrix.suite-name }} (macOS self-hosted, optional)"
+    # Same-repo PRs only: a fork PR is untrusted code and must NOT execute on the home machine.
+    # workflow_dispatch (manual) is always allowed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS]
+    continue-on-error: true      # optional / FYI - never a required gate (laptop may be offline)
+    timeout-minutes: 45
+    strategy:
+      # Don't cancel the integration job if unit fails (or vice versa) - each is independent FYI.
+      fail-fast: false
+      matrix:
+        include:
+          # Unit suite forks one JVM per core (ci profile forkCount=1C) - fast on the 12-core Mac.
+          - suite-name: "Unit"
+            cmd: "bin/ci-unit-test.sh"
+          # Integration suite forks per-broker (each JVM gets its own Testcontainers Kafka) - reliable + fast.
+          - suite-name: "Integration"
+            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+          # Mutation testing (PIT) is CPU-bound and scales with cores - it runs one minion JVM per core
+          # here (via bin/ci-mutation-test.sh), which is far faster than GitHub's 2-core runner (where a
+          # full internal.* sweep was impractically slow). Advisory only.
+          - suite-name: "Mutation (PIT)"
+            # -Dverbose: temporary, streams per-class/per-mutation progress in the live log. Drop once
+            # we've eyeballed the timing.
+            cmd: "bin/ci-mutation-test.sh -Dverbose=true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: ''
+
+      - name: Show environment
+        run: |
+          java -version
+          echo "cores: $(sysctl -n hw.ncpu)"
+          docker --version
+          docker info | head -20
+
+      - name: ${{ matrix.suite-name }} tests
+        run: time ${{ matrix.cmd }}
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-fast-feedback-reports-${{ matrix.suite-name }}-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 14
