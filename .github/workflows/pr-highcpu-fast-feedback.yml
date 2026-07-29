@@ -7,6 +7,13 @@
 #
 # SECURITY (public repo + self-hosted runner): guarded to SAME-REPO pull requests only, so a fork PR's
 # untrusted code NEVER runs on the self-hosted machine (RCE). pull_request (no secrets), never pull_request_target.
+#
+# IMPORTANT - this `if:` guard lives IN the PR-head workflow file, so a fork PR could edit it out in the same
+# PR. The real backstop is a GitHub repo setting, NOT this file: Settings -> Actions -> General -> "Fork pull
+# request workflows from outside collaborators" MUST be set to "Require approval for ALL outside collaborators"
+# (the default only gates FIRST-TIME contributors - a fork author with one prior merged PR would otherwise be
+# auto-approved and could reach this self-hosted runner). Keep that setting on, or don't trigger on
+# `pull_request` at all (mirror self-hosted-tests.yml). See docs/SELF_HOSTED_RUNNER.md.
 
 name: PR High-CPU Fast Feedback
 
