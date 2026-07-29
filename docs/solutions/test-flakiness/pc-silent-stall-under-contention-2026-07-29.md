@@ -217,18 +217,26 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
    drain loop's sleep (as `handlePoll()`'s comment intends), killing the 10 kHz spin **and** keeping the
    drainer rebalance-responsive. Guarded by `BrokerPollSystemDrainTest` (committed first as a
    characterisation of the defect, then flipped RED→GREEN by the fix).
-2. **Hard drain deadline with explicit group exit.** `drainTimeout` already bounds the *wait for user
-   work*; extend the guarantee to the *broker side*: when the deadline expires (or `waitForClose` times
-   out), explicitly `consumer.close(bounded)` / unsubscribe so a **LeaveGroup** is sent and the partitions
-   free immediately - never leave departure to session/poll-interval eviction. Audit the timeout/exception
-   paths in `close()`/`waitForClose()` for gaps where the supervisor gives up but the consumer object (and
-   its heartbeat thread) lives on.
-3. **Leave the group eagerly at drain start.** Since DRAINING pauses all partitions anyway (no new records
-   will ever be processed), the membership is only being kept for the final offset commit. An alternative
-   shape: commit what is ready, leave the group immediately (releasing partitions to siblings), then finish
-   in-flight work knowing those offsets cannot be committed (they will be redelivered - the same semantics
-   as `DONT_DRAIN`, applied only to the tail). Real trade-offs for EoS/transactional commit modes (commits
-   require live group membership/generation), so this is a design discussion, not a quick fix.
+2. **Hard drain deadline with explicit group exit (fail-safe only - NOT the normal path).** During a
+   healthy drain the member **should** keep its partitions (see option 3's rejection: that is what lets it
+   finish and commit, avoiding duplicates). The guarantee to add is only for the *pathological* case:
+   when `drainTimeout` expires (or `waitForClose` times out) the drain is being abandoned anyway, so
+   explicitly `consumer.close(bounded)` / unsubscribe so a **LeaveGroup** is sent and the partitions free
+   immediately - never leave departure to session/poll-interval eviction, and accept the bounded
+   duplicates as the lesser evil versus an indefinite hold. Audit the timeout/exception paths in
+   `close()`/`waitForClose()` for gaps where the supervisor gives up but the consumer object (and its
+   heartbeat thread) lives on.
+3. **~~Leave the group eagerly at drain start~~ - REJECTED (2026-07-30).** Holding the partitions through
+   the drain is the *point* of draining: the member keeps its assignment so in-flight work can finish and
+   its offsets can be **committed before leaving** - that is what delivers no/near-zero duplicates (and,
+   with transactions, a clean final commit). Releasing at drain start hands the partitions to a sibling
+   that immediately **reprocesses all in-flight work** - guaranteed duplicates, i.e. `DONT_DRAIN`
+   semantics smuggled into `DRAIN`. The defect was never the hold; it was the hold *combined with*
+   protocol-unresponsiveness. Post-fix behaviour is correct on both paths: undisturbed drain → finish,
+   commit, leave (zero duplicates); rebalance forced mid-drain → participate, commit-what's-done on
+   revoke, hand over cleanly (duplicates bounded to the not-yet-committable tail). Explicit LeaveGroup
+   belongs only in option 2's **deadline-expiry fail-safe**, where the drain is being abandoned anyway and
+   bounded duplicates are the lesser evil versus an indefinite hold.
 4. **Spin watchdog.** The poll loop has no self-observation; a 9-second 10 kHz spin was invisible until
    this capture. A cheap rate check (iterations/sec, rate-limited WARN) in `BrokerPollSystem`'s control
    loop would have flagged this class of bug years ago, and would catch regressions.
