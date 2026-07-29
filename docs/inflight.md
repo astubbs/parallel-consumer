@@ -392,11 +392,19 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   polling (paused, long-poll cadence) and stays rebalance-responsive; guarded by `BrokerPollSystemDrainTest`
   (characterisation-first, flipped RED→GREEN). **Verified: neither PR #29 (#857) nor PR #31 (#909) fixed
   this** — they fix sibling mechanisms (assign-time throttle-pause reset + CME; stale-container
-  replacement) of the same "alive but not progressing" symptom; all three are non-conflicting. Next step
-  per the report: an **uber branch** merging #29 + #31 + PR #80, measured against #29's chaos run
-  (currently 10-20% residual stalls) and this report's forkCount=16 recipe. Route findings into the
-  **#857** investigation; revisit the `committedOffsetRemoved` await only after the stall is confirmed
-  gone.
+  replacement) of the same "alive but not progressing" symptom. **UBER EXPERIMENT RUN + CONCLUDED
+  (2026-07-30)** — full results:
+  `docs/solutions/test-flakiness/uber-stall-experiment-results-2026-07-30.md` (archive refs
+  `experiment/stall-uber-{nofix,fix}`). Headlines: (1) drain fix validated by direct RED→GREEN guards
+  (`DrainingMemberRebalanceIT` + unit guard), statistical axes uninformative; (2) `committedOffsetRemoved`
+  stall **still fires with all three fixes combined** — distinct broker-side mechanism, still open;
+  (3) **#29 does NOT compose with current master** (deterministic: close→reopen redelivery 9/14 ERROR,
+  `RebalanceEoSDeadlockTest` 5/5 FAIL) — attribution arms prove **#29 owns 100% of the breakage, #31 is
+  exonerated**. Merge order: #75 → #80 → #31 (trivial rebase) → #29 rebased + split into slices, with the
+  two deterministic regressions as rebase acceptance criteria (conflict cheat-sheet: uber-fix merge commit
+  `340bf75f`). Chaos Pain Suite design (branch `docs/chaos-pain-suite-design`) targets the remaining open
+  mechanisms; revisit the `committedOffsetRemoved` await only after its stall is actually traced and
+  fixed.
 - **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
   resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
   shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure
