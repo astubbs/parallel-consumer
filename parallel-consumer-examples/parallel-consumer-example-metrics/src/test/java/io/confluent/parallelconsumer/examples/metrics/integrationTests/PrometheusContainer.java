@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.examples.metrics;
+package io.confluent.parallelconsumer.examples.metrics.integrationTests;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
