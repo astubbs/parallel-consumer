@@ -198,6 +198,15 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   **"Step 2" DEFERRED:** retry full thread-parallel on a shared broker to *validate* the #857 deadlock is
   gone (not merely avoided) — only **after** #857/#29 finishes and merges on its own merits (it's a
   ~454-line WIP concurrency refactor, "root cause still open"). Reproducer for then: `-Dparallel-tests=true`.
+  - **UPDATE (2026-07, fork×threads probed on the highcpu self-hosted runner - Ryzen 9 5950X, 16c/32t):** ran
+    the reproducer (`-Dparallel-tests=true`) ON TOP of forking. **Signal that thread-parallelism may be
+    healed:** the forked *unit* suite went **green** with threads enabled; the *integration* red was the known
+    flaky `PartitionStateCommittedOffsetIT` (fails on GitHub-hosted too), NOT a new thread-race. **Caveats:**
+    one green run ≠ proof (flakiness is intermittent - repeat before trusting), and #857 root cause is still
+    open, so this only *motivates* the proper Step-2 validation, it doesn't complete it. **Also measured: no
+    speedup** - fork×threads was ~identical to fork-only (unit 6m00 vs 5m53), because forking already saturates
+    the cores. So **forking stays the default**; threading would only pay off if it *replaces* forking (fewer
+    JVM starts), never stacked on top.
 - **DONE (PR #69): unit suite parallelised by FORKING (surefire `forkCount=1C`), not threading.** The `ci`
   profile now forks the unit suite one-JVM-per-core (`forkCount=1C`, `reuseForks=true`), keeping
   `parallel-tests=false`. Core unit dropped **5:14 → 1:39** (259 tests, 0 failures) on a 12-core box, and it
