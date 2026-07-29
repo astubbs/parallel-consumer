@@ -43,6 +43,11 @@ jobs:
             cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
           - suite-name: "Performance"
             cmd: "bin/performance-test.sh"
+          # Mutation (PIT) is CPU-bound and scales with cores - one minion JVM per core here, far faster than
+          # GitHub's 2-core runner (where a full internal.* sweep is impractically slow). Moved off the
+          # (offline) mac runner. -Dverbose streams per-mutation progress; drop once the timing is eyeballed.
+          - suite-name: "Mutation (PIT)"
+            cmd: "bin/ci-mutation-test.sh -Dverbose=true"
     steps:
       - name: Checkout
         uses: actions/checkout@v6

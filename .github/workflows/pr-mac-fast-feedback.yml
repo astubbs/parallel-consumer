@@ -17,8 +17,11 @@
 
 name: PR Mac Fast Feedback
 
+# mac-laptop is offline indefinitely, and its suites (unit / integration / mutation) now run on the
+# always-more-capable high-CPU runner (pr-highcpu-fast-feedback.yml, a strict superset + performance).
+# Manual-dispatch-only so it doesn't queue dead jobs on every PR; re-add `pull_request:` if the mac
+# runner comes back online.
 on:
-  pull_request:
   workflow_dispatch:
 
 concurrency:
