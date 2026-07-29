@@ -31,6 +31,12 @@ updates:
       # Managed by hand in the curated versions-maven-plugin sweep instead.
       # See parallel-consumer-example-metrics/pom.xml.
       - dependency-name: "com.fasterxml.jackson.core:jackson-databind"
+      # Frozen workaround pin, NOT a dep to track upward: byte-buddy is held at
+      # mockito's version because wiremock-jre8 2.35.2 drags in an ancient byte-buddy
+      # that breaks mockito (MockitoInitializationException). A bump buys nothing and
+      # risks re-breaking it. Remove this pin entirely when wiremock moves to 3.x
+      # (which drops the stale transitive) - do not bump it in the meantime.
+      - dependency-name: "net.bytebuddy:*"
       # micrometer 1.13+ renamed the Prometheus registry package -> breaks CoreApp.
       # Allow patches within the pinned line; block minor/major until CoreApp migrates.
       - dependency-name: "io.micrometer:*"
