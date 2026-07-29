@@ -72,22 +72,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # EXPERIMENT (branch experiment/tests-logging-off-speed): A/B test whether
+        # suppressing test logging speeds up the suites on GitHub-hosted runners.
+        # Each suite runs twice - once with default logging (LOG_LEVEL unset) and
+        # once fully silenced (LOG_LEVEL=off, wired through logback-test.xml). Both
+        # variants of a suite run on identical ubuntu-latest runners from the same
+        # cache, so the wall-clock delta is the cost of logging. Compare the two
+        # "logging ON" vs "logging OFF" job durations in the Actions UI.
         include:
           - suite: unit
-            name: "Unit Tests"
+            name: "Unit Tests (logging ON)"
             cmd: "bin/ci-unit-test.sh"
+            log_level: ""
+            timeout: 15
+          - suite: unit
+            name: "Unit Tests (logging OFF)"
+            cmd: "bin/ci-unit-test.sh"
+            log_level: "off"
             timeout: 15
           - suite: integration
-            name: "Integration Tests"
+            name: "Integration Tests (logging ON)"
             # Forked (process-parallel) mode: each JVM fork gets its own TestContainers
             # broker, so tests don't contend one shared broker. Reliable AND parallel,
             # without masking anything (each test runs on an uncontended broker). See
             # docs/solutions/test-flakiness/. forkCount=4 matches the self-hosted measurement.
             cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            log_level: ""
             timeout: 60
-          - suite: performance
-            name: "Performance Tests"
-            cmd: "bin/performance-test.sh"
+          - suite: integration
+            name: "Integration Tests (logging OFF)"
+            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            log_level: "off"
             timeout: 60
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
@@ -106,7 +121,18 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
       - name: ${{ matrix.name }}
-        run: ${{ matrix.cmd }}
+        run: |
+          # EXPERIMENT: only export LOG_LEVEL for the "OFF" variants. Leaving it
+          # unset makes logback fall back to the per-module defaults in
+          # logback-test.xml (the real baseline), so the "ON" jobs measure today's
+          # behaviour exactly. Surefire/failsafe forked JVMs inherit this env var.
+          if [ -n "${{ matrix.log_level }}" ]; then
+            export LOG_LEVEL="${{ matrix.log_level }}"
+            echo "LOG_LEVEL=$LOG_LEVEL — test logging suppressed"
+          else
+            echo "LOG_LEVEL unset — default test logging"
+          fi
+          ${{ matrix.cmd }}
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5

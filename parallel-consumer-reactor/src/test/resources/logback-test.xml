@@ -21,13 +21,13 @@
         </encoder>
     </appender>
 
-    <root level="warn">
+    <root level="${LOG_LEVEL:-warn}">
         <!--    <root level="debug">-->
         <appender-ref ref="STDOUT"/>
     </root>
 
     <!-- primary -->
-    <logger name="io.confluent.parallelconsumer" level="info"/>
+    <logger name="io.confluent.parallelconsumer" level="${LOG_LEVEL:-info}"/>
 
     <!-- Key classes -->
     <!--    <logger name="io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="debug"/>-->

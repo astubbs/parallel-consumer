@@ -21,7 +21,7 @@
         </encoder>
     </appender>
 
-    <root level="info">
+    <root level="${LOG_LEVEL:-info}">
         <!--    <root level="debug">-->
         <appender-ref ref="STDOUT"/>
     </root>
@@ -32,7 +32,7 @@
 
 
     <!-- primary -->
-    <logger name="io.confluent.parallelconsumer" level="info"/>
+    <logger name="io.confluent.parallelconsumer" level="${LOG_LEVEL:-info}"/>
     <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer" level="trace"/>-->
 
