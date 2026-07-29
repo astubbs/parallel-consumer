@@ -33,6 +33,14 @@
 
     <!-- primary -->
     <logger name="io.confluent.parallelconsumer" level="info"/>
+
+    <!-- #857 silent-stall investigation: uncomment to trace the "asked for work / got none / but work is in
+         the queues" condition and the broker poller pause/resume state under contention. Off by default (these
+         are verbose and perturb stall timing). See
+         docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md -->
+    <!--    <logger name="io.confluent.parallelconsumer.state.ShardManager" level="debug"/>-->
+    <!--    <logger name="io.confluent.parallelconsumer.state.WorkManager" level="debug"/>-->
+    <!--    <logger name="io.confluent.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer" level="trace"/>-->
 

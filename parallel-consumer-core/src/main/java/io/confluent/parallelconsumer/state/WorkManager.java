@@ -232,7 +232,20 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        return (getNumberOfWorkQueuedInShardsAwaitingSelection() + getNumberRecordsOutForProcessing() ) > (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
+        long awaitingSelection = getNumberOfWorkQueuedInShardsAwaitingSelection();
+        long outForProcessing = getNumberRecordsOutForProcessing();
+        long threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
+        boolean loaded = (awaitingSelection + outForProcessing) > threshold;
+        // Silent-stall diagnostic (#857): this gates the broker-poller pause/resume. If it stays true while no
+        // records are actually flowing, the poller never resumes and the PC stalls. A high outForProcessing with
+        // no awaitingSelection and no real progress is the numberRecordsOutForProcessing counter-drift signature.
+        // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
+        if (log.isDebugEnabled()) {
+            log.debug("isSufficientlyLoaded={} (awaitingSelection={} + outForProcessing={} = {} vs target({})*loadingFactor({})={})",
+                    loaded, awaitingSelection, outForProcessing, awaitingSelection + outForProcessing,
+                    options.getTargetAmountOfRecordsInFlight(), getLoadingFactor(), threshold);
+        }
+        return loaded;
     }
 
     private int getLoadingFactor() {

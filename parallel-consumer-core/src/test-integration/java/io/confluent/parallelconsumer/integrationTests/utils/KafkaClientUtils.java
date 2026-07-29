@@ -66,6 +66,14 @@ public class KafkaClientUtils implements AutoCloseable {
     public static final int MAX_POLL_RECORDS = 10_000;
     public static final String GROUP_ID_PREFIX = "group-1-";
 
+    /**
+     * Gives every PC built here a unique id so its threads ({@code pc-control-PCn}, {@code pc-broker-poll-PCn})
+     * and the {@code pcId} MDC are attributable to one instance in the logs. Without it, concurrent PC
+     * instances all log under the same generic thread names and are impossible to tell apart - which made
+     * the #857 silent-stall investigation much harder than it needed to be.
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger PC_INSTANCE_COUNTER = new java.util.concurrent.atomic.AtomicInteger();
+
     class PCVersion {
         public static final String V051 = "0.5.1";
     }
@@ -419,6 +427,9 @@ public class KafkaClientUtils implements AutoCloseable {
                 .build());
 
         pc.setTimeBetweenCommits(ofSeconds(1));
+
+        // unique per-instance id so concurrent PCs are distinguishable in the logs (see PC_INSTANCE_COUNTER)
+        pc.setMyId(java.util.Optional.of("PC" + PC_INSTANCE_COUNTER.incrementAndGet()));
 
         // sanity
         return pc;
