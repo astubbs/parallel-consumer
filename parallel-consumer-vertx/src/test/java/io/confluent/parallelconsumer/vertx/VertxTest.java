@@ -30,7 +30,6 @@ import org.junit.jupiter.api.parallel.Isolated;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
@@ -55,8 +54,12 @@ class VertxTest extends VertxBaseUnitTest {
     }
 
     RequestInfo getBadRequest() {
+        // 127.0.0.1:1 gives an immediate, deterministic "connection refused" on every environment, with no
+        // DNS involved. A bogus HOSTNAME instead relies on DNS *failing to resolve*, which is false on any
+        // network with a local resolver + search domain (the name resolves and the failure mode changes),
+        // and a dotless name additionally gets the search domain appended. Closed local port = no such coupling.
         int badPort = 1;
-        String badHostname = "xxxxxxxxx"; // bad host names seem to fail faster than valid host names with invalid ports
+        String badHostname = "127.0.0.1";
         return new RequestInfo(badHostname, badPort, "/", UniMaps.of());
     }
 
@@ -100,9 +103,10 @@ class VertxTest extends VertxBaseUnitTest {
         var res = getResults(tupleStream);
         assertThat(res).doesNotContainNull();
         assertThat(res).extracting(AsyncResult::failed).containsOnly(true);
-        assertThat(res).flatExtracting(x ->
-                        Arrays.asList(x.cause().getMessage().toLowerCase().split(" ")))
-                .contains("failed", "resolve");
+        // Deterministic across environments: a closed local port yields "Connection refused" (no DNS lookup).
+        assertThat(res)
+                .extracting(x -> x.cause().getMessage().toLowerCase())
+                .allSatisfy(msg -> assertThat(msg).contains("connection refused"));
     }
 
     // todo how is this different from #failingHttpCall ?
