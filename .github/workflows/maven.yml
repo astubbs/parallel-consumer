@@ -183,7 +183,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: astubbs/duplicate-code-detection-tool@4e302e720f86c4e95f709196bae21333a9696937 # feat/base-vs-pr-comparison
+      - uses: astubbs/duplicate-code-detection-tool@74adf74b65b6a288b21ba957d7d7bef43831ee65 # master: base-vs-PR comparison + ce-review fixes
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src'
