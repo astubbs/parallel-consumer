@@ -35,12 +35,13 @@ jobs:
       fail-fast: false           # unit / integration / performance run independently, in parallel
       matrix:
         include:
-          # forkCount capped so several concurrent jobs share the runner's many cores without oversubscribing.
+          # Cranked up: the box has ample headroom (load ~18/32, 34GB free), and the bottleneck was cold-cache
+          # I/O, not CPU - so use all cores. Unit forks 1-per-core (ci default); integration one broker per fork.
           - suite-name: "Unit"
-            cmd: "bin/ci-unit-test.sh -DforkCount=8"
-          # Each integration fork gets its own Testcontainers broker; keep 4 (RAM: 2 integ jobs ~= 8 brokers).
+            cmd: "bin/ci-unit-test.sh -DforkCount=1C"
+          # Each integration fork gets its own Testcontainers Kafka broker (RAM: ~1GB each, fits in 48GB).
           - suite-name: "Integration"
-            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            cmd: "bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true"
           - suite-name: "Performance"
             cmd: "bin/performance-test.sh"
           # Mutation (PIT) is CPU-bound and scales with cores - one minion JVM per core here, far faster than
