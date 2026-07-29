@@ -134,7 +134,9 @@ class VertxTest extends VertxBaseUnitTest {
         assertThat(actual).isNotNull();
 
         actual.onComplete(tc.failing(ar -> tc.verify(() -> {
-            assertThat(ar).hasMessageContainingAll("Failed", "resolve");
+            // Deterministic across environments: closed local port (getBadRequest) -> "Connection refused"
+            // (was the old DNS "Failed to resolve" message; both this and failingHttpCall share getBadRequest).
+            assertThat(ar).hasMessageContaining("Connection refused");
             tc.completeNow();
         })));
 
