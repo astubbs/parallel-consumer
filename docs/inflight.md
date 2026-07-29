@@ -198,23 +198,120 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   **"Step 2" DEFERRED:** retry full thread-parallel on a shared broker to *validate* the #857 deadlock is
   gone (not merely avoided) — only **after** #857/#29 finishes and merges on its own merits (it's a
   ~454-line WIP concurrency refactor, "root cause still open"). Reproducer for then: `-Dparallel-tests=true`.
-- **NEXT (follow-up to the above): unit tests are now the CI long pole (~8.5 min) — fork them too.** Step 1
-  forked the *integration* suite (failsafe); *unit* tests (surefire) still run **sequential** (`ci` profile
-  `parallel-tests=false` applies to both), so they became the slowest required check — **8m31s** vs forked
-  integration 6m16s (run `30352770661`, 2026-07-28). The unit job runs surefire across **all** modules
-  (core/vertx/reactor/mutiny/examples) serially, and a few heavy classes dominate:
-  **`RunLengthEncoderTest` 81.7s** (pure-CPU encoder — an outlier, ~16% of the run), then
-  `VertxBatchTest`/`ParallelEoSStreamProcessorTest`/`CoreBatchTest` 41-56s, and reactor/mutiny/streams
-  batch+app tests 30-35s each. **Two follow-ups:**
-  1. **Fork the unit tests** (surefire `forkCount>1`) — same proven per-fork-isolation pattern as the
-     integration fix; unit tests already carry `@Isolated`/`@ResourceLock` for static-state races, which
-     per-fork isolation handles cleanly → should drop unit toward ~1.5-2 min, but **floored at
-     `RunLengthEncoderTest`'s 81s** (forking distributes *classes*, so the slowest single class is the limit).
-  2. **`RunLengthEncoderTest` (81s)** — trim / parameterize-down / parallelise its methods so it stops being
-     the floor.
-  Apply the same rigor (AGENTS.md): any new failure under parallel = establish **contention-artifact vs real
-  bug** before masking. Not started — the harness (`scratchpad/fork-harness.sh`) and forked-mode invocation
-  are ready to reuse.
+- **DONE (PR #69): unit suite parallelised by FORKING (surefire `forkCount=1C`), not threading.** The `ci`
+  profile now forks the unit suite one-JVM-per-core (`forkCount=1C`, `reuseForks=true`), keeping
+  `parallel-tests=false`. Core unit dropped **5:14 → 1:39** (259 tests, 0 failures) on a 12-core box, and it
+  auto-scales (`1C` = 2 forks on GitHub's 2-core gate, = core count on the self-hosted box). Forking is faster
+  AND reliable where thread-parallel (2:32) is flaky — separate processes don't share the static state that
+  threads race on. Unblocked by the RunLengthEncoderTest fix (removed the ~85s single-class floor) + the arch
+  rule (keeps container tests out of the forked unit suite). Write-up:
+  `docs/solutions/test-flakiness/unit-tests-parallelise-by-forking-not-threading-2026-07-29.md`.
+  - **Follow-up (jacoco under forking):** `prepare-agent` writes ONE `jacoco.exec` in append mode; N forks
+    appending concurrently can corrupt/undercount coverage. If CI coverage looks wrong, give each fork its own
+    exec file (`destFile` with `${surefire.forkNumber}`) + `jacoco:merge` before the report.
+  - **`RunLengthEncoderTest` ~59s floor** (the `testSimultaneousWithOverflowErrors` INT case genuinely walks
+    ~2.1B offsets in `OffsetSimultaneousEncoder.invoke()`) — needs a delta-aware `invoke()` (main-code
+    optimisation), not urgent.
+- **DISABLED (PR #69): the experimental "Kafka Compat (experimental 4.x)" CI job** (`test-kafka-compat` in
+  `.github/workflows/maven.yml`) is turned off via `if: false`. It currently fails and adds a red X of noise
+  to every PR (it is `continue-on-error`, so it never gated merges). **Re-enable when the Kafka 4.x migration
+  work starts** by restoring `if: github.event_name == 'pull_request'` — that work will make it pass.
+- **pitest (Mutation Testing) was pre-existing RED — root cause found + fixed (PR #69): coverage-minion OOM
+  at `-Xmx1g`.** The single coverage-generation minion (runs all target tests once to map coverage) crashed
+  with `UNKNOWN_ERROR`; confirmed locally that 1g crashes and 4g completes → raised to `-Xmx2g`. Also switched
+  `-Dthreads` 1→2: PIT runs mutation analysis in separate **minion JVMs** (process-parallel, so — like our
+  forked unit suite — it is SAFE from the shared-static-state races that break JUnit thread parallelism), so
+  threads is the right lever; kept `threads*heap` (2×2g) within runner RAM. **Further speedup still on the
+  table (deferred — user said try parallel first):** scope PR mutation to only the classes changed vs base
+  (pitest SCM / `+GIT`), keeping the full `internal.*` sweep for push/nightly — biggest win, and it also
+  shrinks the coverage minion's load. Fine-tune threads (2 vs 3) with a multi-class benchmark once green.
+  - **UPDATE (measured on CI): heap fix CONFIRMED working** — coverage gen now passes ("Calculated coverage
+    in 425s", no OOM). **But the job then TIMES OUT at the 300-min cap** in the mutation phase: the history
+    cache key includes `hashFiles('**/src/main/**/*.java')`, so any main-code change makes it cold → full
+    22-unit sweep of `internal.*`, and each mutant re-runs `targetTests=parallelconsumer.*` which includes the
+    SLOW integration tests → ~5h. `threads=2` on a 2-core runner can't fix that. **The real fix is the scope
+    restriction (now clearly needed, not optional):** (a) restrict `targetTests` to the fast unit tests only
+    (huge — stops re-running Docker integration tests per mutant), and/or (b) mutate only classes changed vs
+    base on PRs (pitest SCM / `+GIT`), keeping the full sweep for push/nightly. `-Dthreads=$(nproc)` is moot
+    for speed here (nproc=2 on the gate = current 2).
+  - **DONE (PR #69): implemented (a).** Added `-DexcludedTestClasses="io.confluent.parallelconsumer.integrationTests.*"`
+    to the PIT step, so per-mutant runs no longer re-run the slow TestContainers integration tests (they live in
+    `integrationTests` packages, enforced by #69's ArchUnit rule). Mutations on `internal.*` are exercised by the
+    fast unit tests. Trade-off: a mutation only an integration test could kill now shows as *survived* — acceptable
+    for an advisory/non-gating signal. Option (b) (changed-classes-only via pitest SCM) still available if needed.
+  - **INCREMENTAL HISTORY REMOVED (PR #69) — pitest 1.25.x needs a paid plugin for it.** #73 bumped pitest
+    1.17.4 → 1.25.8, which dropped the built-in file-based history: `-DwithHistory` *and* the explicit
+    `-DhistoryInputFile`/`-DhistoryOutputFile` now both error with "no history plugin has been installed"
+    (history moved entirely to the commercial **arcmutate** plugin). We removed all history flags + the history
+    cache step; PIT runs a full `internal.*` sweep each run, which is tractable now that (a) drops the slow
+    integration tests. So each PR re-mutates the whole engine rather than only changed code.
+  - **SHELVED PLAN — restore incremental (and changed-classes-only) via arcmutate's free OSS licence.**
+    arcmutate (https://www.arcmutate.com, by the pitest author) is **free for open-source projects** and provides
+    the history plugin (incremental) + git plugin (mutate only classes changed vs base — the biggest win, = option
+    (b) above). **Why shelved for now:** (1) needs the maintainer to manually sign up for the OSS licence at
+    subscribe.arcmutate.com — I can't do that; (2) the licence is a file `arcmutate-licence.txt` at the repo root,
+    which on a *public* repo means either committing a licence key or wiring it in as a CI secret — friction +
+    a terms check; (3) it adds a commercial-plugin dependency to a FOSS build; (4) the current no-history +
+    `excludedTestClasses` approach should stay under the 300-min cap, so incremental is a nice-to-have, not a need.
+    **Revisit when:** PIT's full-sweep time creeps toward the cap. Then: get the free OSS licence → add the arcmutate
+    history + git plugins → switch PRs to changed-classes-only, keep the full sweep for push/nightly.
+  - **DONE (PR #69): moved PIT off GitHub's 2-core runner onto the self-hosted Mac (core-scaled parallelism).**
+    On GitHub-hosted, a full `internal.*` sweep was impractically slow — `-Dthreads=2` maxed the 2 cores and it
+    ran 17+ min without finishing. PIT is CPU-bound and process-parallel across minion JVMs, so it scales with
+    cores. Removed the GitHub-hosted `mutation-testing` job and added a `Mutation (PIT)` entry to the
+    `pr-mac-fast-feedback.yml` matrix, driven by `bin/ci-mutation-test.sh` which defaults `-Dthreads` to the
+    box's core count (~12 on the Mac ⇒ ~5-6× faster). **Caveats:** (i) advisory only, and the Mac may be offline,
+    so there's now no PIT signal when the laptop's off (acceptable — it never gated); (ii) RAM = threads × 2g
+    (~24g at 12 threads), lower `PIT_THREADS` if the box is constrained. This is the "more cores" answer;
+    changed-classes-only (arcmutate, above) is still the way to make it *cheap* rather than just *parallel*.
+- **FLAKY (tracked, PR #69): `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed`** (core
+  `integrationTests`). Fails intermittently under the forked-per-broker integration run on loaded CI with
+  `TimeoutException: Timeout while waiting to get produce lock (PT2S)` / commit lock (PT1S) — ~1/104, passes on
+  re-run. **Hypothesis:** the intentionally-tight 1–2s lock timeouts fire under CI CPU/IO contention, not a real
+  lock bug — the same "test-tightness under load" class the #68 investigation catalogued (distinct from the #857
+  deadlock, which was a *revoke* path). **To confirm before touching:** reproduce under artificial CPU load and
+  check whether it's contention (raise this test's lock-acquisition timeouts / mark heavier) vs a real
+  produce/commit-lock stall in the multi-instance-shared-registry path. Do NOT just bump the timeout to go green
+  without establishing which (AGENTS.md rule). Not yet reproduced deterministically.
+- **DONE (PR #69): moved the "unit" tests that were actually INTEGRATION tests out of surefire, and now
+  ENFORCED so no more can hide.** Two container-based tests were landing in surefire only because they
+  weren't in an `integrationTest*` package: `examples…streams.StreamsAppTest` and
+  `examples…metrics.CoreAppMetricsIntegrationTest` (+ its `PrometheusContainer` helper). Both relocated into
+  their module's `integrationTests` package (so **failsafe** runs them, with Docker), each with the DI fixed
+  (constructor injection instead of a package-private subclass-and-override seam) so they still run and assert
+  the same thing. The metrics one also needed a real `jackson-databind` test dep (it had been parsing with the
+  shaded Jackson). **The audit is now permanent, not a one-off:** the `TestConventionRules` ArchUnit rule fails
+  the build if any test using Testcontainers / extending `BrokerIntegrationTest` sits in a surefire package -
+  and it is green across every module, which *proves* no other container test is hiding in the unit suite.
+- **DONE (PR #69): `RunLengthEncoderTest` no longer a ~1.5-min beast.** `vTwoIntegerOverflow` used to loop
+  `Range.range(11, overflowedValue)` = **~2.1 billion `encodeCompletedOffset` calls** to reach the integer
+  overflow. But the encoder accumulates run-length from the **delta** between offsets (`encodeRunLength:
+  delta = relativeOffset - previousRangeIndex`), not from the call count, so a single completed offset a huge
+  distance past the previous one overflows in ONE step via the same `Math.toIntExact` path. Replaced the loop
+  with a two-call delta jump: the v2 case went **~85s → 0.087s**, overflow assertion untouched. Both overflow
+  tests also got proper javadoc explaining the what/why. Class total now ~59s (was ~120s+).
+  - **Follow-up (main-code optimisation, NOT urgent — user: "not our big win"):** the *other* overflow test
+    `testSimultaneousWithOverflowErrors` INT case is still ~59s and **can't** use the delta shortcut —
+    `OffsetSimultaneousEncoder.invoke()` walks *every* offset in the range (`range(length).forEach(...)`), so
+    an int overflow genuinely iterates ~2.1B. Speeding it up needs a delta-aware `invoke()` (the run-length
+    optimisation TODO already in `OffsetSimultaneousEncoder`) — a real main-code change, left for later.
+- **BUG-OR-FLAKE to triage: `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+  fails under thread-parallel unit tests.** The full thread-parallel unit run (`-Dparallel-tests=true`, 2:32)
+  went red only on this one — an `AssertionError` in `assertCommits`
+  (`AbstractParallelEoSStreamProcessorTestBase.java:382`); a mock shutdown-timing/commit-assertion test.
+  Per AGENTS.md: establish **static-state/timing artifact vs real concurrency bug** before masking — do NOT
+  just `@Isolated`/serialise it to go green. (Surefire mis-attributed it to `PartitionStateCommittedOffsetTest`
+  in the per-class report — report cross-contamination under parallelism; the real failing class is
+  `ParallelEoSStreamProcessorTest`.) **Revisit alongside the #857 locking work** — it's a shutdown/commit
+  assertion, so it may be the same commit-lock timing family; don't investigate/mask it in isolation, look
+  at it when we're back in the locking code.
+- **DONE (PR #69): unified Awaitility + Hamcrest onto the real libraries.** Swapped all 11 shaded usages
+  (`org.testcontainers.shaded.org.awaitility` in 3 `MockConsumerTest*` + 8 integration tests; also discovered
+  `org.testcontainers.shaded.org.hamcrest` in 3 of them) to the real `org.awaitility` / `org.hamcrest` (both
+  already on the classpath). New ArchUnit rule `tests_must_not_use_shaded_libraries` bans any
+  `org.testcontainers.shaded..` dependency so it can't regress. The arch rules were also made DRY: defined
+  once in `TestConventionRules` (core test-jar), each module pulls them in via `ArchTests.in(...)` (replacing
+  the duplicated per-module `IntegrationTestPlacementArchTest` copies).
 - **`Integration Tests` was flaky (required → blocked merges) — FIX IN FLIGHT (PR #63).** Failed
   intermittently on `BrokerIntegrationTest.ensureTopic` → `TimeoutException` (e.g. #56, #61). Root cause:
   `ensureTopic` was a drifted duplicate of `KafkaClientUtils.createTopics` that waited only

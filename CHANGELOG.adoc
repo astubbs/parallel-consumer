@@ -31,6 +31,10 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 * Commit-failure error logging now includes the offsets being committed, to aid diagnosis of failed commits (upstream https://github.com/confluentinc/parallel-consumer/pull/850[#850]).
 * Modernized CI (parallel unit/integration/performance suites, SpotBugs, PIT mutation testing, dependency scanning) and automated Maven Central publishing (https://github.com/astubbs/parallel-consumer/commit/b810e873[b810e873], https://github.com/astubbs/parallel-consumer/commit/2bcc74d9[2bcc74d9]).
 
+=== Examples
+
+* `parallel-consumer-example-streams`: `StreamsApp` now takes the Kafka `bootstrapServers` via its constructor (`new StreamsApp(bootstrapServers)`) instead of relying on subclass-and-override test hooks. The example is now runnable/configurable as shown - previously its consumer/producer/server methods were non-functional stubs (`new KafkaConsumer<>(new Properties())`, `"add your server here"`) that only the test filled in. `run()`, `close()`, and the input/output topic constants are now `public`.
+
 === Fixes
 
 * fix: null epoch race condition in EpochAndRecordsMap - poll() returning records before onPartitionsAssigned() no longer causes NPE; records are safely skipped and re-delivered (https://github.com/astubbs/parallel-consumer/commit/afde8c5e[afde8c5e]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/326[#326])
@@ -44,6 +48,7 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 === Build & CI
 
 * New `Self-Hosted Tests` workflow runs the integration and performance suites on a self-hosted runner (a Proxmox Linux VM or a Mac), parallelised on real hardware where the `ci` profile runs them sequentially for GitHub's 2-core hosted runners. Integration runs in forked per-broker mode (`-DforkCount=4 -DreuseForks=true`, each JVM fork gets its own broker); performance uses in-JVM thread parallelism (`-Dparallel-tests=true`). Manual/scheduled only, never on PRs; the GitHub-hosted PR gate is unchanged. See link:docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md]. Replaces the earlier Windows-only performance workflow.
+* The fast unit (surefire) suite now forks one JVM per core in CI (process-level parallelism), and an ArchUnit rule keeps Testcontainers / `BrokerIntegrationTest` tests out of it - they must live in an `integrationTests` package (run by failsafe, with Docker) - so the unit suite stays fast and can't be silently inflated by slow Docker-dependent tests.
 
 // There is no 0.5.3.4 release. The #892 metrics fix once tracked under a "0.5.3.4" heading here was
 // never published upstream as 0.5.3.4; it ships in this fork's 0.6.0.0 (folded into the Fixes above).
