@@ -20,7 +20,7 @@
 # auto-approved and could reach this self-hosted runner). Keep that setting on, or don't trigger on
 # `pull_request` at all (mirror self-hosted-tests.yml). See docs/SELF_HOSTED_RUNNER.md.
 
-name: PR High-CPU Fast Feedback
+name: highcpu
 
 on:
   pull_request:
@@ -35,7 +35,9 @@ permissions:
 
 jobs:
   highcpu-build-test:
-    name: "Build & Test - ${{ matrix.suite-name }} (high-CPU self-hosted, optional)"
+    # Check name shows as "highcpu / <suite> (optional)". KEEP IN SYNC with bin/ci-concede-check.sh
+    # (WORKFLOW must equal this workflow's `name:`; JOB_PREFIX must be a prefix of this job name).
+    name: "${{ matrix.suite-name }} (optional)"
     # Same-repo PRs only: fork PRs are untrusted and must NOT execute on the self-hosted machine.
     if: >-
       github.event_name == 'workflow_dispatch' ||

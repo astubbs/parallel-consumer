@@ -25,8 +25,8 @@ set -uo pipefail
 SUITE="${1:?usage: ci-concede-check.sh <suite-name>}"
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY unset}"
 SHA="${CONCEDE_HEAD_SHA:?CONCEDE_HEAD_SHA unset}"
-WORKFLOW="${CONCEDE_WORKFLOW:-PR High-CPU Fast Feedback}"
-JOB_PREFIX="Build & Test - ${SUITE} (high-CPU"     # matches the highcpu matrix job for this suite
+WORKFLOW="${CONCEDE_WORKFLOW:-highcpu}"             # must equal the highcpu workflow's `name:`
+JOB_PREFIX="${SUITE}"                               # highcpu job is named "<suite> (optional)"; match its prefix
 MAX_WAIT="${CONCEDE_MAX_WAIT:-600}"
 INTERVAL=20
 
