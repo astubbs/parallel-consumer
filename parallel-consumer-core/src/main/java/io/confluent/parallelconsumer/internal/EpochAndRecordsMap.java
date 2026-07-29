@@ -25,19 +25,18 @@ public class EpochAndRecordsMap<K, V> {
 
     Map<TopicPartition, RecordsAndEpoch> recordMap = new HashMap<>();
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(EpochAndRecordsMap.class);
+
     public EpochAndRecordsMap(ConsumerRecords<K, V> poll, PartitionStateManager<K, V> pm) {
         poll.partitions().forEach(partition -> {
             var records = poll.records(partition);
             Long epochOfPartition = pm.getEpochOfPartition(partition);
             if (epochOfPartition == null) {
-                // Race: poll() returned records for a partition before onPartitionsAssigned()
-                // has fired. This is more likely with Kafka 2.x's eager rebalance protocol.
-                // Safe to skip — these records haven't been committed, so Kafka will re-deliver
-                // them on the next poll after the assignment callback completes.
                 log.warn("Skipping {} records for partition {} — no epoch assigned yet. " +
                         "Records will be re-delivered on next poll after assignment completes.", records.size(), partition);
                 return;
             }
+            log.trace("Tagging {} records for {} with epoch {}", records.size(), partition, epochOfPartition);
             RecordsAndEpoch entry = new RecordsAndEpoch(partition, epochOfPartition, records);
             recordMap.put(partition, entry);
         });

@@ -1,0 +1,39 @@
+<!--
+
+    Copyright (C) 2020-2026 Confluent, Inc. and contributors
+
+-->
+<configuration packagingData="true" scan="true" scanPeriod="5 seconds" debug="false">
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{mm:ss.SSS} %yellow(%X{pcId}) %highlight(%-5level) %yellow([%thread]) %X{offset} %cyan(\(%file:%line\)#%M) %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+
+    <root level="info">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- PC state management — DEBUG to capture epoch, stale container, and rebalance events
+         without the overwhelming volume of TRACE on 500k records -->
+    <logger name="io.confluent.parallelconsumer.state.PartitionStateManager" level="debug"/>
+    <logger name="io.confluent.parallelconsumer.state.ProcessingShard" level="debug"/>
+    <logger name="io.confluent.parallelconsumer.state.ShardManager" level="debug"/>
+    <logger name="io.confluent.parallelconsumer.state.PartitionState" level="debug"/>
+    <logger name="io.confluent.parallelconsumer.state.RemovedPartitionState" level="debug"/>
+    <logger name="io.confluent.parallelconsumer.internal.BrokerPollSystem" level="debug"/>
+
+    <!-- Keep general PC at info to reduce noise -->
+    <logger name="io.confluent.parallelconsumer" level="info"/>
+
+    <!-- Suppress noisy external loggers -->
+    <logger name="org.apache.kafka" level="warn"/>
+    <logger name="org.apache.kafka.common.config.AbstractConfig" level="error"/>
+    <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
+    <logger name="org.postgresql" level="info"/>
+    <logger name="io.netty" level="info"/>
+    <logger name="pl.tlinkowski" level="warn"/>
+
+</configuration>

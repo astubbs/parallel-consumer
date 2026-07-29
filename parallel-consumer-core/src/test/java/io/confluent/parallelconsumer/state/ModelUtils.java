@@ -32,9 +32,15 @@ public class ModelUtils {
     }
 
     public WorkContainer<String, String> createWorkFor(long offset) {
+        return createWorkFor(offset, 0);
+    }
+
+    public WorkContainer<String, String> createWorkFor(long offset, long epoch) {
         ConsumerRecord<String, String> mockCr = Mockito.mock(ConsumerRecord.class);
-        WorkContainer<String, String> workContainer = new WorkContainer<>(0, mockCr, module);
         Mockito.doReturn(offset).when(mockCr).offset();
+        Mockito.doReturn(topic).when(mockCr).topic();
+        Mockito.doReturn(0).when(mockCr).partition();
+        WorkContainer<String, String> workContainer = new WorkContainer<>(epoch, mockCr, module);
         return workContainer;
     }
 
