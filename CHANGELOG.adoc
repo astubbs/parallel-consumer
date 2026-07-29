@@ -5,7 +5,7 @@
 
 A high level summary of noteworthy changes in each version.
 
-NOTE:: Dependency version bumps are not listed here.
+NOTE:: Routine/automated dependency bumps (e.g. Dependabot) are not listed here. Notable or coordinated dependency refreshes - and any change to a user-facing runtime dependency such as the Kafka client - are summarised under the relevant version, since for a library these affect the transitive dependencies and compatibility that consumers inherit.
 
 NOTE:: *Reference convention (this is a fork).* Links and bare `#NN` / commit hashes refer to this fork, https://github.com/astubbs/parallel-consumer[astubbs/parallel-consumer]. Upstream references are written explicitly as `upstream #NN` and link to https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer]. Entries below `0.6.0.0` predate the fork and their `#NN` refer to upstream.
 
@@ -17,6 +17,11 @@ toc::[]
 endif::[]
 
 == Unreleased
+
+=== Dependencies
+
+* Dependencies and build plugins refreshed to their latest non-major versions ahead of the release (https://github.com/astubbs/parallel-consumer/pull/73[#73]): JUnit 5.10.2 → 5.14.4, Mockito 5.12.0 → 5.23.0, Testcontainers 1.19.8 → 1.21.4, AssertJ 3.24.2 → 3.27.7, SLF4J 2.0.13 → 2.0.18, Project Reactor 3.6.2 → 3.8.6, SmallRye Mutiny 2.9.4 → 2.9.5, Vert.x 4.5.7 → 4.5.31, Lombok 1.18.28 → 1.18.46, plus Guava, commons-lang3, Logback and the PostgreSQL driver.
+* The Kafka client stays on **3.9.1** — Kafka 4.x (and the other majors JUnit 6, Testcontainers 2, Vert.x 5, Mutiny 3, WireMock 3) were deliberately deferred to keep this a low-risk patch release. See link:docs/inflight.md[docs/inflight.md].
 
 === Build & CI
 
