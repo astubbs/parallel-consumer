@@ -26,9 +26,12 @@ on:
   pull_request:
   workflow_dispatch:
 
-concurrency:
-  group: pr-highcpu-fast-feedback-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+# NOTE: concurrency is JOB-level (per suite), not workflow-level - see the job's `concurrency:` block.
+# A single workflow-level group made every new push's fast suites queue ~5 minutes behind the previous
+# run's Mutation (PIT) job: cancel-in-progress signalled it, but the maven/PIT JVM tree rides out the
+# runner's full cancellation grace before force-kill, and the group only frees once the old run fully
+# completes. Per-suite groups mean a push's Unit/Integration/Performance start within seconds (their
+# predecessors finish or die fast); only Mutation queues behind old Mutation - fine for an advisory job.
 
 permissions:
   contents: read
@@ -45,6 +48,11 @@ jobs:
     runs-on: [self-hosted, highcpu]
     continue-on-error: true      # optional / FYI - never a required gate (the runner may be offline)
     timeout-minutes: 60
+    # Per-suite superseding: a new push cancels only ITS OWN suite's previous run, so fast suites start
+    # within seconds instead of queueing behind the old run's slow-dying Mutation job (see header note).
+    concurrency:
+      group: highcpu-${{ matrix.suite-name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false           # each suite is independent
       matrix:
