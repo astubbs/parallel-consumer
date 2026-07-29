@@ -20,12 +20,12 @@ import static org.mockito.Mockito.mockingDetails;
 /**
  * Covers the broker-poll system's behaviour while the PC is draining for close.
  * <p>
- * <b>Characterisation of the drain-path defect</b> (see
+ * <b>The drain-path defect this guards against</b> (see
  * {@code docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md}):
- * {@link BrokerPollSystem#drain()} calls {@code ConsumerManager.signalStop()} <i>before</i> entering
- * {@code DRAINING}, and {@code ConsumerManager.poll()} guards the real {@code consumer.poll()} call with
- * {@code while (!shutdownRequested)} — so once draining starts, <b>{@code consumer.poll()} is never invoked
- * again</b>. Two consequences:
+ * {@code BrokerPollSystem.drain()} used to call {@code ConsumerManager.signalStop()} <i>before</i> entering
+ * {@code DRAINING}, and {@code ConsumerManager.poll()} guarded the real {@code consumer.poll()} call with a
+ * private {@code while (!shutdownRequested)} flag — so once draining started, <b>{@code consumer.poll()}
+ * was never invoked again</b>. Two consequences:
  * <ol>
  *     <li><b>Busy-spin:</b> the poll loop's intended sleep is the paused 2s long poll (see the comment in
  *     {@link BrokerPollSystem}{@code #handlePoll()}: "if draining - subs will be paused, so use this to just
@@ -45,12 +45,16 @@ import static org.mockito.Mockito.mockingDetails;
 class BrokerPollSystemDrainTest extends ParallelEoSStreamProcessorTestBase {
 
     /**
-     * CHARACTERISES THE DEFECT — this test asserts the CURRENT (broken) behaviour: zero
-     * {@code consumer.poll()} invocations during the drain window. The fix commit flips this assertion to
-     * the desired behaviour (poll continues at long-poll cadence).
+     * Guards the fix: while draining, the poller must keep invoking {@code consumer.poll()} at long-poll
+     * cadence — bounded above (no busy-spin) and at least once per window (stays rebalance-responsive).
+     * <p>
+     * History: committed first as a characterisation of the defect (asserting zero polls during drain,
+     * as {@code drainStopsInvokingConsumerPoll_characterisesZombieDrainDefect}); flipped to the desired
+     * property by the fix commit that collapsed {@code ConsumerManager.shutdownRequested} into the poll
+     * system's lifecycle.
      */
     @Test
-    void drainStopsInvokingConsumerPoll_characterisesZombieDrainDefect() throws InterruptedException {
+    void drainKeepsPollingConsumer_staysRebalanceResponsiveWithoutSpinning() throws InterruptedException {
         var workStarted = new CountDownLatch(1);
         var releaseWork = new CountDownLatch(1);
 
@@ -81,12 +85,16 @@ class BrokerPollSystemDrainTest extends ParallelEoSStreamProcessorTestBase {
             io.confluent.csid.utils.ThreadUtils.sleepQuietly(3 * DEFAULT_BROKER_POLL_FREQUENCY_MS);
             long pollsDuringDrainWindow = consumerPollInvocationCount() - pollsAtDrainStart;
 
-            // CHARACTERISATION (defect): consumer.poll() is never invoked while draining - the loop spins
-            // unslept and the consumer is a rebalance-unresponsive zombie member.
-            // DESIRED (fix flips this): pollsDuringDrainWindow >= 1 (long-poll cadence, bounded - no spin).
+            // The drain-window polling property:
+            // >= 1: the drainer still polls, so it can ack revokes / rejoin - not a zombie group member.
+            // <= 30: polls happen at long-poll cadence (nominal ~3 in this window), not a busy-spin
+            //        (the defect's spin ran at ~10k iterations/s - orders of magnitude past this bound).
             assertWithMessage("consumer.poll() invocations during the drain window")
                     .that(pollsDuringDrainWindow)
-                    .isEqualTo(0);
+                    .isAtLeast(1);
+            assertWithMessage("consumer.poll() cadence during drain should be the long poll, not a spin")
+                    .that(pollsDuringDrainWindow)
+                    .isAtMost(30);
         } finally {
             // always release the parked work so close can complete, even if assertions fail
             releaseWork.countDown();

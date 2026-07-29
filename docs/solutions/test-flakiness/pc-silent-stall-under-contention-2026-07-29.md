@@ -64,9 +64,11 @@ tags:
   throttle-paused; its group is fresh so the partition-hold channel is indirect) - the leading explanation
   is broker/CPU starvation amplified by zombie drainers from other tests in the same fork; its own trace
   stayed elusive under instrumentation.
-- **Action: do not bump the await to go green.** Fix the drain path (honour the 2 s poll; bound the
-  broker-side release) and feed `committedOffsetRemoved` + the reproduction recipe + the new diagnostics
-  into the #857 investigation.
+- **Action: do not bump the await to go green.** The drain-path fix has **landed on this PR** (state
+  collapse: the duplicated shutdown flag is deleted, abort derives from the poll system's `runState`;
+  guarded by `BrokerPollSystemDrainTest`, characterisation-first → RED → GREEN). The broker-side
+  fail-safe release and the single-thread end-state remain with the #857 investigation, along with
+  `committedOffsetRemoved` + the reproduction recipe + the diagnostics.
 
 ## Background
 
@@ -206,11 +208,15 @@ robustness requirement - which the current implementation does not clearly meet 
 
 Options to consider (not mutually exclusive), roughly in order of increasing invasiveness:
 
-1. **Honour the 2 s long poll during DRAINING (restore the design intent).** Do not `signalStop()` the
-   `ConsumerManager` at drain time - only at `CLOSING`. Then the paused `consumer.poll(2s)` provides the
-   loop's sleep (as `handlePoll()`'s comment intends), kills the 10 kHz spin, **and** keeps the consumer
-   participating in the group protocol, so it can promptly ack revokes / rejoin instead of stalling other
-   members' rebalances. This is the minimal fix and addresses both channels at once.
+1. **Honour the 2 s long poll during DRAINING (restore the design intent) - ✅ IMPLEMENTED on this PR,**
+   in the stronger *state-collapse* form: `ConsumerManager.shutdownRequested` + `signalStop()` are
+   **removed entirely** (the flag was a private shadow of `BrokerPollSystem.runState`, settable out of
+   phase - the desync WAS the bug). `ConsumerManager` now derives "abort retries/polling" from an injected
+   `closeInProgressSignal` reading the poll system's `runState == CLOSING/CLOSED` - one source of truth,
+   so the desync *class* is structurally impossible. The paused `consumer.poll(2s)` again provides the
+   drain loop's sleep (as `handlePoll()`'s comment intends), killing the 10 kHz spin **and** keeping the
+   drainer rebalance-responsive. Guarded by `BrokerPollSystemDrainTest` (committed first as a
+   characterisation of the defect, then flipped RED→GREEN by the fix).
 2. **Hard drain deadline with explicit group exit.** `drainTimeout` already bounds the *wait for user
    work*; extend the guarantee to the *broker side*: when the deadline expires (or `waitForClose` times
    out), explicitly `consumer.close(bounded)` / unsubscribe so a **LeaveGroup** is sent and the partitions
@@ -226,6 +232,14 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 4. **Spin watchdog.** The poll loop has no self-observation; a 9-second 10 kHz spin was invisible until
    this capture. A cheap rate check (iterations/sec, rate-limited WARN) in `BrokerPollSystem`'s control
    loop would have flagged this class of bug years ago, and would catch regressions.
+5. **End-state: single-thread consumer ownership (defer to the #857 stream).** Merge the broker-poll
+   thread into the control thread so ONE thread owns the consumer (the KafkaConsumer reference pattern -
+   `wakeup()` is its only sanctioned cross-thread call). Close then becomes a linear function on that
+   thread - pause → bounded wait for workers → commit → `consumer.close()` (LeaveGroup) - and DRAINING is
+   just a loop mode: the CME class, the `commitCommand` locking, the wakeup choreography, and *all*
+   cross-thread lifecycle flags evaporate. This "merge poll + control threads" refactor is already being
+   weighed in the #857 investigation; the uber-branch experiment's results should inform whether it is
+   justified.
 
 ## Honest caveats / what is NOT yet proven
 
@@ -293,15 +307,16 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
    stalls it *without* DEBUG first, then attach the (now committed) `ShardManager` / `WorkManager` /
    `BrokerPollSystem` loggers - the `isSufficientlyLoaded=...` line will show whether the poller is
    throttle-paused (counter/`numberRecordsOutForProcessing` drift) or the broker is simply not serving.
-4. **Fix the drain path (own ticket, small first step available).** The minimal fix is option 1 of the
-   design review above: stop `signalStop()`-ing the `ConsumerManager` at drain time so the paused 2 s
-   `consumer.poll()` acts as the loop's sleep again (as `handlePoll()`'s comment intends) - kills the
-   ~10 kHz spin *and* keeps the drainer rebalance-responsive. The fail-safe release guarantee (options 2-3)
-   is the deeper design work, best coordinated with #857 since it touches the same close/rebalance paths.
+4. **Fix the drain path - ✅ DONE on this PR** (design-review option 1, in its stronger state-collapse
+   form: the duplicated `shutdownRequested` flag is deleted; `ConsumerManager` derives abort from the
+   poll system's `runState` via an injected signal). Guarded by `BrokerPollSystemDrainTest`
+   (characterisation-first, then flipped RED→GREEN by the fix). The fail-safe release guarantee (options
+   2-3) and the single-thread end-state (option 5) remain deeper design work, best coordinated with #857
+   since they touch the same close/rebalance paths.
 5. **Uber-branch experiment: merge all the partial fixes and measure.** The three efforts fix
    non-conflicting mechanisms of the same symptom, so combine them on one integration branch -
-   **#29 (857) + #31 (909) + this PR's diagnostics + the minimal drain fix (defer `signalStop()` to
-   `CLOSING`)** - and run both reproductions: (a) this report's `forkCount=16` stress recipe, and (b)
+   **#29 (857) + #31 (909) + this PR (diagnostics + drain fix)** - and run both reproductions: (a) this
+   report's `forkCount=16` stress recipe, and (b)
    #29's `MultiInstanceRebalanceTest` chaos run, which currently still stalls 10-20% of the time. That
    turns three partial theories into one measurable experiment: if the residual chaos-stall rate drops to
    ~0 with the drain fix added, the zombie-drainer mechanism explains the residue; whatever remains is a

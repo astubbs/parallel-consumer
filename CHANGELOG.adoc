@@ -37,6 +37,7 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 
 === Fixes
 
+* fix: draining close no longer busy-spins nor zombie-holds partitions. A duplicated shutdown flag stopped `consumer.poll()` from being invoked during the `DRAIN` phase of `close()`, so the closing consumer busy-spun its poll loop (~10k iterations/s, a full core) and - because rebalance participation happens inside `poll()` - remained a live group member holding its whole partition assignment without being able to respond to rebalances, starving same-group consumers for up to `max.poll.interval.ms`. The flag is removed; the poll system's lifecycle is now the single source of truth, and a draining consumer keeps polling (paused) at long-poll cadence (https://github.com/astubbs/parallel-consumer/pull/80[#80]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/857[#857]).
 * fix: null epoch race condition in EpochAndRecordsMap - poll() returning records before onPartitionsAssigned() no longer causes NPE; records are safely skipped and re-delivered (https://github.com/astubbs/parallel-consumer/commit/afde8c5e[afde8c5e]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/326[#326])
 * fix: `OffsetMapCodecManager` is kept instantiated so PC metrics are no longer recreated on every commit (upstream https://github.com/confluentinc/parallel-consumer/pull/892[#892]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/859[#859]).
 

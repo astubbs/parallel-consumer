@@ -386,13 +386,17 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   `max.poll.interval.ms`, 5 min) that starves same-group siblings and burns a core. Likely a third
   mechanism behind **#857**'s "paused consumption after rebalance". **Bumping the test await would hide a
   real product bug.** Full write-up + drain design review:
-  `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`. Minimal fix candidate:
-  don't `signalStop()` until `CLOSING` so the 2s poll is honoured during DRAINING. **Verified: neither PR
-  #29 (#857) nor PR #31 (#909) fixes this** — they fix sibling mechanisms (assign-time throttle-pause reset
-  + CME; stale-container replacement) of the same "alive but not progressing" symptom; all three are
-  non-conflicting. Next step per the report: an **uber branch** merging #29 + #31 + the drain fix, measured
-  against #29's chaos run (currently 10-20% residual stalls) and this report's forkCount=16 recipe. Route
-  into the **#857** investigation; revisit the await only after the stall is confirmed gone.
+  `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`. **FIX LANDED on PR #80
+  (2026-07-30):** the duplicated `ConsumerManager.shutdownRequested` flag is deleted (state collapse —
+  abort now derives from `BrokerPollSystem.runState` via an injected signal), so a draining consumer keeps
+  polling (paused, long-poll cadence) and stays rebalance-responsive; guarded by `BrokerPollSystemDrainTest`
+  (characterisation-first, flipped RED→GREEN). **Verified: neither PR #29 (#857) nor PR #31 (#909) fixed
+  this** — they fix sibling mechanisms (assign-time throttle-pause reset + CME; stale-container
+  replacement) of the same "alive but not progressing" symptom; all three are non-conflicting. Next step
+  per the report: an **uber branch** merging #29 + #31 + PR #80, measured against #29's chaos run
+  (currently 10-20% residual stalls) and this report's forkCount=16 recipe. Route findings into the
+  **#857** investigation; revisit the `committedOffsetRemoved` await only after the stall is confirmed
+  gone.
 - **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
   resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
   shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure
