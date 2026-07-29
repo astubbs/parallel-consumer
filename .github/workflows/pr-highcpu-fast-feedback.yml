@@ -1,11 +1,14 @@
 # Optional, NON-GATING fast feedback on a self-hosted high-CPU runner (many-core Linux, native Docker).
 #
-# Two jobs: (1) a matrix of unit + integration + mutation that run concurrently on real cores, and
-# (2) a SEPARATE, isolated Performance job that `needs` the matrix so the throughput benchmark measures on a
-# quiet box (it's hypersensitive to co-runner load - grumpy solo 1m54 vs 7m18 sharing the box). Far faster
-# than GitHub's 2-core gate. The runner may be offline at any time, so these jobs are FYI only:
+# Runs unit + integration + performance + mutation as separate matrix jobs concurrently on real cores - far
+# faster than GitHub's 2-core gate. The runner may be offline at any time, so these jobs are FYI only:
 # continue-on-error + not-required means an offline runner never blocks a merge (the required gate stays
 # GitHub-hosted, see maven.yml). When the runner is offline the jobs simply queue and are skipped by the guard.
+#
+# Tuning (measured on this 16c/32t box): unit forks 1-per-core (1C=32); more (2C) is flat, so 1C is the knee.
+# Integration is capped at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism).
+# Performance runs concurrently too: it's just a correctness gate here, and its *timing* is noisy under load
+# (accurate benchmarking belongs in a separate isolated/on-demand run - grumpy solo is ~1m54 vs GitHub ~3m50).
 #
 # SECURITY (public repo + self-hosted runner): guarded to SAME-REPO pull requests only, so a fork PR's
 # untrusted code NEVER runs on the self-hosted machine (RCE). pull_request (no secrets), never pull_request_target.
@@ -44,16 +47,17 @@ jobs:
       fail-fast: false           # each suite is independent
       matrix:
         include:
-          # Doubled again to probe the ceiling: Unit 2 forks PER CORE (2C = ~64 JVMs on 32 cores), Integration
-          # 16 brokers. Deliberately oversubscribed - watch for it getting SLOWER (fork/JVM startup churn beats
-          # the added parallelism) or OOM (16 Testcontainers Kafka brokers + 64 forks vs 48GB RAM).
+          # Unit: 1 fork PER CORE (1C = 32 JVMs). 2C was flat - this is the knee.
           - suite-name: "Unit"
-            cmd: "bin/ci-unit-test.sh -DforkCount=2C"
+            cmd: "bin/ci-unit-test.sh -DforkCount=1C"
+          # Integration: 8 forks, each a Testcontainers Kafka broker. 16 was slower (per-broker overhead).
           - suite-name: "Integration"
-            cmd: "bin/ci-integration-test.sh -DforkCount=16 -DreuseForks=true"
-          # Mutation (PIT) is CPU-bound (not a throughput benchmark), so it shares the box with unit/integration.
-          # PIT runs one minion JVM per thread; cranked 2 -> 16 (was tuned for GitHub's 2 cores). Peak heap ~=
-          # threads x 2g = ~32g, fits in 48GB. -Dverbose streams per-mutation progress; drop once eyeballed.
+            cmd: "bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true"
+          # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
+          - suite-name: "Performance"
+            cmd: "bin/performance-test.sh"
+          # Mutation (PIT): one minion JVM per thread. threads=16 (~2g heap each ~= RAM ceiling on 48GB). Biggest
+          # future win is scope restriction (mutate only changed classes on PRs), not more threads. See inflight.
           - suite-name: "Mutation (PIT)"
             cmd: "bin/ci-mutation-test.sh -Dverbose=true -Dthreads=16"
     steps:
@@ -82,47 +86,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: highcpu-fast-feedback-reports-${{ matrix.suite-name }}-${{ github.run_number }}
-          path: '**/target/*-reports/*.xml'
-          retention-days: 14
-
-  # Performance is a THROUGHPUT benchmark, so its wall-clock is dominated by measured pipeline speed and is
-  # hypersensitive to ANY co-runner load (not just CPU saturation). It therefore runs in its OWN job that
-  # `needs` the matrix, so it measures on a quiet box. `!cancelled()` (not `success()`) so it still runs even
-  # when a matrix suite is red (they're continue-on-error / FYI).
-  highcpu-performance:
-    name: "Build & Test - Performance (high-CPU self-hosted, ISOLATED)"
-    needs: [highcpu-build-test]
-    if: >-
-      !cancelled() &&
-      (github.event_name == 'workflow_dispatch' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, highcpu]
-    continue-on-error: true
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup JDK 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: ''
-
-      - name: Show environment
-        run: |
-          java -version
-          echo "cpus: $(nproc)"
-          uptime
-
-      - name: Performance tests (isolated - box should be quiet)
-        run: time bin/performance-test.sh
-
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: highcpu-fast-feedback-reports-Performance-${{ github.run_number }}
           path: '**/target/*-reports/*.xml'
           retention-days: 14
