@@ -254,10 +254,27 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
   stall** (10-20% of chaos runs still stall); **root cause still open**. The **zombie-drainer partition
   hold** root-caused here is a *third* mechanism in the same family - and note it composes with (1): a
   rebalance touching a draining member runs revoke on the spinning poll thread, right where the CME/commit-
-  lock races live. The #857 branch's provisional fixes do **not** appear to address the
-  `signalStop`-short-circuit spin (its `ConsumerManager` changes are about thread confinement and CME).
-- **#909 / PR #31** (`fix/909-stale-container-replacement`) - stale work container at the same offset after
-  rebalance. Adjacent rebalance-correctness work.
+  lock races live.
+  - **VERIFIED (2026-07-29): PR #29 does NOT fix the drain defect.** On its branch, `drain()` still calls
+    `consumerManager.signalStop()` first (`BrokerPollSystem` L235) and `ConsumerManager.poll()` still has
+    the `while (!shutdownRequested.get())` short-circuit (L92) - the ~10 kHz spin and zombie hold survive
+    unchanged. What it *does* fix is a **sibling** mechanism: `onPartitionsAssigned()` now resets
+    `pausedForThrottling` (a RUNNING-state throttle-pause stall on re-assignment - same "poller paused when
+    it shouldn't be" family, different state). It even **adds trace logging inside the very loop that
+    spins** (`handlePoll`: "Poll returned 0 records. assignment=..., paused=...") - instrumentation that
+    would log through the 10 kHz spin without recognising it.
+  - **Residual-stall link:** #29 reports 10-20% of aggressive-chaos runs *still* stalling with its fixes
+    applied. The chaos monkey's stop/start cycling is a drain-window factory, and the unfixed zombie-drain
+    path is a prime candidate for exactly that residue - a testable prediction for the uber-branch
+    experiment below.
+- **#909 / PR #31** (`fix/909-stale-container-replacement`) - **VERIFIED: no overlap.** Its main-code diff
+  is only `ProcessingShard.java` (11 lines, stale-container replacement); it touches nothing in the
+  drain/poll/shutdown paths. Adjacent rebalance-correctness work on a fourth, independent mechanism (stale
+  container at the same offset blocking that shard's progress).
+- **Complementary, not competing.** All three efforts chase the same *symptom* - "PC alive but not
+  progressing" - via **different, non-conflicting mechanisms**: #29 = close-race CME + counter drift +
+  assign-time throttle-pause; #31 = per-shard stale-container block; this report = drain-time zombie
+  spin/hold. The minimal drain fix (defer `signalStop()` to `CLOSING`) conflicts with **neither** branch.
 - Base master (and therefore PR #75) contains **none** of these fixes, so the sharpened stress suite
   (forked-per-broker integration, PR #68; unit forking, PR #69) is now surfacing the unsolved stall.
 - Prior art: `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md`
@@ -281,7 +298,15 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
    `consumer.poll()` acts as the loop's sleep again (as `handlePoll()`'s comment intends) - kills the
    ~10 kHz spin *and* keeps the drainer rebalance-responsive. The fail-safe release guarantee (options 2-3)
    is the deeper design work, best coordinated with #857 since it touches the same close/rebalance paths.
-5. **When #857 lands,** re-run this reproduction recipe to confirm the stall is gone (not merely
+5. **Uber-branch experiment: merge all the partial fixes and measure.** The three efforts fix
+   non-conflicting mechanisms of the same symptom, so combine them on one integration branch -
+   **#29 (857) + #31 (909) + this PR's diagnostics + the minimal drain fix (defer `signalStop()` to
+   `CLOSING`)** - and run both reproductions: (a) this report's `forkCount=16` stress recipe, and (b)
+   #29's `MultiInstanceRebalanceTest` chaos run, which currently still stalls 10-20% of the time. That
+   turns three partial theories into one measurable experiment: if the residual chaos-stall rate drops to
+   ~0 with the drain fix added, the zombie-drainer mechanism explains the residue; whatever remains is a
+   fifth mechanism, now observable via the committed diagnostics.
+6. **When the fixes land,** re-run this reproduction recipe to confirm the stall is gone (not merely
    timing-hidden), then the `committedOffsetRemoved` await can be revisited on its own merits.
 
 ## Reproduction recipe
