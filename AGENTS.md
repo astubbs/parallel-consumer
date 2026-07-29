@@ -93,6 +93,16 @@ bin/performance-test.sh
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
 
+## Changelog
+
+`CHANGELOG.adoc` (repo root) is the source of truth for release notes; `README.adoc` regenerates from it at build/release time (never hand-edit `README.adoc` - see Code Style / the generated-README rule). **When you make a user- or operator-visible change, add a `CHANGELOG.adoc` entry in the same PR**, under `== Unreleased` (create that heading if it's missing, above the latest version), in the right subsection: `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, or `=== Build & CI`.
+
+- **Do add:** behavioural/API changes, new features or modules, user-affecting bug fixes, and *notable or coordinated* dependency refreshes or any change to a user-facing runtime dependency (especially the Kafka client) - for a library these affect the transitive dependencies and compatibility that consumers inherit.
+- **Don't add:** routine/automated single dependency bumps (Dependabot), internal refactors, test-only changes, CI/tooling, docs, or formatting - those are visible in git history and just add noise.
+- **Reference convention:** a bare `#NN` refers to this fork; write `upstream #NN` for upstream references, and link the PR/issue.
+
+Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
+
 ## Releasing
 
 **Tag-as-truth, dispatch-triggered.** `master` is **always** a `-SNAPSHOT`. A dispatch runs

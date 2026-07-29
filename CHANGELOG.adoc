@@ -5,7 +5,7 @@
 
 A high level summary of noteworthy changes in each version.
 
-NOTE:: Dependency version bumps are not listed here.
+NOTE:: Routine/automated dependency bumps (e.g. Dependabot) are not listed here. Notable or coordinated dependency refreshes - and any change to a user-facing runtime dependency such as the Kafka client - are summarised under the relevant version, since for a library these affect the transitive dependencies and compatibility that consumers inherit.
 
 NOTE:: *Reference convention (this is a fork).* Links and bare `#NN` / commit hashes refer to this fork, https://github.com/astubbs/parallel-consumer[astubbs/parallel-consumer]. Upstream references are written explicitly as `upstream #NN` and link to https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer]. Entries below `0.6.0.0` predate the fork and their `#NN` refer to upstream.
 
@@ -15,12 +15,6 @@ NOTE:: *Reference convention (this is a fork).* Links and bare `#NN` / commit ha
 ifndef::github_name[]
 toc::[]
 endif::[]
-
-== Unreleased
-
-=== Build & CI
-
-* New `Self-Hosted Tests` workflow runs the integration and performance suites on a self-hosted runner (a Proxmox Linux VM or a Mac), parallelised on real hardware where the `ci` profile runs them sequentially for GitHub's 2-core hosted runners. Integration runs in forked per-broker mode (`-DforkCount=4 -DreuseForks=true`, each JVM fork gets its own broker); performance uses in-JVM thread parallelism (`-Dparallel-tests=true`). Manual/scheduled only, never on PRs; the GitHub-hosted PR gate is unchanged. See link:docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md]. Replaces the earlier Windows-only performance workflow.
 
 == 0.6.0.0
 
@@ -41,6 +35,15 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 
 * fix: null epoch race condition in EpochAndRecordsMap - poll() returning records before onPartitionsAssigned() no longer causes NPE; records are safely skipped and re-delivered (https://github.com/astubbs/parallel-consumer/commit/afde8c5e[afde8c5e]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/326[#326])
 * fix: `OffsetMapCodecManager` is kept instantiated so PC metrics are no longer recreated on every commit (upstream https://github.com/confluentinc/parallel-consumer/pull/892[#892]; relates to upstream https://github.com/confluentinc/parallel-consumer/issues/859[#859]).
+
+=== Dependencies
+
+* Dependencies and build plugins refreshed to their latest non-major versions (https://github.com/astubbs/parallel-consumer/pull/73[#73]): JUnit 5.10.2 → 5.14.4, Mockito 5.12.0 → 5.23.0, Testcontainers 1.19.8 → 1.21.4, AssertJ 3.24.2 → 3.27.7, SLF4J 2.0.13 → 2.0.18, Project Reactor 3.6.2 → 3.8.6, SmallRye Mutiny 2.9.4 → 2.9.5, Vert.x 4.5.7 → 4.5.31, Lombok 1.18.28 → 1.18.46, plus Guava, commons-lang3, Logback and the PostgreSQL driver.
+* The Kafka client stays on **3.9.1** — Kafka 4.x (and the other majors JUnit 6, Testcontainers 2, Vert.x 5, Mutiny 3, WireMock 3) were deliberately deferred to keep the release low-risk. See link:docs/inflight.md[docs/inflight.md].
+
+=== Build & CI
+
+* New `Self-Hosted Tests` workflow runs the integration and performance suites on a self-hosted runner (a Proxmox Linux VM or a Mac), parallelised on real hardware where the `ci` profile runs them sequentially for GitHub's 2-core hosted runners. Integration runs in forked per-broker mode (`-DforkCount=4 -DreuseForks=true`, each JVM fork gets its own broker); performance uses in-JVM thread parallelism (`-Dparallel-tests=true`). Manual/scheduled only, never on PRs; the GitHub-hosted PR gate is unchanged. See link:docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md]. Replaces the earlier Windows-only performance workflow.
 
 // There is no 0.5.3.4 release. The #892 metrics fix once tracked under a "0.5.3.4" heading here was
 // never published upstream as 0.5.3.4; it ships in this fork's 0.6.0.0 (folded into the Fixes above).
