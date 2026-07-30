@@ -307,6 +307,16 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   suite improvement: **per-cause ledger attribution** — correlate duplicate deliveries against the
   conductor's timestamped disturbance windows, then assert zero for undisturbed drains while allowing
   hard-stop redelivery; one global allowance can't catch "drains quietly stopped committing".
+  **Phase 2 priority: the CLASS 2 probe (per-partition lag stagnation).** The "locks forever, manual
+  restart required" #857 reports are protocol-INVISIBLE stalls (counter drift / stuck throttle-pause):
+  the group is STABLE, heartbeats+polls flow, every broker clock is satisfied — no rebalance pending
+  means the 5-min eviction clock never even starts. The zombie probe cannot see this class, and the
+  fleet-wide progress watermark under-detects PARTIAL stalls (the protected pc0 keeps the aggregate
+  advancing). Detector: via AdminClient, "no partition may hold lag>0 while its committed offset
+  stagnates beyond T" — detects partial stalls in exactly the terms users experience them (lag grows,
+  nothing moves; the chaos-suite analogue of production lag monitoring). Trigger: pair with the W4
+  revoke-under-work scenario (heavy-tailed latencies + rebalance storms) on compositions lacking #29's
+  counter fixes.
 - **LOAD-TIGHTNESS FLAKE FAMILY (failure group; roster + rates from the 2026-07-30 20-run fork16
   acceptance hunt on PR #80's branch).** Shared signature: *fast-failing* assertion/timeout under heavy
   contention, passes isolated/on rerun. Diagnosis rule (from the #68 lesson): classify before touching —
