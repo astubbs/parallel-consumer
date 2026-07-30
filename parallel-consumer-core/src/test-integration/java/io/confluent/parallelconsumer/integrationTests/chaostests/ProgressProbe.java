@@ -69,8 +69,12 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * Bound must exceed a heavy-tail REDELIVERY CHAIN: a hard stop can interrupt a heavy record
      * mid-dwell and at-least-once re-runs it fresh, so a partition's committed offset can be
      * legitimately blocked ~2 chained dwells (measured: 151s at a 90s dwell - hence the dwell was
-     * reduced to 45s; 2x45=90s vs this 150s bound). RED calibration of this probe awaits the W4
-     * revoke-under-work trigger scenario on a composition lacking the counter-drift fixes. */
+     * reduced to 45s; 2x45=90s vs this 150s bound). A second legit-freeze class was measured during W4
+     * calibration: EAGER reassignment restarts in-flight heavies on every storm membership change,
+     * pinning commit low-watermarks for storm+dwell+slack - scenarios must keep that arithmetic under
+     * this bound (see ChaosRevokeUnderWorkIT). RED calibration of this probe is still open: W4 is
+     * artifact-free but has not yet reproduced a true unbounded Class 2 stall on master (the #857
+     * root-cause stall is probabilistic); the probe ships GREEN-calibrated with peaks measured. */
     public static final Duration LAG_STAGNATION_BOUND = Duration.ofSeconds(150);
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
     public static final long LAG_STAGNATION_MIN_LAG = 50;
@@ -101,6 +105,28 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     private volatile long peakDrainDurationMs = 0;
     @Getter
     private volatile long peakLagStagnationMs = 0;
+
+    /** Per-scenario toggles - defaults preserve W1 behaviour. The dwell PEAK is always measured;
+     * disabling only suppresses the violation (a scenario must never lose the measurement). */
+    private volatile boolean rebalanceDwellViolationEnabled = true;
+    private volatile Duration noProgressWindow = NO_PROGRESS_WINDOW;
+
+    /**
+     * W4 uses this: with a low {@code max.poll.interval.ms} the deadlock-blocked rebalances self-resolve
+     * by eviction, and Class 1 dwell violations would otherwise fire first and mask the Class 2
+     * measurement this scenario exists for. Class 1 stays covered by W1, where the probe is armed.
+     */
+    public ProgressProbe disableRebalanceDwellViolation() {
+        this.rebalanceDwellViolationEnabled = false;
+        return this;
+    }
+
+    /** Widen the fleet-wide progress watermark for scenarios whose churn legitimately pauses everyone
+     * (an eager rebalance revokes every member's partitions) longer than the W1 default tolerates. */
+    public ProgressProbe withNoProgressWindow(Duration window) {
+        this.noProgressWindow = window;
+        return this;
+    }
 
     public ProgressProbe(KafkaClientUtils kcu, String groupId, String topic, LongSupplier totalConsumed, long expectedTotal) {
         this.kcu = kcu;
@@ -182,9 +208,9 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
         boolean workRemains = now < expectedTotal - TAIL_SLACK;
         Duration stalled = Duration.between(lastAdvance, Instant.now());
-        if (workRemains && stalled.compareTo(NO_PROGRESS_WINDOW) > 0) {
+        if (workRemains && stalled.compareTo(noProgressWindow) > 0) {
             violate("NO_PROGRESS: fleet consumed count stuck at " + now + "/" + expectedTotal
-                    + " for " + stalled.getSeconds() + "s (bound " + NO_PROGRESS_WINDOW.getSeconds() + "s)");
+                    + " for " + stalled.getSeconds() + "s (bound " + noProgressWindow.getSeconds() + "s)");
             lastAdvance = Instant.now(); // re-arm so a genuine stall reports once per window, not per sample
         }
     }
@@ -205,7 +231,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
         Duration dwell = Duration.between(rebalanceDwellStart, Instant.now());
         if (dwell.toMillis() > peakRebalanceDwellMs) peakRebalanceDwellMs = dwell.toMillis();
-        if (dwell.compareTo(REBALANCE_DWELL_BOUND) > 0) {
+        if (rebalanceDwellViolationEnabled && dwell.compareTo(REBALANCE_DWELL_BOUND) > 0) {
             violate("ZOMBIE_MEMBER/REBALANCE_BLOCKED: group '" + groupId + "' dwelling in " + state
                     + " for " + dwell.getSeconds() + "s (bound " + REBALANCE_DWELL_BOUND.getSeconds()
                     + "s) - a member is not answering the rebalance (protocol-unresponsive)");
