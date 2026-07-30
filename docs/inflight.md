@@ -282,6 +282,23 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   check whether it's contention (raise this test's lock-acquisition timeouts / mark heavier) vs a real
   produce/commit-lock stall in the multi-instance-shared-registry path. Do NOT just bump the timeout to go green
   without establishing which (AGENTS.md rule). Not yet reproduced deterministically.
+- **LOAD-TIGHTNESS FLAKE FAMILY (failure group; roster + rates from the 2026-07-30 20-run fork16
+  acceptance hunt on PR #80's branch).** Shared signature: *fast-failing* assertion/timeout under heavy
+  contention, passes isolated/on rerun. Diagnosis rule (from the #68 lesson): classify before touching —
+  this same family is where the #857 deadlock and the drain zombie hid. Distinguish from the two SOLVED
+  classes by their named signatures: nudge race = unwinnable await + `SubscriptionState` reset position
+  past the data (see `latest-reset-nudge-race-...-2026-07-30.md`); drain zombie = `DRAINING`-state poll
+  spin (see `pc-silent-stall-under-contention-2026-07-29.md`). Members:
+  - `MultiInstanceMetricsTest.sameRegistryCanBeReused...` — 1-2s lock timeouts (own entry above; 0/20 in
+    the hunt).
+  - `TransactionTimeoutsTest.produceTimeout` — tight produce-timeout assertion; 1/20 hunt + 1× highcpu runner
+    (2026-07-30).
+  - `LoadTest` — 60s throughput awaits; 1/20.
+  - `DbTest` — postgres container start under contention; 2/20.
+  Baseline for comparison: 15/20 hunt runs fully CLEAN, zero stall-class failures. NOT in this family:
+  `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` (1/20) — per the #68 record its contended failure maps to
+  the REAL **#857** deadlock; the hunt sighting is live confirmation #857 remains present on master-line
+  branches (its fix lives in PR #29 pending rebase — see the uber experiment results doc).
 - **DONE (PR #69): moved the "unit" tests that were actually INTEGRATION tests out of surefire, and now
   ENFORCED so no more can hide.** Two container-based tests were landing in surefire only because they
   weren't in an `integrationTest*` package: `examples…streams.StreamsAppTest` and

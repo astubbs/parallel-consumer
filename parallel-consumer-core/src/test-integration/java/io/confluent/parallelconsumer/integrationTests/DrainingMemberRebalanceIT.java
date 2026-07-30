@@ -88,10 +88,13 @@ class DrainingMemberRebalanceIT extends BrokerIntegrationTest<String, String> {
             processedByA.add(recordContexts.key());
         });
 
-        // A is healthy and consuming alone
+        // A is healthy and consuming alone. The >=300 floor also guarantees the duplicates ledger below a
+        // clean >=2x separation between "bounded parked tail" (~100) and "wholesale reprocess" (>=300) on
+        // any box speed - on a slow box A processing only ~150 pre-drain would leave the two
+        // indistinguishable (observed on the highcpu runner: A=157, dups=100=exactly the parked tail, bound collided).
         await().atMost(30, SECONDS).untilAsserted(() ->
                 assertWithMessage("A should be consuming before we start the drain")
-                        .that(processedByA.size()).isAtLeast(50));
+                        .that(processedByA.size()).isAtLeast(300));
 
         // ---- park in-flight work, then start a long drain. A may have already consumed the whole initial
         // batch (UNORDERED x high concurrency is fast), so produce fresh records AFTER arming the park so
@@ -148,19 +151,22 @@ class DrainingMemberRebalanceIT extends BrokerIntegrationTest<String, String> {
                             .that(union).containsAtLeastElementsIn(producedKeys);
                 });
 
-        // Duplicates must be bounded to A's uncommitted tail (commit interval is 1s in buildPc + in-flight
-        // work), NOT a wholesale reprocess of A's records - which is what release-at-drain-start (or
-        // ignoring A's commits) would produce. A processed >= 50 before the drain even started; allow a
-        // generous uncommitted tail but reject anything close to full reprocessing.
+        // Duplicates must be bounded to A's uncommitted tail: the parked in-flight batch (up to
+        // maxConcurrency=100) plus commit-interval lag - NOT a wholesale reprocess of A's >=300 records,
+        // which is what release-at-drain-start (or ignoring A's commits) would produce. Flat bound: the
+        // legitimate tail is capacity-shaped (parked workers + 1s commit lag), independent of how much A
+        // processed - a fraction-of-A bound collided with the tail itself on slow boxes (highcpu runner: A=157,
+        // dups=100=exactly the parked tail).
         Set<String> duplicates = ConcurrentHashMap.newKeySet();
         duplicates.addAll(processedByA);
         duplicates.retainAll(processedByB);
         log.info("Ledger: A processed {}, B processed {}, duplicates {} (bounded tail expected)",
                 processedByA.size(), processedByB.size(), duplicates.size());
         assertWithMessage("hand-over must honour A's commits: duplicates bounded to the uncommitted " +
-                "tail, not a wholesale reprocess of A's %s records", processedByA.size())
+                "tail (parked in-flight + commit lag), not a wholesale reprocess of A's %s records",
+                processedByA.size())
                 .that(duplicates.size())
-                .isLessThan(Math.max(100, processedByA.size() / 2));
+                .isAtMost(150);
 
         pcB.close();
     }

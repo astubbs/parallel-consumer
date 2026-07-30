@@ -30,7 +30,7 @@ tags:
   - contention
 ---
 
-# PartitionStateCommittedOffsetIT: the grumpy "flake" is a real silent stall, not a test-timeout bug
+# PartitionStateCommittedOffsetIT: the highcpu runner "flake" is a real silent stall, not a test-timeout bug
 
 > **UPDATE 2026-07-30 - the `committedOffsetRemoved` mystery is SOLVED**, with a final twist: it was an
 > `auto.offset.reset=latest` **nudge race in the test harness** - the reset resolving after the test's
@@ -50,7 +50,7 @@ tags:
 ## TL;DR
 
 - The claim under assessment - *"Integration's red is the known flake (`PartitionStateCommittedOffsetIT`,
-  already in inflight, fails on GitHub too) - not grumpy"* - is **true about grumpy** (reproduced locally;
+  already in inflight, fails on GitHub too) - not the runner"* - is **true about the highcpu runner** (reproduced locally;
   the runner is exonerated) but **understates the cause**: it is **not a benign awaitility timeout**.
 - Under real CPU/IO contention a Parallel Consumer instance **silently stops making progress** - zero
   records polled for the entire window, **still zero with a 120s bound**, no exception, consumer alive.
@@ -81,7 +81,7 @@ tags:
 
 ## Background
 
-PR #75 adds an optional, non-gating high-CPU self-hosted ("grumpy", 24c/48t) fast-feedback workflow. Its
+PR #75 adds an optional, non-gating high-CPU self-hosted ("highcpu runner", 24c/48t) fast-feedback workflow. Its
 **Integration** matrix job (`bin/ci-integration-test.sh -DforkCount=16 -DreuseForks=true`) went red. The
 sole failure was:
 
@@ -100,14 +100,14 @@ the underlying PC genuinely stalls, so a bigger deadline just hides it.
 
 ## Reproduction and evidence
 
-Local box: 12 logical cores, 32 GB (grumpy: 48 threads). "forks/core" is the oversubscription ratio;
-grumpy's integration job runs 16 forks / 48 threads = 0.33.
+Local box: 12 logical cores, 32 GB (highcpu runner: 48 threads). "forks/core" is the oversubscription ratio;
+the highcpu runner's integration job runs 16 forks / 48 threads = 0.33.
 
 | Run | forks/core | await bound | Result |
 |-----|-----------|-------------|--------|
 | Baseline | 1 (none) | 10s | **7/7 green** |
 | Fair | 8 → 0.67 | 120s | **7/7 green**, worst first-poll **1.0s** (others ~0.5s) |
-| Contended | 16 → 1.33 | 10s | **stall** - `committedOffsetRemoved` ConditionTimeout (grumpy's exact signature) |
+| Contended | 16 → 1.33 | 10s | **stall** - `committedOffsetRemoved` ConditionTimeout (the highcpu runner's exact signature) |
 | Contended | 16 → 1.33 | **120s** | **still fails - 0 polls in 120s** |
 
 Two facts are decisive:
@@ -273,7 +273,7 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 - The under-served detector only observed **normal in-flight back-pressure**, not stuck-selectable or
   missing work - so the queue/shard layer is exonerated *for the scenarios captured*, which does not prove
   it is healthy in the (uncaptured) `committedOffsetRemoved` stall.
-- What **is** firmly established: it is a real stall (0 polls / 120s), not grumpy-specific, not a benign
+- What **is** firmly established: it is a real stall (0 polls / 120s), not runner-specific, not a benign
   timeout, and in the #857 silent-stall family. The exact per-scenario mechanism is **open**.
 
 ## Relationship to the in-flight lock-up work
@@ -316,7 +316,7 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 
 1. **Do not mask.** Leave `committedOffsetRemoved`'s await as-is; do not bump it to go green. A generous
    bound here would hide a real production stall - the exact failure this library exists to prevent.
-2. **Keep the grumpy Integration job non-gating** (it already is). The runner is fine; the red is a real
+2. **Keep the highcpu runner Integration job non-gating** (it already is). The runner is fine; the red is a real
    product stall that also affects GitHub-hosted runs intermittently (via sibling flakes like
    `MultiInstanceMetricsTest`).
 3. **Route to #857.** Add `committedOffsetRemoved` and `KafkaSanityTests` as additional reproductions under
@@ -377,7 +377,7 @@ masking):
 
 ## Sources
 
-- Grumpy failure: PR #75 run `30434423800` (failsafe report: `committedOffsetRemoved[1]` ConditionTimeout).
+- highcpu runner failure: PR #75 run `30434423800` (failsafe report: `committedOffsetRemoved[1]` ConditionTimeout).
 - GitHub-hosted Integration red on the same PR: run `30424305954` - the sibling flake
   `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed`, not this test.
 - `docs/inflight.md` - existing `committedOffsetRemoved` and `MultiInstanceMetricsTest` flake entries.

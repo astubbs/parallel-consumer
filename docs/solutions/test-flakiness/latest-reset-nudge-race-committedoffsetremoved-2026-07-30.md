@@ -8,7 +8,7 @@ component: testing / consumer bootstrap
 symptoms:
   - "PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] (latest) fails with ConditionTimeoutException 'not to be empty' - 10s, 60s, or 120s bound, timeout size irrelevant"
   - "ONLY the [1]=latest parameter ever fails; earliest/none never do"
-  - "Correlates with box contention (forkCount=16, loaded grumpy) but reproduces on any environment"
+  - "Correlates with box contention (forkCount=16, loaded highcpu runner) but reproduces on any environment"
   - "All PC-side diagnostics healthy: fresh RUNNING PC, counters 0, poller not throttle-paused, work-selection clean"
   - "Still fired with the drain fix AND #29 AND #31 all applied - no product fix touched it"
 root_cause: latest_offset_reset_resolves_after_single_pre_await_nudge_record
@@ -32,7 +32,7 @@ tags: [flaky-tests, offset-reset, latest, awaitility, test-harness, solved]
 A consumer with `auto.offset.reset=latest` and no committed offset resolves its start position at
 whatever the log end offset is **at the moment the reset executes**. `runPcUntilOffset` produced exactly
 ONE "poll-bumper" record, *before* its await, relying - implicitly, by luck - on the consumer's reset
-resolving *before* that bumper landed. Under contention (fork16, loaded grumpy), consumer-group bootstrap
+resolving *before* that bumper landed. Under contention (fork16, loaded highcpu runner), consumer-group bootstrap
 takes 1-3s instead of <1s, the reset resolves *after* the bumper, and the consumer is positioned **past
 every record that will ever exist** (the helper produces nothing else). From that moment the await -
 `seenOffsets isNotEmpty` - is **unwinnable at any timeout**. Not a hang, not a stall, not a broker
@@ -72,7 +72,7 @@ apparent stop was a test that could no longer be satisfied.
 ## Why it presented as a roaming cross-environment mystery
 
 - **Only `[1]`/latest can lose this race** - earliest/none position at offset 0 and see everything.
-  Observed failures were [1] in 100% of cases (grumpy, local fork16, uber arms) - the tell nobody read.
+  Observed failures were [1] in 100% of cases (highcpu runner, local fork16, uber arms) - the tell nobody read.
 - Contention **correlates** because it widens bootstrap past the ~1s pre-bumper sleep - so it tracked
   load like a real stall would.
 - Timeout size was irrelevant (10s/60s/120s all failed) - which *looked* like a hard hang.
