@@ -443,3 +443,23 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.
+
+## Copyright headers - enforcement + fork convention (2026-07-31, PR #90)
+
+- **Root cause of the mislabeled-header class, fixed:** the mycila license plugin defaulted to
+  `format` mode with its single Confluent header template, so any bare `mvn` build stamped the wrong
+  attribution onto fork-original files (this is how the chaos-suite files got Confluent headers), and
+  its git-year resolver auto-bumped years and broke in worktrees. Now skipped by default
+  (`<license.skip>true</license.skip>`); `-Dlicense.skip` on command lines is obsolete-but-harmless.
+- **Enforcement:** `bin/check-copyright-headers.sh` + the `Copyright Headers` workflow (self-tested,
+  13 fixture assertions, runs on every PR + master push). Provenance from the pinned fork point
+  (7f290122): fork-original files need the fork header; upstream-derived files keep Confluent's; and
+  **modified-since-fork derived files (incl. changed renames + extractions) must ADD
+  `Modifications Copyright (C) <year> Antony Stubbs and contributors`** - the Apache 2.0
+  4(b)/4(c) dual-notice convention (Corretto/MariaDB style). Nothing is planned to go upstream, so
+  no header is held back for upstream-PR diff cleanliness.
+- **Sweep DONE on master (PR #90):** 45 modified-derived files got the modifications line.
+- **Remaining, chaos stack:** `ManagedPCInstance` is registered as an upstream EXTRACTION so the
+  scanner requires Confluent + modifications line - PR #83 currently has it Confluent-only, so the
+  chaos stack needs that one-line addition (plus its already-committed fork-header fixes) once #90
+  merges and the check starts running on those PRs.

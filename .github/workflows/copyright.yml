@@ -12,8 +12,11 @@
 
 name: Copyright Headers
 
+# push is scoped to master (matching maven.yml) so PR-branch commits run once via the
+# pull_request event instead of twice.
 on:
   push:
+    branches: [ master ]
   pull_request:
   workflow_dispatch:
 
