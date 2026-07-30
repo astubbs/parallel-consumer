@@ -93,9 +93,9 @@ known-defective composition and passes on the fixed one, while also verifying th
 (partitions held → in-flight finished → committed → duplicates bounded; eager release would have shown
 duplicates ≈ A's full record count).
 
-### Grumpy datapoint (independent, one run)
+### highcpu runner datapoint (independent, one run)
 
-On PR #80's branch (fix present), grumpy's Integration job still reddened on
+On PR #80's branch (fix present), the highcpu runner's Integration job still reddened on
 `committedOffsetRemoved[1]` while Unit + Performance passed - consistent with the report's position that
 this test's fresh-PC first-poll stall is a **distinct, likely broker-side mechanism**, not the zombie
 drain.
@@ -114,7 +114,7 @@ drain.
 
 ## Merge strategy for the three PRs (recommendation)
 
-1. **#75** (grumpy CI) first - #80 stacks on it.
+1. **#75** (highcpu runner CI) first - #80 stacks on it.
 2. **#80** (drain fix + guards) next - self-contained, green, small; landing early forces #29's rebase to
    account for the new drain semantics (correct, it owns that choreography).
 3. **#31** (#909, 11 lines) - **unblocked by attribution** (solo arm fully green): trivial rebase onto
