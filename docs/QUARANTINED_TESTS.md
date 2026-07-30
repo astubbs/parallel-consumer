@@ -5,10 +5,20 @@ The task list of tests currently in the quarantine lane: known-failing-on-master
 every PR by the non-gating "Quarantined Tests" job. Each entry is an open task: get the test fixed and
 back into the gating lane.
 
-**This file is enforced, not advisory**: `bin/check-quarantine-registry.sh` (run locally by
-`bin/quarantined-test.sh` and in CI by the Quarantined Tests job) fails on any drift between the
-`@Quarantined` annotations in the code and the entries below - a quarantined test missing here, or a
-stale entry for a test no longer quarantined, is an error.
+**This file is enforced, not advisory**, by two checks (run locally by `bin/quarantined-test.sh` and
+in CI by the Quarantined Tests job):
+
+- `bin/check-quarantine-registry.sh` fails on any drift between the `@Quarantined` annotations in the
+  code and the entries below - a quarantined test missing here, or a stale entry for a test no longer
+  quarantined, is an error.
+- `bin/check-quarantine-owners.sh` verifies each entry's owner claim against reality: the owning PR
+  must exist and be open (closed-unmerged = orphaned entry = error; merged with the test still
+  quarantined = re-enable overdue = error), and once the quarantine reaches that PR's base branch, its
+  merge preview is checked for actually removing the annotation (advisory until it does).
+
+**Machine-parsed format** (the checks depend on it): each entry is an unchecked checkbox line, `- [ ]`,
+immediately followed by the backticked test reference (`Class.method`), and its text must contain
+`Owner: PR #NN` (omit only for diagnosed-but-unowned entries, which the checks flag as advisory).
 
 Rules (full discipline in `AGENTS.md` → Testing, and the `@Quarantined` javadoc):
 

@@ -20,7 +20,7 @@ endif::[]
 
 === Build & CI
 
-* Quarantine lane for known-failing-on-master tests: `@Quarantined(reason, tracking, fixedBy)` removes a diagnosed failing test from the *gating* CI suites (so green checks mean mergeable) while a new non-gating "Quarantined Tests" job keeps running it on every PR, with an audit summary of each quarantined test and its owning fix PR. The live registry `docs/QUARANTINED_TESTS.md` is CI-enforced to match the annotations. Locally: `bin/quarantined-test.sh`. First occupant: `PartitionStateCommittedOffsetIT.committedOffsetRemoved` (the `[latest]` nudge race, owned by https://github.com/astubbs/parallel-consumer/pull/80[#80]).
+* Quarantine lane for known-failing-on-master tests: `@Quarantined(reason, tracking, fixedBy)` removes a diagnosed failing test from the *gating* CI suites (so green checks mean mergeable) while a new non-gating "Quarantined Tests" job keeps running it on every PR, with an audit summary of each quarantined test and its owning fix PR. The live registry `docs/QUARANTINED_TESTS.md` is CI-enforced to match the annotations, and each entry's owner claim is verified against reality (owning fix PR must exist and be open; merged-but-still-quarantined or closed-unmerged owners turn the job red). Locally: `bin/quarantined-test.sh`. First occupant: `PartitionStateCommittedOffsetIT.committedOffsetRemoved` (the `[latest]` nudge race, owned by https://github.com/astubbs/parallel-consumer/pull/80[#80]).
 
 == 0.6.0.0
 

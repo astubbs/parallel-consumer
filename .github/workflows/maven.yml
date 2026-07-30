@@ -134,6 +134,13 @@ jobs:
       # failures, which are expected) - it is the one thing allowed to turn this job red.
       - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
         run: bin/check-quarantine-registry.sh
+      # Also NOT continue-on-error: verifies each entry's owner claim against reality via gh -
+      # owner PR missing / closed-unmerged / merged-but-still-quarantined are real errors that
+      # turn the job red; an open owner that hasn't yet removed the quarantine is advisory only.
+      - name: Verify owner claims (each quarantined test's fix PR exists, is open, and removes the quarantine)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bin/check-quarantine-owners.sh
       - name: Check the lane is not empty
         id: any
         run: |

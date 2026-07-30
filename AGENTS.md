@@ -76,7 +76,8 @@ bin/performance-test.sh
   (green means mergeable) but keeps running on every PR in the non-gating "Quarantined Tests" CI job,
   whose summary carries pass/fail + the audit of every quarantined test and its owner. The live registry
   / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
-  the annotations in both directions, so it can't drift. Rules: **(1) no
+  the annotations in both directions, so it can't drift; `bin/check-quarantine-owners.sh` additionally
+  verifies each entry's owner claim (owning PR exists + is open + eventually removes the quarantine). Rules: **(1) no
   quarantine without diagnosis** — undiagnosed red stays red and blocks, on purpose; **(2) quarantine is
   master-state, not PR-state** — a test red on only one PR is that PR's problem; **(3) the owning fix PR
   deletes the annotation AND its registry entry in the same commit** after merging master, atomically

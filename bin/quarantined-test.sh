@@ -18,6 +18,12 @@ set -euo pipefail
 
 echo "=== Quarantine registry check (docs/QUARANTINED_TESTS.md must match the annotations) ==="
 "$(dirname "$0")/check-quarantine-registry.sh"
+echo "=== Quarantine owner-claim check (needs gh; skipped when unavailable) ==="
+if gh auth status >/dev/null 2>&1; then
+  "$(dirname "$0")/check-quarantine-owners.sh"
+else
+  echo "(gh unavailable/unauthenticated - owner claims not verified locally; CI verifies them)"
+fi
 echo "=== Quarantine audit (every entry must be diagnosed; empty fixedBy = unowned, needs an owner) ==="
 grep -rn --include='*.java' --exclude-dir=target -A 4 '@Quarantined(' . || echo "(no @Quarantined tests - this lane is empty)"
 echo "==================================================================================================="
