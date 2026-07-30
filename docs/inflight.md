@@ -179,6 +179,25 @@ with 4.10.3, so these drop out of "new". Track the actual fixes (make the counte
 Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
 .erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
 
+## Chaos Pain Suite - Phase 2+ roster (branch feats/chaos-w4-revoke-under-work)
+
+- **Class 2 RED hunt (open):** W4 is calibrated artifact-free but a true unbounded Class 2 stall did
+  not reproduce on master (seed 7612284256787897904) - the open #857 root-cause stall is
+  probabilistic. Levers: defect-arm seed sweep (cheap, first); cooperative-sticky W4 variant (also
+  removes the eager-reassignment heavy-restart artifact class entirely, so the storm no longer
+  restarts every in-flight heavy).
+- **Thin margin note:** W4's measured legit lag-stagnation peaks (117-123s) sit ~1.25x under the 150s
+  Class 2 bound. Fine for a non-gating suite; widen (shorter storm or dwell) if it ever flakes.
+- **Ambient probe for EVERY integration test (user idea, promising):** ProgressProbe's dwell +
+  lag-stagnation samplers are pure admin-client reads (group state, committed vs end offsets) - they
+  need only (kcu, groupId, topic), no consumption counter. A JUnit 5 extension on
+  `BrokerIntegrationTest` could run the probe in OBSERVER mode under every IT: never failing the test
+  itself, but dumping violations + peak signatures as the autopsy whenever a test fails/times out -
+  turning every generic Awaitility timeout into a diagnosed failure (zombie vs Class 2 vs clean), i.e.
+  a black-box flight recorder for the whole IT suite. Gate only in the chaos suite; observer-mode
+  everywhere else avoids flake injection. Roughly: TestWatcher + lazy start once kcu/group exists +
+  opt-out flag. Phase 3 candidate.
+
 ## CI reliability / gate issues (follow-up work)
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
