@@ -37,6 +37,7 @@ import pl.tlinkowski.unij.api.UniLists;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -82,12 +83,26 @@ public class KafkaClientUtils implements AutoCloseable {
     @Getter
     private KafkaProducer<String, String> producer;
 
+    /**
+     * volatile + nulled on {@link #close()}: the ambient probe's sampler daemon thread reads this via
+     * {@link #adminIfOpen()} before each admin read, so it must see both the open() assignment and the
+     * close() clear - otherwise a still-running sampler can call into a closed client.
+     */
     @Getter
-    private AdminClient admin;
+    private volatile AdminClient admin;
+
+    /**
+     * The admin client only while inside the {@link #open()}..{@link #close()} window, else empty.
+     * The lifecycle-safe accessor for background samplers (the ambient probe): empty means "no usable
+     * admin client right now - skip this sample". Mid-test code can keep using {@link #getAdmin()}.
+     */
+    public Optional<AdminClient> adminIfOpen() {
+        return Optional.ofNullable(admin);
+    }
 
     @Getter
     @Setter
-    private String groupId = GROUP_ID_PREFIX + nextInt();
+    private volatile String groupId = GROUP_ID_PREFIX + nextInt();
 
     /**
      * todo docs
@@ -155,8 +170,10 @@ public class KafkaClientUtils implements AutoCloseable {
             producer.close();
         if (consumer != null)
             consumer.close();
-        if (admin != null)
+        if (admin != null) {
             admin.close();
+            admin = null; // publish "closed" to sampler threads that null-check getAdmin(); open() reassigns per test
+        }
     }
 
     public enum GroupOption {

@@ -64,6 +64,12 @@ bin/performance-test.sh
   uncontended/own broker: if it then passes it was contention; if it still fails, investigate the code — do
   not mask it). Loosening deadlines to go green can hide exactly the bugs this library exists to prevent.
   When you do change a test, say in the commit/PR *which* of the two causes you established and how.
+- **Check the ambient probe autopsy first when a broker IT fails.** Every broker integration test failure
+  log includes an `=== AMBIENT PROBE AUTOPSY ===` block (grep for it) with rebalance-dwell / lag-stagnation
+  violations and per-partition frozen-committed detail — it answers exactly the "contention artifact vs
+  genuine bug" question above before you start manual diagnosis. `probe clean` means the fault is likely in
+  the test itself, not consumer-group progress. Disable via `-Dambient.probe=off` or `@NoAmbientProbe` only
+  when the probe itself is the problem (see `AmbientProbeExtension` javadoc).
 - **Unit tests**: `mvn test` / surefire plugin. Source in `src/test/java/`.
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.

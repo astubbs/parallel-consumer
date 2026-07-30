@@ -1,13 +1,14 @@
 package io.confluent.parallelconsumer.integrationTests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.integrationTests.chaostests.ProgressProbe;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.extension.AfterEachCallback;
+import org.junit.jupiter.api.extension.AfterTestExecutionCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junit.jupiter.api.extension.TestWatcher;
@@ -32,13 +33,18 @@ import java.util.stream.Collectors;
  * (one daemon thread per test, 1s group-state cadence, offsets every 5th tick) starts in
  * {@code beforeEach} - before the base class's {@code @BeforeEach} opens the clients - so
  * {@link ProgressProbe} skips samples until the admin client exists, and a group that never forms
- * simply never trips anything. It is always stopped in {@code afterEach}; {@link TestWatcher}
- * callbacks then report from the retained probe state (they run after {@code afterEach}).
+ * simply never trips anything. It is stopped in {@code afterTestExecution} - immediately after the
+ * test method, BEFORE {@code @AfterEach} methods run (JUnit invokes {@code @AfterEach} METHODS
+ * before {@code AfterEachCallback} extensions, so stopping any later would leave the sampler racing
+ * the base class's {@code @AfterEach} admin-client close). If {@code @BeforeEach} throws, the test
+ * method never executes and {@code afterTestExecution} is NOT invoked - {@code afterEach} remains as
+ * an idempotent safety-net stop for exactly that path. {@link TestWatcher} callbacks then report
+ * from the retained probe state (they run after all teardown).
  * <p>
  * Escape hatches: {@code -Dambient.probe=off} globally, {@link NoAmbientProbe} per class/method.
  */
 @Slf4j
-public class AmbientProbeExtension implements BeforeEachCallback, AfterEachCallback, TestWatcher {
+public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecutionCallback, AfterEachCallback, TestWatcher {
 
     /** Set {@code -Dambient.probe=off} to disable the flight recorder globally. */
     public static final String DISABLE_PROPERTY = "ambient.probe";
@@ -63,12 +69,12 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterEachCallb
             log.debug("[ambient-probe] disabled for {}", context.getDisplayName());
             return;
         }
-        Object instance = context.getRequiredTestInstance();
-        if (!(instance instanceof BrokerIntegrationTest)) {
-            return;
-        }
         // never let flight-recorder setup break a test - observer mode is best-effort
         try {
+            Object instance = context.getRequiredTestInstance();
+            if (!(instance instanceof BrokerIntegrationTest)) {
+                return;
+            }
             KafkaClientUtils kcu = ((BrokerIntegrationTest<?, ?>) instance).getKcu();
             if (kcu == null) {
                 return;
@@ -82,8 +88,26 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterEachCallb
         }
     }
 
+    /**
+     * Primary stop point: runs immediately after the test method, before {@code @AfterEach} methods
+     * close the admin client - so the sampler never races a closing/closed client.
+     */
+    @Override
+    public void afterTestExecution(ExtensionContext context) {
+        stopProbe(context);
+    }
+
+    /**
+     * Safety net: if {@code @BeforeEach} threw, the test method never ran and
+     * {@link #afterTestExecution} was never invoked - but {@code AfterEachCallback}s still fire.
+     * {@link ProgressProbe#stop()} is idempotent, so the common double-invocation is harmless.
+     */
     @Override
     public void afterEach(ExtensionContext context) {
+        stopProbe(context);
+    }
+
+    private static void stopProbe(ExtensionContext context) {
         ProgressProbe probe = probeOf(context);
         if (probe == null) {
             return;
@@ -117,7 +141,11 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterEachCallb
 
     // testAborted / testDisabled: TestWatcher's no-op defaults are deliberate - the observer stays silent
 
-    private static boolean isDisabled(ExtensionContext context) {
+    /**
+     * Public for unit testing only ({@code AmbientProbeExtensionTest} must live outside this package:
+     * surefire excludes every class in an {@code integrationTest*} package from the unit suite).
+     */
+    public static boolean isDisabled(ExtensionContext context) {
         if (DISABLE_VALUE.equalsIgnoreCase(System.getProperty(DISABLE_PROPERTY))) {
             return true;
         }
@@ -134,7 +162,8 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterEachCallb
         return context.getStore(NAMESPACE).get(PROBE_KEY, ProgressProbe.class);
     }
 
-    private static String buildAutopsy(ExtensionContext context, ProgressProbe probe, Throwable cause) {
+    /** Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. */
+    public static String buildAutopsy(ExtensionContext context, ProgressProbe probe, Throwable cause) {
         List<String> violations = new ArrayList<>(probe.getViolations());
         List<String> frozen = frozenPartitionLines(probe);
 
@@ -176,7 +205,8 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterEachCallb
         return cause.getClass().getSimpleName() + ": " + cause.getMessage();
     }
 
-    private static List<String> frozenPartitionLines(ProgressProbe probe) {
+    /** Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. */
+    public static List<String> frozenPartitionLines(ProgressProbe probe) {
         return probe.getPartitionLagSnapshots().values().stream()
                 .filter(snapshot -> snapshot.getLag() >= FROZEN_REPORT_MIN_LAG)
                 .filter(snapshot -> snapshot.stagnantSeconds() >= FROZEN_REPORT_MIN_STAGNATION.getSeconds())
