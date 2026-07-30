@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write  # sticky lane report comment + merge-blocking unexpected-pass threads
 
 jobs:
   # Quarantine LANE RUN: actually executes the @Quarantined tests - known-failing-on-master tests
@@ -70,6 +71,13 @@ jobs:
         env:
           QUARANTINE_SKIP_CHECKS: "1"  # the fail-fast steps above already ran them as gating checks
         run: bin/quarantined-test.sh -DforkCount=4 -DreuseForks=true
+      - name: Report lane outcomes to the PR (sticky comment + merge-blocking threads on unexpected passes)
+        if: always() && steps.any.outputs.found == 'true' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bin/quarantine-lane-report.sh
       - name: Summarize quarantine lane
         if: steps.any.outputs.found == 'true'
         run: |

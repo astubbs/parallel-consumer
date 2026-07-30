@@ -56,4 +56,12 @@ public @interface Quarantined {
      * diagnosed-but-unowned - the CI audit summary flags these so they can't fall through the cracks.
      */
     String fixedBy() default "";
+
+    /**
+     * {@code true} for tests that fail UNRELIABLY (pass most runs, fail under load/timing) - a pass
+     * proves nothing, so the lane reports it without demanding action. For deterministic failures
+     * (default {@code false}), a PASS means the fix landed: the lane posts a merge-blocking review
+     * thread on the PR demanding the annotation + registry entry be deleted (strict-xfail semantics).
+     */
+    boolean flapping() default false;
 }

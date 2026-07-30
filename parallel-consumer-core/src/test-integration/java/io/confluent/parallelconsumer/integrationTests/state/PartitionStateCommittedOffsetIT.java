@@ -443,7 +443,8 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
                     "leapfrogs it and the await can never see the expected records at any timeout - only the " +
                     "[latest] parameter ever fails.",
             tracking = "docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md (on the fix branch)",
-            fixedBy = "PR #80 (awaitWithTopicNudge: nudge-inside-await + timeout self-diagnosis; 20/20 clean)")
+            fixedBy = "PR #80 (awaitWithTopicNudge: nudge-inside-await + timeout self-diagnosis; 20/20 clean)",
+            flapping = true) // passes most runs - only the [latest] param under broker load fails; a pass proves nothing
     @SneakyThrows
     @EnumSource(value = OffsetResetStrategy.class)
     @ParameterizedTest

@@ -3,7 +3,11 @@
 The task list of tests currently in the quarantine lane: known-failing-on-master tests carrying
 `@Quarantined`, excluded from the gating CI suites (so green checks mean mergeable) but still run on EVERY PR push
 and after every merge to master (workflow_dispatch on demand) by the non-gating "Quarantined Tests"
-job - its check stays green either way; the verdict lives in its step summary.
+job. The lane posts a sticky per-test report comment on the PR (🔴 failing-as-expected / 🟡🎲
+flapper passed / 🚨 PASSED) and, when a DETERMINISTIC quarantined test passes (its fix landed), opens
+a MERGE-BLOCKING review thread demanding the annotation + entry be deleted (the repo requires
+conversation resolution). Tests that pass unreliably are marked `flapping = true` on the annotation -
+their passes are report-only.
 The seconds-fast "Quarantine Audit" job enforces the rules below on every PR. Each entry is an open
 task: get the test fixed and back into the gating lane.
 
@@ -21,6 +25,8 @@ every PR by the Quarantine Audit job, and again before every lane run):
 **Machine-parsed format** (the checks depend on it): each entry is an unchecked checkbox line, `- [ ]`,
 immediately followed by the backticked test reference (`Class.method`), and its text must contain
 `Owner: PR #NN` (omit only for diagnosed-but-unowned entries, which the checks flag as advisory).
+Unreliable tests carry `flapping = true` on the annotation itself (compile-checked, read by the lane
+reporter).
 
 Rules (full discipline in `AGENTS.md` → Testing, and the `@Quarantined` javadoc):
 
