@@ -8,6 +8,7 @@
 name: Quarantine Lane
 
 on:
+  pull_request:  # DEMO (will be reverted): one-time pre-merge validation run - schedule/dispatch cannot fire from a non-default branch
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
