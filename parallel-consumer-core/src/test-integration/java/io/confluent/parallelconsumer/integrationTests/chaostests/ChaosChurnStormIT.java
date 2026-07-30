@@ -123,7 +123,9 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
 
         ChaosConductor conductor = ChaosConductor.builder()
                 .seed(seed)
-                .joinAfterDrainBias(0.7)
+                .minTick(Duration.ofMillis(500))
+                .maxTick(Duration.ofMillis(1500))
+                .joinAfterDrainBias(0.9)
                 .maxFleetSize(MAX_FLEET)
                 .pcExecutor(pcExecutor)
                 .instanceFactory(() -> newInstance(pcConfig, totalConsumed, allConsumed))
@@ -179,9 +181,21 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
                                           AtomicLong totalConsumed, Queue<String> allConsumed) {
         return new ManagedPCInstance(config, getKcu(), key -> {
             if (isHeavyKey(key)) {
-                try {
-                    Thread.sleep(HEAVY_SLEEP.toMillis()); // in-flight dwell; interruptible on shutdown
-                } catch (InterruptedException e) {
+                // NON-interruptible dwell (sleep-until-deadline): PC's close path force-interrupts stuck
+                // workers after ~5s (awaitTermination -> shutdownNow), which would cap every drain at
+                // seconds and shrink the zombie-freeze window below what any probe can discriminate.
+                // Real-world slow work often ignores interrupts too (JDBC, native calls, CPU loops).
+                long deadline = System.currentTimeMillis() + HEAVY_SLEEP.toMillis();
+                boolean interrupted = false;
+                long left;
+                while ((left = deadline - System.currentTimeMillis()) > 0) {
+                    try {
+                        Thread.sleep(Math.min(left, 1_000));
+                    } catch (InterruptedException e) {
+                        interrupted = true; // note it, keep dwelling until the deadline
+                    }
+                }
+                if (interrupted) {
                     Thread.currentThread().interrupt();
                 }
             }

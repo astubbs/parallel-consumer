@@ -282,6 +282,31 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   check whether it's contention (raise this test's lock-acquisition timeouts / mark heavier) vs a real
   produce/commit-lock stall in the multi-instance-shared-registry path. Do NOT just bump the timeout to go green
   without establishing which (AGENTS.md rule). Not yet reproduced deterministically.
+- **CHAOS PAIN SUITE Phase 1: IMPLEMENTED + CALIBRATED (branch `experiment/chaos-pain-suite-phase1`,
+  2026-07-30).** Seeded ChaosConductor (replayable schedules, timestamped timeline, join-after-drain bias)
+  + ProgressProbe SLOs (progress watermark, rebalance-dwell ZOMBIE probe, drain bound, correctness ledger)
+  + W1 churn storm (12-16 PCs / 80 partitions / 100k msgs with a NON-interruptible 90s heavy tail - PC's
+  close force-interrupts stragglers at ~11s, so interruptible sleeps cannot stretch drains into a
+  discriminable window). Run: `-Dincluded.groups=chaos [-Dchaos.seed=N]`; on-demand highcpu workflow
+  `chaos-pain.yml`. **Calibration (test-the-test): defect arm 3/3 RED via ZOMBIE_MEMBER probe (dwell
+  15.6-15.9s), fixed arm 3/3 GREEN (4.5-8.9s), bound 15s set from same-seed A/B measurement** - the
+  planted zombie-drain bug is caught by name. Suite + `ManagedPCInstance` verified to compile on plain
+  master → portable-detector branch is feasible (next: independent branch off master, temporarily
+  mergeable into any PR to expose fix-absent bugs). Ops nugget from calibration Q&A: PC's always-polling
+  loop means users can set `max.poll.interval.ms` far lower than raw-consumer users → faster coordinator
+  eviction of zombie members as defence-in-depth (Phase 2 experiment candidate).
+- **Chaos suite follow-up: drive duplicates→0 for GRACEFUL paths (Phase 2 candidate).** Measured baseline
+  (W1 churn storm): duplicates ≈500/100k under churn — near the at-least-once floor (the
+  `DrainingMemberRebalanceIT` ledger proved graceful-drain redelivery = exactly the parked in-flight tail).
+  Duplicate sources, by lever value: (1) hard stops = semantically irreducible at-least-once redelivery —
+  assert zero only where zero is the contract; (2) eager assignor revokes EVERYONE's in-flight on every
+  join — **cooperative-sticky W1 variant is the biggest cheap win**; (3) 1s async commit cadence → **sync
+  final commit on drain/revoke (+retry)**; (4) commit-on-revoke reliability (`CommitFailedException`
+  swallowed during rebalances) — **fold into the #29 rebase acceptance criteria** (its tryLock can skip
+  revoke commits); (5) EoS (`PERIODIC_TRANSACTIONAL_PRODUCER`) W1 variant as the true-zero arm. Sharpest
+  suite improvement: **per-cause ledger attribution** — correlate duplicate deliveries against the
+  conductor's timestamped disturbance windows, then assert zero for undisturbed drains while allowing
+  hard-stop redelivery; one global allowance can't catch "drains quietly stopped committing".
 - **LOAD-TIGHTNESS FLAKE FAMILY (failure group; roster + rates from the 2026-07-30 20-run fork16
   acceptance hunt on PR #80's branch).** Shared signature: *fast-failing* assertion/timeout under heavy
   contention, passes isolated/on rerun. Diagnosis rule (from the #68 lesson): classify before touching —
