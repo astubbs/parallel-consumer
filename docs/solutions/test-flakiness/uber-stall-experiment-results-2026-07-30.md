@@ -135,3 +135,16 @@ drain.
 - Chaos phase was stopped deliberately at 4 pairs (user call: axis could not discriminate).
 - fork16 binary verdicts were unusable; the per-test decomposition above is the salvage.
 - `ManagedPCInstanceLifecycleTest` flakiness under fork16 is #29's own test under load - not triaged here.
+
+## Addendum (2026-07-30, post nudge-race fix): full-stack composition check
+
+After the nudge-race harness fix landed on PR #80, its full tip (drain fix + nudge fix + all guards and
+diagnostics) was merged into `experiment/stall-uber-fix` (ref updated to `c72c923c`): **zero conflicts**
+(including `BrokerIntegrationTest`, which both #29 and #80 modify), and **all four guards green** on the
+combined composition - `BrokerPollSystemDrainTest`, `PartitionStateCommittedOffsetIT` 7/7,
+`LatestResetTailNudgeIT`, `DrainingMemberRebalanceIT` (ledger byte-identical to the standalone branch:
+A=1100, B=200, duplicates=100 = the parked tail). Conclusion: the PR #80 fix stack is composition-safe
+with #29+#31; the deterministic #29 regressions (`CloseAndOpenOffsetTest`, `RebalanceEoSDeadlockTest`)
+remain, unchanged, as the #29 rebase acceptance criteria. The 20-run acceptance hunt on PR #80's own
+branch separately measured committedOffsetRemoved 0/20, 15/20 fully clean, zero stall-class failures
+(catalogued in inflight's load-tightness flake family).
