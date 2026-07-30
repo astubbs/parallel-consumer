@@ -4,18 +4,11 @@ package io.confluent.parallelconsumer;
  */
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.DisabledOnOs;
-import org.junit.jupiter.api.condition.OS;
-import org.junit.jupiter.api.io.TempDir;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.concurrent.TimeUnit;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -27,11 +20,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * exit codes + messages for the consistent, missing-entry, and stale-entry cases, so a refactor of the
  * script (or of the registry's machine-parsed format) that breaks detection fails the gating unit suite.
  */
-@DisabledOnOs(OS.WINDOWS) // bash script under test; CI and dev machines are POSIX
-class QuarantineRegistryScriptTest {
-
-    @TempDir
-    Path fixture;
+class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
 
     @Test
     void consistentRegistryPasses() throws Exception {
@@ -165,42 +154,7 @@ class QuarantineRegistryScriptTest {
         Files.write(src.resolve(className + ".java"), body.getBytes(StandardCharsets.UTF_8));
     }
 
-    private void writeRegistry(String entries) throws IOException {
-        Path docs = fixture.resolve("docs");
-        Files.createDirectories(docs);
-        String content = "# Quarantined tests - live registry\n\n## Currently quarantined\n\n" + entries;
-        Files.write(docs.resolve("QUARANTINED_TESTS.md"), content.getBytes(StandardCharsets.UTF_8));
-    }
-
     private Result runCheck() throws IOException, InterruptedException {
-        Path script = RepoRoot.find().resolve("bin/check-quarantine-registry.sh");
-        ProcessBuilder pb = new ProcessBuilder("bash", script.toString());
-        pb.environment().put("QUARANTINE_CHECK_ROOT", fixture.toString());
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
-        String output = readFully(process.getInputStream());
-        assertWithMessage("script under test hung - output so far: %s", output)
-                .that(process.waitFor(30, TimeUnit.SECONDS)).isTrue();
-        return new Result(process.exitValue(), output);
-    }
-
-    private static String readFully(InputStream in) throws IOException {
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        byte[] chunk = new byte[4096];
-        int n;
-        while ((n = in.read(chunk)) != -1) {
-            buffer.write(chunk, 0, n);
-        }
-        return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
-    }
-
-    private static final class Result {
-        final int exitCode;
-        final String output;
-
-        Result(int exitCode, String output) {
-            this.exitCode = exitCode;
-            this.output = output;
-        }
+        return runScript("bin/check-quarantine-registry.sh");
     }
 }
