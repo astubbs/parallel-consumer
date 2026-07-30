@@ -1,0 +1,74 @@
+# Chaos Pain Suite - on-demand stall hunting on the self-hosted high-CPU runner.
+#
+# Runs the @Tag("chaos") suite (see integrationTests.chaostests + the design doc under docs/plans/):
+# seeded chaos schedules against a PC fleet with SLO probes (progress watermark, rebalance-dwell zombie
+# probe, drain bound) and a correctness ledger. NEVER PR-gating: workflow_dispatch only. Failures are
+# investigation food - the seed + chaos timeline in the logs replay the schedule, and reports upload as
+# artifacts.
+#
+# SECURITY (public repo + self-hosted runner): workflow_dispatch only - it can only be triggered by users
+# with write access, so no untrusted fork code can reach the self-hosted machine through this workflow.
+# See docs/SELF_HOSTED_RUNNER.md and pr-highcpu-fast-feedback.yml's header for the fork-PR backstop story.
+
+name: chaos-pain
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Chaos seed (empty = random, logged in the run for replay)'
+        required: false
+        default: ''
+      reps:
+        description: 'How many times to run the suite'
+        required: false
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chaos-pain-${{ github.ref }}
+  cancel-in-progress: false   # chaos runs are measurements - queue, never kill
+
+jobs:
+  chaos:
+    name: "Chaos Pain Suite (on-demand)"
+    runs-on: [self-hosted, highcpu]
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: ''
+
+      - name: Show environment
+        run: |
+          java -version
+          echo "cpus: $(nproc)"
+          docker --version
+
+      - name: Chaos runs
+        run: |
+          SEED_ARG=""
+          if [ -n "${{ inputs.seed }}" ]; then SEED_ARG="-Dchaos.seed=${{ inputs.seed }}"; fi
+          for i in $(seq 1 ${{ inputs.reps }}); do
+            echo "=== chaos rep $i/${{ inputs.reps }} ==="
+            time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
+              -DskipUTs=true -Dlicense.skip \
+              -Dincluded.groups=chaos -Dexcluded.groups= \
+              $SEED_ARG
+          done
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chaos-pain-reports-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 30

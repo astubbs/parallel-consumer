@@ -81,11 +81,13 @@
         <skipUTs>${skipTests}</skipUTs>
 
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
-             -Dgroups=performance         (run only performance tests)
-             -Dexcluded.groups=           (run everything including performance)
-             -Dexcluded.groups=transactions,performance  (skip multiple groups) -->
+             -Dincluded.groups=performance    (run only performance tests)
+             -Dincluded.groups=chaos          (run only the Chaos Pain Suite - see integrationTests.chaostests)
+             -Dexcluded.groups=               (run everything incl. performance + chaos)
+             -Dexcluded.groups=transactions,performance,chaos  (skip multiple groups)
+             NB overrides REPLACE the default list - include both performance and chaos when excluding. -->
         <included.groups></included.groups>
-        <excluded.groups>performance</excluded.groups>
+        <excluded.groups>performance,chaos</excluded.groups>
 
         <!-- version numbers -->
         <!-- plugins -->
