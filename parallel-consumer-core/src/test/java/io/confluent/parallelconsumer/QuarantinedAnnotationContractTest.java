@@ -77,26 +77,32 @@ class QuarantinedAnnotationContractTest {
     }
 
     @Test
-    void ciWorkflowRunsTheQuarantineLaneAndEnforcesTheRegistry() throws IOException {
-        String workflow = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
-        assertThat(workflow).contains("bin/quarantined-test.sh");
-        assertThat(workflow).contains("bin/check-quarantine-registry.sh");
-        assertThat(workflow).contains("bin/check-quarantine-owners.sh");
+    void perPrWorkflowRunsTheAuditAndTheNightlyWorkflowRunsTheLane() throws IOException {
+        String maven = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
+        assertWithMessage("per-PR audit must enforce the registry")
+                .that(maven).contains("bin/check-quarantine-registry.sh");
+        assertThat(maven).contains("bin/check-quarantine-owners.sh");
+        assertWithMessage("the lane RUN must NOT be in maven.yml - it would list as a skipped check " +
+                "on every PR; it lives in its own nightly workflow")
+                .that(maven).doesNotContain("bin/quarantined-test.sh");
+        String nightly = read(REPO_ROOT.resolve(".github/workflows/quarantine-nightly.yml"));
+        assertThat(nightly).contains("bin/quarantined-test.sh");
+        assertWithMessage("nightly lane fail-fasts on rule violations before spending a test run")
+                .that(nightly).contains("bin/check-quarantine-registry.sh");
+        assertThat(nightly).contains("bin/check-quarantine-owners.sh");
     }
 
     /**
-     * The nightly lane job's if-condition reacts to schedule + workflow_dispatch - both triggers must
-     * actually be DECLARED in the workflow's {@code on:} block, or the job silently becomes
-     * unreachable that way (a real bug this test was added after: the dispatch trigger was missing, so
-     * "run it manually" was impossible while the if-condition claimed otherwise).
+     * The nightly workflow must DECLARE the triggers it exists for - a real bug this test guards: the
+     * dispatch trigger was once missing while docs claimed "run it manually", making that impossible.
      */
     @Test
-    void ciWorkflowDeclaresTheTriggersTheLaneJobReactsTo() throws IOException {
-        String workflow = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
+    void nightlyWorkflowDeclaresScheduleAndDispatchTriggers() throws IOException {
+        String nightly = read(REPO_ROOT.resolve(".github/workflows/quarantine-nightly.yml"));
         assertWithMessage("nightly lane needs a declared schedule trigger")
-                .that(workflow).contains("schedule:");
+                .that(nightly).contains("schedule:");
         assertWithMessage("manual lane runs need a declared workflow_dispatch trigger")
-                .that(workflow).contains("workflow_dispatch:");
+                .that(nightly).contains("workflow_dispatch:");
     }
 
     @Test

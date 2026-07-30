@@ -1,0 +1,92 @@
+# Quarantine lane NIGHTLY run - lives in its own workflow (not maven.yml) so PR runs never list it,
+# not even as a skipped entry: the per-PR enforcement is maven.yml's seconds-fast "Quarantine Audit"
+# job; THIS workflow actually executes the @Quarantined tests against master (quarantine is
+# master-state) to keep their signal alive - we see when they start passing (fixes landed) or worsen.
+# Red inside the run step is EXPECTED while owning fix PRs are open; only the fail-fast rule checks
+# make the job itself red. Manual runs: workflow_dispatch.
+
+name: Quarantine Lane
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Quarantine LANE RUN: actually executes the @Quarantined tests - known-failing-on-master tests
+  # excluded from the gating suites - so we still see when they start passing (their fixes landed),
+  # when they get worse, and their signal stays alive. Runs NIGHTLY against master (quarantine is
+  # master-state; running per-PR added ~10min of runner noise for a signal that only changes when
+  # master does) plus on-demand via workflow_dispatch. Red inside the run step is EXPECTED while the
+  # owning fix PR is open; the job itself never goes red for test failures (step-level
+  # continue-on-error) - only audit-class errors would, and those live in quarantine-audit.
+  test-quarantined:
+    name: "Quarantined Tests (non-gating)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      # Fail fast on rule violations BEFORE spending a test run - same checks as quarantine-audit,
+      # here validating master's state.
+      - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
+        run: bin/check-quarantine-registry.sh
+      - name: Verify owner claims
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bin/check-quarantine-owners.sh
+      - name: Check the lane is not empty
+        id: any
+        run: |
+          if grep -rqE --include='*.java' --exclude-dir=target '^[[:space:]]*@Quarantined\(' .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No @Quarantined tests - lane is empty, nothing to run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-java@v5
+        if: steps.any.outputs.found == 'true'
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        if: steps.any.outputs.found == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+      - name: Run quarantined tests (red step here is expected, not a gate)
+        id: run
+        if: steps.any.outputs.found == 'true'
+        continue-on-error: true
+        run: bin/quarantined-test.sh -DforkCount=4 -DreuseForks=true
+      - name: Summarize quarantine lane
+        if: steps.any.outputs.found == 'true'
+        run: |
+          {
+            echo "## Quarantine lane"
+            if [ "${{ steps.run.outcome }}" = "success" ]; then
+              echo "✅ **All quarantined tests PASSED** - their fixes may have landed; check whether the owning PRs have merged and the annotations can be deleted."
+            else
+              echo "🔴 Quarantined tests still failing - expected while their fix PRs are open."
+            fi
+            echo ""
+            echo "### Audit - every entry needs a diagnosis + an owning fix PR (empty fixedBy = unowned)"
+            echo '```'
+            grep -rnE --include='*.java' --exclude-dir=target -A 4 '^[[:space:]]*@Quarantined\(' . || true
+            echo '```'
+            echo ""
+            echo "### Per-test results"
+            echo '```'
+            reports=$(find . -path '*/surefire-reports/*.txt' -o -path '*/failsafe-reports/*.txt')
+            if [ -n "$reports" ]; then
+              grep -h '<<< FAILURE\|<<< ERROR\|Tests run' $reports | sort -u | head -50
+            else
+              echo "(no reports found)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
