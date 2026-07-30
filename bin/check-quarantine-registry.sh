@@ -14,11 +14,13 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# QUARANTINE_CHECK_ROOT overrides the scan root - used by QuarantineRegistryScriptTest to exercise
+# this script against temp fixtures; defaults to the repo root.
+cd "${QUARANTINE_CHECK_ROOT:-$(dirname "$0")/..}"
 
 REGISTRY=docs/QUARANTINED_TESTS.md
 
-code_classes=$(grep -rl --include='*.java' --exclude-dir=target '@Quarantined(' . 2>/dev/null \
+code_classes=$(grep -rlE --include='*.java' --exclude-dir=target '^[[:space:]]*@Quarantined\(' . 2>/dev/null \
   | xargs -n1 basename 2>/dev/null | sed 's/\.java$//' | sort -u || true)
 
 registry_classes=$(grep -E '^- \[ \] `' "$REGISTRY" 2>/dev/null \

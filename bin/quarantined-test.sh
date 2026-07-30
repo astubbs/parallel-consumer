@@ -25,7 +25,7 @@ else
   echo "(gh unavailable/unauthenticated - owner claims not verified locally; CI verifies them)"
 fi
 echo "=== Quarantine audit (every entry must be diagnosed; empty fixedBy = unowned, needs an owner) ==="
-grep -rn --include='*.java' --exclude-dir=target -A 4 '@Quarantined(' . || echo "(no @Quarantined tests - this lane is empty)"
+grep -rnE --include='*.java' --exclude-dir=target -A 4 '^[[:space:]]*@Quarantined\(' . || echo "(no @Quarantined tests - this lane is empty)"
 echo "==================================================================================================="
 
 ./mvnw --batch-mode \

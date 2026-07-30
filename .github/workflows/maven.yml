@@ -144,7 +144,7 @@ jobs:
       - name: Check the lane is not empty
         id: any
         run: |
-          if grep -rq --include='*.java' '@Quarantined(' .; then
+          if grep -rqE --include='*.java' --exclude-dir=target '^[[:space:]]*@Quarantined\(' .; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -181,7 +181,7 @@ jobs:
             echo ""
             echo "### Audit - every entry needs a diagnosis + an owning fix PR (empty fixedBy = unowned)"
             echo '```'
-            grep -rn --include='*.java' --exclude-dir=target -A 4 '@Quarantined(' . || true
+            grep -rnE --include='*.java' --exclude-dir=target -A 4 '^[[:space:]]*@Quarantined\(' . || true
             echo '```'
             echo ""
             echo "### Per-test results"

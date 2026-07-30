@@ -193,6 +193,18 @@ directions), so it acts as the task list of tests to return to the gating lane. 
 `PartitionStateCommittedOffsetIT.committedOffsetRemoved` (the `[latest]` nudge race), **owner PR #80**,
 which must delete the annotation + registry entry once it has master merged in.
 
+## Parked: extract the quarantine lane as its own FOSS project?
+
+The `@Quarantined` lane (annotation + enforced registry + owner-claim verification + non-gating CI job
++ release blocking + self-tests) is generic - nothing in it is parallel-consumer-specific. Evaluate
+whether an equivalent FOSS tool already exists before extracting; known adjacent art (mostly commercial
+SaaS, none quite this shape): Trunk.io flaky-test quarantining, BuildPulse, Datadog Test Optimization's
+quarantine feature, Develocity (Gradle Enterprise) flaky management, JUnit Pioneer's `@DisabledUntil`
+(date-based, no ownership loop). The differentiator here: the CLOSED LOOP is enforced in CI (registry
+can't drift, owner PR must exist/stay open, merged-owner-without-re-enable turns red, releases blocked)
+rather than relying on humans or a SaaS dashboard. Could extract as annotation + scripts + a reusable
+GitHub Action. Revisit after the current PR queue drains.
+
 ## Parked: user-facing upstream issue mirroring
 
 We have strong *internal* upstream tracking (`upstream-map.yaml`, this ledger, `docs/solutions/`) but
