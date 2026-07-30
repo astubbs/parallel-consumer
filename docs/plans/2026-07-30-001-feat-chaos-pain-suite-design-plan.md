@@ -135,7 +135,7 @@ Four new pieces:
 We possess something rare: **a reproducible, understood stall** (the PR #80 zombie-drain defect). Before
 trusting the suite, run its W1/W5 scenarios against the *pre-fix* commit (`2eca71fa`) - the suite MUST go
 red with a bundle that names the drain window. Same for W4 once #29's counter-drift reproducer exists.
-A chaos suite that has never caught a known-planted bug is decoration; this one starts life calibrated
+A chaos suite that has never caught a known real bug (pre-fix composition) is decoration; this one starts life calibrated
 against two. (Repeatable via the uber-arm technique from this experiment: arms differing by one fix.)
 
 ## Phased delivery (skateboard first)
