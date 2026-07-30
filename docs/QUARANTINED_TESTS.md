@@ -1,9 +1,9 @@
 # Quarantined tests - live registry
 
 The task list of tests currently in the quarantine lane: known-failing-on-master tests carrying
-`@Quarantined`, excluded from the gating CI suites (so green checks mean mergeable) but still run against master
-AFTER EVERY MERGE (push to master; nightly cron as backstop; workflow_dispatch on demand) by the
-non-gating "Quarantined Tests" job.
+`@Quarantined`, excluded from the gating CI suites (so green checks mean mergeable) but still run on EVERY PR push
+and after every merge to master (workflow_dispatch on demand) by the non-gating "Quarantined Tests"
+job - its check stays green either way; the verdict lives in its step summary.
 The seconds-fast "Quarantine Audit" job enforces the rules below on every PR. Each entry is an open
 task: get the test fixed and back into the gating lane.
 
@@ -38,7 +38,7 @@ Rules (full discipline in `AGENTS.md` → Testing, and the `@Quarantined` javado
 
 - Fast, no-Docker consistency check while editing: `bin/check-quarantine-registry.sh` (seconds).
 - Owner-claim check needs an authenticated `gh` (`gh auth status`): `bin/check-quarantine-owners.sh`.
-- Run the whole lane manually: `gh workflow run quarantine-nightly.yml -R astubbs/parallel-consumer`.
+- Run the whole lane manually: `gh workflow run quarantine-lane.yml -R astubbs/parallel-consumer`.
 
 ## Currently quarantined
 

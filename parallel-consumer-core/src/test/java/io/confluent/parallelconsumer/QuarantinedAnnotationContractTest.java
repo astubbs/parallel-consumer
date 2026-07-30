@@ -107,10 +107,10 @@ class QuarantinedAnnotationContractTest {
         assertWithMessage("per-PR audit must enforce the registry")
                 .that(maven).contains("bin/check-quarantine-registry.sh");
         assertThat(maven).contains("bin/check-quarantine-owners.sh");
-        assertWithMessage("the lane RUN must NOT be in maven.yml - it would list as a skipped check " +
-                "on every PR; it lives in its own nightly workflow")
+        assertWithMessage("the lane RUN must NOT be in maven.yml - it lives in its own workflow " +
+                "with its own trigger set")
                 .that(maven).doesNotContain("bin/quarantined-test.sh");
-        String nightly = read(REPO_ROOT.resolve(".github/workflows/quarantine-nightly.yml"));
+        String nightly = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
         assertThat(nightly).contains("bin/quarantined-test.sh");
         assertWithMessage("nightly lane fail-fasts on rule violations before spending a test run")
                 .that(nightly).contains("bin/check-quarantine-registry.sh");
@@ -118,16 +118,18 @@ class QuarantinedAnnotationContractTest {
     }
 
     /**
-     * The nightly workflow must DECLARE the triggers it exists for - a real bug this test guards: the
+     * The lane workflow must DECLARE the triggers it exists for - a real bug this test guards: the
      * dispatch trigger was once missing while docs claimed "run it manually", making that impossible.
      */
     @Test
-    void nightlyWorkflowDeclaresScheduleAndDispatchTriggers() throws IOException {
-        String nightly = read(REPO_ROOT.resolve(".github/workflows/quarantine-nightly.yml"));
-        assertWithMessage("nightly lane needs a declared schedule trigger")
-                .that(nightly).contains("schedule:");
+    void laneWorkflowDeclaresItsTriggers() throws IOException {
+        String lane = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
+        assertWithMessage("lane runs on every PR push (pre-merge attribution)")
+                .that(lane).contains("pull_request:");
+        assertWithMessage("lane must run after every merge to master (canonical master-state record)")
+                .that(lane).contains("push:");
         assertWithMessage("manual lane runs need a declared workflow_dispatch trigger")
-                .that(nightly).contains("workflow_dispatch:");
+                .that(lane).contains("workflow_dispatch:");
     }
 
     @Test
