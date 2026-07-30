@@ -212,7 +212,10 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
     run's own logs - nothing logs actual `onPartitionsRevoked` events (conductor timeline records only
     its own STOP/RESTART/JOIN actions). Add a per-instance revoke counter in `ManagedPCInstance`'s
     rebalance listener and fold `revokeEvents=` into the driver's "Run summary" line. Also feeds the
-    parked duplicates-reduction measurement (sticky should cut rebalance duplicates).
+    parked duplicates-reduction measurement (sticky should cut rebalance duplicates). **Once the
+    counts are logged, revisit the ledger duplicate allowance (`perDisturbanceAllowance` 5000) under
+    cooperative** - the W4-coop plan deferred it; with measured revoke counts the tightening becomes
+    evidence-based instead of a guess.
   - **Hoist shared driver boilerplate into `ChaosScenarioBase`:** the fleet-bootstrap and final
     probe/ledger-assertion blocks are duplicated between `AbstractRevokeUnderWorkScenario` and W1's
     `ChaosChurnStormIT` (relocated pre-existing clones, flagged by the CI duplication reports on
