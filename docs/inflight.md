@@ -150,6 +150,17 @@ and Confluent `-ce`/`-ccs` Kafka builds — without the `-ce` filter, kafka "lat
   to compile against 1.17. Both are pinned with in-pom comments. **To upgrade:** migrate the `CoreApp`
   imports + registry construction, then bump the whole micrometer family together (keep the two aligned).
 
+**jackson-databind — hand-managed, module-local test pin (Dependabot told to ignore):**
+- **jackson-databind** held at `2.17.2` in `parallel-consumer-example-metrics` (test scope) — parses the
+  Prometheus metadata JSON in that module's integration test. Kept as a module-local, explicitly-versioned
+  test dep **on purpose**: pinning it globally via root `dependencyManagement` forces WireMock
+  (`parallel-consumer-vertx`, `wiremock-jre8`) onto an incompatible Jackson and breaks `VertxTest` (HTTP
+  500), so it stays scoped to this one module. Dependabot proposed `2.17.2 → 2.18.9` (PR #76); we told it
+  `@dependabot ignore this dependency` because these bumps belong in the curated `versions-maven-plugin`
+  sweep with an `example-metrics` integration-test run, not standalone PRs. **To upgrade:** bump the pin in
+  the next sweep and confirm the example-metrics integration test is green (the module-local scope means it
+  cannot affect `VertxTest`). Test-scoped, so it never reaches the published artifact classpath.
+
 **Build plugins — only pre-releases available, held by the risk policy:**
 - Maven-4-era plugins offered only as betas/milestones: `maven-clean/deploy/install/jar/resources/source/
   compiler` `4.0.0-beta-*`; `maven-surefire`/`maven-failsafe` `3.6.0-M1`; `maven-site-plugin` `4.0.0-M16`
