@@ -133,7 +133,7 @@ commit; see `docs/plans/2026-07-28-release-pipeline-hardening.md`).
    `0.6.0.0`) and next dev version (e.g. `0.6.0.1-SNAPSHOT`). Tick **Dry run** first to rehearse with no
    commits/tags/deploy.
 2. It runs `release:prepare` (rewrites poms, makes the two release commits, tags `v<version>`, **pushes
-   to `master`** via `RELEASE_PAT`), refuses if master's latest *Build and Test* isn't green, then checks
+   to `master`** via `RELEASE_PAT`), refuses if master's latest *CI* workflow run isn't green, then checks
    out that tag and deploys it to Maven Central, then cuts a GitHub release. `master` ends on the next
    `-SNAPSHOT`.
 

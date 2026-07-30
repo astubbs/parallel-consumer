@@ -20,7 +20,7 @@ change. Release = strip `-SNAPSHOT` → `0.6.0.0` and merge to `master`. Release
 Antony separately (not in this doc).
 
 **Release mechanics:** no `maven-release-plugin`; the pom `<version>` is the single source of truth.
-Merge to `master` → `.github/workflows/publish.yml` runs after "Build and Test" succeeds and deploys via
+Merge to `master` → `.github/workflows/publish.yml` runs after the "CI" workflow succeeds and deploys via
 the `maven-central` profile (`central-publishing-maven-plugin`, GPG signed). A non-`-SNAPSHOT` version
 also tags `v<version>` and cuts a GitHub release. See `AGENTS.md` "Releasing".
 
@@ -418,7 +418,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
 - **`Mutation Testing (PIT)` cascades from any flaky test.** PIT requires a fully green suite, so a
   single flaky/timeout test aborts the whole run ("1 test did not pass without mutation"). **Fix:**
   depends on the Integration flake fix; consider not gating PIT on the integration suite. Advisory.
-- **Path-filter inconsistency.** `Build and Test` (and `SpotBugs Baseline`) are *skipped* on docs-only
+- **Path-filter inconsistency.** the `CI` workflow (and `static: spotbugs baseline`) are *skipped* on docs-only
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.

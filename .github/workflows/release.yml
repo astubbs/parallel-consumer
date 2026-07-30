@@ -63,10 +63,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHA=$(git rev-parse HEAD)
-          CONCL=$(gh run list --workflow "Build and Test" --branch master --limit 15 \
+          CONCL=$(gh run list --workflow "CI" --branch master --limit 15 \
             --json headSha,conclusion --jq "[.[] | select(.headSha==\"$SHA\")][0].conclusion")
           if [ "$CONCL" != "success" ]; then
-            echo "::error::Latest 'Build and Test' for master $SHA is '${CONCL:-not found}', not success. Refusing to release."
+            echo "::error::Latest 'CI' workflow run for master $SHA is '${CONCL:-not found}', not success. Refusing to release."
             exit 1
           fi
 

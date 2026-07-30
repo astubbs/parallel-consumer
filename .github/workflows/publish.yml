@@ -1,4 +1,4 @@
-# Publishes a SNAPSHOT to Maven Central after "Build and Test" passes on master.
+# Publishes a SNAPSHOT to Maven Central after the "CI" workflow passes on master.
 #
 # master is ALWAYS a -SNAPSHOT. Real releases are cut by release.yml (tag-as-truth), NOT here.
 # This workflow only ever publishes snapshots — it does not detect, tag, or release anything, and
@@ -12,7 +12,7 @@ name: Publish snapshot to Maven Central
 
 on:
   workflow_run:
-    workflows: ["Build and Test"]
+    workflows: ["CI"]
     branches: [ master ]
     types: [completed]
   workflow_dispatch:
