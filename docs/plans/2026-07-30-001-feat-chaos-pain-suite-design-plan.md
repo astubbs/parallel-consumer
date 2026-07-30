@@ -16,7 +16,7 @@ lives in a different mechanism (drain-window zombie; fresh-PC first-poll starvat
 assignment; `numberRecordsOutForProcessing` drift; stale containers; CME close races). Today these are
 caught *accidentally*, by ordinary integration tests timing out when a loaded box happens to squeeze the
 right path. This design makes that pressure **deliberate, seeded, scaled, and self-diagnosing**, sized for
-the grumpy runner (Proxmox LXC, 24c/48t, large RAM) rather than the 2-core GitHub gate.
+the highcpu runner (Proxmox LXC, 24c/48t, large RAM) rather than the 2-core GitHub gate.
 
 Design goal in one line: **turn "the suite sometimes reddens under load" into "the suite hunts stalls on
 purpose and hands you the autopsy."**
@@ -28,7 +28,7 @@ Each scenario is aimed at a *specific* mechanism surfaced by the investigation, 
 | # | Identified weakness (evidence) | Targeted pain scenario |
 |---|---|---|
 | W1 | **Drain-window zombie** - closing PC spun + was rebalance-unresponsive while holding partitions (fixed in PR #80, guarded by `BrokerPollSystemDrainTest`). NB: *holding* partitions during drain is correct - it is what lets the drainer finish + commit (no duplicates); the defect was unresponsiveness | **Churn storm**: high-frequency `stop(DRAIN)`/restart cycles across a large fleet; assert every drain completes within `drainTimeout + margin`, group rebalances are never blocked on a draining member, and duplicates stay bounded to the not-yet-committed tail |
-| W2 | **Fresh-PC first-poll starvation** (`committedOffsetRemoved` 0-polls-in-120s; still red on grumpy post-fix - mechanism untraced) | **Cold-start stampede**: N brand-new PCs + M fresh topics bootstrapping simultaneously against brokers under induced I/O+CPU pressure; SLO on p99 time-to-first-record |
+| W2 | **Fresh-PC first-poll starvation** (`committedOffsetRemoved` 0-polls-in-120s; still red on the highcpu runner post-fix - mechanism untraced) | **Cold-start stampede**: N brand-new PCs + M fresh topics bootstrapping simultaneously against brokers under induced I/O+CPU pressure; SLO on p99 time-to-first-record |
 | W3 | **Throttle-pause stalls** (#29's `pausedForThrottling`-on-assignment fix; `isSufficientlyLoaded` gate) | **Load oscillation**: square-wave produce rates (burst→idle) interleaved with rebalances, forcing pause/resume cycling; assert poller never stays paused while buffers are empty (our `WorkManager.isSufficientlyLoaded` DEBUG is the probe) |
 | W4 | **`numberRecordsOutForProcessing` drift** (#857 doc: counter inflation → `requesting: 0` forever) | **Revoke-under-work**: rebalance storms while user functions hold in-flight work with heavy-tailed latencies (some > session timeout); assert work-request `delta` recovers after every revoke (our `ShardManager` under-served detector is the probe) |
 | W5 | **Rebalance-during-drain composition** (revoke lands on drainer's poll thread → #29's CME/commit-lock territory) | **Timed collision**: chaos conductor deliberately triggers member joins *while* another member is mid-drain (now possible: post-fix drainers participate in rebalances) |
@@ -75,7 +75,7 @@ Four new pieces:
 
 ## Scale matrix (exploiting 24c/48t + big RAM)
 
-| Dimension | Today (#29 chaos test) | Pain suite (grumpy) |
+| Dimension | Today (#29 chaos test) | Pain suite (highcpu runner) |
 |---|---|---|
 | PC instances | 12 | 32-96 (sweep) |
 | Partitions | 80 | 512-1024 |
@@ -88,7 +88,7 @@ Four new pieces:
 
 - New package `...integrationTests.chaostests`, `@Tag("chaos")` - excluded from all default/PR suites
   (like `performance`).
-- **grumpy `workflow_dispatch` workflow** (`chaos-pain.yml`): inputs = scenario, seed, scale-preset,
+- **highcpu runner `workflow_dispatch` workflow** (`chaos-pain.yml`): inputs = scenario, seed, scale-preset,
   duration; plus a nightly schedule running the full matrix at default scale. Never PR-gating; failures
   file the DiagnosticBundle as an artifact + a summary comment.
 - Local dev mode: same suite, `scale=laptop` preset (the fork16-equivalent pressure via
@@ -106,7 +106,7 @@ against two. (Repeatable via the uber-arm technique from this experiment: arms d
 
 - **Phase 1 (skateboard)**: seeded ChaosConductor + ProgressProbe's zombie-member assertion bolted onto
   the *existing* `MultiInstanceRebalanceTest` harness, `@Tag("chaos")`, one `workflow_dispatch` job on
-  grumpy at today's scale. No new chaos actions beyond stopDrain/stopNoDrain/join/leave. Calibrate
+  highcpu runner at today's scale. No new chaos actions beyond stopDrain/stopNoDrain/join/leave. Calibrate
   against `2eca71fa` (W1).
 - **Phase 2**: DiagnosticBundle (runtime DEBUG flip + jstack + admin dump) and scale presets; W2
   cold-start stampede + W4 revoke-under-work scenarios.
@@ -126,6 +126,6 @@ against two. (Repeatable via the uber-arm technique from this experiment: arms d
 | Risk | Mitigation |
 |---|---|
 | Suite is flaky-by-design (chaos ≠ deterministic assertions) | Assert SLOs and invariants (zombie-member, drain-bound, at-least-once), never exact timings; seeded schedules for replay; failures ship bundles not just stack traces |
-| Grumpy monopolised / thermal throttling skews runs | Nightly schedule off-hours; `workflow_dispatch` concurrency group of 1; ResourcePressurizer makes pressure explicit rather than load-dependent |
+| highcpu runner monopolised / thermal throttling skews runs | Nightly schedule off-hours; `workflow_dispatch` concurrency group of 1; ResourcePressurizer makes pressure explicit rather than load-dependent |
 | Becomes a second flaky-CI source | Never PR-gating; red = investigation food with autopsy attached, tracked in inflight like #857 findings |
 | Big scale masks signal in noise | Every scenario also runs at small scale first (bisectable); one weakness per scenario, not one mega-scenario |
