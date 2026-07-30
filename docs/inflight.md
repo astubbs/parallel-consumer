@@ -182,8 +182,10 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
 ## Chaos Pain Suite - Phase 2+ roster (branch feats/chaos-w4-revoke-under-work)
 
 - **Class 2 RED hunt (open):** W4 is calibrated artifact-free but a true unbounded Class 2 stall did
-  not reproduce on master (seed 7612284256787897904) - the open #857 root-cause stall is
-  probabilistic. Levers: defect-arm seed sweep (cheap, first); cooperative-sticky W4 variant (also
+  not reproduce on master - the open #857 root-cause stall is probabilistic. **Seed sweep DONE
+  (2026-07-30): 9 seeds total (calibration seed + 8-seed sweep), 0 Class 2 hits**; stagnation peaks
+  tightly banded 95-112s (all legit-window), dwell peaks 33-68s (protocol-visible wedging, always
+  resolved). Seed volume alone is not finding it - next lever: cooperative-sticky W4 variant (also
   removes the eager-reassignment heavy-restart artifact class entirely, so the storm no longer
   restarts every in-flight heavy).
 - **Thin margin note:** W4's measured legit lag-stagnation peaks (117-123s) sit ~1.25x under the 150s
