@@ -321,11 +321,12 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   `.github/workflows/maven.yml`) is turned off via `if: false`. It currently fails and adds a red X of noise
   to every PR (it is `continue-on-error`, so it never gated merges). **Re-enable when the Kafka 4.x migration
   work starts** by restoring `if: github.event_name == 'pull_request'` — that work will make it pass.
-- **DISABLED: the macOS self-hosted PR jobs** (`pr-mac-fast-feedback.yml` — Unit / Integration / Mutation
-  (PIT) "(macOS self-hosted, optional)" checks). The mac-laptop runner is offline for the foreseeable
-  future, so the jobs sat eternally *pending* on every PR, polluting the checks list. The `pull_request`
-  trigger is commented out (`was:` note in the workflow); `workflow_dispatch` still works. **Re-enable by
-  restoring the `pull_request:` trigger when the runner returns.**
+- **DISABLED: the `local` self-hosted PR jobs** (`pr-local-fast-feedback.yml` — Unit / Integration / Mutation
+  (PIT) "(local self-hosted, optional)" checks). The `local` runner (currently a mac-laptop) is offline for
+  the foreseeable future, so the jobs sat eternally *pending* on every PR, polluting the checks list. The
+  `pull_request` trigger is commented out (`was:` note in the workflow); `workflow_dispatch` still works.
+  Targets `runs-on: [self-hosted, local]`, so give the runner the `local` label (`./config.sh --labels local`)
+  when registering it. **Re-enable by restoring the `pull_request:` trigger when the runner returns.**
 - **pitest (Mutation Testing) was pre-existing RED — root cause found + fixed (PR #69): coverage-minion OOM
   at `-Xmx1g`.** The single coverage-generation minion (runs all target tests once to map coverage) crashed
   with `UNKNOWN_ERROR`; confirmed locally that 1g crashes and 4g completes → raised to `-Xmx2g`. Also switched
@@ -369,7 +370,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     On GitHub-hosted, a full `internal.*` sweep was impractically slow — `-Dthreads=2` maxed the 2 cores and it
     ran 17+ min without finishing. PIT is CPU-bound and process-parallel across minion JVMs, so it scales with
     cores. Removed the GitHub-hosted `mutation-testing` job and added a `Mutation (PIT)` entry to the
-    `pr-mac-fast-feedback.yml` matrix, driven by `bin/ci-mutation-test.sh` which defaults `-Dthreads` to the
+    `pr-local-fast-feedback.yml` matrix, driven by `bin/ci-mutation-test.sh` which defaults `-Dthreads` to the
     box's core count (~12 on the Mac ⇒ ~5-6× faster). **Caveats:** (i) advisory only, and the Mac may be offline,
     so there's now no PIT signal when the laptop's off (acceptable — it never gated); (ii) RAM = threads × 2g
     (~24g at 12 threads), lower `PIT_THREADS` if the box is constrained. This is the "more cores" answer;

@@ -7,7 +7,7 @@
 #
 # TRIGGER - workflow_dispatch ONLY for now: with no `[self-hosted, highcpu]` runner registered yet, a
 # `pull_request:` trigger would leave these jobs QUEUED FOREVER as eternally-pending checks on every PR
-# (the exact pollution that got pr-mac-fast-feedback.yml's PR trigger disabled). Re-add `pull_request:`
+# (the exact pollution that got pr-local-fast-feedback.yml's PR trigger disabled). Re-add `pull_request:`
 # below once the runners are registered AND reliably online. Run on demand meanwhile:
 # `gh workflow run highcpu --ref <branch>` or Actions -> highcpu -> Run workflow.
 #

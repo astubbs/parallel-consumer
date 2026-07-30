@@ -156,7 +156,7 @@ infra repo, not here.
 
 **Trigger:** `workflow_dispatch` only until a `[self-hosted, highcpu]` runner is registered and reliably
 online - a `pull_request:` trigger with no runner would leave eternally-pending checks on every PR (the
-reason `pr-mac-fast-feedback.yml`'s PR trigger is also disabled). **Manually:** `gh workflow run highcpu
+reason `pr-local-fast-feedback.yml`'s PR trigger is also disabled). **Manually:** `gh workflow run highcpu
 --ref <branch>`, or fork -> **Actions -> highcpu -> Run workflow**. Re-enable the `pull_request:` trigger
 in the workflow once the runners are live.
 
