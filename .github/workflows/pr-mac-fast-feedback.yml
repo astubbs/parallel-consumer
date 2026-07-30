@@ -17,11 +17,14 @@
 
 name: PR Mac Fast Feedback
 
-# mac-laptop is offline indefinitely, and its suites (unit / integration / mutation) now run on the
-# always-more-capable high-CPU runner (pr-highcpu-fast-feedback.yml, a strict superset + performance).
-# Manual-dispatch-only so it doesn't queue dead jobs on every PR; re-add `pull_request:` if the mac
-# runner comes back online.
+# PR RUNS DISABLED: the mac-laptop self-hosted runner is offline indefinitely, and its suites
+# (unit / integration / mutation) now run on the always-more-capable high-CPU runner
+# (pr-highcpu-fast-feedback.yml, a strict superset + performance) - so PR-triggered jobs here just
+# queued forever as eternally-pending checks. Disabled at the trigger level so the checks disappear
+# from PRs entirely. Re-enable by restoring `pull_request:` below if the mac runner comes back
+# online; workflow_dispatch still works whenever the runner is up.
 on:
+  # was: pull_request: — re-enable when the mac-laptop self-hosted runner is back online
   workflow_dispatch:
 
 concurrency:

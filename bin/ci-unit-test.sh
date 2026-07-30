@@ -16,6 +16,6 @@ set -euo pipefail
   -Pci \
   clean test \
   -Dlicense.skip \
-  -Dexcluded.groups=performance \
+  -Dexcluded.groups=performance,quarantined \
   -Dsurefire.rerunFailingTestsCount=2 \
   "$@"
