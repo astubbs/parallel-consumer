@@ -149,9 +149,16 @@ fallback.
 
 The heavy runner is a many-core Linux box running a Docker LXC with **several runner instances** (one per
 concurrent job), targeted by the [`highcpu`](../.github/workflows/pr-highcpu-fast-feedback.yml)
-workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). Unit, integration and performance
-run as separate matrix jobs in parallel. Provisioning it (OpenTofu + Ansible) and the on-demand power/boot
-control are generic infrastructure kept in a separate private infra repo, not here.
+workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). Unit, integration,
+performance **and mutation (PIT)** run as separate matrix jobs in parallel. Provisioning it (OpenTofu +
+Ansible) and the on-demand power/boot control are generic infrastructure kept in a separate private
+infra repo, not here.
+
+**Trigger:** `workflow_dispatch` only until a `[self-hosted, highcpu]` runner is registered and reliably
+online - a `pull_request:` trigger with no runner would leave eternally-pending checks on every PR (the
+reason `pr-mac-fast-feedback.yml`'s PR trigger is also disabled). **Manually:** `gh workflow run highcpu
+--ref <branch>`, or fork -> **Actions -> highcpu -> Run workflow**. Re-enable the `pull_request:` trigger
+in the workflow once the runners are live.
 
 ## Fallback behaviour (important)
 

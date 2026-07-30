@@ -3,7 +3,13 @@
 # Runs unit + integration + performance + mutation as separate matrix jobs concurrently on real cores - far
 # faster than GitHub's 2-core gate. The runner may be offline at any time, so these jobs are FYI only:
 # continue-on-error + not-required means an offline runner never blocks a merge (the required gate stays
-# GitHub-hosted, see maven.yml). When the runner is offline the jobs simply queue and are skipped by the guard.
+# GitHub-hosted, see maven.yml).
+#
+# TRIGGER - workflow_dispatch ONLY for now: with no `[self-hosted, highcpu]` runner registered yet, a
+# `pull_request:` trigger would leave these jobs QUEUED FOREVER as eternally-pending checks on every PR
+# (the exact pollution that got pr-mac-fast-feedback.yml's PR trigger disabled). Re-add `pull_request:`
+# below once the runners are registered AND reliably online. Run on demand meanwhile:
+# `gh workflow run highcpu --ref <branch>` or Actions -> highcpu -> Run workflow.
 #
 # Tuning (measured on this 16c/32t box): unit forks 1-per-core (1C=32); more (2C) is flat, so 1C is the knee.
 # Integration is capped at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism).
@@ -23,7 +29,8 @@
 name: highcpu
 
 on:
-  pull_request:
+  # was: pull_request: — re-enable when a [self-hosted, highcpu] runner is registered and reliably online
+  # (until then it would only queue eternally-pending PR checks). See the TRIGGER note above.
   workflow_dispatch:
 
 # NOTE: concurrency is JOB-level (per suite), not workflow-level - see the job's `concurrency:` block.
@@ -38,8 +45,7 @@ permissions:
 
 jobs:
   highcpu-build-test:
-    # Check name shows as "highcpu / <suite> (optional)". KEEP IN SYNC with bin/ci-concede-check.sh
-    # (WORKFLOW must equal this workflow's `name:`; JOB_PREFIX must be a prefix of this job name).
+    # Check name shows as "highcpu / <suite> (optional)".
     name: "${{ matrix.suite-name }} (optional)"
     # Same-repo PRs only: fork PRs are untrusted and must NOT execute on the self-hosted machine.
     if: >-

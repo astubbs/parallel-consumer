@@ -236,6 +236,35 @@ flight, or won't-fix — and upstream (unmaintained) data could disappear/be arc
 - First candidates once the current PR queue drains: upstream #857 (stall saga), #909, #893/#905
   (PCMetrics leak), #912 (vertx leak).
 
+## Parked: hardened "concede optimizer" (removed from PR #75 by ce-review 2026-07-31)
+
+PR #75 originally let the REQUIRED GitHub-hosted gate report green *without running its tests* when the
+self-hosted `highcpu` runner had already passed the same suite for the same SHA (`bin/ci-concede-check.sh`
++ `maven.yml` `if: steps.concede.outputs.skip != 'true'`). A 10-reviewer ce-review found this **not safe
+as built** and it was removed; the base highcpu workflow + VertxTest fix + PR-scoped PIT shipped. Findings
+to fix before ANY revival:
+
+- **P0 gate spoof (adversarial):** concede matched only on free-text `workflow_run.name` ("highcpu") +
+  job-name prefix + head SHA, with no binding to the real workflow ID/path. Because `pull_request`
+  workflows run the PR branch's own files, a PR could add a workflow file *named* `highcpu` with a
+  trivially-passing "Unit (optional)" job on `ubuntu-latest` and make the required gate skip real tests -
+  no self-hosted box needed. **Fix:** bind to the workflow's immutable path/ID, and verify the run's
+  `event == 'pull_request'` and `head_repository.full_name == GITHUB_REPOSITORY` and actor identity.
+- **P1 timeout (reliability/correctness/maint):** `MAX_WAIT=600s` vs the Unit job's 15-min budget - a
+  slow-but-alive highcpu run could burn ~10 min before falling back, timing out a good commit. **Fix:**
+  per-suite wait budget, or don't wait at all (only concede to an ALREADY-complete run).
+- **P1 non-equivalent contract (adversarial):** conceding hosted Integration (`forkCount=4`) to highcpu
+  (`forkCount=8`) - this PR's own inflight note shows the flake flip-flops between the two, so one green
+  ≠ the other. **Fix:** only concede between byte-identical suite invocations, or don't.
+- **Silent name-drift (maint/learnings):** job/workflow names were manually synced across 3 files with a
+  `KEEP IN SYNC` comment; a rename silently disables the feature. **Fix:** a drift self-check test.
+- **Invisibility (agent-native):** a conceded skip was only in raw logs - no step-summary/annotation and
+  no durable link to the trusted run. **Fix:** `$GITHUB_STEP_SUMMARY` + `::notice::` with the run URL.
+
+**Simplest safe alternative, recommended over reviving concede at all:** keep `highcpu` purely advisory
+(never let a self-hosted result satisfy a required gate). The speed win is the fast *feedback*, not
+skipping the hosted gate - the gate staying independent is worth more than the minutes saved.
+
 ## CI reliability / gate issues (follow-up work)
 
 - **Stacked PRs are ungated - dependency check "required" doesn't apply to them (2026-07-31).**
