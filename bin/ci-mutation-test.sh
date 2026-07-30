@@ -27,6 +27,9 @@ fi
 THREADS="${PIT_THREADS:-$CORES}"
 echo "PIT: using ${THREADS} thread(s) (cores=${CORES}); minion heap -Xmx2g => ~$((THREADS * 2))g peak"
 
+# NB: pitest does not honour excluded.groups - @Quarantined (and chaos/performance) tests are only
+# excluded here coincidentally, via the integrationTests source-dir glob. If a quarantined UNIT test
+# ever exists when this runs, wire excludedGroups into pitest explicitly (ce-review P3 finding).
 ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
   -Dlicense.skip \
   -Djacoco.skip=true \

@@ -17,8 +17,15 @@
 
 name: PR Mac Fast Feedback
 
+# PR RUNS DISABLED: the mac-laptop self-hosted runner is offline/unused for the foreseeable future, so
+# every PR-triggered job just queued forever waiting for a runner, showing as an eternally-pending check
+# on every PR. Disabled at the trigger level (rather than a job-level `if: false` like maven.yml's
+# test-kafka-compat) because this workflow's ONLY job is the mac job - removing the trigger makes the
+# checks disappear from PRs entirely instead of listing three "skipped" entries. Re-enable by restoring
+# the `pull_request:` trigger below when the mac runner is back online. Manual runs (workflow_dispatch)
+# still work whenever the runner is up - the job's `if` already allows them.
 on:
-  pull_request:
+  # was: pull_request: — re-enable when the mac-laptop self-hosted runner is back online
   workflow_dispatch:
 
 concurrency:
