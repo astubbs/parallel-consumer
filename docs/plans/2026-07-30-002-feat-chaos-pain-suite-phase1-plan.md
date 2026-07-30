@@ -19,7 +19,7 @@ transplants onto the eventual rebased-#29 slices as a near-pure file copy.
 The origin design's one-liner: turn "the suite sometimes reddens under load" into "the suite hunts stalls
 on purpose and hands you the autopsy." Phase 1 is the skateboard: ONE scenario (W1 churn storm), a
 seeded/replayable conductor, first-class SLO assertions including the zombie-member probe this whole
-investigation lacked, at today's scale - calibrated against the planted zombie-drain bug before its
+investigation lacked, at today's scale - calibrated against the real zombie-drain bug at its pre-fix commit before its
 greens are trusted.
 
 ## Requirements Trace (from origin doc, Phase 1 section)
@@ -34,7 +34,7 @@ greens are trusted.
 - R3. **W1 churn-storm scenario** at today's scale (~12 instances / 80 partitions / 500k msgs, 3-5 min).
 - R4. `@Tag("chaos")`, excluded from all default/PR suites; one **`workflow_dispatch`** job on the highcpu
   runner (inputs: seed, reps).
-- R5. **Calibration (test-the-test)**: the suite MUST go red on the planted zombie-drain defect
+- R5. **Calibration (test-the-test)**: the suite MUST go red on the pre-fix zombie-drain defect (the real bug, not injected)
   (uber-NOFIX arm) and green on this branch. A chaos suite that never caught a known bug is decoration.
 
 ## Scope Boundaries
@@ -83,7 +83,7 @@ greens are trusted.
   seconds). This is exactly the discriminator that separated the fixed/defective drain arms.
 - **Calibration is the acceptance test of the whole phase** (R5): the same suite commit must produce
   RED-on-nofix / GREEN-here. If the nofix arm doesn't go red, the probe thresholds are wrong - fix the
-  probe, not the bound, until the planted bug is caught.
+  probe, not the bound, until the known real bug (pre-fix composition, not injected) is caught.
 
 ## Open Questions
 
@@ -173,7 +173,7 @@ ProgressProbe wrapping the run; 5-min cap. Seed from `-Dchaos.seed` (default: ra
 
 **Verification:** `mvn verify` on core runs no `chaostests`; explicit `-Dincluded.groups=chaos` runs them.
 
-- [ ] **Unit 5: calibration - RED on the planted defect, GREEN here (R5, phase acceptance)**
+- [ ] **Unit 5: calibration - RED on the known-bug (pre-fix) composition, GREEN here (R5, phase acceptance)**
 
 **Files:** none new (cherry-pick exercise + docs updates in Unit 6).
 
@@ -181,7 +181,7 @@ ProgressProbe wrapping the run; 5-min cap. Seed from `-Dchaos.seed` (default: ra
 run `ChaosChurnStormIT` there 3×: expect **RED via the rebalance-dwell (zombie) probe or drain-bound
 probe** in ≥2/3 runs (the drain defect makes a mid-drain join freeze the group). Then 3× on this branch:
 expect **GREEN 3/3**. If nofix doesn't red reliably, bias the conductor (join-after-stopDrain weight) and
-re-run - tune until the planted bug is caught, never by loosening probes on the green side.
+re-run - tune until the known real bug (pre-fix composition, not injected) is caught, never by loosening probes on the green side.
 
 **Verification:** documented 3+3 run table; RED failures name the zombie probe and attach the timeline.
 

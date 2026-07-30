@@ -45,8 +45,8 @@ import static org.awaitility.Awaitility.await;
  * watermark, rebalance-dwell zombie probe, drain bound) and the end-of-run ledger asserts correctness
  * (no record ever lost; duplicates bounded per disturbance).
  * <p>
- * <b>Calibration status</b>: this scenario MUST go red (zombie/dwell or drain-bound probe) on the planted
- * drain-defect composition ({@code experiment/stall-uber-nofix}) and green here - see plan Unit 5.
+ * <b>Calibration status</b>: this scenario MUST go red (zombie/dwell or drain-bound probe) on the pre-fix
+ * drain-defect composition (the real bug) ({@code experiment/stall-uber-nofix}) and green here - see plan Unit 5.
  * <p>
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
  * Excluded from default suites via {@code @Tag("chaos")}; run with {@code -Dincluded.groups=chaos}.

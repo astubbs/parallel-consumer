@@ -290,7 +290,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   discriminable window). Run: `-Dincluded.groups=chaos [-Dchaos.seed=N]`; on-demand highcpu workflow
   `chaos-pain.yml`. **Calibration (test-the-test): defect arm 3/3 RED via ZOMBIE_MEMBER probe (dwell
   15.6-15.9s), fixed arm 3/3 GREEN (4.5-8.9s), bound 15s set from same-seed A/B measurement** - the
-  planted zombie-drain bug is caught by name. Suite + `ManagedPCInstance` verified to compile on plain
+  real (pre-fix) zombie-drain bug is caught by name. Suite + `ManagedPCInstance` verified to compile on plain
   master → portable-detector branch is feasible (next: independent branch off master, temporarily
   mergeable into any PR to expose fix-absent bugs). Ops nugget from calibration Q&A: PC's always-polling
   loop means users can set `max.poll.interval.ms` far lower than raw-consumer users → faster coordinator
