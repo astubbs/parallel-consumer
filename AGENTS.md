@@ -71,7 +71,7 @@ bin/performance-test.sh
 - **Quarantine lane for known-failing-on-master tests (`@Quarantined`).** When a test is red on master's
   *gating* CI and its fix lives in another (open) PR, do NOT leave it red (ambiguous checks, error-prone
   merge decisions) and do NOT `@Disabled` it (loses the signal — a "known flake" can be a real product
-  bug, see the drain-zombie write-up in `docs/solutions/test-flakiness/`). Instead annotate it
+  bug - see the drain-zombie write-up, `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`, which lands with PR #80). Instead annotate it
   `@Quarantined(reason, tracking, fixedBy)` (in core's shared test sources): it leaves the gating suites
   (green means mergeable) but keeps running NIGHTLY against master (+ workflow_dispatch) in the
   non-gating "Quarantined Tests" CI job, whose summary carries pass/fail + the audit of every

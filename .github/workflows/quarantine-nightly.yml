@@ -40,7 +40,8 @@ jobs:
       - name: Check the lane is not empty
         id: any
         run: |
-          if grep -rqE --include='*.java' --exclude-dir=target '^[[:space:]]*@Quarantined\(' .; then
+          source bin/lib/quarantine-common.sh
+          if [ -n "$(quarantined_files)" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -63,6 +64,8 @@ jobs:
         id: run
         if: steps.any.outputs.found == 'true'
         continue-on-error: true
+        env:
+          QUARANTINE_SKIP_CHECKS: "1"  # the fail-fast steps above already ran them as gating checks
         run: bin/quarantined-test.sh -DforkCount=4 -DreuseForks=true
       - name: Summarize quarantine lane
         if: steps.any.outputs.found == 'true'
@@ -77,7 +80,7 @@ jobs:
             echo ""
             echo "### Audit - every entry needs a diagnosis + an owning fix PR (empty fixedBy = unowned)"
             echo '```'
-            grep -rnE --include='*.java' --exclude-dir=target -A 4 '^[[:space:]]*@Quarantined\(' . || true
+            { source bin/lib/quarantine-common.sh && grep -rnE --include='*.java' --exclude-dir=target -A 4 "$QUARANTINE_ANNOTATION_ERE" .; } || true
             echo '```'
             echo ""
             echo "### Per-test results"

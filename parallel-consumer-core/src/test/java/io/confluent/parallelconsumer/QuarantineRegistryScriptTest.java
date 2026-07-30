@@ -86,16 +86,83 @@ class QuarantineRegistryScriptTest {
         assertThat(result.exitCode).isEqualTo(0);
     }
 
+    @Test
+    void sameLineStackedAnnotationIsDetected() throws Exception {
+        // ce-review P1: `@Test @Quarantined(...)` on one line must still count as quarantined
+        writeTestSource("StackedIT", "class StackedIT {\n" +
+                "    @Test @Quarantined(reason = \"d\", tracking = \"t\")\n" +
+                "    void m() {}\n}\n");
+        writeRegistry("");
+        Result result = runCheck();
+        assertWithMessage("stacked same-line annotation missed - output: %s", result.output)
+                .that(result.exitCode).isEqualTo(1);
+    }
+
+    @Test
+    void fullyQualifiedAnnotationIsDetected() throws Exception {
+        writeTestSource("FqIT", "class FqIT {\n" +
+                "    @io.confluent.parallelconsumer.Quarantined(reason = \"d\", tracking = \"t\")\n" +
+                "    void m() {}\n}\n");
+        writeRegistry("");
+        Result result = runCheck();
+        assertWithMessage("fully-qualified annotation missed - output: %s", result.output)
+                .that(result.exitCode).isEqualTo(1);
+    }
+
+    @Test
+    void multiLineAnnotationArgumentsAreDetected() throws Exception {
+        writeTestSource("MultiLineIT", "class MultiLineIT {\n" +
+                "    @Quarantined(\n" +
+                "            reason = \"long \" +\n" +
+                "                    \"diagnosis\",\n" +
+                "            tracking = \"docs/x.md\")\n" +
+                "    void m() {}\n}\n");
+        writeRegistry("- [ ] `MultiLineIT.m` - diagnosed. **Owner: PR #999**\n");
+        Result result = runCheck();
+        assertWithMessage("multi-line annotation should be consistent - output: %s", result.output)
+                .that(result.exitCode).isEqualTo(0);
+    }
+
+    @Test
+    void secondUndiagnosedMethodCannotRideAlongOnTheFirstEntry() throws Exception {
+        // ce-review P1 (reproduced there): 2 annotated methods with 1 entry must FAIL
+        writeTestSource("TwoIT", "class TwoIT {\n" +
+                "    @Quarantined(reason = \"d\", tracking = \"t\")\n    void one() {}\n" +
+                "    @Quarantined(reason = \"d\", tracking = \"t\")\n    void two() {}\n}\n");
+        writeRegistry("- [ ] `TwoIT.one` - diagnosed. **Owner: PR #999**\n");
+        Result result = runCheck();
+        assertWithMessage("2 annotations vs 1 entry must drift - output: %s", result.output)
+                .that(result.exitCode).isEqualTo(1);
+        // and with both entries present it must pass
+        writeRegistry("- [ ] `TwoIT.one` - d. **Owner: PR #999**\n- [ ] `TwoIT.two` - d. **Owner: PR #999**\n");
+        assertThat(runCheck().exitCode).isEqualTo(0);
+    }
+
+    @Test
+    void staleMethodEntryIsFlagged() throws Exception {
+        // ce-review P1 (reproduced there): entry for a method that no longer exists must FAIL
+        writeAnnotatedTest("SomeQuarantinedIT");
+        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - d. **Owner: PR #999**\n" +
+                "- [ ] `SomeQuarantinedIT.goneMethod` - d. **Owner: PR #999**\n");
+        Result result = runCheck();
+        assertWithMessage("stale method entry must drift - output: %s", result.output)
+                .that(result.exitCode).isEqualTo(1);
+        assertThat(result.output).contains("goneMethod");
+    }
+
     // ---- fixture helpers ----
 
     private void writeAnnotatedTest(String className) throws IOException {
-        Path src = fixture.resolve("module/src/test-integration/java");
-        Files.createDirectories(src);
-        String java = "class " + className + " {\n" +
+        writeTestSource(className, "class " + className + " {\n" +
                 "    @Quarantined(reason = \"diagnosed\", tracking = \"docs/x.md\", fixedBy = \"PR #999\")\n" +
                 "    void someMethod() {}\n" +
-                "}\n";
-        Files.write(src.resolve(className + ".java"), java.getBytes(StandardCharsets.UTF_8));
+                "}\n");
+    }
+
+    private void writeTestSource(String className, String body) throws IOException {
+        Path src = fixture.resolve("module/src/test-integration/java");
+        Files.createDirectories(src);
+        Files.write(src.resolve(className + ".java"), body.getBytes(StandardCharsets.UTF_8));
     }
 
     private void writeRegistry(String entries) throws IOException {

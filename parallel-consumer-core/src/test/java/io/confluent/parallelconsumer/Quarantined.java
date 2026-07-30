@@ -17,7 +17,8 @@ import java.lang.annotation.Target;
  * but it keeps RUNNING on every PR in the non-gating "Quarantined Tests" CI job - so we still see when
  * it starts passing (its fix landed), when it gets worse, and it can still surprise us. This is a
  * quarantine, not a kill switch: {@code @Disabled} loses the signal entirely and, as the drain-zombie
- * investigation proved, a "known flake" can be a real product bug.
+ * investigation proved, a "known flake" can be a real product bug (write-up lands with PR #80 in
+ * {@code docs/solutions/test-flakiness/}).
  * <p>
  * Discipline (enforced by the required fields + reviewed via the CI job's audit summary):
  * <ol>

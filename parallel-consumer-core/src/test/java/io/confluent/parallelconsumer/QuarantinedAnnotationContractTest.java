@@ -58,6 +58,31 @@ class QuarantinedAnnotationContractTest {
                 .that(pom).contains("<excluded.groups>performance," + Quarantined.TAG + "</excluded.groups>");
     }
 
+    /**
+     * BOTH test plugins must bind the group properties - a real ce-review P1: only failsafe was
+     * wired, so the exclusion was a silent no-op for every UNIT test (a @Quarantined unit test kept
+     * running in the gating Unit Tests lane). Verified behaviorally at fix time: a failing
+     * quarantined unit test ran 0 times under gating groups and executed under the lane's groups.
+     */
+    @Test
+    void bothSurefireAndFailsafeBindTheGroupProperties() throws IOException {
+        String pom = read(REPO_ROOT.resolve("pom.xml"));
+        int groupsBindings = countOccurrences(pom, "<groups>${included.groups}</groups>");
+        int excludedBindings = countOccurrences(pom, "<excludedGroups>${excluded.groups}</excludedGroups>");
+        assertWithMessage("surefire AND failsafe must each bind <groups> (unit-lane filtering is a " +
+                "no-op without the surefire binding)").that(groupsBindings).isAtLeast(2);
+        assertThat(excludedBindings).isAtLeast(2);
+    }
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0, idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) != -1) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
+    }
+
     @Test
     void gatingCiScriptsExcludeTheQuarantinedGroup() throws IOException {
         for (String script : Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh")) {
@@ -110,12 +135,55 @@ class QuarantinedAnnotationContractTest {
         String release = read(REPO_ROOT.resolve(".github/workflows/release.yml"));
         assertWithMessage("release.yml must refuse to release while any test is quarantined")
                 .that(release).contains("Refuse to release with quarantined tests");
-        assertThat(release).contains("@Quarantined");
+        assertWithMessage("the release guard must use the SHARED detection lib, not an inline pattern copy")
+                .that(release).contains("quarantine-common.sh");
     }
 
     @Test
     void registryFileExistsWhereTheCheckScriptsExpectIt() {
         assertThat(Files.exists(REPO_ROOT.resolve("docs/QUARANTINED_TESTS.md"))).isTrue();
+    }
+
+    /**
+     * "No quarantine without diagnosis" is only compiler-enforced as far as the attributes EXISTING -
+     * empty strings compile fine (ce-review P2). Scan compiled test classes reflectively (no static
+     * initialization) and reject blank reason/tracking.
+     */
+    @Test
+    void quarantinedAnnotationsMustCarryNonBlankDiagnosis() throws Exception {
+        Path classesDir = Paths.get("target/test-classes").toAbsolutePath();
+        if (!Files.exists(classesDir)) {
+            return; // running outside a built module - the build always has it
+        }
+        java.util.List<String> offenders = new java.util.ArrayList<>();
+        try (java.util.stream.Stream<Path> walk = Files.walk(classesDir)) {
+            for (Path clazz : walk.filter(f -> f.toString().endsWith(".class"))
+                    .collect(java.util.stream.Collectors.toList())) {
+                byte[] bytes = Files.readAllBytes(clazz);
+                if (!new String(bytes, StandardCharsets.ISO_8859_1).contains("Quarantined")) {
+                    continue; // cheap constant-pool pre-filter
+                }
+                String name = classesDir.relativize(clazz).toString()
+                        .replace(java.io.File.separatorChar, '.').replaceAll("\\.class$", "");
+                try {
+                    Class<?> loaded = Class.forName(name, false, getClass().getClassLoader());
+                    checkDiagnosis(loaded.getAnnotation(Quarantined.class), name, offenders);
+                    for (java.lang.reflect.Method m : loaded.getDeclaredMethods()) {
+                        checkDiagnosis(m.getAnnotation(Quarantined.class), name + "." + m.getName(), offenders);
+                    }
+                } catch (Throwable ignored) {
+                    // unloadable class (missing optional dep etc.) - not a quarantine concern
+                }
+            }
+        }
+        assertWithMessage("blank reason/tracking defeats 'no quarantine without diagnosis'")
+                .that(offenders).isEmpty();
+    }
+
+    private static void checkDiagnosis(Quarantined q, String where, java.util.List<String> offenders) {
+        if (q == null) return;
+        if (q.reason().trim().isEmpty()) offenders.add(where + ": blank reason");
+        if (q.tracking().trim().isEmpty()) offenders.add(where + ": blank tracking");
     }
 
     private static String read(Path path) throws IOException {

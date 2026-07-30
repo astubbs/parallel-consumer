@@ -33,7 +33,14 @@ Rules (full discipline in `AGENTS.md` → Testing, and the `@Quarantined` javado
    a release must not ship while tests are held out of the gates. Snapshots still publish (dev
    artifacts, master is always `-SNAPSHOT`).
 
+## Working with the registry
+
+- Fast, no-Docker consistency check while editing: `bin/check-quarantine-registry.sh` (seconds).
+- Owner-claim check needs an authenticated `gh` (`gh auth status`): `bin/check-quarantine-owners.sh`.
+- Run the whole lane manually: `gh workflow run quarantine-nightly.yml -R astubbs/parallel-consumer`.
+
 ## Currently quarantined
+
 
 - [ ] `PartitionStateCommittedOffsetIT.committedOffsetRemoved` - the `[latest]` nudge race: the single
   pre-await tail-nudge record can be produced before the consumer's `auto.offset.reset=latest` reset
