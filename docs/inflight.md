@@ -227,6 +227,16 @@ flight, or won't-fix — and upstream (unmaintained) data could disappear/be arc
 
 ## CI reliability / gate issues (follow-up work)
 
+- **Stacked PRs are ungated - dependency check "required" doesn't apply to them (2026-07-31).**
+  Observed: PR #87 (base = #85's branch) FAILS the PR-dependency check yet shows as mergeable.
+  Diagnosis: required status checks are configured in the ruleset targeting `master`, so they only
+  gate PRs whose BASE is master - a stacked PR merging into its parent branch bypasses every
+  required check, not just the dep gate. Fix options: (a) add a second ruleset targeting ALL
+  branches (`**`) requiring just the dependency check (safe: it passes trivially on non-stacked
+  PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
+  needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
+  matches exactly what the ruleset requires (rulesets match by name).
+
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
 **Unit Tests, Integration Tests, Performance Tests**. Everything else is advisory. Track and fix:
