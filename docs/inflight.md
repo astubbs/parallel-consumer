@@ -262,6 +262,11 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   `.github/workflows/maven.yml`) is turned off via `if: false`. It currently fails and adds a red X of noise
   to every PR (it is `continue-on-error`, so it never gated merges). **Re-enable when the Kafka 4.x migration
   work starts** by restoring `if: github.event_name == 'pull_request'` — that work will make it pass.
+- **DISABLED: the macOS self-hosted PR jobs** (`pr-mac-fast-feedback.yml` — Unit / Integration / Mutation
+  (PIT) "(macOS self-hosted, optional)" checks). The mac-laptop runner is offline for the foreseeable
+  future, so the jobs sat eternally *pending* on every PR, polluting the checks list. The `pull_request`
+  trigger is commented out (`was:` note in the workflow); `workflow_dispatch` still works. **Re-enable by
+  restoring the `pull_request:` trigger when the runner returns.**
 - **pitest (Mutation Testing) was pre-existing RED — root cause found + fixed (PR #69): coverage-minion OOM
   at `-Xmx1g`.** The single coverage-generation minion (runs all target tests once to map coverage) crashed
   with `UNKNOWN_ERROR`; confirmed locally that 1g crashes and 4g completes → raised to `-Xmx2g`. Also switched
