@@ -73,8 +73,10 @@ bin/performance-test.sh
   merge decisions) and do NOT `@Disabled` it (loses the signal — a "known flake" can be a real product
   bug, see the drain-zombie write-up in `docs/solutions/test-flakiness/`). Instead annotate it
   `@Quarantined(reason, tracking, fixedBy)` (in core's shared test sources): it leaves the gating suites
-  (green means mergeable) but keeps running on every PR in the non-gating "Quarantined Tests" CI job,
-  whose summary carries pass/fail + the audit of every quarantined test and its owner. The live registry
+  (green means mergeable) but keeps running NIGHTLY against master (+ workflow_dispatch) in the
+  non-gating "Quarantined Tests" CI job, whose summary carries pass/fail + the audit of every
+  quarantined test and its owner; the seconds-fast "Quarantine Audit" job enforces the rules on every
+  PR (registry drift / broken owner claims fail fast - no tests are run there). The live registry
   / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
   the annotations in both directions, so it can't drift; `bin/check-quarantine-owners.sh` additionally
   verifies each entry's owner claim (owning PR exists + is open + eventually removes the quarantine). Rules: **(1) no
@@ -105,7 +107,7 @@ bin/performance-test.sh
 
 ## CI
 
-- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). A non-gating "Quarantined Tests" job runs the `@Quarantined` lane (`bin/quarantined-test.sh` — see Testing). Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
+- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). A seconds-fast "Quarantine Audit" job enforces the quarantine registry on every PR; the non-gating "Quarantined Tests" job runs the `@Quarantined` lane nightly on master + on dispatch (`bin/quarantined-test.sh` — see Testing). Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
 

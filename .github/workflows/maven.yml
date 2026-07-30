@@ -18,6 +18,9 @@ on:
   push:
     branches: [ master ]
   pull_request:
+  schedule:
+    # nightly quarantine-lane run on master (quarantine is master-state) - see test-quarantined
+    - cron: '17 3 * * *'
 
 permissions:
   contents: read
@@ -115,29 +118,44 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Quarantine lane: runs ONLY the @Quarantined tests - known-failing-on-master tests excluded from
-  # the gating suites (so green gates mean "mergeable"). Red inside this job is EXPECTED while the
-  # owning fix PR is open; the job itself never goes red (step-level continue-on-error) so it doesn't
-  # add X noise - the run step's own status + the audit output carry the signal. A fix PR deletes the
-  # @Quarantined annotation, which atomically moves the test back into the gating lane.
+  # Quarantine AUDIT: the seconds-fast enforcement job on every PR - registry drift and broken owner
+  # claims are real, actionable errors that turn it red. It does NOT run any tests (that is
+  # test-quarantined, nightly on master + dispatch) so the PR checks list gets its verdict in seconds.
   # Discipline: no quarantine without diagnosis; quarantine is master-state, not PR-state. See the
   # @Quarantined javadoc (parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/Quarantined.java).
-  test-quarantined:
+  quarantine-audit:
     if: github.event_name == 'pull_request'
-    needs: prepare-deps
-    name: "Quarantined Tests (non-gating)"
+    name: "Quarantine Audit"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
+        run: bin/check-quarantine-registry.sh
+      - name: Verify owner claims (each quarantined test's fix PR exists, is open, and removes the quarantine)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bin/check-quarantine-owners.sh
+
+  # Quarantine LANE RUN: actually executes the @Quarantined tests - known-failing-on-master tests
+  # excluded from the gating suites - so we still see when they start passing (their fixes landed),
+  # when they get worse, and their signal stays alive. Runs NIGHTLY against master (quarantine is
+  # master-state; running per-PR added ~10min of runner noise for a signal that only changes when
+  # master does) plus on-demand via workflow_dispatch. Red inside the run step is EXPECTED while the
+  # owning fix PR is open; the job itself never goes red for test failures (step-level
+  # continue-on-error) - only audit-class errors would, and those live in quarantine-audit.
+  test-quarantined:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: "Quarantined Tests (nightly, non-gating)"
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      # NOT continue-on-error: registry drift is a real, actionable error (unlike quarantined-test
-      # failures, which are expected) - it is the one thing allowed to turn this job red.
+      # Fail fast on rule violations BEFORE spending a test run - same checks as quarantine-audit,
+      # here validating master's state.
       - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
         run: bin/check-quarantine-registry.sh
-      # Also NOT continue-on-error: verifies each entry's owner claim against reality via gh -
-      # owner PR missing / closed-unmerged / merged-but-still-quarantined are real errors that
-      # turn the job red; an open owner that hasn't yet removed the quarantine is advisory only.
-      - name: Verify owner claims (each quarantined test's fix PR exists, is open, and removes the quarantine)
+      - name: Verify owner claims
         env:
           GH_TOKEN: ${{ github.token }}
         run: bin/check-quarantine-owners.sh

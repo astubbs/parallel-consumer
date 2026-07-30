@@ -1,12 +1,13 @@
 # Quarantined tests - live registry
 
 The task list of tests currently in the quarantine lane: known-failing-on-master tests carrying
-`@Quarantined`, excluded from the gating CI suites (so green checks mean mergeable) but still run on
-every PR by the non-gating "Quarantined Tests" job. Each entry is an open task: get the test fixed and
-back into the gating lane.
+`@Quarantined`, excluded from the gating CI suites (so green checks mean mergeable) but still run
+NIGHTLY against master (+ on demand via workflow_dispatch) by the non-gating "Quarantined Tests" job.
+The seconds-fast "Quarantine Audit" job enforces the rules below on every PR. Each entry is an open
+task: get the test fixed and back into the gating lane.
 
-**This file is enforced, not advisory**, by two checks (run locally by `bin/quarantined-test.sh` and
-in CI by the Quarantined Tests job):
+**This file is enforced, not advisory**, by two checks (run locally by `bin/quarantined-test.sh`, on
+every PR by the Quarantine Audit job, and again before every nightly lane run):
 
 - `bin/check-quarantine-registry.sh` fails on any drift between the `@Quarantined` annotations in the
   code and the entries below - a quarantined test missing here, or a stale entry for a test no longer
