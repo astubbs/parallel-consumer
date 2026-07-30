@@ -198,6 +198,15 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   **"Step 2" DEFERRED:** retry full thread-parallel on a shared broker to *validate* the #857 deadlock is
   gone (not merely avoided) — only **after** #857/#29 finishes and merges on its own merits (it's a
   ~454-line WIP concurrency refactor, "root cause still open"). Reproducer for then: `-Dparallel-tests=true`.
+  - **UPDATE (2026-07, fork×threads probed on the highcpu self-hosted runner - Ryzen 9 5950X, 16c/32t):** ran
+    the reproducer (`-Dparallel-tests=true`) ON TOP of forking. **Signal that thread-parallelism may be
+    healed:** the forked *unit* suite went **green** with threads enabled; the *integration* red was the known
+    flaky `PartitionStateCommittedOffsetIT` (fails on GitHub-hosted too), NOT a new thread-race. **Caveats:**
+    one green run ≠ proof (flakiness is intermittent - repeat before trusting), and #857 root cause is still
+    open, so this only *motivates* the proper Step-2 validation, it doesn't complete it. **Also measured: no
+    speedup** - fork×threads was ~identical to fork-only (unit 6m00 vs 5m53), because forking already saturates
+    the cores. So **forking stays the default**; threading would only pay off if it *replaces* forking (fewer
+    JVM starts), never stacked on top.
 - **DONE (PR #69): unit suite parallelised by FORKING (surefire `forkCount=1C`), not threading.** The `ci`
   profile now forks the unit suite one-JVM-per-core (`forkCount=1C`, `reuseForks=true`), keeping
   `parallel-tests=false`. Core unit dropped **5:14 → 1:39** (259 tests, 0 failures) on a 12-core box, and it
@@ -273,6 +282,23 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   check whether it's contention (raise this test's lock-acquisition timeouts / mark heavier) vs a real
   produce/commit-lock stall in the multi-instance-shared-registry path. Do NOT just bump the timeout to go green
   without establishing which (AGENTS.md rule). Not yet reproduced deterministically.
+- **LOAD-TIGHTNESS FLAKE FAMILY (failure group; roster + rates from the 2026-07-30 20-run fork16
+  acceptance hunt on PR #80's branch).** Shared signature: *fast-failing* assertion/timeout under heavy
+  contention, passes isolated/on rerun. Diagnosis rule (from the #68 lesson): classify before touching —
+  this same family is where the #857 deadlock and the drain zombie hid. Distinguish from the two SOLVED
+  classes by their named signatures: nudge race = unwinnable await + `SubscriptionState` reset position
+  past the data (see `latest-reset-nudge-race-...-2026-07-30.md`); drain zombie = `DRAINING`-state poll
+  spin (see `pc-silent-stall-under-contention-2026-07-29.md`). Members:
+  - `MultiInstanceMetricsTest.sameRegistryCanBeReused...` — 1-2s lock timeouts (own entry above; 0/20 in
+    the hunt).
+  - `TransactionTimeoutsTest.produceTimeout` — tight produce-timeout assertion; 1/20 hunt + 1× highcpu runner
+    (2026-07-30).
+  - `LoadTest` — 60s throughput awaits; 1/20.
+  - `DbTest` — postgres container start under contention; 2/20.
+  Baseline for comparison: 15/20 hunt runs fully CLEAN, zero stall-class failures. NOT in this family:
+  `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` (1/20) — per the #68 record its contended failure maps to
+  the REAL **#857** deadlock; the hunt sighting is live confirmation #857 remains present on master-line
+  branches (its fix lives in PR #29 pending rebase — see the uber experiment results doc).
 - **DONE (PR #69): moved the "unit" tests that were actually INTEGRATION tests out of surefire, and now
   ENFORCED so no more can hide.** Two container-based tests were landing in surefire only because they
   weren't in an `integrationTest*` package: `examples…streams.StreamsAppTest` and
@@ -392,11 +418,19 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   polling (paused, long-poll cadence) and stays rebalance-responsive; guarded by `BrokerPollSystemDrainTest`
   (characterisation-first, flipped RED→GREEN). **Verified: neither PR #29 (#857) nor PR #31 (#909) fixed
   this** — they fix sibling mechanisms (assign-time throttle-pause reset + CME; stale-container
-  replacement) of the same "alive but not progressing" symptom; all three are non-conflicting. Next step
-  per the report: an **uber branch** merging #29 + #31 + PR #80, measured against #29's chaos run
-  (currently 10-20% residual stalls) and this report's forkCount=16 recipe. Route findings into the
-  **#857** investigation; revisit the `committedOffsetRemoved` await only after the stall is confirmed
-  gone.
+  replacement) of the same "alive but not progressing" symptom; all three are non-conflicting.
+  **SOLVED (2026-07-30): the `committedOffsetRemoved[latest]` failure itself turned out to be an
+  `auto.offset.reset=latest` NUDGE RACE in the test harness** — under contention the reset resolves
+  *after* `runPcUntilOffset`'s single pre-await bumper, positioning the consumer past all data forever
+  (unwinnable at any timeout; only ever the [latest] param — the unread tell). Captured via kafka-client
+  DEBUG (branch `debug/committedoffset-firstpoll-stall`): `SubscriptionState ... position 201` vs 201
+  records. NOT a product bug; the drain zombie found en route WAS. **Fix on PR #80:** shared
+  `BrokerIntegrationTest#awaitWithTopicNudge` (nudge-inside-the-await + timeout self-diagnosis), both
+  helpers refactored onto it (no copy-paste, no timeout bumped), deterministic `LatestResetTailNudgeIT`
+  guard (RED with old pattern ~23s / GREEN with primitive). Full story + diagnosability lessons:
+  `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`.
+  Remaining singles (`KafkaSanityTests`, `TransactionMarkersTest` — one uber-run sighting each) and
+  `MultiInstanceMetricsTest` stay tracked separately; production #857 remains #29's territory.
 - **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
   resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
   shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure

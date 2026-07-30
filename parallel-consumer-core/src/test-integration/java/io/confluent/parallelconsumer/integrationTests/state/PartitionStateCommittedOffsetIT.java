@@ -297,25 +297,17 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
 
             getKcu().close();
         } else {
-            Awaitility.await()
-                    .pollInterval(5, SECONDS) // allow bumper messages to propagate
-                    .atMost(30, SECONDS) // so, allow more for more total time
-                    .failFast(tempPc::isClosedOrFailed)
-                    .untilAsserted(() -> {
-                        // in case we're at the end of the topic, add some messages to make sure we get a poll response
-                        // must go before failing assertion, otherwise won't be reached
-                        getKcu().getProducer().send(new ProducerRecord<>(getTopic(), "key-bumper", "poll-bumper"));
-                        bumpersSent.incrementAndGet();
+            // nudge-inside-the-await shared primitive - see BrokerIntegrationTest#awaitWithTopicNudge
+            awaitWithTopicNudge(tempPc, Duration.ofSeconds(5), Duration.ofSeconds(30), bumpersSent, () -> {
+                final long endOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.earliest())).partitionResult(tp).get().offset();
+                final long startOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.latest())).partitionResult(tp).get().offset();
+                log.error("start await loop: {}, end: {}, bumpersSent: {}", startOffset, endOffset, bumpersSent);
 
-                        final long endOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.earliest())).partitionResult(tp).get().offset();
-                        final long startOffset = getKcu().getAdmin().listOffsets(UniMaps.of(tp, OffsetSpec.latest())).partitionResult(tp).get().offset();
-                        log.error("start await loop: {}, end: {}, bumpersSent: {}", startOffset, endOffset, bumpersSent);
-
-                        //
-                        assertWithMessage("Highest seen offset to read up to")
-                                .that(highest.get())
-                                .isAtLeast(checkUpTo - 1);
-                    });
+                //
+                assertWithMessage("Highest seen offset to read up to")
+                        .that(highest.get())
+                        .isAtLeast(checkUpTo - 1);
+            });
 
             log.warn("Offset started at should equal the target {}, lowest {}, sent {}, diff is {})", targetStartOffset, lowest, bumpersSent, lowest.get() - targetStartOffset);
 
@@ -379,14 +371,19 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
             // give first poll a chance to run
             ThreadUtils.sleepSecondsLog(1);
 
-            getKcu().produceMessages(getTopic(), 1, "poll-bumper");
-
-            Awaitility.await()
-                    .failFast(tempPc::isClosedOrFailed)
-                    .untilAsserted(() -> {
-                        assertThat(seenOffsets).isNotEmpty();
-                        assertThat(seenOffsets.last().offset()).isGreaterThan(expectedProcessToOffset - 2);
-                    });
+            // Nudge records are produced INSIDE the await, not just once up front: with
+            // auto.offset.reset=latest and a contention-slowed bootstrap, a single pre-await record can be
+            // leapfrogged by the offset reset resolving after it - leaving the consumer positioned past
+            // every record that will ever exist, making this await unwinnable at ANY timeout. That race
+            // was this test's long-standing CI "flake" ([1]=latest only). See
+            // BrokerIntegrationTest#awaitWithTopicNudge and the linked solution doc.
+            log.info("first-poll await: pcId={} topic={} groupId={}",
+                    tempPc.getMyId().orElse("?"), getTopic(), getKcu().getGroupId());
+            var nudgesSent = new AtomicLong();
+            awaitWithTopicNudge(tempPc, Duration.ofSeconds(1), Duration.ofSeconds(10), nudgesSent, () -> {
+                assertThat(seenOffsets).isNotEmpty();
+                assertThat(seenOffsets.last().offset()).isGreaterThan(expectedProcessToOffset - 2);
+            });
 
             if (!succeededOffsets.isEmpty()) {
                 log.debug("Succeeded up to: {}", succeededOffsets.last().offset());

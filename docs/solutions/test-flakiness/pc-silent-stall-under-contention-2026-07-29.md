@@ -30,7 +30,16 @@ tags:
   - contention
 ---
 
-# PartitionStateCommittedOffsetIT: the grumpy "flake" is a real silent stall, not a test-timeout bug
+# PartitionStateCommittedOffsetIT: the highcpu runner "flake" is a real silent stall, not a test-timeout bug
+
+> **UPDATE 2026-07-30 - the `committedOffsetRemoved` mystery is SOLVED**, with a final twist: it was an
+> `auto.offset.reset=latest` **nudge race in the test harness** - the reset resolving after the test's
+> single pre-await bumper leaves the consumer positioned past all data forever, making the await
+> unwinnable at ANY timeout. NOT a product stall, NOT broker distress (read this report's "broker-side
+> hypothesis" as since-disproven). The drain-path zombie found and fixed along the way remains a real
+> product bug. Mechanism, capture, fix (shared `awaitWithTopicNudge` + deterministic
+> `LatestResetTailNudgeIT` guard) and diagnosability lessons:
+> `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`.
 
 > **Research report, not a fix.** This documents what the diagnosis found so the finding is not lost, and
 > ties it into the open #857 silent-stall investigation. **No test was masked and no timeout was bumped** -
@@ -41,7 +50,7 @@ tags:
 ## TL;DR
 
 - The claim under assessment - *"Integration's red is the known flake (`PartitionStateCommittedOffsetIT`,
-  already in inflight, fails on GitHub too) - not grumpy"* - is **true about grumpy** (reproduced locally;
+  already in inflight, fails on GitHub too) - not the runner"* - is **true about the highcpu runner** (reproduced locally;
   the runner is exonerated) but **understates the cause**: it is **not a benign awaitility timeout**.
 - Under real CPU/IO contention a Parallel Consumer instance **silently stops making progress** - zero
   records polled for the entire window, **still zero with a 120s bound**, no exception, consumer alive.
@@ -72,7 +81,7 @@ tags:
 
 ## Background
 
-PR #75 adds an optional, non-gating high-CPU self-hosted ("grumpy", 24c/48t) fast-feedback workflow. Its
+PR #75 adds an optional, non-gating high-CPU self-hosted ("highcpu runner", 24c/48t) fast-feedback workflow. Its
 **Integration** matrix job (`bin/ci-integration-test.sh -DforkCount=16 -DreuseForks=true`) went red. The
 sole failure was:
 
@@ -91,14 +100,14 @@ the underlying PC genuinely stalls, so a bigger deadline just hides it.
 
 ## Reproduction and evidence
 
-Local box: 12 logical cores, 32 GB (grumpy: 48 threads). "forks/core" is the oversubscription ratio;
-grumpy's integration job runs 16 forks / 48 threads = 0.33.
+Local box: 12 logical cores, 32 GB (highcpu runner: 48 threads). "forks/core" is the oversubscription ratio;
+the highcpu runner's integration job runs 16 forks / 48 threads = 0.33.
 
 | Run | forks/core | await bound | Result |
 |-----|-----------|-------------|--------|
 | Baseline | 1 (none) | 10s | **7/7 green** |
 | Fair | 8 → 0.67 | 120s | **7/7 green**, worst first-poll **1.0s** (others ~0.5s) |
-| Contended | 16 → 1.33 | 10s | **stall** - `committedOffsetRemoved` ConditionTimeout (grumpy's exact signature) |
+| Contended | 16 → 1.33 | 10s | **stall** - `committedOffsetRemoved` ConditionTimeout (the highcpu runner's exact signature) |
 | Contended | 16 → 1.33 | **120s** | **still fails - 0 polls in 120s** |
 
 Two facts are decisive:
@@ -217,18 +226,26 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
    drain loop's sleep (as `handlePoll()`'s comment intends), killing the 10 kHz spin **and** keeping the
    drainer rebalance-responsive. Guarded by `BrokerPollSystemDrainTest` (committed first as a
    characterisation of the defect, then flipped RED→GREEN by the fix).
-2. **Hard drain deadline with explicit group exit.** `drainTimeout` already bounds the *wait for user
-   work*; extend the guarantee to the *broker side*: when the deadline expires (or `waitForClose` times
-   out), explicitly `consumer.close(bounded)` / unsubscribe so a **LeaveGroup** is sent and the partitions
-   free immediately - never leave departure to session/poll-interval eviction. Audit the timeout/exception
-   paths in `close()`/`waitForClose()` for gaps where the supervisor gives up but the consumer object (and
-   its heartbeat thread) lives on.
-3. **Leave the group eagerly at drain start.** Since DRAINING pauses all partitions anyway (no new records
-   will ever be processed), the membership is only being kept for the final offset commit. An alternative
-   shape: commit what is ready, leave the group immediately (releasing partitions to siblings), then finish
-   in-flight work knowing those offsets cannot be committed (they will be redelivered - the same semantics
-   as `DONT_DRAIN`, applied only to the tail). Real trade-offs for EoS/transactional commit modes (commits
-   require live group membership/generation), so this is a design discussion, not a quick fix.
+2. **Hard drain deadline with explicit group exit (fail-safe only - NOT the normal path).** During a
+   healthy drain the member **should** keep its partitions (see option 3's rejection: that is what lets it
+   finish and commit, avoiding duplicates). The guarantee to add is only for the *pathological* case:
+   when `drainTimeout` expires (or `waitForClose` times out) the drain is being abandoned anyway, so
+   explicitly `consumer.close(bounded)` / unsubscribe so a **LeaveGroup** is sent and the partitions free
+   immediately - never leave departure to session/poll-interval eviction, and accept the bounded
+   duplicates as the lesser evil versus an indefinite hold. Audit the timeout/exception paths in
+   `close()`/`waitForClose()` for gaps where the supervisor gives up but the consumer object (and its
+   heartbeat thread) lives on.
+3. **~~Leave the group eagerly at drain start~~ - REJECTED (2026-07-30).** Holding the partitions through
+   the drain is the *point* of draining: the member keeps its assignment so in-flight work can finish and
+   its offsets can be **committed before leaving** - that is what delivers no/near-zero duplicates (and,
+   with transactions, a clean final commit). Releasing at drain start hands the partitions to a sibling
+   that immediately **reprocesses all in-flight work** - guaranteed duplicates, i.e. `DONT_DRAIN`
+   semantics smuggled into `DRAIN`. The defect was never the hold; it was the hold *combined with*
+   protocol-unresponsiveness. Post-fix behaviour is correct on both paths: undisturbed drain → finish,
+   commit, leave (zero duplicates); rebalance forced mid-drain → participate, commit-what's-done on
+   revoke, hand over cleanly (duplicates bounded to the not-yet-committable tail). Explicit LeaveGroup
+   belongs only in option 2's **deadline-expiry fail-safe**, where the drain is being abandoned anyway and
+   bounded duplicates are the lesser evil versus an indefinite hold.
 4. **Spin watchdog.** The poll loop has no self-observation; a 9-second 10 kHz spin was invisible until
    this capture. A cheap rate check (iterations/sec, rate-limited WARN) in `BrokerPollSystem`'s control
    loop would have flagged this class of bug years ago, and would catch regressions.
@@ -256,7 +273,7 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 - The under-served detector only observed **normal in-flight back-pressure**, not stuck-selectable or
   missing work - so the queue/shard layer is exonerated *for the scenarios captured*, which does not prove
   it is healthy in the (uncaptured) `committedOffsetRemoved` stall.
-- What **is** firmly established: it is a real stall (0 polls / 120s), not grumpy-specific, not a benign
+- What **is** firmly established: it is a real stall (0 polls / 120s), not runner-specific, not a benign
   timeout, and in the #857 silent-stall family. The exact per-scenario mechanism is **open**.
 
 ## Relationship to the in-flight lock-up work
@@ -299,7 +316,7 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 
 1. **Do not mask.** Leave `committedOffsetRemoved`'s await as-is; do not bump it to go green. A generous
    bound here would hide a real production stall - the exact failure this library exists to prevent.
-2. **Keep the grumpy Integration job non-gating** (it already is). The runner is fine; the red is a real
+2. **Keep the highcpu runner Integration job non-gating** (it already is). The runner is fine; the red is a real
    product stall that also affects GitHub-hosted runs intermittently (via sibling flakes like
    `MultiInstanceMetricsTest`).
 3. **Route to #857.** Add `committedOffsetRemoved` and `KafkaSanityTests` as additional reproductions under
@@ -360,7 +377,7 @@ masking):
 
 ## Sources
 
-- Grumpy failure: PR #75 run `30434423800` (failsafe report: `committedOffsetRemoved[1]` ConditionTimeout).
+- highcpu runner failure: PR #75 run `30434423800` (failsafe report: `committedOffsetRemoved[1]` ConditionTimeout).
 - GitHub-hosted Integration red on the same PR: run `30424305954` - the sibling flake
   `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed`, not this test.
 - `docs/inflight.md` - existing `committedOffsetRemoved` and `MultiInstanceMetricsTest` flake entries.
