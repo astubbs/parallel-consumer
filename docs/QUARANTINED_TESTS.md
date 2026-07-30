@@ -2,7 +2,7 @@
 
 The task list of tests currently in the quarantine lane: known-failing-on-master tests carrying
 `@Quarantined`, excluded from the gating CI suites (so green checks mean mergeable) but still run on EVERY PR push
-and after every merge to master (workflow_dispatch on demand) by the non-gating "Quarantined Tests"
+and after every merge to master (workflow_dispatch on demand) by the non-gating "Quarantine Lane / tests"
 job. The lane posts a sticky per-test report comment on the PR (🔴 failing-as-expected / 🟡🎲
 flapper passed / 🚨 PASSED) and, when a DETERMINISTIC quarantined test passes (its fix landed), opens
 a MERGE-BLOCKING review thread demanding the annotation + entry be deleted (the repo requires

@@ -28,7 +28,7 @@ jobs:
   # owning fix PR is open; the job itself never goes red for test failures (step-level
   # continue-on-error) - only audit-class errors would, and those live in quarantine-audit.
   test-quarantined:
-    name: "Quarantined Tests (non-gating)"
+    name: "tests"  # renders as "Quarantine Lane / tests" - the workflow name carries the identity
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

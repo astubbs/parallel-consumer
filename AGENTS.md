@@ -74,7 +74,7 @@ bin/performance-test.sh
   bug - see the drain-zombie write-up, `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`, which lands with PR #80). Instead annotate it
   `@Quarantined(reason, tracking, fixedBy)` (in core's shared test sources): it leaves the gating suites
   (green means mergeable) but keeps running on every PR push and after every merge to master (workflow_dispatch on
-  demand) in the non-gating "Quarantined Tests" CI job, whose summary carries pass/fail + the audit of every
+  demand) in the non-gating "Quarantine Lane / tests" CI job, whose summary carries pass/fail + the audit of every
   quarantined test and its owner; the seconds-fast "Quarantine Audit" job enforces the rules on every
   PR (registry drift / broken owner claims fail fast - no tests are run there). The live registry
   / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match

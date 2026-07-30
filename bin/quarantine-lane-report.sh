@@ -14,12 +14,17 @@
 #                                when it is part of the PR diff, else on the first changed file with a
 #                                pointer to the annotation location.
 #        NOT_RUN              -> infra/report anomaly, flagged.
-#   2. Upserts ONE sticky PR comment (marker-identified) with the per-test table - never spams.
+#   2. LANE-LEAK SELF-CHECK: every testcase found in the reports must correspond to a registry
+#      entry - if ANY non-quarantined test executed in the lane, the group filtering has regressed
+#      (e.g. a plugin config losing the <groups> binding, the real ce-review P1) and the script
+#      exits 1, turning the lane job RED. The lane proves on every run that it runs ONLY the
+#      quarantined tests.
+#   3. Upserts ONE sticky PR comment (marker-identified) with the per-test table - never spams.
 #
 # Env: PR_NUMBER (empty = log-only, e.g. push-to-master runs), HEAD_SHA (for review comments),
 #      GH_TOKEN in CI. DRY_RUN=1 prints intended gh actions instead of calling gh (test seam).
-# Exit: always 0 unless the script itself breaks - test outcomes must not red the lane job; the
-#       thread is the gate.
+# Exit: 0 unless the script breaks OR the lane-leak self-check fires - test OUTCOMES never red the
+#       job (the thread is the gate); a leaked non-quarantined test always does.
 
 set -euo pipefail
 
@@ -95,6 +100,36 @@ annotation_location() { # <Class> -> path:line of the @Quarantined( line
 
 entries=$(registry_entries)
 [ -z "$entries" ] && { echo "Quarantine lane empty - nothing to report."; exit 0; }
+
+# --- lane-leak self-check: every executed testcase must match a registry entry ---
+leak=0
+while IFS=$'\t' read -r tc_class tc_name; do
+    [ -n "$tc_class" ] || continue
+    simple=${tc_class##*.}
+    matched=0
+    for e in $entries; do
+        ecls=${e%%.*}; emethod=${e#*.}
+        [ "$emethod" = "$e" ] && emethod=""
+        if [ "$simple" = "$ecls" ] && { [ -z "$emethod" ] || [ "${tc_name#"$emethod"}" != "$tc_name" ]; }; then
+            matched=1; break
+        fi
+    done
+    if [ "$matched" = "0" ]; then
+        echo "LANE_LEAK: $tc_class.$tc_name executed in the quarantine lane but is NOT a quarantined test - group filtering has regressed (check the surefire/failsafe <groups> bindings)."
+        leak=1
+    fi
+done < <(find . -path '*/surefire-reports/*.xml' -o -path '*/failsafe-reports/*.xml' 2>/dev/null | while IFS= read -r f; do
+        awk '/<testcase /{
+            match($0, /classname="[^"]*"/); cn=substr($0, RSTART+11, RLENGTH-12)
+            match($0, /name="[^"]*"/);      nm=substr($0, RSTART+6,  RLENGTH-7)
+            print cn "\t" nm
+        }' "$f"
+    done | sort -u)
+if [ "$leak" = "1" ]; then
+    echo "FATAL: non-quarantined tests ran in the lane - failing the job (this is the self-check that the lane runs ONLY quarantined tests)."
+    exit 1
+fi
+echo "Lane-leak self-check passed: every executed testcase matches a registry entry."
 
 table=""
 action_needed=""

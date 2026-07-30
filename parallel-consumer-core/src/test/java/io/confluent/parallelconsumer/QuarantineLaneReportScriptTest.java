@@ -76,6 +76,30 @@ class QuarantineLaneReportScriptTest extends AbstractQuarantineScriptTest {
         assertThat(r.output).contains("SomeQuarantinedIT.someMethod -> NOT_RUN");
     }
 
+    @Test
+    void nonQuarantinedTestInReportsFailsTheLaneLeakSelfCheck() throws Exception {
+        // the user-mandated guarantee: the lane must PROVE it ran only quarantined tests - a stray
+        // testcase in the reports means group filtering regressed (the surefire-binding P1 class)
+        fixtureWith("SomeQuarantinedIT", "someMethod", false,
+                testcaseXml("SomeQuarantinedIT", "someMethod", true));
+        Path reports = fixture.resolve("module/target/surefire-reports");
+        Files.createDirectories(reports);
+        Files.write(reports.resolve("TEST-x.LeakedUnitTest.xml"),
+                testcaseXml("LeakedUnitTest", "shouldNeverRunHere", false).getBytes(StandardCharsets.UTF_8));
+        Result r = runReport();
+        assertWithMessage("a leaked non-quarantined test must fail the job - output: %s", r.output)
+                .that(r.exitCode).isEqualTo(1);
+        assertThat(r.output).contains("LANE_LEAK: x.LeakedUnitTest.shouldNeverRunHere");
+    }
+
+    @Test
+    void leakSelfCheckPassesWhenOnlyQuarantinedTestsRan() throws Exception {
+        fixtureWith("SomeQuarantinedIT", "someMethod", false,
+                testcaseXml("SomeQuarantinedIT", "someMethod", true));
+        Result r = runReport();
+        assertThat(r.output).contains("Lane-leak self-check passed");
+    }
+
     // ---- fixtures ----
 
     private void fixtureWith(String cls, String method, boolean flapping, String reportXml) throws IOException {
