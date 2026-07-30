@@ -8,7 +8,7 @@
 # Tuning (measured on this 16c/32t box): unit forks 1-per-core (1C=32); more (2C) is flat, so 1C is the knee.
 # Integration is capped at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism).
 # Performance runs concurrently too: it's just a correctness gate here, and its *timing* is noisy under load
-# (accurate benchmarking belongs in a separate isolated/on-demand run - grumpy solo is ~1m54 vs GitHub ~3m50).
+# (accurate benchmarking belongs in a separate isolated/on-demand run - highcpu runner solo is ~1m54 vs GitHub ~3m50).
 #
 # SECURITY (public repo + self-hosted runner): guarded to SAME-REPO pull requests only, so a fork PR's
 # untrusted code NEVER runs on the self-hosted machine (RCE). pull_request (no secrets), never pull_request_target.

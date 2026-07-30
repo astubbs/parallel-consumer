@@ -8,7 +8,7 @@
 # usually faster. This lets the GitHub-hosted job, BEFORE running its own (slow, 2-core) suite, check whether
 # the highcpu equivalent for THIS commit has already PASSED - and if so, skip its own run and declare green.
 # The GitHub-hosted job therefore stays the required gate (it always reports), it just finishes faster when
-# grumpy wins the race. It NEVER depends on the self-hosted runner: if grumpy is offline/queued/slow/failed,
+# the highcpu runner wins the race. It NEVER depends on the self-hosted runner: if the highcpu runner is offline/queued/slow/failed,
 # the hosted job runs its tests normally.
 #
 # Outputs `skip=true|false` to $GITHUB_OUTPUT.

@@ -110,7 +110,7 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
       # Concede: if the self-hosted highcpu runner already passed this suite for this commit, skip the (slow)
-      # hosted run and go green. Never blocks - if grumpy is offline/slow/failed, this runs the tests normally.
+      # hosted run and go green. Never blocks - if the highcpu runner is offline/slow/failed, this runs the tests normally.
       - name: Concede to self-hosted highcpu if it already passed
         id: concede
         continue-on-error: true      # a concede-check failure must never fail the gate - just run the tests
