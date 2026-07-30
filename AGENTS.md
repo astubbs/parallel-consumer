@@ -96,13 +96,27 @@ bin/performance-test.sh
 
 - **Lombok**: Used extensively (builders, getters, logging). IntelliJ Lombok plugin required.
 - **EditorConfig**: Enforced via `.editorconfig` - 4-space indent for Java, 120 char line length.
-- **License headers**: Managed by `license-maven-plugin` (Mycila). Use `-Dlicense.skip` locally to skip checks.
+- **License headers**: Enforced by `bin/check-copyright-headers.sh` (runs in CI via the
+  `Copyright Headers` workflow; run it locally before pushing header-related changes). The mycila
+  `license-maven-plugin` is skipped by default in the root pom - it knows only the Confluent header
+  template, so its `format` goal used to stamp the wrong attribution onto fork-original files and its
+  git-year resolver auto-bumped years and broke in worktrees. `-Dlicense.skip` on the command line is
+  no longer needed (harmless if still passed).
 - **Copyright rules for this fork**:
   - Do not change copyright headers on existing files unless the file has substantive code changes in the same commit
   - Do not bump copyright years as an incidental or standalone change
   - The `NOTICE` file at repo root contains the legal attribution structure for the fork
-  - New files written entirely for the fork should not claim Confluent copyright
-  - Always pass `-Dlicense.skip` to Maven to prevent the license plugin from auto-bumping years
+  - New files written entirely for the fork use `Copyright (C) <year> Antony Stubbs and contributors` -
+    never the Confluent header
+  - Upstream-derived files MODIFIED on the fork retain the Confluent notice and ADD
+    `Modifications Copyright (C) <year> Antony Stubbs and contributors` beneath it (Apache 2.0
+    4(b) retain-notices + 4(c) change-notice - the convention used by e.g. Amazon Corretto and
+    MariaDB for derived files). The scanner detects modification against the fork point
+    automatically, so forgetting the line fails CI
+  - Files renamed or extracted from upstream keep the Confluent header - register renames in
+    `RENAMED_FROM_UPSTREAM` (`newpath|oldpath` lines) and extractions in `EXTRACTED_FROM_UPSTREAM`
+    inside `bin/check-copyright-headers.sh`. Renames with content changes, and all extractions,
+    also require the modifications line
 - **Google Truth**: Used for test assertions alongside JUnit 5 and Mockito.
 
 ## CI

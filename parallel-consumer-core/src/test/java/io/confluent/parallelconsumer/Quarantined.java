@@ -1,6 +1,6 @@
 package io.confluent.parallelconsumer;
 /*-
- * Copyright (C) 2020-2026 Antony Stubbs and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import org.junit.jupiter.api.Tag;
