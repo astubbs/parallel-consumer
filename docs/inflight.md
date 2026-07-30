@@ -179,6 +179,40 @@ with 4.10.3, so these drop out of "new". Track the actual fixes (make the counte
 Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
 .erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
 
+## Quarantine lane (`@Quarantined`) — active roster
+
+Branch `ci/quarantined-test-lane`. Known-failing-on-master tests leave the *gating* suites (green means
+mergeable) but keep running on every PR in the non-gating "Quarantined Tests" CI job (audit + per-test
+results in its step summary; locally `bin/quarantined-test.sh`). Rules live in AGENTS.md (Testing): no
+quarantine without diagnosis; quarantine is master-state, not PR-state; the owning fix PR deletes the
+annotation after merging master, atomically restoring the test to the gating lane.
+
+The live roster is **`docs/QUARANTINED_TESTS.md`** — a CI-enforced registry
+(`bin/check-quarantine-registry.sh` fails on any drift vs the `@Quarantined` annotations, both
+directions), so it acts as the task list of tests to return to the gating lane. Current sole occupant:
+`PartitionStateCommittedOffsetIT.committedOffsetRemoved` (the `[latest]` nudge race), **owner PR #80**,
+which must delete the annotation + registry entry once it has master merged in.
+
+## Parked: user-facing upstream issue mirroring
+
+We have strong *internal* upstream tracking (`upstream-map.yaml`, this ledger, `docs/solutions/`) but
+nothing user-facing: a user on the fork's Issues tab can't tell whether upstream #857 is fixed here, in
+flight, or won't-fix — and upstream (unmaintained) data could disappear/be archived one day. Plan:
+
+- **Mirror on touch, not in bulk** — create a fork issue only when we address an upstream issue (fix,
+  won't-fix, or active investigation). No mass import (noise + maintenance debt).
+- Canonical structure per mirror: title `upstream #NNN: ...`; snapshot of the upstream issue's essential
+  content (quoted, attributed, linked — the data-preservation goal); our disposition (fixed-in /
+  won't-fix + why / investigating); links to fixing PRs + solutions docs; `upstream-mirror` label.
+- **Ongoing conversation lives on the fork issue**; the upstream thread is historical record.
+- Script it off `upstream-map.yaml` (gh CLI) so map and issues can't drift — the map stays the source
+  of truth, issues are a rendered view. **Script requirements (user-specified): operates on exactly ONE
+  upstream issue per invocation (no batch mode), and has a first-class dry-run mode** (print the full
+  issue title/body/labels that *would* be created/updated, and whether it's a create or an update,
+  without touching GitHub).
+- First candidates once the current PR queue drains: upstream #857 (stall saga), #909, #893/#905
+  (PCMetrics leak), #912 (vertx leak).
+
 ## CI reliability / gate issues (follow-up work)
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —

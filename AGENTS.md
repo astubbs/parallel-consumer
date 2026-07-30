@@ -68,6 +68,20 @@ bin/performance-test.sh
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
+- **Quarantine lane for known-failing-on-master tests (`@Quarantined`).** When a test is red on master's
+  *gating* CI and its fix lives in another (open) PR, do NOT leave it red (ambiguous checks, error-prone
+  merge decisions) and do NOT `@Disabled` it (loses the signal — a "known flake" can be a real product
+  bug, see the drain-zombie write-up in `docs/solutions/test-flakiness/`). Instead annotate it
+  `@Quarantined(reason, tracking, fixedBy)` (in core's shared test sources): it leaves the gating suites
+  (green means mergeable) but keeps running on every PR in the non-gating "Quarantined Tests" CI job,
+  whose summary carries pass/fail + the audit of every quarantined test and its owner. The live registry
+  / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
+  the annotations in both directions, so it can't drift. Rules: **(1) no
+  quarantine without diagnosis** — undiagnosed red stays red and blocks, on purpose; **(2) quarantine is
+  master-state, not PR-state** — a test red on only one PR is that PR's problem; **(3) the owning fix PR
+  deletes the annotation AND its registry entry in the same commit** after merging master, atomically
+  restoring the test to the gating lane. Run
+  the lane locally with `bin/quarantined-test.sh`.
 - **Reuse test utilities — search before you add (DRY).** Shared client/broker helpers live in `KafkaClientUtils` (topic creation, producers, consumers, PC builders) and `BrokerIntegrationTest` (the base class most integration tests extend). Before writing a new helper or a raw `admin`/producer/consumer call in a test, search these two first and extend them. Duplicating an existing helper is how bugs get reintroduced — e.g. a copy of topic-creation logic drifted to a 1-second timeout and became a flaky-CI source (see `docs/solutions/test-issues/`). When you must add a helper, put it in the shared util, not the test. Also check `docs/solutions/` for prior art before solving a problem that feels familiar.
 
 ## Known Issues
@@ -89,7 +103,7 @@ bin/performance-test.sh
 
 ## CI
 
-- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
+- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). A non-gating "Quarantined Tests" job runs the `@Quarantined` lane (`bin/quarantined-test.sh` — see Testing). Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
 
