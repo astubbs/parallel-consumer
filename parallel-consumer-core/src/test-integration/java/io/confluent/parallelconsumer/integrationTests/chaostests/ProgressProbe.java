@@ -6,8 +6,10 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.Getter;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.ConsumerGroupState;
+import org.apache.kafka.common.TopicPartition;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -18,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 import static pl.tlinkowski.unij.api.UniLists.of;
 
@@ -43,6 +46,17 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * </ul>
  * The end-of-run correctness ledger (no loss / bounded duplicates) is a static helper the test calls
  * after the fleet settles - see {@link #ledger}.
+ * <p>
+ * Two construction paths share the same samplers:
+ * <ul>
+ *   <li><b>Chaos mode</b> ({@link #ProgressProbe(KafkaClientUtils, String, String, LongSupplier, long)}):
+ *   all probes active, single topic, violations GATE the run (the chaos suite asserts them empty).</li>
+ *   <li><b>Ambient observer mode</b> ({@link #ambientObserver(KafkaClientUtils, Supplier)}): flight
+ *   recorder for every broker IT. Watches ALL topics the group has committed offsets for; the
+ *   progress-watermark probe is inactive (no consumed-count supplier exists); violations and peaks are
+ *   collected for the autopsy but NEVER gate - the chaos suite is the only place these
+ *   chaos-calibrated thresholds are assertions.</li>
+ * </ul>
  */
 @Slf4j
 public class ProgressProbe implements ChaosConductor.ChaosObserver {
@@ -77,13 +91,22 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     private static final Duration SAMPLE_INTERVAL = Duration.ofSeconds(1);
 
     private final KafkaClientUtils kcu;
-    private final String groupId;
+    /** Supplier, not a snapshot: ambient mode must follow tests that switch to a NEW_GROUP mid-test. */
+    private final Supplier<String> groupIdSupplier;
+    /** null = ambient mode: watch every topic the group has committed offsets for */
     private final String topic;
+    /** null = ambient mode: progress-watermark probe inactive (no fleet consumed-count exists) */
     private final LongSupplier totalConsumed;
     private final long expectedTotal;
+    private final String threadName;
+    /** log tag distinguishing chaos-gating output from ambient flight-recorder output */
+    private final String logTag;
     /** per-partition committed-offset watermarks for the Class 2 (lag stagnation) probe */
-    private final Map<Integer, Long> lastCommitted = new ConcurrentHashMap<>();
-    private final Map<Integer, Instant> lastCommittedMove = new ConcurrentHashMap<>();
+    private final Map<TopicPartition, Long> lastCommitted = new ConcurrentHashMap<>();
+    private final Map<TopicPartition, Instant> lastCommittedMove = new ConcurrentHashMap<>();
+    /** Latest per-partition lag observation - the autopsy's frozen-partition detail. */
+    @Getter
+    private final Map<TopicPartition, PartitionLagSnapshot> partitionLagSnapshots = new ConcurrentHashMap<>();
 
     @Getter
     private final List<String> violations = Collections.synchronizedList(new ArrayList<>());
@@ -102,18 +125,41 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     @Getter
     private volatile long peakLagStagnationMs = 0;
 
+    /** Chaos-mode construction: all probes active, single topic - the W1/W4 gating path. */
     public ProgressProbe(KafkaClientUtils kcu, String groupId, String topic, LongSupplier totalConsumed, long expectedTotal) {
+        this(kcu, () -> groupId, topic, totalConsumed, expectedTotal, "chaos-progress-probe", "chaos-probe");
+    }
+
+    /**
+     * Ambient observer-mode construction (see class javadoc): admin-read samplers only (rebalance
+     * dwell + all-topic lag stagnation), progress watermark inactive. Tolerates the admin client not
+     * existing yet ({@code kcu.open()} runs after extension callbacks start the probe) - samples are
+     * silently skipped until it appears, and a group that never forms simply never trips anything.
+     */
+    public static ProgressProbe ambientObserver(KafkaClientUtils kcu, Supplier<String> groupIdSupplier) {
+        return new ProgressProbe(kcu, groupIdSupplier, null, null, 0, "ambient-probe-sampler", "ambient-probe");
+    }
+
+    private ProgressProbe(KafkaClientUtils kcu, Supplier<String> groupIdSupplier, String topic,
+                          LongSupplier totalConsumed, long expectedTotal, String threadName, String logTag) {
         this.kcu = kcu;
-        this.groupId = groupId;
+        this.groupIdSupplier = groupIdSupplier;
         this.topic = topic;
         this.totalConsumed = totalConsumed;
         this.expectedTotal = expectedTotal;
+        this.threadName = threadName;
+        this.logTag = logTag;
+    }
+
+    /** Observer mode never gates - violations are autopsy material only (ambient flight recorder). */
+    public boolean isObserverMode() {
+        return totalConsumed == null;
     }
 
     public void start() {
         running.set(true);
         lastAdvance = Instant.now();
-        samplerThread = new Thread(this::sampleLoop, "chaos-progress-probe");
+        samplerThread = new Thread(this::sampleLoop, threadName);
         samplerThread.setDaemon(true);
         samplerThread.start();
     }
@@ -129,8 +175,14 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 Thread.currentThread().interrupt();
             }
         }
-        log.info("[chaos-probe] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
-                peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
+        if (isObserverMode()) {
+            // quiet flight recorder: the extension owns end-of-test reporting (autopsy / DEBUG one-liner)
+            log.debug("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
+                    logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
+        } else {
+            log.info("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
+                    logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
+        }
         return getViolations();
     }
 
@@ -157,7 +209,9 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         while (running.get()) {
             try {
                 Thread.sleep(SAMPLE_INTERVAL.toMillis());
-                sampleProgress();
+                if (!isObserverMode()) {
+                    sampleProgress();
+                }
                 sampleRebalanceDwell();
                 sampleDrains();
                 if (++tick % 5 == 0) {
@@ -190,7 +244,10 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     }
 
     private void sampleRebalanceDwell() throws Exception {
-        var group = kcu.getAdmin().describeConsumerGroups(of(groupId)).all()
+        var admin = kcu.getAdmin();
+        if (admin == null) return; // ambient lazy start: clients not opened yet - skip silently
+        String groupId = groupIdSupplier.get();
+        var group = admin.describeConsumerGroups(of(groupId)).all()
                 .get(5, java.util.concurrent.TimeUnit.SECONDS).get(groupId);
         ConsumerGroupState state = group.state();
         boolean rebalancing = state == ConsumerGroupState.PREPARING_REBALANCE
@@ -219,14 +276,20 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * including PARTIAL stalls that a fleet-wide consumption counter hides behind healthy siblings.
      */
     private void sampleLagStagnation() throws Exception {
-        var committedMap = kcu.getAdmin().listConsumerGroupOffsets(groupId)
+        var admin = kcu.getAdmin();
+        if (admin == null) return; // ambient lazy start: clients not opened yet - skip silently
+        String groupId = groupIdSupplier.get();
+        var committedMap = admin.listConsumerGroupOffsets(groupId)
                 .partitionsToOffsetAndMetadata().get(5, java.util.concurrent.TimeUnit.SECONDS);
-        var offsetSpecs = new java.util.HashMap<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.admin.OffsetSpec>();
+        var offsetSpecs = new java.util.HashMap<TopicPartition, org.apache.kafka.clients.admin.OffsetSpec>();
         for (var tp : committedMap.keySet()) {
-            if (tp.topic().equals(topic)) offsetSpecs.put(tp, org.apache.kafka.clients.admin.OffsetSpec.latest());
+            // chaos mode watches its single topic; ambient (topic == null) watches everything the group commits to
+            if (topic == null || tp.topic().equals(topic)) {
+                offsetSpecs.put(tp, org.apache.kafka.clients.admin.OffsetSpec.latest());
+            }
         }
         if (offsetSpecs.isEmpty()) return;
-        var endOffsets = kcu.getAdmin().listOffsets(offsetSpecs).all().get(5, java.util.concurrent.TimeUnit.SECONDS);
+        var endOffsets = admin.listOffsets(offsetSpecs).all().get(5, java.util.concurrent.TimeUnit.SECONDS);
         Instant now = Instant.now();
         for (var entry : endOffsets.entrySet()) {
             var tp = entry.getKey();
@@ -235,12 +298,14 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             long committed = committedMeta.offset();
             long end = entry.getValue().offset();
             long lag = end - committed;
-            Long previous = lastCommitted.put(tp.partition(), committed);
-            if (previous == null || committed != previous) {
-                lastCommittedMove.put(tp.partition(), now);
-                continue;
+            Long previous = lastCommitted.put(tp, committed);
+            boolean moved = previous == null || committed != previous;
+            if (moved) {
+                lastCommittedMove.put(tp, now);
             }
-            Instant since = lastCommittedMove.getOrDefault(tp.partition(), now);
+            Instant since = lastCommittedMove.getOrDefault(tp, now);
+            partitionLagSnapshots.put(tp, new PartitionLagSnapshot(tp, committed, end, lag, since));
+            if (moved) continue;
             long stagnantMs = Duration.between(since, now).toMillis();
             if (lag >= LAG_STAGNATION_MIN_LAG && stagnantMs > peakLagStagnationMs) {
                 peakLagStagnationMs = stagnantMs;
@@ -250,8 +315,26 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                         + " with committed offset stagnant at " + committed + " for " + (stagnantMs / 1000)
                         + "s (bound " + LAG_STAGNATION_BOUND.getSeconds() + "s) - protocol-invisible stall: "
                         + "group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere");
-                lastCommittedMove.put(tp.partition(), now); // re-arm
+                lastCommittedMove.put(tp, now); // re-arm
             }
+        }
+    }
+
+    /**
+     * One partition's latest lag-sample observation. The ambient autopsy uses these for the
+     * frozen-committed detail; stagnation is measured from the last time the committed offset moved.
+     */
+    @Value
+    public static class PartitionLagSnapshot {
+        TopicPartition topicPartition;
+        long committed;
+        long endOffset;
+        long lag;
+        Instant committedLastMovedAt;
+
+        /** Seconds the committed offset has been stagnant, as of NOW (call at report time). */
+        public long stagnantSeconds() {
+            return Duration.between(committedLastMovedAt, Instant.now()).getSeconds();
         }
     }
 
@@ -268,7 +351,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
 
     private void violate(String message) {
         violations.add(message);
-        log.error("[chaos-probe] VIOLATION: {}", message);
+        log.error("[{}] VIOLATION: {}", logTag, message);
     }
 
     /**

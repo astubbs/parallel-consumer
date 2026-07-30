@@ -16,6 +16,12 @@ ifndef::github_name[]
 toc::[]
 endif::[]
 
+== Unreleased
+
+=== Build & CI
+
+* Ambient probe "flight recorder" for every broker integration test: a JUnit extension on `BrokerIntegrationTest` runs the chaos suite's ProgressProbe in observer mode under every IT - on test failure it logs an autopsy (rebalance-dwell + per-partition committed-offset stagnation + frozen-partition table) so generic timeouts arrive pre-diagnosed; silent on passing tests; opt-outs via `-Dambient.probe=off` or `@NoAmbientProbe`.
+
 == 0.6.0.0
 
 First release of the community fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer] (upstream is no longer actively maintained). Drop-in compatible with upstream 0.5.x — the only required change is the Maven groupId (see Breaking below). Includes upstream fixes and features merged after upstream's last release (0.5.3.3) that were never published there.
