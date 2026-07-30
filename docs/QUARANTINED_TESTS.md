@@ -28,6 +28,9 @@ Rules (full discipline in `AGENTS.md` → Testing, and the `@Quarantined` javado
    merging master - atomically restoring the test to the gating lane.
 4. Every entry needs an owning fix PR. An entry without one is diagnosed-but-unowned: flag it, find it
    an owner.
+5. **A release is blocked while this list is non-empty** (`release.yml` guard; dry runs warn instead) -
+   a release must not ship while tests are held out of the gates. Snapshots still publish (dev
+   artifacts, master is always `-SNAPSHOT`).
 
 ## Currently quarantined
 

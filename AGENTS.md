@@ -81,7 +81,8 @@ bin/performance-test.sh
   quarantine without diagnosis** — undiagnosed red stays red and blocks, on purpose; **(2) quarantine is
   master-state, not PR-state** — a test red on only one PR is that PR's problem; **(3) the owning fix PR
   deletes the annotation AND its registry entry in the same commit** after merging master, atomically
-  restoring the test to the gating lane. Run
+  restoring the test to the gating lane. Releases are blocked
+  while the lane is non-empty (`release.yml` guard; snapshots still publish). Run
   the lane locally with `bin/quarantined-test.sh`.
 - **Reuse test utilities — search before you add (DRY).** Shared client/broker helpers live in `KafkaClientUtils` (topic creation, producers, consumers, PC builders) and `BrokerIntegrationTest` (the base class most integration tests extend). Before writing a new helper or a raw `admin`/producer/consumer call in a test, search these two first and extend them. Duplicating an existing helper is how bugs get reintroduced — e.g. a copy of topic-creation logic drifted to a 1-second timeout and became a flaky-CI source (see `docs/solutions/test-issues/`). When you must add a helper, put it in the shared util, not the test. Also check `docs/solutions/` for prior art before solving a problem that feels familiar.
 
