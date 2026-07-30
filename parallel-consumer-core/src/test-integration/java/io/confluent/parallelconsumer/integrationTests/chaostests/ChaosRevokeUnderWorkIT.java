@@ -1,7 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
@@ -28,7 +28,6 @@ import java.util.concurrent.Executors;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
@@ -214,22 +213,9 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            conductor.stop();
-            List<String> violations = probe.stop();
-            producerThread.join(10_000);
-            settleFleet(conductor);
-            log.info("Run summary: consumed={} probe violations={}", totalConsumed.get(), violations);
+            settleRun(conductor, probe, producerThread, totalConsumed);
         }
 
-        assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
-                "seed %s replays this schedule)", seed)
-                .that(probe.getViolations()).isEmpty();
-
-        int disturbances = (int) conductor.getTimeline().stream()
-                .filter(entry -> entry.contains("STOP_") || entry.contains("RESTART")).count();
-        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
-                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
-        assertWithMessage("correctness ledger must balance (seed %s)", seed)
-                .that(ledgerProblems).isEmpty();
+        assertScenarioSlos(probe, conductor, seed, expectedKeys, allConsumed);
     }
 }

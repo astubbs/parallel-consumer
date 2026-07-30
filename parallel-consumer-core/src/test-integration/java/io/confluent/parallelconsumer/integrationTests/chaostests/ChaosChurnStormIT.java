@@ -25,7 +25,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
@@ -146,26 +145,10 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            conductor.stop();
-            List<String> violations = probe.stop();
-            producerThread.join(10_000);
-            settleFleet(conductor);
-            log.info("Run summary: consumed={} (unique tracking via ledger below), probe violations={}",
-                    totalConsumed.get(), violations);
+            settleRun(conductor, probe, producerThread, totalConsumed);
         }
 
-        // SLO verdict
-        assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
-                "seed %s replays this schedule)", seed)
-                .that(probe.getViolations()).isEmpty();
-
-        // correctness ledger: no loss ever; duplicates bounded per disturbance
-        int disturbances = (int) conductor.getTimeline().stream()
-                .filter(entry -> entry.contains("STOP_") || entry.contains("RESTART")).count();
-        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
-                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
-        assertWithMessage("correctness ledger must balance (seed %s)", seed)
-                .that(ledgerProblems).isEmpty();
+        assertScenarioSlos(probe, conductor, seed, expectedKeys, allConsumed);
     }
 
 }

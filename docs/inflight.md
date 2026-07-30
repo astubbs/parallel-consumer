@@ -190,6 +190,16 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
   restarts every in-flight heavy).
 - **Thin margin note:** W4's measured legit lag-stagnation peaks (117-123s) sit ~1.25x under the 150s
   Class 2 bound. Fine for a non-gating suite; widen (shorter storm or dwell) if it ever flakes.
+- **Unit-test seams (PR #85 review):** ProgressProbe's per-scenario toggles
+  (`disableRebalanceDwellViolation` / `withNoProgressWindow`) and their "peak always measured,
+  violation only suppressed" invariant have no fast unit coverage - the samplers are private, so a
+  small extract-and-test seam is needed first. Same for `ManagedPCInstance.Config.extraConsumerProps`
+  (null vs present, wins-last ordering). Both become millisecond broker-free tests once seams exist.
+- **Fork copyright headers (chaos suite):** the PR #85 new files now carry the fork header
+  (`Copyright (C) 2026 Antony Stubbs and contributors`, per AGENTS.md); older fork-authored chaos
+  files (ChaosChurnStormIT, ChaosConductor, ChaosConductorPlanIT, ProgressProbe, ManagedPCInstance)
+  still carry the Confluent header - align each when it next has substantive changes (AGENTS.md rule
+  forbids standalone header churn).
 - **Ambient probe for EVERY integration test (user idea, promising):** ProgressProbe's dwell +
   lag-stagnation samplers are pure admin-client reads (group state, committed vs end offsets) - they
   need only (kcu, groupId, topic), no consumption counter. A JUnit 5 extension on

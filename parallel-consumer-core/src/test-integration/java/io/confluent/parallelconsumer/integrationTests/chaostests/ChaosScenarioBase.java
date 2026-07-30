@@ -1,7 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
@@ -19,6 +19,8 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * Shared scaffolding for Chaos Pain Suite scenarios (W1 churn storm, W4 revoke-under-work, ...): the
@@ -100,5 +102,35 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
                 log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
             }
         }
+    }
+
+    /** Shared finally-block epilogue: stop chaos and the probe, join the background producer, settle
+     * the fleet, log the run summary. Runs on both the pass and fail path - it must only tear down and
+     * report, never assert (asserting here would mask the primary failure). */
+    protected void settleRun(ChaosConductor conductor, ProgressProbe probe, Thread producerThread,
+                             AtomicLong totalConsumed) throws InterruptedException {
+        conductor.stop();
+        List<String> violations = probe.stop();
+        producerThread.join(10_000);
+        settleFleet(conductor);
+        log.info("Run summary: consumed={} (unique tracking via correctness ledger), probe violations={}",
+                totalConsumed.get(), violations);
+    }
+
+    /** The suite-wide verdict, identical for every scenario by design: probes must be violation-free
+     * (each violation carries its own diagnosis), and the correctness ledger must balance - no loss
+     * ever, duplicates bounded per disturbance. The seed in every message replays the schedule. */
+    protected void assertScenarioSlos(ProgressProbe probe, ChaosConductor conductor, long seed,
+                                      Set<String> expectedKeys, Queue<String> allConsumed) {
+        assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
+                "seed %s replays this schedule)", seed)
+                .that(probe.getViolations()).isEmpty();
+
+        int disturbances = (int) conductor.getTimeline().stream()
+                .filter(entry -> entry.contains("STOP_") || entry.contains("RESTART")).count();
+        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
+                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
+        assertWithMessage("correctness ledger must balance (seed %s)", seed)
+                .that(ledgerProblems).isEmpty();
     }
 }
