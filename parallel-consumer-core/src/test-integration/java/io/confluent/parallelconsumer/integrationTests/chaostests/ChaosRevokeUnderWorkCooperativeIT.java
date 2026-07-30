@@ -1,7 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.extern.slf4j.Slf4j;
@@ -23,11 +23,13 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *   produced the false-positive class root-caused during eager calibration. Under cooperative-sticky,
  *   unaffected partitions keep processing straight through rebalances, so the legitimate
  *   lag-stagnation window shrinks to a single heavy dwell + slack - far more probe headroom.</li>
- *   <li><b>Exposure to the actual quarry rises.</b> The open #857 commit-during-revoke deadlock
- *   ({@code synchronized(commitCommand)} in {@code onPartitionsRevoked} vs
- *   {@code commitOffsetsThatAreReady}) fires per-revoke - and cooperative mode produces MORE
- *   FREQUENT, smaller revokes. More revokes under in-flight heavy work = more draws at the
- *   probabilistic stall the eager variant's 9-seed sweep never hit.</li>
+ *   <li><b>Exposure to the actual quarry was hypothesized to rise.</b> The open #857
+ *   commit-during-revoke deadlock ({@code synchronized(commitCommand)} in
+ *   {@code onPartitionsRevoked} vs {@code commitOffsetsThatAreReady}) fires per-revoke, and the
+ *   going-in hypothesis was that cooperative mode produces MORE FREQUENT, smaller revokes = more
+ *   draws at the probabilistic stall the eager variant's 9-seed sweep never hit. The calibration
+ *   record below REVISED this: sticky assignment avoids unnecessary movement, so revoke events
+ *   dropped ~6x - what rises is per-event sharpness, not frequency.</li>
  * </ol>
  * <p>
  * <b>Novel-coverage note</b>: this is the codebase's first-ever end-to-end exercise of PC under the

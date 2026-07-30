@@ -73,7 +73,10 @@ PR #85 → #83; PR body carries `depends on #85`). New worktree `.claude/worktre
 - **Shared driver, two thin ITs.** Extract the W4 run into an abstract
   `AbstractRevokeUnderWorkScenario extends ChaosScenarioBase` exposing the knobs the variants differ
   on (assignor flag; scenario name for topic/log labels; constants stay protected fields with the
-  current values as defaults). `ChaosRevokeUnderWorkIT` (eager) becomes a thin subclass - byte-equal
+  current values as defaults - post-review clarification: the constants are shared fixed calibration
+  values, NOT overridable knobs; static fields can't be overridden by subclass shadowing, so a
+  variant that ever needs a different value must first promote that constant to an overridable
+  accessor). `ChaosRevokeUnderWorkIT` (eager) becomes a thin subclass - byte-equal
   behavior; new `ChaosRevokeUnderWorkCooperativeIT` sets `useCooperativeAssignor=true`. Separate
   classes keep per-variant javadoc calibration records, independent seeds/timeouts, and selective
   `-Dit.test` runs (a parameterized single class would couple tuning constants and muddle the

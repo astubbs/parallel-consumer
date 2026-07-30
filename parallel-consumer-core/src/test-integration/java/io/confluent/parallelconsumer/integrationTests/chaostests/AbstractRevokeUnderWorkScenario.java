@@ -1,7 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
@@ -32,8 +32,14 @@ import static org.awaitility.Awaitility.await;
  * The shared two-phase "revoke under work" driver behind the W4 scenario family - see
  * {@link ChaosRevokeUnderWorkIT} (eager assignor; the original, with the full design + calibration
  * javadoc) and {@link ChaosRevokeUnderWorkCooperativeIT} (cooperative-sticky). Variants differ only by
- * the knobs below; the storm/quiet mechanics, probe configuration, and ledger are identical so the
- * assignor is the single experimental variable.
+ * the two abstract methods below; the storm/quiet mechanics, probe configuration, and ledger are
+ * identical so the assignor is the single experimental variable.
+ * <p>
+ * The {@code protected static final} constants are SHARED fixed calibration values, not per-variant
+ * knobs: static field references in the inherited driver resolve at compile time to this class, so a
+ * subclass shadowing one would silently no-op. A future variant needing a different value (e.g. the
+ * rostered W1-coop) must first promote that constant to an overridable accessor referenced via
+ * {@code this}.
  */
 @Slf4j
 abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {

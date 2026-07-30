@@ -207,6 +207,22 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
   a black-box flight recorder for the whole IT suite. Gate only in the chaos suite; observer-mode
   everywhere else avoids flake injection. Roughly: TestWatcher + lazy start once kcu/group exists +
   opt-out flag. Phase 3 candidate.
+- **Chaos-suite review follow-ups (ce-review of PR #87, 2026-07-31):**
+  - **Revoke-event instrumentation:** the ~6x revoke-drop headline finding is not reproducible from a
+    run's own logs - nothing logs actual `onPartitionsRevoked` events (conductor timeline records only
+    its own STOP/RESTART/JOIN actions). Add a per-instance revoke counter in `ManagedPCInstance`'s
+    rebalance listener and fold `revokeEvents=` into the driver's "Run summary" line. Also feeds the
+    parked duplicates-reduction measurement (sticky should cut rebalance duplicates).
+  - **Hoist shared driver boilerplate into `ChaosScenarioBase`:** the fleet-bootstrap and final
+    probe/ledger-assertion blocks are duplicated between `AbstractRevokeUnderWorkScenario` and W1's
+    `ChaosChurnStormIT` (relocated pre-existing clones, flagged by the CI duplication reports on
+    PR #87). One copy means a fix to the ledger allowance or disturbances filter can't silently drift
+    between the W1 and W4 families.
+  - **Copyright header sweep (chaos suite):** the chaostests package + `ManagedPCInstance` (created on
+    PRs #83/#85) carry the Confluent header, but AGENTS.md says fork-original files use the fork
+    header (`Copyright (C) 2026 Antony Stubbs and contributors`, as the fork's unit tests already do).
+    PR #87's two new files fixed in-PR; sweep the rest at their source PRs or in one pass after the
+    stack merges.
 
 ## CI reliability / gate issues (follow-up work)
 

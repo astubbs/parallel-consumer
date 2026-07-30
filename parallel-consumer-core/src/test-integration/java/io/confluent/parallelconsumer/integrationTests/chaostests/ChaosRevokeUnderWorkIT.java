@@ -52,8 +52,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *   delegated to W1.</li>
  *   <li>No true (unbounded) Class 2 stall reproduced on master under this seed/shape or the 8-seed
  *   sweep (9 seeds total, 0 hits) - the open #857 root-cause stall did not bite under EAGER. Hence
- *   the cooperative-sticky sibling: more frequent, smaller revokes = more draws at the probabilistic
- *   deadlock, and the eager-restart artifact class disappears entirely.</li>
+ *   the cooperative-sticky sibling, hypothesized to yield more frequent, smaller revokes = more
+ *   draws at the probabilistic deadlock (its calibration REVISED this: revoke events dropped ~6x,
+ *   per-event sharpness rose instead), while the eager-restart artifact class disappears
+ *   entirely.</li>
  * </ul>
  * <p>
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
