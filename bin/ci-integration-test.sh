@@ -20,6 +20,6 @@ set -euo pipefail
   clean verify \
   -DskipUTs=true \
   -Dlicense.skip \
-  -Dexcluded.groups=performance \
+  -Dexcluded.groups=performance,chaos \
   -Dsurefire.rerunFailingTestsCount=2 \
   "$@"

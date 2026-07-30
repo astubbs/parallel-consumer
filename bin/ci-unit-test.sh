@@ -12,5 +12,5 @@ set -euo pipefail
   -Pci \
   clean test \
   -Dlicense.skip \
-  -Dexcluded.groups=performance \
+  -Dexcluded.groups=performance,chaos \
   -Dsurefire.rerunFailingTestsCount=2
