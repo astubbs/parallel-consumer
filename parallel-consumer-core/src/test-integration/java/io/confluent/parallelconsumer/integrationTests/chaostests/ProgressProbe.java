@@ -62,12 +62,28 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     /** Progress watermark is skipped when this few records remain: the tail may be all heavy-tailed
      * records legitimately sleeping in-flight. The defect signature is a stall with THOUSANDS remaining. */
     public static final int TAIL_SLACK = 500;
+    /** CLASS 2 probe (protocol-INVISIBLE stalls - the "locks forever, manual restart" #857 reports):
+     * no partition may hold real lag while its committed offset stagnates beyond this bound. Broker-side
+     * clocks cannot see this class: the group is STABLE, heartbeats + polls flow, no rebalance is pending
+     * so the 5-min eviction clock never starts - only lag observation (exactly how users notice) works.
+     * Bound must exceed a heavy-tail REDELIVERY CHAIN: a hard stop can interrupt a heavy record
+     * mid-dwell and at-least-once re-runs it fresh, so a partition's committed offset can be
+     * legitimately blocked ~2 chained dwells (measured: 151s at a 90s dwell - hence the dwell was
+     * reduced to 45s; 2x45=90s vs this 150s bound). RED calibration of this probe awaits the W4
+     * revoke-under-work trigger scenario on a composition lacking the counter-drift fixes. */
+    public static final Duration LAG_STAGNATION_BOUND = Duration.ofSeconds(150);
+    /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
+    public static final long LAG_STAGNATION_MIN_LAG = 50;
     private static final Duration SAMPLE_INTERVAL = Duration.ofSeconds(1);
 
     private final KafkaClientUtils kcu;
     private final String groupId;
+    private final String topic;
     private final LongSupplier totalConsumed;
     private final long expectedTotal;
+    /** per-partition committed-offset watermarks for the Class 2 (lag stagnation) probe */
+    private final Map<Integer, Long> lastCommitted = new ConcurrentHashMap<>();
+    private final Map<Integer, Instant> lastCommittedMove = new ConcurrentHashMap<>();
 
     @Getter
     private final List<String> violations = Collections.synchronizedList(new ArrayList<>());
@@ -83,10 +99,13 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     private volatile long peakRebalanceDwellMs = 0;
     @Getter
     private volatile long peakDrainDurationMs = 0;
+    @Getter
+    private volatile long peakLagStagnationMs = 0;
 
-    public ProgressProbe(KafkaClientUtils kcu, String groupId, LongSupplier totalConsumed, long expectedTotal) {
+    public ProgressProbe(KafkaClientUtils kcu, String groupId, String topic, LongSupplier totalConsumed, long expectedTotal) {
         this.kcu = kcu;
         this.groupId = groupId;
+        this.topic = topic;
         this.totalConsumed = totalConsumed;
         this.expectedTotal = expectedTotal;
     }
@@ -110,7 +129,8 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 Thread.currentThread().interrupt();
             }
         }
-        log.info("[chaos-probe] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms", peakRebalanceDwellMs, peakDrainDurationMs);
+        log.info("[chaos-probe] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
+                peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
         return getViolations();
     }
 
@@ -133,12 +153,16 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     }
 
     private void sampleLoop() {
+        int tick = 0;
         while (running.get()) {
             try {
                 Thread.sleep(SAMPLE_INTERVAL.toMillis());
                 sampleProgress();
                 sampleRebalanceDwell();
                 sampleDrains();
+                if (++tick % 5 == 0) {
+                    sampleLagStagnation(); // heavier admin round-trip; 5s cadence is ample vs a 150s bound
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
@@ -186,6 +210,48 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                     + " for " + dwell.getSeconds() + "s (bound " + REBALANCE_DWELL_BOUND.getSeconds()
                     + "s) - a member is not answering the rebalance (protocol-unresponsive)");
             rebalanceDwellStart = Instant.now(); // re-arm
+        }
+    }
+
+    /**
+     * CLASS 2 detector: per-partition "real lag + stagnant committed offset" - catches
+     * protocol-invisible stalls (counter drift, stuck throttle-pause) that every broker clock misses,
+     * including PARTIAL stalls that a fleet-wide consumption counter hides behind healthy siblings.
+     */
+    private void sampleLagStagnation() throws Exception {
+        var committedMap = kcu.getAdmin().listConsumerGroupOffsets(groupId)
+                .partitionsToOffsetAndMetadata().get(5, java.util.concurrent.TimeUnit.SECONDS);
+        var offsetSpecs = new java.util.HashMap<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.admin.OffsetSpec>();
+        for (var tp : committedMap.keySet()) {
+            if (tp.topic().equals(topic)) offsetSpecs.put(tp, org.apache.kafka.clients.admin.OffsetSpec.latest());
+        }
+        if (offsetSpecs.isEmpty()) return;
+        var endOffsets = kcu.getAdmin().listOffsets(offsetSpecs).all().get(5, java.util.concurrent.TimeUnit.SECONDS);
+        Instant now = Instant.now();
+        for (var entry : endOffsets.entrySet()) {
+            var tp = entry.getKey();
+            var committedMeta = committedMap.get(tp);
+            if (committedMeta == null) continue;
+            long committed = committedMeta.offset();
+            long end = entry.getValue().offset();
+            long lag = end - committed;
+            Long previous = lastCommitted.put(tp.partition(), committed);
+            if (previous == null || committed != previous) {
+                lastCommittedMove.put(tp.partition(), now);
+                continue;
+            }
+            Instant since = lastCommittedMove.getOrDefault(tp.partition(), now);
+            long stagnantMs = Duration.between(since, now).toMillis();
+            if (lag >= LAG_STAGNATION_MIN_LAG && stagnantMs > peakLagStagnationMs) {
+                peakLagStagnationMs = stagnantMs;
+            }
+            if (lag >= LAG_STAGNATION_MIN_LAG && stagnantMs > LAG_STAGNATION_BOUND.toMillis()) {
+                violate("CLASS2_STALL/LAG_STAGNATION: partition " + tp + " lag=" + lag
+                        + " with committed offset stagnant at " + committed + " for " + (stagnantMs / 1000)
+                        + "s (bound " + LAG_STAGNATION_BOUND.getSeconds() + "s) - protocol-invisible stall: "
+                        + "group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere");
+                lastCommittedMove.put(tp.partition(), now); // re-arm
+            }
         }
     }
 

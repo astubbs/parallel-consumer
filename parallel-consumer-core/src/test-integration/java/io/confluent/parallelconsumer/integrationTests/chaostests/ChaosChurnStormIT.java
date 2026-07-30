@@ -71,7 +71,12 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
      * drains still complete within ProgressProbe#DRAIN_BOUND (which must exceed HEAVY_SLEEP).
      */
     private static final int HEAVY_EVERY = 4_000;
-    private static final Duration HEAVY_SLEEP = Duration.ofSeconds(90);
+    /** 45s, not longer: the zombie window only needs drains occupied (close bails at ~11s regardless),
+     * while the Class 2 lag probe must tolerate a REDELIVERY CHAIN - a hard stop can interrupt a heavy
+     * record mid-dwell and at-least-once re-runs it fresh, legitimately blocking that partition's
+     * committed offset for ~2 chained dwells (observed 151s at 90s dwell = false positive). 2x45s=90s
+     * sits comfortably under LAG_STAGNATION_BOUND (150s). */
+    private static final Duration HEAVY_SLEEP = Duration.ofSeconds(45);
 
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
@@ -118,7 +123,7 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
             pc.start(pcExecutor);
         }
 
-        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(),
+        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
                 totalConsumed::get, EXPECTED_MESSAGES);
 
         ChaosConductor conductor = ChaosConductor.builder()
