@@ -1,16 +1,19 @@
-# Quarantine lane NIGHTLY run - lives in its own workflow (not maven.yml) so PR runs never list it,
-# not even as a skipped entry: the per-PR enforcement is maven.yml's seconds-fast "Quarantine Audit"
-# job; THIS workflow actually executes the @Quarantined tests against master (quarantine is
-# master-state) to keep their signal alive - we see when they start passing (fixes landed) or worsen.
-# Red inside the run step is EXPECTED while owning fix PRs are open; only the fail-fast rule checks
-# make the job itself red. Manual runs: workflow_dispatch.
+# Quarantine lane run - executes the @Quarantined tests against master AFTER EVERY MERGE (push to
+# master), keeping their signal alive with the same cadence as any other integration test - we see
+# immediately when a merge makes them start passing (fixes landed, delete the annotations) or worsen.
+# Lives in its own workflow (not maven.yml) so PR runs never list it, not even as a skipped entry:
+# the per-PR enforcement is maven.yml's seconds-fast "Quarantine Audit" job. Quarantine is
+# master-state - master changes on merges, so push-to-master is the natural trigger; the nightly cron
+# is just a backstop for long merge-free stretches. Red inside the run step is EXPECTED while owning
+# fix PRs are open; only the fail-fast rule checks make the job itself red. Manual: workflow_dispatch.
 
 name: Quarantine Lane
 
 on:
-  pull_request:  # DEMO (will be reverted): one-time pre-merge validation run - schedule/dispatch cannot fire from a non-default branch
+  push:
+    branches: [ master ]
   schedule:
-    - cron: '17 3 * * *'
+    - cron: '17 3 * * *'  # backstop for merge-free stretches
   workflow_dispatch:
 
 permissions:
