@@ -1,7 +1,7 @@
 ---
 title: "feat: Chaos Pain Suite - weakness-targeted stress harness for high-core boxes"
 type: feat
-status: draft
+status: active - Phase 1 IMPLEMENTED + CALIBRATED (2026-07-30)
 date: 2026-07-30
 ---
 
@@ -20,6 +20,42 @@ the highcpu runner (Proxmox LXC, 24c/48t, large RAM) rather than the 2-core GitH
 
 Design goal in one line: **turn "the suite sometimes reddens under load" into "the suite hunts stalls on
 purpose and hands you the autopsy."**
+
+## Phase 1 status: IMPLEMENTED + CALIBRATED (2026-07-30)
+
+Branch `experiment/chaos-pain-suite-phase1` (plan `docs/plans/2026-07-30-002-...` on that branch):
+`ChaosConductor` (seeded/replayable, timestamped timeline, join-after-drain bias), `ProgressProbe`
+(progress watermark, rebalance-dwell ZOMBIE probe, drain bound, correctness ledger), `ChaosChurnStormIT`
+(W1: 12-16 PCs / 80 partitions / 100k msgs with a NON-interruptible 90s heavy tail), `@Tag("chaos")` +
+`chaos-pain.yml` workflow_dispatch. Run: `-Dincluded.groups=chaos [-Dchaos.seed=N]`.
+
+**Calibration verdict (the test-the-test principle, executed):**
+
+| Composition | Verdict | Peak rebalance dwell |
+|---|---|---|
+| Planted zombie-drain defect (uber-nofix arm) | RED 3/3 - `ZOMBIE_MEMBER/REBALANCE_BLOCKED` | 15.6-15.9s |
+| Fixed composition (all fixes) | GREEN 3/3 | 4.5-8.9s |
+| **Plain `origin/master`** (suite + `ManagedPCInstance` cherry-picked - compiles clean) | **RED** - same probe | 15.6s |
+
+The master row proves the **portable-detector** model: the suite, dropped onto a branch it has never
+seen, finds the bug that branch carries. Follow-up (tracked): an independent branch off master,
+temporarily mergeable into any open PR to expose fix-absent bugs and verify their fixes.
+
+**Calibration lessons (bake into every future scenario):**
+1. **PC's close path caps drain duration** (~5s force-interrupt, gives up on stragglers ~11s) - the naive
+   "5-minute zombie" arithmetic dies here; freezes are drain-duration-bounded. Heavy-tail work MUST be
+   non-interruptible (sleep-until-deadline; real stuck work - JDBC, native - behaves this way) or the
+   window collapses below any probe's discrimination.
+2. **Thresholds are measured, not guessed**: run the identical seeded schedule on defect + fixed arms,
+   read the peak signatures (probe logs maxRebalanceDwell/maxDrainDuration every run), set the bound in
+   the gap, record the arithmetic in the constant's comment. First-pass 60s bound missed the bug; the
+   measured 15s bound (healthy 6.7s vs defect 20.1s, same seed) caught it 3/3.
+3. **Tune the conductor, never loosen probes**: the fix loop was workload realism (non-interruptible
+   tail) + collision pressure (0.5-1.5s ticks, join-after-drain bias 0.9) - probe semantics unchanged.
+4. **Coordinator fallback context**: the broker evicts a roll-call-absent member at the rebalance timeout
+   (= `max.poll.interval.ms`, 5 min default) - a ceiling, not a defence. PC-specific mitigation worth a
+   Phase 2 experiment: PC's always-polling loop lets users set `max.poll.interval.ms` far lower than raw
+   consumers can, buying faster zombie eviction.
 
 ## Weakness → scenario matrix (the core of the design)
 
