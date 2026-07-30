@@ -49,8 +49,13 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
 
     /** Fleet-wide consumption must advance at least this often while work remains. */
     public static final Duration NO_PROGRESS_WINDOW = Duration.ofSeconds(30);
-    /** Max continuous group-rebalancing dwell: >> seconds-healthy, << 5-min zombie eviction. */
-    public static final Duration REBALANCE_DWELL_BOUND = Duration.ofSeconds(60);
+    /** Max continuous group-rebalancing dwell. Empirically calibrated (2026-07-30, seed 424242, same
+     * schedule on both arms): healthy peak 6.7s (drainer participates, rebalance completes mid-drain) vs
+     * defect peak 20.1s (protocol-absent drainer blocks the join until its LeaveGroup - the whole freeze
+     * window, since PC's close bails on stragglers at ~11s). 15s = 2.2x the healthy peak, comfortably
+     * inside the defect signature. NB the naive "5-min zombie" arithmetic doesn't survive contact with
+     * the close path's give-up-on-stragglers behaviour - the freeze is drain-duration-bounded. */
+    public static final Duration REBALANCE_DWELL_BOUND = Duration.ofSeconds(15);
     /** Drain-mode close must finish within this - MUST exceed the suite's heavy-tail sleep (a healthy
      * drain legitimately waits for the heaviest in-flight record) plus generous margin under load. */
     public static final Duration DRAIN_BOUND = Duration.ofSeconds(150);
@@ -73,6 +78,11 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     private long lastCount = -1;
     private Instant lastAdvance = Instant.now();
     private Instant rebalanceDwellStart = null;
+    /** Peak signatures observed - logged at stop(); the empirical basis for threshold calibration. */
+    @Getter
+    private volatile long peakRebalanceDwellMs = 0;
+    @Getter
+    private volatile long peakDrainDurationMs = 0;
 
     public ProgressProbe(KafkaClientUtils kcu, String groupId, LongSupplier totalConsumed, long expectedTotal) {
         this.kcu = kcu;
@@ -100,6 +110,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 Thread.currentThread().interrupt();
             }
         }
+        log.info("[chaos-probe] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms", peakRebalanceDwellMs, peakDrainDurationMs);
         return getViolations();
     }
 
@@ -113,7 +124,11 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         if (action == ChaosConductor.ChaosAction.STOP_DRAIN) {
             outstandingDrains.put(instanceId, Instant.now());
         } else if (action == null) {
-            outstandingDrains.remove(instanceId);
+            Instant started = outstandingDrains.remove(instanceId);
+            if (started != null) {
+                long ms = Duration.between(started, Instant.now()).toMillis();
+                if (ms > peakDrainDurationMs) peakDrainDurationMs = ms;
+            }
         }
     }
 
@@ -165,6 +180,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             return;
         }
         Duration dwell = Duration.between(rebalanceDwellStart, Instant.now());
+        if (dwell.toMillis() > peakRebalanceDwellMs) peakRebalanceDwellMs = dwell.toMillis();
         if (dwell.compareTo(REBALANCE_DWELL_BOUND) > 0) {
             violate("ZOMBIE_MEMBER/REBALANCE_BLOCKED: group '" + groupId + "' dwelling in " + state
                     + " for " + dwell.getSeconds() + "s (bound " + REBALANCE_DWELL_BOUND.getSeconds()
