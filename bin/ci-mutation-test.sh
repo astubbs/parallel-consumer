@@ -35,9 +35,12 @@ BASE_REF="${PIT_BASE_REF:-${GITHUB_BASE_REF:-}}"
 TARGET_CLASSES="io.confluent.parallelconsumer.internal.*"
 if [ -n "$BASE_REF" ]; then
   git fetch --no-tags -q origin "$BASE_REF" 2>/dev/null || true
+  # Trailing '*' on each FQCN so PIT also mutates the class's nested/synthetic members (Lombok @Builder
+  # inner classes, anonymous classes, lambdas) - an exact name would miss them, silently narrowing
+  # coverage vs the full internal.* sweep (ce-review correctness finding).
   CHANGED=$(git diff --name-only "origin/${BASE_REF}" HEAD -- parallel-consumer-core/src/main/java/ 2>/dev/null \
     | sed -E 's#.*/src/main/java/##; s#/#.#g; s#\.java$##' \
-    | { grep -E '^io\.confluent\.parallelconsumer\.' || true; } | paste -sd, -)
+    | { grep -E '^io\.confluent\.parallelconsumer\.' || true; } | sed 's/$/*/' | paste -sd, -)
   if [ -z "$CHANGED" ]; then
     echo "PIT: no core main-source classes changed vs origin/${BASE_REF} - nothing to mutate, skipping."
     exit 0
