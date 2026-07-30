@@ -84,6 +84,21 @@ class QuarantinedAnnotationContractTest {
         assertThat(workflow).contains("bin/check-quarantine-owners.sh");
     }
 
+    /**
+     * The nightly lane job's if-condition reacts to schedule + workflow_dispatch - both triggers must
+     * actually be DECLARED in the workflow's {@code on:} block, or the job silently becomes
+     * unreachable that way (a real bug this test was added after: the dispatch trigger was missing, so
+     * "run it manually" was impossible while the if-condition claimed otherwise).
+     */
+    @Test
+    void ciWorkflowDeclaresTheTriggersTheLaneJobReactsTo() throws IOException {
+        String workflow = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
+        assertWithMessage("nightly lane needs a declared schedule trigger")
+                .that(workflow).contains("schedule:");
+        assertWithMessage("manual lane runs need a declared workflow_dispatch trigger")
+                .that(workflow).contains("workflow_dispatch:");
+    }
+
     @Test
     void releaseWorkflowBlocksOnQuarantinedTests() throws IOException {
         String release = read(REPO_ROOT.resolve(".github/workflows/release.yml"));

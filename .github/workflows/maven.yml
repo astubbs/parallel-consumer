@@ -21,6 +21,8 @@ on:
   schedule:
     # nightly quarantine-lane run on master (quarantine is master-state) - see test-quarantined
     - cron: '17 3 * * *'
+  # manual quarantine-lane run (test-quarantined is the only job that reacts to dispatch)
+  workflow_dispatch:
 
 permissions:
   contents: read
