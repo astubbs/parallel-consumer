@@ -185,9 +185,17 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
   not reproduce on master - the open #857 root-cause stall is probabilistic. **Seed sweep DONE
   (2026-07-30): 9 seeds total (calibration seed + 8-seed sweep), 0 Class 2 hits**; stagnation peaks
   tightly banded 95-112s (all legit-window), dwell peaks 33-68s (protocol-visible wedging, always
-  resolved). Seed volume alone is not finding it - next lever: cooperative-sticky W4 variant (also
-  removes the eager-reassignment heavy-restart artifact class entirely, so the storm no longer
-  restarts every in-flight heavy).
+  resolved). Seed volume alone is not finding it. **Cooperative-sticky W4 variant DONE (2026-07-31,
+  branch feats/chaos-w4-cooperative): both arms GREEN too** - and it was PC's first-ever end-to-end
+  cooperative exercise (state layer held up empirically; measured: sticky drops revoke events ~6x,
+  refuting the more-revokes hypothesis; dwell does NOT discriminate arms under cooperative, so
+  eager-calibrated Class 1 bounds don't transfer - a W1-coop variant would need its own calibration).
+  **Hunt status after both levers: the Class 2 probe stands as a calibrated TRIPWIRE** - GREEN-side
+  validated on both assignors, RED-side awaiting a real-world/CI occurrence or a future trigger idea
+  (remaining unexplored levers, in rough order of promise: KEY-ordered processing to concentrate
+  commit contention per shard; sub-second commit intervals; EoS/transactional mode; targeted #909
+  stale-container restart patterns). A tripwire's value does not require a reproducible trigger: it
+  diagnoses the stall whenever it next happens anywhere the suite or the ambient probe runs.
 - **Thin margin note:** W4's measured legit lag-stagnation peaks (117-123s) sit ~1.25x under the 150s
   Class 2 bound. Fine for a non-gating suite; widen (shorter storm or dwell) if it ever flakes.
 - **Ambient probe for EVERY integration test (user idea, promising):** ProgressProbe's dwell +
