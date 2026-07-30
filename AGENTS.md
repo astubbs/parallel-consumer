@@ -70,6 +70,20 @@ bin/performance-test.sh
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
 - **Reuse test utilities — search before you add (DRY).** Shared client/broker helpers live in `KafkaClientUtils` (topic creation, producers, consumers, PC builders) and `BrokerIntegrationTest` (the base class most integration tests extend). Before writing a new helper or a raw `admin`/producer/consumer call in a test, search these two first and extend them. Duplicating an existing helper is how bugs get reintroduced — e.g. a copy of topic-creation logic drifted to a 1-second timeout and became a flaky-CI source (see `docs/solutions/test-issues/`). When you must add a helper, put it in the shared util, not the test. Also check `docs/solutions/` for prior art before solving a problem that feels familiar.
 
+### Chaos Pain Suite (on-demand bug detector — never gates)
+
+A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
+`ChaosChurnStormIT`) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,
+protocol-invisible per-partition lag stagnation, drain overruns, and record loss/duplication. Tagged
+`@Tag("chaos")` and excluded from all default/gating suites via `pom.xml`'s `excluded.groups` default.
+
+- **Run locally** (requires Docker; ~5-6 min):
+  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=`
+- **Replay a schedule**: every run logs its seed and the full replay command; add `-Dchaos.seed=<seed>`.
+- **On-demand CI**: `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`, self-hosted `highcpu` runner), e.g. `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`.
+- **Probe a fix PR** (the suite's primary purpose): temporarily merge the chaos branch into the PR under test, run at a commit before the fix (expect RED — the violation names the mechanism) and at the fix (expect GREEN). See `ChaosChurnStormIT`'s class javadoc for the full recipe.
+- A RED run is investigation food, not flake noise — the probes are calibrated against the real historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in measured gaps). Never loosen a probe to go green; tune the workload/conductor instead.
+
 ## Known Issues
 
 - **Mutiny module**: Has a `release.target=9` override in its pom.xml because Mutiny's `Multi` implements `java.util.concurrent.Flow.Publisher` which is not available with `--release 8`.

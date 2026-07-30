@@ -1,7 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2020-2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
@@ -50,6 +50,16 @@ import static org.awaitility.Awaitility.await;
  * <p>
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
  * Excluded from default suites via {@code @Tag("chaos")}; run with {@code -Dincluded.groups=chaos}.
+ * <p>
+ * <b>Usage - probing a fix PR (the suite's primary purpose)</b>: temporarily merge the chaos-suite
+ * branch into the PR under test, then run
+ * <pre>{@code ./mvnw -Pci -pl parallel-consumer-core -am verify \
+ *     -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=}</pre>
+ * at a commit BEFORE the fix (expect RED - the probe violation names the mechanism) and again at the
+ * fix commit (expect GREEN). The RED->GREEN flip is the evidence that the fix addresses the mechanism
+ * the probe watches. Add {@code -Dchaos.seed=<seed>} to replay a specific schedule; on-demand CI runs
+ * via {@code .github/workflows/chaos-pain.yml} (workflow_dispatch: seed, reps). See AGENTS.md
+ * "Chaos Pain Suite".
  */
 @Tag("chaos")
 @Timeout(600)
@@ -66,8 +76,9 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
     /**
      * Heavy-tailed work: 1 in HEAVY_EVERY records sleeps HEAVY_SLEEP in the user function. This is what
      * makes drains take real time - the zombie-drain defect freezes the group for the DURATION of a
-     * drain, so without a heavy tail the freeze clears in seconds and the rebalance-dwell probe (60s)
-     * cannot discriminate defect from healthy. Healthy arm: heavy records occupy one worker slot each and
+     * drain, so without a heavy tail the freeze clears in seconds and the rebalance-dwell probe
+     * ({@link ProgressProbe#REBALANCE_DWELL_BOUND}) cannot discriminate defect from healthy. Healthy arm:
+     * heavy records occupy one worker slot each and
      * drains still complete within ProgressProbe#DRAIN_BOUND (which must exceed HEAVY_SLEEP).
      */
     private static final int HEAVY_EVERY = 4_000;
@@ -80,8 +91,13 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
 
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
-        long seed = Long.getLong("chaos.seed", RandomUtils.nextLong());
-        log.info("=== CHAOS W1 churn storm: seed={} (replay with -Dchaos.seed={}) ===", seed, seed);
+        String seedProp = System.getProperty("chaos.seed");
+        long seed = seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
+        // the FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
+        // reproduce (the chaos tag is excluded by default, so the seed alone is not enough)
+        String replayCmd = "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
+                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+        log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed, replayCmd);
 
         String topic = getClass().getSimpleName() + "-w1-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS); // explicit partition count (base numPartitions is package-private)
@@ -151,12 +167,18 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            conductor.stop();
+            conductor.stop(); // also joins outstanding drain threads (bounded) - fleet is quiesced after
             List<String> violations = probe.stop();
             producerThread.join(10_000);
             // settle the fleet
             for (ManagedPCInstance pc : conductor.getFleet()) {
                 try {
+                    // let any stopAsync background close finish first - close() below is then a no-op
+                    long waited = 0;
+                    while (pc.isClosePending() && waited < 15_000) {
+                        Thread.sleep(100);
+                        waited += 100;
+                    }
                     if (pc.getParallelConsumer() != null && !pc.getParallelConsumer().isClosedOrFailed()) {
                         pc.getParallelConsumer().close();
                     }
@@ -164,21 +186,36 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
                     log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
                 }
             }
+            pcExecutor.shutdownNow();
             log.info("Run summary: consumed={} (unique tracking via ledger below), probe violations={}",
                     totalConsumed.get(), violations);
         }
 
         // SLO verdict
         assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
-                "seed %s replays this schedule)", seed)
+                "replay: %s)", replayCmd)
                 .that(probe.getViolations()).isEmpty();
 
+        // end-of-run canary sweep: every instance's terminal failure cause must be classified - an
+        // instance stopped and never restarted would otherwise carry an unexpected error silently
+        // (restart is the only other place classification happens)
+        List<String> unexpectedFailures = new ArrayList<>();
+        for (ManagedPCInstance pc : conductor.getFleet()) {
+            var consumer = pc.getParallelConsumer();
+            Exception cause = consumer == null ? null : consumer.getFailureCause();
+            if (cause != null && !ManagedPCInstance.isExpectedCloseException(cause)) {
+                unexpectedFailures.add("instance " + pc.getInstanceId() + ": " + cause);
+            }
+        }
+        assertWithMessage("no instance may end the run with an unclassified failure cause (replay: %s)",
+                replayCmd)
+                .that(unexpectedFailures).isEmpty();
+
         // correctness ledger: no loss ever; duplicates bounded per disturbance
-        int disturbances = (int) conductor.getTimeline().stream()
-                .filter(entry -> entry.contains("STOP_") || entry.contains("RESTART")).count();
+        int disturbances = conductor.getDisturbanceCount();
         List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
                 Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
-        assertWithMessage("correctness ledger must balance (seed %s)", seed)
+        assertWithMessage("correctness ledger must balance (replay: %s)", replayCmd)
                 .that(ledgerProblems).isEmpty();
     }
 
@@ -215,7 +252,8 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
         return n > 0 && n % HEAVY_EVERY == 0;
     }
 
-    /** Coverage check is expensive at 500k scale - only evaluate once the counter says it's plausible. */
+    /** Coverage check is expensive at full message scale (see EXPECTED_MESSAGES) - only evaluate once the
+     * counter says it's plausible. */
     private boolean allConsumedCovers(Set<String> expectedKeys, Queue<String> allConsumed) {
         var unique = new java.util.HashSet<>(allConsumed);
         return unique.containsAll(expectedKeys);

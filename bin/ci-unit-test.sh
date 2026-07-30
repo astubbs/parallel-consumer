@@ -8,9 +8,10 @@
 
 set -euo pipefail
 
+# Test-group exclusion (performance,chaos) comes from pom.xml's excluded.groups default -
+# the single source of truth; pass -Dexcluded.groups=... explicitly to deviate.
 ./mvnw --batch-mode \
   -Pci \
   clean test \
   -Dlicense.skip \
-  -Dexcluded.groups=performance,chaos \
   -Dsurefire.rerunFailingTestsCount=2

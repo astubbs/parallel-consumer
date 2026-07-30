@@ -8,7 +8,7 @@
 #
 # SECURITY (public repo + self-hosted runner): workflow_dispatch only - it can only be triggered by users
 # with write access, so no untrusted fork code can reach the self-hosted machine through this workflow.
-# See docs/SELF_HOSTED_RUNNER.md and pr-highcpu-fast-feedback.yml's header for the fork-PR backstop story.
+# See docs/SELF_HOSTED_RUNNER.md and pr-mac-fast-feedback.yml's header for the fork-PR backstop story.
 
 name: chaos-pain
 
