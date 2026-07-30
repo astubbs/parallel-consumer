@@ -96,13 +96,20 @@ bin/performance-test.sh
 
 - **Lombok**: Used extensively (builders, getters, logging). IntelliJ Lombok plugin required.
 - **EditorConfig**: Enforced via `.editorconfig` - 4-space indent for Java, 120 char line length.
-- **License headers**: Managed by `license-maven-plugin` (Mycila). Use `-Dlicense.skip` locally to skip checks.
+- **License headers**: Enforced by `bin/check-copyright-headers.sh` (runs in CI via the
+  `Copyright Headers` workflow; run it locally before pushing header-related changes). The mycila
+  `license-maven-plugin` is skipped by default in the root pom - it knows only the Confluent header
+  template, so its `format` goal used to stamp the wrong attribution onto fork-original files and its
+  git-year resolver auto-bumped years and broke in worktrees. `-Dlicense.skip` on the command line is
+  no longer needed (harmless if still passed).
 - **Copyright rules for this fork**:
   - Do not change copyright headers on existing files unless the file has substantive code changes in the same commit
   - Do not bump copyright years as an incidental or standalone change
   - The `NOTICE` file at repo root contains the legal attribution structure for the fork
-  - New files written entirely for the fork should not claim Confluent copyright
-  - Always pass `-Dlicense.skip` to Maven to prevent the license plugin from auto-bumping years
+  - New files written entirely for the fork use `Copyright (C) <year> Antony Stubbs and contributors` -
+    never the Confluent header
+  - Files renamed/moved from upstream keep their Confluent header - register such paths in the
+    `UPSTREAM_DERIVED_EXCEPTIONS` list inside `bin/check-copyright-headers.sh`
 - **Google Truth**: Used for test assertions alongside JUnit 5 and Mockito.
 
 ## CI
