@@ -72,9 +72,14 @@
              the wrong attribution, and its git-based year resolver auto-bumps years and breaks in git
              worktrees. Header conformance is enforced by bin/check-copyright-headers.sh instead
              (provenance-aware: upstream-derived files keep the Confluent header, fork-original files
-             use the fork header - see AGENTS.md "Copyright rules for this fork"). Re-enable the plugin
-             deliberately with -Dlicense.skip=false if you ever need its format goal on upstream files. -->
+             use the fork header - see AGENTS.md "Copyright rules for this fork"). That scanner runs
+             in the `validate` phase via exec-maven-plugin (below), so a local `mvn` build catches
+             header violations too, not only the copyright.yml GitHub Action. Re-enable the mycila
+             plugin deliberately with -Dlicense.skip=false if you ever need its format goal on upstream files. -->
         <license.skip>true</license.skip>
+        <!-- Skip the in-build copyright-header scanner (exec-maven-plugin, validate phase) with
+             -Dcopyright.skip=true. Runs by default; unlike the mycila plugin it is worktree-safe. -->
+        <copyright.skip>false</copyright.skip>
         <!-- default to format when on developer machines, check when in CI -->
         <license.mode>format</license.mode>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
@@ -113,7 +118,7 @@
 
         <!-- core -->
         <slf4j.version>2.0.18</slf4j.version>
-        <kafka.version>3.9.1</kafka.version>
+        <kafka.version>3.9.2</kafka.version>
         <version.unij>0.1.3</version.unij>
 
         <!-- tests -->
@@ -144,7 +149,7 @@
         <!-- Held at 1.13.0: keep the micrometer family version-aligned with
              micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
              prometheus package rename is migrated). See docs/inflight.md. -->
-        <micrometer-core.version>1.13.0</micrometer-core.version>
+        <micrometer-core.version>1.13.15</micrometer-core.version>
     </properties>
 
     <profiles>
@@ -424,7 +429,7 @@
         <dependency>
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5</artifactId>
-            <version>1.3.0</version>
+            <version>1.4.2</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -725,6 +730,34 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- Provenance-aware copyright-header conformance IN THE BUILD (fork policy, AGENTS.md).
+                 Runs bin/check-copyright-headers.sh in `validate` so `mvn` catches header violations
+                 locally, not only via the copyright.yml GitHub Action. Once at the root (inherited=false).
+                 The script cd's to the git top-level itself, so ${project.basedir} (the root) is fine.
+                 Skip with -Dcopyright.skip=true. Needs the fork-point commit in history; on a shallow
+                 clone the scanner warns and skips (CI's copyright.yml uses fetch-depth: 0 + strict mode). -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <inherited>false</inherited>
+                <executions>
+                    <execution>
+                        <id>check-copyright-headers</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${copyright.skip}</skip>
+                            <executable>bash</executable>
+                            <arguments>
+                                <argument>${project.basedir}/bin/check-copyright-headers.sh</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -968,7 +1001,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-site-plugin</artifactId>
-                <version>4.0.0-M15</version>
+                <version>4.0.0-M16</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -1070,7 +1103,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-site-plugin</artifactId>
-                    <version>4.0.0-M15</version>
+                    <version>4.0.0-M16</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

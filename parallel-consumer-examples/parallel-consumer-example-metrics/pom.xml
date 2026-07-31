@@ -30,7 +30,7 @@
                  io.micrometer.prometheus -> io.micrometer.prometheusmetrics, which breaks
                  CoreApp.java. Bump together with micrometer-core when migrating that import.
                  See docs/inflight.md "Deferred dependency upgrades". -->
-            <version>1.12.2</version>
+            <version>1.12.13</version>
         </dependency>
         <!-- end::exampleDep[] -->
         <dependency>

@@ -1,0 +1,49 @@
+# PR Checklist gate - makes .github/PULL_REQUEST_TEMPLATE.md's checklist actually binding.
+#
+# The template is only a passive nudge (and gh --body-file PRs skip it entirely), so this fails the
+# check when a checklist box is left unchecked WITHOUT an "N/A" annotation. Authors either tick the box
+# `[x]` or write `- [ ] ... N/A - <reason>`. PRs with no checklist at all (e.g. Dependabot/bots that
+# don't use the template) are exempt - this only enforces boxes that are present. Re-runs on body edits.
+
+name: PR Checklist
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checklist-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checklist:
+    name: "PR Checklist"
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify checklist boxes are resolved (checked or N/A)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || "";
+            const offenders = [];
+            for (const line of body.split(/\r?\n/)) {
+              // Match a markdown task-list item: "- [ ] text" / "- [x] text"
+              const m = line.match(/^\s*[-*]\s*\[( |x|X)\]\s*(.*)$/);
+              if (!m) continue;
+              const checked = m[1].toLowerCase() === "x";
+              const text = (m[2] || "").trim();
+              const naMarked = /\bN\/?A\b/i.test(text);
+              if (!checked && !naMarked) offenders.push(text || "(empty item)");
+            }
+            if (offenders.length) {
+              core.setFailed(
+                "Incomplete PR checklist - tick each box [x] or mark it 'N/A - <reason>':\n" +
+                offenders.map(o => `  - [ ] ${o}`).join("\n")
+              );
+            } else {
+              core.info("PR checklist OK (all boxes checked or marked N/A).");
+            }

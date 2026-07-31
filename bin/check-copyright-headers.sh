@@ -65,9 +65,17 @@ ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 "
 
 if ! git cat-file -e "${FORK_POINT}^{commit}" 2>/dev/null; then
-    echo "ERROR: fork-point commit ${FORK_POINT} not found in history." >&2
-    echo "       Fetch full history first (CI: actions/checkout with fetch-depth: 0)." >&2
-    exit 2
+    # Provenance can't be determined without the fork-point commit (e.g. a shallow clone, or a
+    # `mvn validate` build in an environment without full history). Default: WARN and skip rather
+    # than fail the build - the authoritative gate is copyright.yml, which fetches full history
+    # (fetch-depth: 0). Set COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 to hard-fail instead (CI does).
+    msg="fork-point commit ${FORK_POINT} not in history - need full history (CI: actions/checkout fetch-depth: 0)."
+    if [ "${COPYRIGHT_CHECK_REQUIRE_FORK_POINT:-0}" = "1" ]; then
+        echo "ERROR: ${msg}" >&2
+        exit 2
+    fi
+    echo "WARNING: ${msg} Skipping copyright header check." >&2
+    exit 0
 fi
 
 upstream_files=$(git ls-tree -r --name-only "$FORK_POINT")
@@ -78,10 +86,13 @@ fails=0
 checked=0
 
 require_confluent() { # <file> <header>
-    if ! printf '%s' "$2" | grep -q "Copyright (C)"; then
+    # Membership/pattern tests use herestrings, never `printf | grep -q`: grep -q exits at first
+    # match, printf takes SIGPIPE, and under pipefail the pipeline then reads as FALSE - randomly
+    # misclassifying files that DID match (seen in CI: an upstream file flagged as fork-original).
+    if ! grep -q "Copyright (C)" <<< "$2"; then
         echo "FAIL (upstream-derived file has no copyright header): $1"
         return 1
-    elif ! printf '%s' "$2" | grep -q "Confluent"; then
+    elif ! grep -q "Confluent" <<< "$2"; then
         echo "FAIL (upstream-derived file lost its Confluent header): $1"
         return 1
     fi
@@ -91,7 +102,7 @@ require_modifications_line() { # <file> <header> <reason>
     # The phrase and the holder must be on the SAME line: a mere mention of the
     # holder elsewhere in the header (e.g. an @author byline) is not a notice.
     # Years are deliberately not policed (see above).
-    if ! printf '%s' "$2" | grep -q "Modifications Copyright (C).*${FORK_HOLDER}"; then
+    if ! grep -q "Modifications Copyright (C).*${FORK_HOLDER}" <<< "$2"; then
         echo "FAIL ($3 but missing 'Modifications Copyright ... ${FORK_HOLDER}' line): $1"
         return 1
     fi
@@ -104,7 +115,9 @@ while IFS= read -r f; do
 
     # exact match on the newpath field - a substring match would misroute files
     # whose path is a tail-substring of a registered newpath into the rename branch
-    rename_entry=$(printf '%s\n' "$RENAMED_FROM_UPSTREAM" | awk -F'|' -v f="$f" '$1 == f {print; exit}')
+    # herestring, not `printf | awk`: awk's early `exit` would SIGPIPE printf, and under
+    # `set -e` a failed $() assignment kills the whole script
+    rename_entry=$(awk -F'|' -v f="$f" '$1 == f {print; exit}' <<< "$RENAMED_FROM_UPSTREAM")
     if [ -n "$rename_entry" ]; then
         old_path=${rename_entry#*|}
         require_confluent "$f" "$header" || { fails=$((fails + 1)); continue; }
@@ -112,22 +125,22 @@ while IFS= read -r f; do
             require_modifications_line "$f" "$header" \
                 "renamed upstream file modified since the fork point" || fails=$((fails + 1))
         fi
-    elif printf '%s\n' "$EXTRACTED_FROM_UPSTREAM" | grep -qxF "$f"; then
+    elif grep -qxF "$f" <<< "$EXTRACTED_FROM_UPSTREAM"; then
         require_confluent "$f" "$header" || { fails=$((fails + 1)); continue; }
         require_modifications_line "$f" "$header" \
             "extraction of upstream-derived code" || fails=$((fails + 1))
-    elif printf '%s\n' "$upstream_files" | grep -qxF "$f"; then
+    elif grep -qxF "$f" <<< "$upstream_files"; then
         require_confluent "$f" "$header" || { fails=$((fails + 1)); continue; }
-        if printf '%s\n' "$modified_since_fork" | grep -qxF "$f"; then
+        if grep -qxF "$f" <<< "$modified_since_fork"; then
             require_modifications_line "$f" "$header" \
                 "upstream-derived file modified since the fork point" || fails=$((fails + 1))
         fi
     else
         # fork-original: fork header required, Confluent claim forbidden
-        if printf '%s' "$header" | grep -q "Confluent"; then
+        if grep -q "Confluent" <<< "$header"; then
             echo "FAIL (fork-original file claims Confluent copyright): $f"
             fails=$((fails + 1))
-        elif ! printf '%s' "$header" | grep -q "$FORK_HOLDER"; then
+        elif ! grep -q "$FORK_HOLDER" <<< "$header"; then
             echo "FAIL (fork-original file missing '${FORK_HOLDER}' header): $f"
             fails=$((fails + 1))
         fi
