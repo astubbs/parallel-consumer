@@ -1,7 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
@@ -30,8 +30,9 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * independent invariants sampled on a background thread. Violations carry enough context to be the
  * autopsy's headline. Deliberately asserts SLOs and invariants, never exact timings.
  * <p>
- * Probes (thresholds are generous constants - sized >=5x a healthy baseline and <=1/5 of the defect
- * signature they discriminate, per the Phase 1 plan):
+ * Probes (each threshold is a constant sized inside the measured gap between the healthy baseline and
+ * the defect signature it discriminates - the per-bound arithmetic and its empirical basis live in
+ * each constant's javadoc; margins vary per probe because the measured gaps do):
  * <ul>
  *   <li><b>Progress watermark</b>: while work remains, fleet-wide consumed count must advance within
  *   {@link #NO_PROGRESS_WINDOW} (generalises the #857 investigation's "no progress for 11s" check).</li>
@@ -40,8 +41,8 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *   Keyed on protocol-unresponsiveness, NOT on "member holds partitions with zero consumption" - a
  *   legitimately draining member holds its assignment while finishing + committing (that is drain's
  *   purpose); what it must never do is block the group's rebalance. Healthy rebalances complete in
- *   seconds; a zombie drainer blocks until {@code max.poll.interval.ms} (5 min). 60s cleanly separates
- *   them.</li>
+ *   seconds; {@link #REBALANCE_DWELL_BOUND} sits between the measured healthy peak (~6.7s) and the
+ *   defect peak (~20.1s), cleanly separating them.</li>
  *   <li><b>Drain bound</b>: every STOP_DRAIN reported by the conductor must complete within
  *   {@link #DRAIN_BOUND}.</li>
  * </ul>
@@ -90,6 +91,10 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
     public static final long LAG_STAGNATION_MIN_LAG = 50;
     private static final Duration SAMPLE_INTERVAL = Duration.ofSeconds(1);
+    /** A probe that cannot sample is a probe silently passing - after this many consecutive sampling
+     * failures the degradation itself becomes a violation (false-GREEN guard), instead of the run
+     * quietly flying blind. Transient admin hiccups under chaos stay tolerated below the threshold. */
+    static final int MAX_CONSECUTIVE_SAMPLE_FAILURES = 10;
 
     /**
      * The probe's construction mode - the single authoritative switch the samplers consult.
@@ -216,22 +221,26 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         return !violations.isEmpty();
     }
 
-    // --- ChaosObserver: drain-bound bookkeeping (null action = drain-finished marker) ---
+    // --- ChaosObserver: drain-bound bookkeeping ---
     @Override
     public void onAction(int instanceId, ChaosConductor.ChaosAction action) {
         if (action == ChaosConductor.ChaosAction.STOP_DRAIN) {
             outstandingDrains.put(instanceId, Instant.now());
-        } else if (action == null) {
-            Instant started = outstandingDrains.remove(instanceId);
-            if (started != null) {
-                long ms = Duration.between(started, Instant.now()).toMillis();
-                if (ms > peakDrainDurationMs) peakDrainDurationMs = ms;
-            }
+        }
+    }
+
+    @Override
+    public void onDrainComplete(int instanceId) {
+        Instant started = outstandingDrains.remove(instanceId);
+        if (started != null) {
+            long ms = Duration.between(started, Instant.now()).toMillis();
+            if (ms > peakDrainDurationMs) peakDrainDurationMs = ms;
         }
     }
 
     private void sampleLoop() {
         int tick = 0;
+        int consecutiveFailures = 0;
         while (running.get()) {
             try {
                 Thread.sleep(SAMPLE_INTERVAL.toMillis());
@@ -243,12 +252,21 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 if (++tick % 5 == 0) {
                     sampleLagStagnation(); // heavier admin round-trip; 5s cadence is ample vs a 150s bound
                 }
+                consecutiveFailures = 0;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                // admin hiccups under chaos are expected; probe keeps sampling
-                log.debug("Probe sample error (continuing): {}", e.getMessage());
+                // transient admin hiccups under chaos are expected; a PERSISTENTLY failing probe is
+                // blind and must fail loud - a blind probe would otherwise pass any run GREEN
+                if (++consecutiveFailures >= MAX_CONSECUTIVE_SAMPLE_FAILURES) {
+                    violate("PROBE_DEGRADED: sampling failed " + consecutiveFailures
+                            + " consecutive times (last: " + e + ") - the probe was blind; this run's GREEN cannot be trusted");
+                    consecutiveFailures = 0; // re-arm: one violation per degradation episode
+                } else {
+                    log.debug("Probe sample error {}/{} (continuing): {}",
+                            consecutiveFailures, MAX_CONSECUTIVE_SAMPLE_FAILURES, e.getMessage());
+                }
             }
         }
     }
@@ -411,13 +429,18 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                     + missing.stream().limit(5).collect(java.util.stream.Collectors.toList()) + ")");
         }
         long duplicates = allConsumedKeysWithDuplicates.size() - unique.size();
-        long allowance = (long) disturbanceCount * perDisturbanceAllowance;
+        long rawAllowance = (long) disturbanceCount * perDisturbanceAllowance;
+        // cap: on a stormy run (many disturbances) the per-disturbance sum can exceed the total volume,
+        // making the bound vacuous - duplicating more than half of everything produced is pathological
+        // no matter how disturbed the run was
+        long allowance = Math.min(rawAllowance, expectedKeys.size() / 2L);
         if (duplicates > allowance) {
             problems.add("LEDGER_DUPLICATES: " + duplicates + " duplicate deliveries exceeds allowance "
-                    + allowance + " (" + disturbanceCount + " disturbances x " + perDisturbanceAllowance + ")");
+                    + allowance + " (" + disturbanceCount + " disturbances x " + perDisturbanceAllowance
+                    + (allowance < rawAllowance ? ", capped at half of expected " + expectedKeys.size() : "") + ")");
         }
-        log.info("[chaos-ledger] expected={} uniqueConsumed={} duplicates={} allowance={}",
-                expectedKeys.size(), unique.size(), duplicates, allowance);
+        log.info("[chaos-ledger] expected={} uniqueConsumed={} duplicates={} allowance={} (raw={})",
+                expectedKeys.size(), unique.size(), duplicates, allowance, rawAllowance);
         return problems;
     }
 }
