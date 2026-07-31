@@ -136,6 +136,10 @@ bin/performance-test.sh
 
 Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
 
+## PR Discipline
+
+- **Open PRs from the template and complete its checklist honestly.** `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively (e.g. `gh pr create --body-file`), so base the PR body on it and resolve every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` CI gate (`.github/workflows/pr-checklist.yml`) fails the check on an unchecked box that has no `N/A` (bots/automated PRs without the template are exempt).
+
 ## Releasing
 
 **Tag-as-truth, dispatch-triggered.** `master` is **always** a `-SNAPSHOT`. A dispatch runs
