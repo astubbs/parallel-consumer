@@ -70,18 +70,23 @@ jobs:
           docker --version
 
       - name: Chaos runs
+        # Inputs go through env, never ${{ }} inside run: - template substitution pastes raw text
+        # into the script BEFORE bash parses it, so a seed like `$(...)` would execute on the
+        # self-hosted runner (review finding, PR #83). Env vars are data, not code.
+        env:
+          CHAOS_SEED: ${{ inputs.seed }}
+          CHAOS_REPS: ${{ inputs.reps }}
         run: |
           echo "CHAOS_START=$(date +%s)" >> "$GITHUB_ENV"
           SEED_ARG=""
-          if [ -n "${{ inputs.seed }}" ]; then SEED_ARG="-Dchaos.seed=${{ inputs.seed }}"; fi
-          REPS="${{ inputs.reps }}"
-          REPS="${REPS:-1}"   # pull_request events carry no inputs - single rep
+          if [ -n "$CHAOS_SEED" ]; then SEED_ARG="-Dchaos.seed=$CHAOS_SEED"; fi
+          REPS="${CHAOS_REPS:-1}"   # pull_request events carry no inputs - single rep
           for i in $(seq 1 "$REPS"); do
             echo "=== chaos rep $i/$REPS ==="
             time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
               -DskipUTs=true -Dlicense.skip \
               -Dincluded.groups=chaos -Dexcluded.groups=quarantined \
-              $SEED_ARG
+              ${SEED_ARG:+"$SEED_ARG"}
           done
 
       - name: Timing summary
