@@ -169,6 +169,18 @@ out=$( (cd "$repoB" && COPYRIGHT_CHECK_FORK_POINT=000000000000000000000000000000
 assert          "missing fork point hard-fails (exit 2) in strict mode" 2 "$rc"
 assert_contains "strict-mode missing fork point explains the fix"       "fetch-depth: 0" "$out"
 
+# --- Structural guard: no SIGPIPE-prone pipes in the scanner ------------------------
+# `printf | grep -q` (or piping into awk that `exit`s early) under `set -euo pipefail`
+# randomly evaluates a MATCH as false when the reader exits before the writer finishes
+# (SIGPIPE -> pipefail), misclassifying files. Seen live in CI: an upstream file flagged
+# as fork-original. Membership tests must use herestrings (<<<), never pipes.
+if grep -vE '^[[:space:]]*#' "$SCANNER" | grep -nE '\|[[:space:]]*grep -q|\|[[:space:]]*awk '; then
+    echo "FAIL: scanner pipes into an early-exiting reader (SIGPIPE + pipefail misclassification risk) - use a herestring"
+    failures=$((failures + 1))
+else
+    echo "ok:   scanner has no SIGPIPE-prone pipes into grep -q / awk"
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "All scanner self-tests passed."
