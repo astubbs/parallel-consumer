@@ -336,32 +336,13 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
-- **`BrokerPollerBackpressureTest.brokerPollPausedWithEmptyShardsButHighInFlight` failed under load -
-  DIAGNOSED + FIXED 2026-07-31: test-design bug (vacuous first await), fix in PR #98 (branch
-  `fix/brokerpoller-backpressure-vacuous-await`** - test rewritten as
-  `brokerPollPausedWhenBlockedInFlightFillsBuffer`; plan:
-  `docs/plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md`; writeup:
-  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`).
-  Original event:
-  10s Awaitility timeout on the FIRST await (shards-drained condition) in highcpu lane run
-  30603617471 while the box ran two PIT sweeps + Unit + Performance; gating GitHub-hosted Integration
-  on the same head was GREEN. Classification per AGENTS.md stress-failure discipline came out as
-  suspicion (b), NOT contention: `messageBufferSize=150` pins the load factor statically at 15
-  (`PCModule.initDynamicLoadFactor`), so with all 10 workers latch-blocked PC takes at most
-  10x15=150 of the 200 unique-key records - `getNumberOfWorkQueuedInShardsAwaitingSelection()`
-  floors at 50 and the awaited `== 0` is UNSATISFIABLE once records arrive. Green runs pass only
-  through a race: the await's first checks run before partition assignment (~1-2s), when the shard
-  map is empty and the condition is vacuously true (same-sha green run 30603617430 finished the
-  whole 2-test class in 5.5s incl. two 1s sleeps - a non-vacuous pass is arithmetically impossible).
-  Under load, produce/setup latency pushed the await start past record arrival (assignment
-  04:16:25.126, await start ~04:16:25.6) making the timeout deterministic - no timeout increase can
-  fix it. NOT a duplicate of the tight-absolute-timeout contention pattern (loosening bounds would
-  mask a broken condition); NOT a main-code wedge (the 50-record floor is the static-buffer cap by
-  design; pause fires via buffer-full: 150 in-flight + 50 in shards > 150 threshold - the named
-  "empty shards + paused" state is unreachable because take-cap == pause threshold). Test inherited
-  from upstream #682/#836. Fix: rewrite first await to the satisfiable steady state (150 out / 50
-  awaiting), rename to what it actually verifies, add solutions doc for the "vacuous await
-  condition" flake class.
+- **`BrokerPollerBackpressureTest` highcpu-lane failure (run 30603617471) - DIAGNOSED + FIXED in
+  PR #98** (branch `fix/brokerpoller-backpressure-vacuous-await`): test-design bug (vacuously-true
+  first await masking an unsatisfiable condition), not contention, not a main-code wedge. Root-cause
+  write-up:
+  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`;
+  plan: `docs/plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md`. **Delete
+  this entry when #98 merges.**
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
