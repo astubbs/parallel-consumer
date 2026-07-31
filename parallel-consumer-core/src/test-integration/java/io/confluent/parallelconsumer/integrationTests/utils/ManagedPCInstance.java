@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests.utils;
 
 /*-
  * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
