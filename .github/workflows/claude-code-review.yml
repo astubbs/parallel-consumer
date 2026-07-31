@@ -33,7 +33,16 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # --comment is REQUIRED for the review to be posted: without it the plugin's step 7
+          # explicitly stops after printing the summary to the action log ("If --comment argument
+          # was NOT provided, stop here. Do not post any GitHub comments.") - which is why this
+          # workflow ran green for months while never posting a single review.
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
+          # Grant the tools the plugin's command + subagents need (mirrors the command's
+          # allowed-tools frontmatter). Prompt-mode runs get NO tool grants by default - the
+          # earlier runs logged 27 permission denials per review.
+          claude_args: |
+            --allowedTools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),mcp__github_inline_comment__create_inline_comment"
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
