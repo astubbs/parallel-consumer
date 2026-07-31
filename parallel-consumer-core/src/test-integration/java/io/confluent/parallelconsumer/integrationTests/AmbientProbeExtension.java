@@ -37,8 +37,12 @@ import java.util.stream.Collectors;
  * test method, BEFORE {@code @AfterEach} methods run (JUnit invokes {@code @AfterEach} METHODS
  * before {@code AfterEachCallback} extensions, so stopping any later would leave the sampler racing
  * the base class's {@code @AfterEach} admin-client close). If {@code @BeforeEach} throws, the test
- * method never executes and {@code afterTestExecution} is NOT invoked - {@code afterEach} remains as
- * an idempotent safety-net stop for exactly that path. {@link TestWatcher} callbacks then report
+ * method never executes and {@code afterTestExecution} is NOT invoked (verified against the pinned
+ * junit-jupiter-engine: a {@code @BeforeEach} failure branches past the AfterTestExecutionCallback
+ * phase) - {@code afterEach} remains as an idempotent safety-net stop for exactly that path. In that
+ * path only, the safety-net stop runs after the base class's {@code @AfterEach} admin close, so the
+ * sampler may issue one last call into a closing client - contained by the sample loop's catch and
+ * {@code adminIfOpen()} returning empty once closed. {@link TestWatcher} callbacks then report
  * from the retained probe state (they run after all teardown).
  * <p>
  * Escape hatches: {@code -Dambient.probe=off} globally, {@link NoAmbientProbe} per class/method.

@@ -172,8 +172,11 @@ public class KafkaClientUtils implements AutoCloseable {
         if (consumer != null)
             consumer.close();
         if (admin != null) {
-            admin.close();
-            admin = null; // publish "closed" to sampler threads that null-check getAdmin(); open() reassigns per test
+            try {
+                admin.close();
+            } finally {
+                admin = null; // publish "closed" to sampler threads via adminIfOpen(), even if close() throws; open() reassigns per test
+            }
         }
     }
 
