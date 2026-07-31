@@ -63,22 +63,9 @@ the PR #53 branch):
 
 ## In-flight on other branches / worktrees
 
-- **`feats/chaos-pain-suite`** (**PR #83, open**; worktree `.claude/worktrees/chaos-on-master`) —
-  Chaos Pain Suite Phase 1: seeded, calibrated chaos detector for the "alive but not progressing" bug
-  class. Lives in `parallel-consumer-core/src/test-integration/.../chaostests/` (`ChaosConductor`,
-  `ProgressProbe`, `ChaosChurnStormIT`) + `ManagedPCInstance` (temporary credited copy from the #857
-  investigation branch, PR #29 — **transplant plan: #29's eventual rebase drops its copy**, this one
-  stays). Tagged `chaos`, excluded from every gating suite (pom `excluded.groups` default); run with
-  `-Dincluded.groups=chaos -Dexcluded.groups=`; in CI via the highcpu lane per PR commit
-  (`highcpu / Chaos Pain Suite`) or on-demand `chaos-pain.yml` (workflow_dispatch: seed/reps) - both
-  call `bin/chaos-test.sh`, which excludes `@Quarantined` scenarios (zero tests selected while W1
-  sits quarantined under #80, flagged in the job summary). Seed protocol: `-Dchaos.seed=<N>` replays; every run
-  logs seed + full replay command. **Calibration evidence** (PR #83 body, plan Unit 5): pre-drain-fix
-  defect arm 3/3 RED (`ZOMBIE_MEMBER/REBALANCE_BLOCKED`, dwell 15.6-15.9s), all-fixes arm 3/3 GREEN
-  (4.5-8.9s), master REDs blind (the drain-zombie fixed on PR #80). Class 2 lag-stagnation probe
-  GREEN-calibrated; its RED trigger (W4 revoke-under-work scenario) is Phase 2, next up — then
-  per-cause duplicate-ledger attribution and assignor/EoS variants. Design doc: branch
-  `docs/chaos-pain-suite-design`. See AGENTS.md "Chaos Pain Suite" for the run recipe.
+- **`ManagedPCInstance` transplant residue** (from the merged Chaos Pain Suite, #83/#85): the copy in
+  `chaostests/` is now canonical — PR #29's eventual rebase drops its own copy, this one stays.
+  Chaos run recipe lives in AGENTS.md "Chaos Pain Suite"; remaining chaos work: Phase 2+ roster below.
 - **`fix/859-metrics-leak-plus-cherrypicks`** (**PR #57, open**; worktree `.claude/worktrees/dev-cc`) —
   5 commits ahead of master, rebased clean, targets `master`. Fixes PCMetrics memory leak (#859):
   duplicate Micrometer meter re-registration on partition assignment/revocation. Owns `PCMetrics.java`,
@@ -211,6 +198,27 @@ with 4.10.3, so these drop out of "new". Track the actual fixes (make the counte
 Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
 .erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
 
+## Chaos Pain Suite - Phase 2+ roster (Phase 1 #83 + W4 #85 merged)
+
+- **Class 2 RED hunt (open):** W4 is calibrated artifact-free but a true unbounded Class 2 stall did
+  not reproduce on master - the open #857 root-cause stall is probabilistic. **Seed sweep DONE
+  (2026-07-30): 9 seeds total (calibration seed + 8-seed sweep), 0 Class 2 hits**; stagnation peaks
+  tightly banded 95-112s (all legit-window), dwell peaks 33-68s (protocol-visible wedging, always
+  resolved). Seed volume alone is not finding it - next lever: the cooperative-sticky W4 variant,
+  **now in flight as PR #87** (stacked on #85; also removes the eager-reassignment heavy-restart
+  artifact class entirely, so the storm no longer restarts every in-flight heavy).
+- **Thin margin note:** W4's measured legit lag-stagnation peaks (117-123s) sit ~1.25x under the 150s
+  Class 2 bound. Fine for a non-gating suite; widen (shorter storm or dwell) if it ever flakes.
+- **Unit-test seams (PR #85 review):** ProgressProbe's per-scenario toggles
+  (`disableRebalanceDwellViolation` / `withNoProgressWindow`) and their "peak always measured,
+  violation only suppressed" invariant have no fast unit coverage - the samplers are private, so a
+  small extract-and-test seam is needed first. Same for `ManagedPCInstance.Config.extraConsumerProps`
+  (null vs present, wins-last ordering). Both become millisecond broker-free tests once seams exist.
+- **Ambient probe for EVERY integration test:** in flight as **PR #86** - ProgressProbe in OBSERVER
+  mode under every broker IT as a failure flight recorder. The anticipated #85/#86
+  `ProgressProbe.java` conflict landed on #86's side and was resolved there (merge of master
+  post-#85). Delete this bullet when #86 merges.
+
 ## Quarantine lane (`@Quarantined`) — active roster
 
 Branch `ci/quarantined-test-lane`. Known-failing-on-master tests leave the *gating* suites (green means
@@ -297,6 +305,18 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
+- **`BrokerPollerBackpressureTest.brokerPollPausedWithEmptyShardsButHighInFlight` failed under load -
+  diagnose, don't dismiss (2026-07-31, highcpu lane run 30603617471).** 10s Awaitility timeout on the
+  FIRST await (shards-drained condition) while the box concurrently ran two PIT sweeps + Unit +
+  Performance; the gating GitHub-hosted Integration run on the same head was GREEN. The test chains
+  five ABSOLUTE 10s bounds - the exact tight-absolute-timeout-under-contention pattern root-caused in
+  `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md` -
+  but per the AGENTS.md stress-failure discipline it must be CLASSIFIED first: (a) re-run on a quiet
+  box - if it passes, it's contention-sensitivity, then harden the bounds per that solutions doc
+  (operator stance: busy boxes should NOT cause test failures); (b) review the first await's
+  semantics - all 10 workers are latch-blocked while it waits for
+  `getNumberOfWorkQueuedInShardsAwaitingSelection() == 0`, so establish whether a slow path there
+  can mask a real backpressure wedge before touching any timeout.
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):

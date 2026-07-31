@@ -39,4 +39,26 @@ class ChaosConductorPlanIT {
         List<ChaosConductor.TickDraws> planB = ChaosConductor.planTicks(43L, 200, MIN_TICK, MAX_TICK, weights);
         assertThat(planA).isNotEqualTo(planB);
     }
+
+    @Test
+    void w4SameSeedDrawsIdenticalSequence() {
+        var weights = ChaosConductor.defaultW4Weights();
+        List<ChaosConductor.TickDraws> planA = ChaosConductor.planTicks(42L, 200, MIN_TICK, MAX_TICK, weights);
+        List<ChaosConductor.TickDraws> planB = ChaosConductor.planTicks(42L, 200, MIN_TICK, MAX_TICK, weights);
+        assertThat(planA).isEqualTo(planB);
+    }
+
+    /**
+     * W4's design invariant: no drains, ever. A STOP_DRAIN would open the Class 1 drain-zombie window
+     * and mask the Class 2 revoke-under-work stall mechanism the scenario exists to isolate.
+     */
+    @Test
+    void w4NeverPlansStopDrain() {
+        var weights = ChaosConductor.defaultW4Weights();
+        for (long seed = 0; seed < 10; seed++) {
+            List<ChaosConductor.ChaosAction> actions = ChaosConductor.planTicks(seed, 500, MIN_TICK, MAX_TICK, weights)
+                    .stream().map(ChaosConductor.TickDraws::getAction).collect(java.util.stream.Collectors.toList());
+            assertThat(actions).doesNotContain(ChaosConductor.ChaosAction.STOP_DRAIN);
+        }
+    }
 }

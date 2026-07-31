@@ -115,6 +115,9 @@ public class ManagedPCInstance implements Runnable {
                 consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG,
                         "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
             }
+            if (config.extraConsumerProps != null) {
+                consumerProps.putAll(config.extraConsumerProps); // scenario-specific overrides win last
+            }
             KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
 
             this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
@@ -249,5 +252,7 @@ public class ManagedPCInstance implements Runnable {
         @Builder.Default private final int pollDelayMs = 0;
         @Builder.Default private final int maxConcurrency = 10;
         @Builder.Default private final boolean useCooperativeAssignor = false;
+        /** Scenario-specific consumer property overrides, applied last (e.g. a low max.poll.interval.ms). */
+        private final Properties extraConsumerProps;
     }
 }

@@ -7,32 +7,19 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.Quarantined;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static com.google.common.truth.Truth.assertWithMessage;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -66,7 +53,7 @@ import static org.awaitility.Awaitility.await;
 @Timeout(600)
 @Testcontainers
 @Slf4j
-class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
+class ChaosChurnStormIT extends ChaosScenarioBase {
 
     private static final int PARTITIONS = 80;
     private static final int EXPECTED_MESSAGES = 100_000;
@@ -110,10 +97,6 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
         String topic = getClass().getSimpleName() + "-w1-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS); // explicit partition count (base numPartitions is package-private)
 
-        // fleet-wide consumption tracking (the probe's watermark + the ledger's evidence)
-        AtomicLong totalConsumed = new AtomicLong();
-        Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
-
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
                 .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
                 .order(ProcessingOrder.UNORDERED)
@@ -122,49 +105,21 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
                 .maxConcurrency(10)
                 .build();
 
-        ExecutorService pcExecutor = Executors.newWorkStealingPool();
+        FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
+                INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
+        AtomicLong totalConsumed = fleet.getTotalConsumed();
+        Queue<String> allConsumed = fleet.getAllConsumed();
+        Set<String> expectedKeys = fleet.getExpectedKeys();
+        ProgressProbe probe = fleet.getProbe();
 
-        // pre-produce a backlog, keep the rest flowing in the background (mirrors the existing
-        // MultiInstanceRebalanceTest shape; suite-local orchestration because runTest there is private)
-        Set<String> expectedKeys = new ConcurrentSkipListSet<>();
-        int preProduce = (int) (EXPECTED_MESSAGES * PRE_PRODUCE_FRACTION);
-        produceRange(topic, 0, preProduce, expectedKeys);
-
-        // protected first member - chaos never touches it, so the group always has a healthy survivor
-        ManagedPCInstance pc0 = newInstance(pcConfig, totalConsumed, allConsumed);
-        pc0.start(pcExecutor);
-        await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
-
-        Thread producerThread = new Thread(() -> produceRange(topic, preProduce, EXPECTED_MESSAGES, expectedKeys),
-                "chaos-background-producer");
-        producerThread.start();
-
-        List<ManagedPCInstance> initialFleet = new ArrayList<>();
-        initialFleet.add(pc0);
-        for (int i = 1; i < INITIAL_FLEET; i++) {
-            ManagedPCInstance pc = newInstance(pcConfig, totalConsumed, allConsumed);
-            initialFleet.add(pc);
-            pc.start(pcExecutor);
-        }
-
-        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
-                totalConsumed::get, EXPECTED_MESSAGES);
-
-        ChaosConductor conductor = ChaosConductor.builder()
+        ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed)
                 .minTick(Duration.ofMillis(500))
                 .maxTick(Duration.ofMillis(1500))
                 .joinAfterDrainBias(0.9)
-                .maxFleetSize(MAX_FLEET)
-                .pcExecutor(pcExecutor)
-                .instanceFactory(() -> newInstance(pcConfig, totalConsumed, allConsumed))
-                .protectedInstance(pc0)
-                .initialFleet(initialFleet)
-                .observer(probe)
                 .build();
 
-        probe.start();
-        conductor.start();
+        startRun(probe, conductor);
 
         try {
             // the run: everything produced must be consumed by SOMEONE within the cap, chaos or not
@@ -175,112 +130,9 @@ class ChaosChurnStormIT extends BrokerIntegrationTest<String, String> {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            conductor.stop(); // also joins outstanding drain threads (bounded) - fleet is quiesced after
-            List<String> violations = probe.stop();
-            producerThread.join(10_000);
-            // settle the fleet
-            for (ManagedPCInstance pc : conductor.getFleet()) {
-                try {
-                    // let any stopAsync background close finish first - close() below is then a no-op
-                    long waited = 0;
-                    while (pc.isClosePending() && waited < 15_000) {
-                        Thread.sleep(100);
-                        waited += 100;
-                    }
-                    if (pc.getParallelConsumer() != null && !pc.getParallelConsumer().isClosedOrFailed()) {
-                        pc.getParallelConsumer().close();
-                    }
-                } catch (Exception e) {
-                    log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
-                }
-            }
-            pcExecutor.shutdownNow();
-            log.info("Run summary: consumed={} (unique tracking via ledger below), probe violations={}",
-                    totalConsumed.get(), violations);
+            settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
-        // SLO verdict
-        assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
-                "replay: %s)", replayCmd)
-                .that(probe.getViolations()).isEmpty();
-
-        // end-of-run canary sweep: every instance's terminal failure cause must be classified - an
-        // instance stopped and never restarted would otherwise carry an unexpected error silently
-        // (restart is the only other place classification happens)
-        List<String> unexpectedFailures = new ArrayList<>();
-        for (ManagedPCInstance pc : conductor.getFleet()) {
-            var consumer = pc.getParallelConsumer();
-            Exception cause = consumer == null ? null : consumer.getFailureCause();
-            if (cause != null && !ManagedPCInstance.isExpectedCloseException(cause)) {
-                unexpectedFailures.add("instance " + pc.getInstanceId() + ": " + cause);
-            }
-        }
-        assertWithMessage("no instance may end the run with an unclassified failure cause (replay: %s)",
-                replayCmd)
-                .that(unexpectedFailures).isEmpty();
-
-        // correctness ledger: no loss ever; duplicates bounded per disturbance
-        int disturbances = conductor.getDisturbanceCount();
-        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
-                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
-        assertWithMessage("correctness ledger must balance (replay: %s)", replayCmd)
-                .that(ledgerProblems).isEmpty();
-    }
-
-    private ManagedPCInstance newInstance(ManagedPCInstance.Config config,
-                                          AtomicLong totalConsumed, Queue<String> allConsumed) {
-        return new ManagedPCInstance(config, getKcu(), key -> {
-            if (isHeavyKey(key)) {
-                // NON-interruptible dwell (sleep-until-deadline): PC's close path force-interrupts stuck
-                // workers after ~5s (awaitTermination -> shutdownNow), which would cap every drain at
-                // seconds and shrink the zombie-freeze window below what any probe can discriminate.
-                // Real-world slow work often ignores interrupts too (JDBC, native calls, CPU loops).
-                long deadline = System.currentTimeMillis() + HEAVY_SLEEP.toMillis();
-                boolean interrupted = false;
-                long left;
-                while ((left = deadline - System.currentTimeMillis()) > 0) {
-                    try {
-                        Thread.sleep(Math.min(left, 1_000));
-                    } catch (InterruptedException e) {
-                        interrupted = true; // note it, keep dwelling until the deadline
-                    }
-                }
-                if (interrupted) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            totalConsumed.incrementAndGet();
-            allConsumed.add(key);
-        });
-    }
-
-    /** key format is "key-N"; every HEAVY_EVERY-th record is heavy. */
-    private static boolean isHeavyKey(String key) {
-        int n = Integer.parseInt(key.substring(key.indexOf('-') + 1));
-        return n > 0 && n % HEAVY_EVERY == 0;
-    }
-
-    /** Coverage check is expensive at full message scale (see EXPECTED_MESSAGES) - only evaluate once the
-     * counter says it's plausible. */
-    private boolean allConsumedCovers(Set<String> expectedKeys, Queue<String> allConsumed) {
-        var unique = new java.util.HashSet<>(allConsumed);
-        return unique.containsAll(expectedKeys);
-    }
-
-    private void produceRange(String topic, int fromInclusive, int toExclusive, Set<String> expectedKeys) {
-        try (Producer<String, String> producer = getKcu().createNewProducer(false)) {
-            List<Future<RecordMetadata>> sends = new ArrayList<>();
-            for (int i = fromInclusive; i < toExclusive; i++) {
-                String key = "key-" + i;
-                expectedKeys.add(key);
-                sends.add(producer.send(new ProducerRecord<>(topic, key, "v-" + i)));
-            }
-            for (Future<RecordMetadata> send : sends) {
-                send.get();
-            }
-            log.info("Produced [{}..{})", fromInclusive, toExclusive);
-        } catch (Exception e) {
-            throw new RuntimeException("Producer failed at range [" + fromInclusive + ".." + toExclusive + ")", e);
-        }
+        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
     }
 }
