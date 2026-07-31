@@ -1,53 +1,57 @@
-# Optional, NON-GATING fast feedback on the self-hosted macOS runner (mac-laptop).
+# Optional, NON-GATING fast feedback on a self-hosted runner labelled `local` (a smaller, personal /
+# offline-capable box - e.g. a laptop or spare machine).
 #
-# Runs the forked unit + integration suites on local multi-core hardware, which is much faster than the
+# Runs the forked unit + integration suites on multi-core hardware, which is much faster than the
 # GitHub-hosted 2-core gate (e.g. the forked unit suite ~1:39 vs GitHub's ~4-5 min). This is FYI only - the
 # required merge gate stays on always-on, sandboxed GitHub-hosted infra (see maven.yml). continue-on-error +
-# not-required means the laptop being asleep/offline never blocks a merge.
+# not-required means the runner being asleep/offline never blocks a merge.
 #
-# The unit and integration suites are split into a matrix of two independent jobs so they can run
-# CONCURRENTLY - BUT that only happens if the mac has 2+ self-hosted runner INSTANCES registered (each
-# runner instance processes one job at a time). With a single instance the two jobs simply queue and run
-# back-to-back. Register a second runner instance on the mac (a second ./config.sh checkout) to actually
+# The unit and integration suites are split into a matrix of independent jobs so they can run
+# CONCURRENTLY - BUT that only happens if the runner has 2+ self-hosted runner INSTANCES registered (each
+# runner instance processes one job at a time). With a single instance the jobs simply queue and run
+# back-to-back. Register a second runner instance (a second ./config.sh checkout) to actually
 # parallelise. See docs/SELF_HOSTED_RUNNER.md.
 #
 # SECURITY (public repo + self-hosted runner): the job is guarded to SAME-REPO pull requests only
-# (head.repo == this repo), so a fork PR's untrusted code NEVER runs on the home machine (RCE). We use
+# (head.repo == this repo), so a fork PR's untrusted code NEVER runs on the self-hosted machine (RCE). We use
 # `pull_request` (untrusted-code trigger, no secrets exposed), never `pull_request_target`.
 
-name: PR Mac Fast Feedback
+name: local
 
-# mac-laptop is offline indefinitely, and its suites (unit / integration / mutation) now run on the
-# always-more-capable high-CPU runner (pr-highcpu-fast-feedback.yml, a strict superset + performance).
-# Manual-dispatch-only so it doesn't queue dead jobs on every PR; re-add `pull_request:` if the mac
-# runner comes back online.
+# PR RUNS DISABLED: the `local` self-hosted runner is offline indefinitely, and its suites
+# (unit / integration / mutation) now run on the always-more-capable high-CPU runner
+# (pr-highcpu-fast-feedback.yml, a strict superset + performance) - so PR-triggered jobs here just
+# queued forever as eternally-pending checks. Disabled at the trigger level so the checks disappear
+# from PRs entirely. Re-enable by restoring `pull_request:` below if the local runner comes back
+# online; workflow_dispatch still works whenever the runner is up.
 on:
+  # was: pull_request: — re-enable when the `local` self-hosted runner is back online
   workflow_dispatch:
 
 concurrency:
-  group: pr-mac-fast-feedback-${{ github.head_ref || github.ref }}
+  group: pr-local-fast-feedback-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  mac-build-test:
-    name: "Build & Test - ${{ matrix.suite-name }} (macOS self-hosted, optional)"
-    # Same-repo PRs only: a fork PR is untrusted code and must NOT execute on the home machine.
+  local-build-test:
+    name: "${{ matrix.suite-name }} (local self-hosted, optional)"
+    # Same-repo PRs only: a fork PR is untrusted code and must NOT execute on the self-hosted machine.
     # workflow_dispatch (manual) is always allowed.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS]
-    continue-on-error: true      # optional / FYI - never a required gate (laptop may be offline)
+    runs-on: [self-hosted, local]
+    continue-on-error: true      # optional / FYI - never a required gate (runner may be offline)
     timeout-minutes: 45
     strategy:
       # Don't cancel the integration job if unit fails (or vice versa) - each is independent FYI.
       fail-fast: false
       matrix:
         include:
-          # Unit suite forks one JVM per core (ci profile forkCount=1C) - fast on the 12-core Mac.
+          # Unit suite forks one JVM per core (ci profile forkCount=1C) - fast on a multi-core box.
           - suite-name: "Unit"
             cmd: "bin/ci-unit-test.sh"
           # Integration suite forks per-broker (each JVM gets its own Testcontainers Kafka) - reliable + fast.
@@ -74,7 +78,7 @@ jobs:
       - name: Show environment
         run: |
           java -version
-          echo "cores: $(sysctl -n hw.ncpu)"
+          echo "cores: $(getconf _NPROCESSORS_ONLN)"
           docker --version
           docker info | head -20
 
@@ -85,6 +89,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mac-fast-feedback-reports-${{ matrix.suite-name }}-${{ github.run_number }}
+          name: local-fast-feedback-reports-${{ matrix.suite-name }}-${{ github.run_number }}
           path: '**/target/*-reports/*.xml'
           retention-days: 14

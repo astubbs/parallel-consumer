@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.examples.streams;
 
 /*-
  * Copyright (C) 2020 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 

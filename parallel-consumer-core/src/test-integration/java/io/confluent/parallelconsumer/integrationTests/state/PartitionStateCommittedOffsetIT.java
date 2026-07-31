@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests.state;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.StringSubject;
@@ -11,6 +12,7 @@ import io.confluent.parallelconsumer.FakeRuntimeException;
 import io.confluent.parallelconsumer.ManagedTruth;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.PollContext;
+import io.confluent.parallelconsumer.Quarantined;
 import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
@@ -433,6 +435,14 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
      *
      * @see #noOffsetPolicyOnStartup
      */
+    @Quarantined(
+            reason = "Nudge race under auto.offset.reset=latest: the single pre-await tail-nudge record can be " +
+                    "produced BEFORE the consumer's [latest] reset resolves on a slow/loaded broker, so the reset " +
+                    "leapfrogs it and the await can never see the expected records at any timeout - only the " +
+                    "[latest] parameter ever fails.",
+            tracking = "docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md (on the fix branch)",
+            fixedBy = "PR #80 (awaitWithTopicNudge: nudge-inside-await + timeout self-diagnosis; 20/20 clean)",
+            flapping = true) // passes most runs - only the [latest] param under broker load fails; a pass proves nothing
     @SneakyThrows
     @EnumSource(value = OffsetResetStrategy.class)
     @ParameterizedTest

@@ -63,11 +63,30 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHA=$(git rev-parse HEAD)
-          CONCL=$(gh run list --workflow "Build and Test" --branch master --limit 15 \
+          CONCL=$(gh run list --workflow "CI" --branch master --limit 15 \
             --json headSha,conclusion --jq "[.[] | select(.headSha==\"$SHA\")][0].conclusion")
           if [ "$CONCL" != "success" ]; then
-            echo "::error::Latest 'Build and Test' for master $SHA is '${CONCL:-not found}', not success. Refusing to release."
+            echo "::error::Latest 'CI' workflow run for master $SHA is '${CONCL:-not found}', not success. Refusing to release."
             exit 1
+          fi
+
+      # A release must not ship while known-failing tests are held out of the gating suites - the
+      # quarantine lane exists to keep PR merges honest, not to let a release skip its tests.
+      # Runs on dry runs too (as a warning) so a rehearsal surfaces that a real release would block.
+      - name: Refuse to release with quarantined tests
+        run: |
+          source bin/lib/quarantine-common.sh
+          if [ -n "$(quarantined_files)" ]; then
+            echo "Quarantined tests present (registry: docs/QUARANTINED_TESTS.md):"
+            grep -rnE --include='*.java' --exclude-dir=target "$QUARANTINE_ANNOTATION_ERE" . || true
+            if [ "${{ inputs.dryRun }}" = "true" ]; then
+              echo "::warning::Dry run: a REAL release would be BLOCKED - known-failing tests are quarantined out of the gating suites. Land the owning fix PRs and re-enable before releasing."
+            else
+              echo "::error::Refusing to release: known-failing tests are quarantined out of the gating suites (docs/QUARANTINED_TESTS.md). Land the owning fix PRs and re-enable them first."
+              exit 1
+            fi
+          else
+            echo "No quarantined tests - release may proceed."
           fi
 
       - name: Guard - tag must not already exist

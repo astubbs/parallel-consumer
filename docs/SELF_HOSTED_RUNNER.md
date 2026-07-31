@@ -149,9 +149,16 @@ fallback.
 
 The heavy runner is a many-core Linux box running a Docker LXC with **several runner instances** (one per
 concurrent job), targeted by the [`highcpu`](../.github/workflows/pr-highcpu-fast-feedback.yml)
-workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). Unit, integration and performance
-run as separate matrix jobs in parallel. Provisioning it (OpenTofu + Ansible) and the on-demand power/boot
-control are generic infrastructure kept in a separate private infra repo, not here.
+workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). Unit, integration,
+performance **and mutation (PIT)** run as separate matrix jobs in parallel. Provisioning it (OpenTofu +
+Ansible) and the on-demand power/boot control are generic infrastructure kept in a separate private
+infra repo, not here.
+
+**Trigger:** `pull_request` (same-repo only) plus manual `workflow_dispatch`. The jobs are advisory
+(`continue-on-error`, not required), so when the `[self-hosted, highcpu]` runner is offline the checks
+just sit pending and never block a merge - the required gate stays GitHub-hosted (`maven.yml`). **Manually:**
+`gh workflow run highcpu --ref <branch>`, or fork -> **Actions -> highcpu -> Run workflow**. (Contrast
+`pr-local-fast-feedback.yml`, which stays `workflow_dispatch`-only because its runner is retired.)
 
 ## Fallback behaviour (important)
 

@@ -2,7 +2,12 @@
 
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
-> from `git log`. Keep it current when context-switching. Last updated: 2026-07-28.
+> from `git log`. Keep it current when context-switching. Last updated: 2026-07-31.
+>
+> **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
+> No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
+> AGENTS.md (policy), PR descriptions/commit messages (history), or `docs/solutions/` (lessons).
+> When work finishes, delete or shrink its entry rather than converting it into a record.
 >
 > **The durable fork↔upstream mapping now lives in a machine-readable cache:**
 > [`src/docs/development/upstream-map.yaml`](../src/docs/development/upstream-map.yaml) is the
@@ -20,7 +25,7 @@ change. Release = strip `-SNAPSHOT` → `0.6.0.0` and merge to `master`. Release
 Antony separately (not in this doc).
 
 **Release mechanics:** no `maven-release-plugin`; the pom `<version>` is the single source of truth.
-Merge to `master` → `.github/workflows/publish.yml` runs after "Build and Test" succeeds and deploys via
+Merge to `master` → `.github/workflows/publish.yml` runs after the "CI" workflow succeeds and deploys via
 the `maven-central` profile (`central-publishing-maven-plugin`, GPG signed). A non-`-SNAPSHOT` version
 also tags `v<version>` and cuts a GitHub release. See `AGENTS.md` "Releasing".
 
@@ -58,6 +63,22 @@ the PR #53 branch):
 
 ## In-flight on other branches / worktrees
 
+- **`feats/chaos-pain-suite`** (**PR #83, open**; worktree `.claude/worktrees/chaos-on-master`) —
+  Chaos Pain Suite Phase 1: seeded, calibrated chaos detector for the "alive but not progressing" bug
+  class. Lives in `parallel-consumer-core/src/test-integration/.../chaostests/` (`ChaosConductor`,
+  `ProgressProbe`, `ChaosChurnStormIT`) + `ManagedPCInstance` (temporary credited copy from the #857
+  investigation branch, PR #29 — **transplant plan: #29's eventual rebase drops its copy**, this one
+  stays). Tagged `chaos`, excluded from every gating suite (pom `excluded.groups` default); run with
+  `-Dincluded.groups=chaos -Dexcluded.groups=`; in CI via the highcpu lane per PR commit
+  (`highcpu / Chaos Pain Suite`) or on-demand `chaos-pain.yml` (workflow_dispatch: seed/reps) - both
+  call `bin/chaos-test.sh`, which excludes `@Quarantined` scenarios (zero tests selected while W1
+  sits quarantined under #80, flagged in the job summary). Seed protocol: `-Dchaos.seed=<N>` replays; every run
+  logs seed + full replay command. **Calibration evidence** (PR #83 body, plan Unit 5): pre-drain-fix
+  defect arm 3/3 RED (`ZOMBIE_MEMBER/REBALANCE_BLOCKED`, dwell 15.6-15.9s), all-fixes arm 3/3 GREEN
+  (4.5-8.9s), master REDs blind (the drain-zombie fixed on PR #80). Class 2 lag-stagnation probe
+  GREEN-calibrated; its RED trigger (W4 revoke-under-work scenario) is Phase 2, next up — then
+  per-cause duplicate-ledger attribution and assignor/EoS variants. Design doc: branch
+  `docs/chaos-pain-suite-design`. See AGENTS.md "Chaos Pain Suite" for the run recipe.
 - **`fix/859-metrics-leak-plus-cherrypicks`** (**PR #57, open**; worktree `.claude/worktrees/dev-cc`) —
   5 commits ahead of master, rebased clean, targets `master`. Fixes PCMetrics memory leak (#859):
   duplicate Micrometer meter re-registration on partition assignment/revocation. Owns `PCMetrics.java`,
@@ -150,6 +171,17 @@ and Confluent `-ce`/`-ccs` Kafka builds — without the `-ce` filter, kafka "lat
   to compile against 1.17. Both are pinned with in-pom comments. **To upgrade:** migrate the `CoreApp`
   imports + registry construction, then bump the whole micrometer family together (keep the two aligned).
 
+**jackson-databind — hand-managed, module-local test pin (Dependabot told to ignore):**
+- **jackson-databind** held at `2.17.2` in `parallel-consumer-example-metrics` (test scope) — parses the
+  Prometheus metadata JSON in that module's integration test. Kept as a module-local, explicitly-versioned
+  test dep **on purpose**: pinning it globally via root `dependencyManagement` forces WireMock
+  (`parallel-consumer-vertx`, `wiremock-jre8`) onto an incompatible Jackson and breaks `VertxTest` (HTTP
+  500), so it stays scoped to this one module. Dependabot proposed `2.17.2 → 2.18.9` (PR #76); we told it
+  `@dependabot ignore this dependency` because these bumps belong in the curated `versions-maven-plugin`
+  sweep with an `example-metrics` integration-test run, not standalone PRs. **To upgrade:** bump the pin in
+  the next sweep and confirm the example-metrics integration test is green (the module-local scope means it
+  cannot affect `VertxTest`). Test-scoped, so it never reaches the published artifact classpath.
+
 **Build plugins — only pre-releases available, held by the risk policy:**
 - Maven-4-era plugins offered only as betas/milestones: `maven-clean/deploy/install/jar/resources/source/
   compiler` `4.0.0-beta-*`; `maven-surefire`/`maven-failsafe` `3.6.0-M1`; `maven-site-plugin` `4.0.0-M16`
@@ -179,7 +211,125 @@ with 4.10.3, so these drop out of "new". Track the actual fixes (make the counte
 Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
 .erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
 
+## Chaos Pain Suite - Phase 2+ roster (branch feats/chaos-w4-revoke-under-work, PR #85)
+
+- **Class 2 RED hunt (open):** W4 is calibrated artifact-free but a true unbounded Class 2 stall did
+  not reproduce on master - the open #857 root-cause stall is probabilistic. **Seed sweep DONE
+  (2026-07-30): 9 seeds total (calibration seed + 8-seed sweep), 0 Class 2 hits**; stagnation peaks
+  tightly banded 95-112s (all legit-window), dwell peaks 33-68s (protocol-visible wedging, always
+  resolved). Seed volume alone is not finding it - next lever: the cooperative-sticky W4 variant,
+  **now in flight as PR #87** (stacked on #85; also removes the eager-reassignment heavy-restart
+  artifact class entirely, so the storm no longer restarts every in-flight heavy).
+- **Thin margin note:** W4's measured legit lag-stagnation peaks (117-123s) sit ~1.25x under the 150s
+  Class 2 bound. Fine for a non-gating suite; widen (shorter storm or dwell) if it ever flakes.
+- **Unit-test seams (PR #85 review):** ProgressProbe's per-scenario toggles
+  (`disableRebalanceDwellViolation` / `withNoProgressWindow`) and their "peak always measured,
+  violation only suppressed" invariant have no fast unit coverage - the samplers are private, so a
+  small extract-and-test seam is needed first. Same for `ManagedPCInstance.Config.extraConsumerProps`
+  (null vs present, wins-last ordering). Both become millisecond broker-free tests once seams exist.
+- **Ambient probe for EVERY integration test:** graduated from roster idea to **PR #86** (sibling of
+  #85, also based on `feats/chaos-pain-suite`) - ProgressProbe in OBSERVER mode under every broker IT
+  as a failure flight recorder. NB #85 and #86 both touch `ProgressProbe.java`; whichever merges
+  second takes a small conflict.
+
+## Quarantine lane (`@Quarantined`) — active roster
+
+Branch `ci/quarantined-test-lane`. Known-failing-on-master tests leave the *gating* suites (green means
+mergeable) but keep running on every PR in the non-gating "Quarantined Tests" CI job (audit + per-test
+results in its step summary; locally `bin/quarantined-test.sh`). Rules live in AGENTS.md (Testing): no
+quarantine without diagnosis; quarantine is master-state, not PR-state; the owning fix PR deletes the
+annotation after merging master, atomically restoring the test to the gating lane.
+
+The live roster is **`docs/QUARANTINED_TESTS.md`** — a CI-enforced registry
+(`bin/check-quarantine-registry.sh` fails on any drift vs the `@Quarantined` annotations, both
+directions), so it acts as the task list of tests to return to the gating lane. Current sole occupant:
+`PartitionStateCommittedOffsetIT.committedOffsetRemoved` (the `[latest]` nudge race), **owner PR #80**,
+which must delete the annotation + registry entry once it has master merged in.
+
+## Parked: extract the quarantine lane as its own FOSS project?
+
+The `@Quarantined` lane (annotation + enforced registry + owner-claim verification + non-gating CI job
++ release blocking + self-tests) is generic - nothing in it is parallel-consumer-specific. Evaluate
+whether an equivalent FOSS tool already exists before extracting; known adjacent art (mostly commercial
+SaaS, none quite this shape): Trunk.io flaky-test quarantining, BuildPulse, Datadog Test Optimization's
+quarantine feature, Develocity (Gradle Enterprise) flaky management, JUnit Pioneer's `@DisabledUntil`
+(date-based, no ownership loop). The differentiator here: the CLOSED LOOP is enforced in CI (registry
+can't drift, owner PR must exist/stay open, merged-owner-without-re-enable turns red, releases blocked)
+rather than relying on humans or a SaaS dashboard. Could extract as annotation + scripts + a reusable
+GitHub Action. Revisit after the current PR queue drains.
+
+## Parked: user-facing upstream issue mirroring
+
+We have strong *internal* upstream tracking (`upstream-map.yaml`, this ledger, `docs/solutions/`) but
+nothing user-facing: a user on the fork's Issues tab can't tell whether upstream #857 is fixed here, in
+flight, or won't-fix — and upstream (unmaintained) data could disappear/be archived one day. Plan:
+
+- **Mirror on touch, not in bulk** — create a fork issue only when we address an upstream issue (fix,
+  won't-fix, or active investigation). No mass import (noise + maintenance debt).
+- Canonical structure per mirror: title `upstream #NNN: ...`; snapshot of the upstream issue's essential
+  content (quoted, attributed, linked — the data-preservation goal); our disposition (fixed-in /
+  won't-fix + why / investigating); links to fixing PRs + solutions docs; `upstream-mirror` label.
+- **Ongoing conversation lives on the fork issue**; the upstream thread is historical record.
+- Script it off `upstream-map.yaml` (gh CLI) so map and issues can't drift — the map stays the source
+  of truth, issues are a rendered view. **Script requirements (user-specified): operates on exactly ONE
+  upstream issue per invocation (no batch mode), and has a first-class dry-run mode** (print the full
+  issue title/body/labels that *would* be created/updated, and whether it's a create or an update,
+  without touching GitHub).
+- First candidates once the current PR queue drains: upstream #857 (stall saga), #909, #893/#905
+  (PCMetrics leak), #912 (vertx leak).
+
+## Parked: hardened "concede optimizer" (removed from PR #75 by ce-review 2026-07-31)
+
+PR #75 originally let the REQUIRED GitHub-hosted gate report green *without running its tests* when the
+self-hosted `highcpu` runner had already passed the same suite for the same SHA (`bin/ci-concede-check.sh`
++ `maven.yml` `if: steps.concede.outputs.skip != 'true'`). A 10-reviewer ce-review found this **not safe
+as built** and it was removed; the base highcpu workflow + VertxTest fix + PR-scoped PIT shipped. Findings
+to fix before ANY revival:
+
+- **P0 gate spoof (adversarial):** concede matched only on free-text `workflow_run.name` ("highcpu") +
+  job-name prefix + head SHA, with no binding to the real workflow ID/path. Because `pull_request`
+  workflows run the PR branch's own files, a PR could add a workflow file *named* `highcpu` with a
+  trivially-passing "Unit (optional)" job on `ubuntu-latest` and make the required gate skip real tests -
+  no self-hosted box needed. **Fix:** bind to the workflow's immutable path/ID, and verify the run's
+  `event == 'pull_request'` and `head_repository.full_name == GITHUB_REPOSITORY` and actor identity.
+- **P1 timeout (reliability/correctness/maint):** `MAX_WAIT=600s` vs the Unit job's 15-min budget - a
+  slow-but-alive highcpu run could burn ~10 min before falling back, timing out a good commit. **Fix:**
+  per-suite wait budget, or don't wait at all (only concede to an ALREADY-complete run).
+- **P1 non-equivalent contract (adversarial):** conceding hosted Integration (`forkCount=4`) to highcpu
+  (`forkCount=8`) - this PR's own inflight note shows the flake flip-flops between the two, so one green
+  ≠ the other. **Fix:** only concede between byte-identical suite invocations, or don't.
+- **Silent name-drift (maint/learnings):** job/workflow names were manually synced across 3 files with a
+  `KEEP IN SYNC` comment; a rename silently disables the feature. **Fix:** a drift self-check test.
+- **Invisibility (agent-native):** a conceded skip was only in raw logs - no step-summary/annotation and
+  no durable link to the trusted run. **Fix:** `$GITHUB_STEP_SUMMARY` + `::notice::` with the run URL.
+
+**Simplest safe alternative, recommended over reviving concede at all:** keep `highcpu` purely advisory
+(never let a self-hosted result satisfy a required gate). The speed win is the fast *feedback*, not
+skipping the hosted gate - the gate staying independent is worth more than the minutes saved.
+
 ## CI reliability / gate issues (follow-up work)
+
+- **Stacked PRs are ungated - dependency check "required" doesn't apply to them (2026-07-31).**
+  Observed: PR #87 (base = #85's branch) FAILS the PR-dependency check yet shows as mergeable.
+  Diagnosis: required status checks are configured in the ruleset targeting `master`, so they only
+  gate PRs whose BASE is master - a stacked PR merging into its parent branch bypasses every
+  required check, not just the dep gate. Fix options: (a) add a second ruleset targeting ALL
+  branches (`**`) requiring just the dependency check (safe: it passes trivially on non-stacked
+  PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
+  needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
+  matches exactly what the ruleset requires (rulesets match by name).
+- **`BrokerPollerBackpressureTest.brokerPollPausedWithEmptyShardsButHighInFlight` failed under load -
+  diagnose, don't dismiss (2026-07-31, highcpu lane run 30603617471).** 10s Awaitility timeout on the
+  FIRST await (shards-drained condition) while the box concurrently ran two PIT sweeps + Unit +
+  Performance; the gating GitHub-hosted Integration run on the same head was GREEN. The test chains
+  five ABSOLUTE 10s bounds - the exact tight-absolute-timeout-under-contention pattern root-caused in
+  `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md` -
+  but per the AGENTS.md stress-failure discipline it must be CLASSIFIED first: (a) re-run on a quiet
+  box - if it passes, it's contention-sensitivity, then harden the bounds per that solutions doc
+  (operator stance: busy boxes should NOT cause test failures); (b) review the first await's
+  semantics - all 10 workers are latch-blocked while it waits for
+  `getNumberOfWorkQueuedInShardsAwaitingSelection() == 0`, so establish whether a slow path there
+  can mask a real backpressure wedge before touching any timeout.
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
@@ -225,6 +375,12 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   `.github/workflows/maven.yml`) is turned off via `if: false`. It currently fails and adds a red X of noise
   to every PR (it is `continue-on-error`, so it never gated merges). **Re-enable when the Kafka 4.x migration
   work starts** by restoring `if: github.event_name == 'pull_request'` — that work will make it pass.
+- **DISABLED: the `local` self-hosted PR jobs** (`pr-local-fast-feedback.yml` — Unit / Integration / Mutation
+  (PIT) "(local self-hosted, optional)" checks). The `local` runner (currently a mac-laptop) is offline for
+  the foreseeable future, so the jobs sat eternally *pending* on every PR, polluting the checks list. The
+  `pull_request` trigger is commented out (`was:` note in the workflow); `workflow_dispatch` still works.
+  Targets `runs-on: [self-hosted, local]`, so give the runner the `local` label (`./config.sh --labels local`)
+  when registering it. **Re-enable by restoring the `pull_request:` trigger when the runner returns.**
 - **pitest (Mutation Testing) was pre-existing RED — root cause found + fixed (PR #69): coverage-minion OOM
   at `-Xmx1g`.** The single coverage-generation minion (runs all target tests once to map coverage) crashed
   with `UNKNOWN_ERROR`; confirmed locally that 1g crashes and 4g completes → raised to `-Xmx2g`. Also switched
@@ -268,7 +424,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     On GitHub-hosted, a full `internal.*` sweep was impractically slow — `-Dthreads=2` maxed the 2 cores and it
     ran 17+ min without finishing. PIT is CPU-bound and process-parallel across minion JVMs, so it scales with
     cores. Removed the GitHub-hosted `mutation-testing` job and added a `Mutation (PIT)` entry to the
-    `pr-mac-fast-feedback.yml` matrix, driven by `bin/ci-mutation-test.sh` which defaults `-Dthreads` to the
+    `pr-local-fast-feedback.yml` matrix, driven by `bin/ci-mutation-test.sh` which defaults `-Dthreads` to the
     box's core count (~12 on the Mac ⇒ ~5-6× faster). **Caveats:** (i) advisory only, and the Mac may be offline,
     so there's now no PIT signal when the laptop's off (acceptable — it never gated); (ii) RAM = threads × 2g
     (~24g at 12 threads), lower `PIT_THREADS` if the box is constrained. This is the "more cores" answer;
@@ -393,7 +549,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
 - **`Mutation Testing (PIT)` cascades from any flaky test.** PIT requires a fully green suite, so a
   single flaky/timeout test aborts the whole run ("1 test did not pass without mutation"). **Fix:**
   depends on the Integration flake fix; consider not gating PIT on the integration suite. Advisory.
-- **Path-filter inconsistency.** `Build and Test` (and `SpotBugs Baseline`) are *skipped* on docs-only
+- **Path-filter inconsistency.** the `CI` workflow (and `static: spotbugs baseline`) are *skipped* on docs-only
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.
@@ -439,3 +595,11 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   passed. **Fixed** by pointing `getBadRequest()` at a **closed local port** (`127.0.0.1:1`) → deterministic
   "connection refused" everywhere, no DNS. (Both sibling tests share the helper, so both assertions were
   updated.) Found bringing up the self-hosted high-CPU runner.
+
+## Copyright headers - open follow-up (2026-07-31)
+
+- **Chaos stack must pass the new header check once PR #90 merges.** The scanner
+  (`bin/check-copyright-headers.sh`, policy in AGENTS.md) registers `ManagedPCInstance` as an
+  upstream EXTRACTION, requiring Confluent + the `Modifications Copyright (C) 2026 Antony Stubbs
+  and contributors` line - PR #83 currently has it Confluent-only, so add that line on the stack.
+  The stack's other fork-header fixes are already committed (#83) or in flight (#85).
