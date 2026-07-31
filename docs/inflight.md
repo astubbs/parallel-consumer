@@ -241,6 +241,35 @@ flight, or won't-fix — and upstream (unmaintained) data could disappear/be arc
 - First candidates once the current PR queue drains: upstream #857 (stall saga), #909, #893/#905
   (PCMetrics leak), #912 (vertx leak).
 
+## Parked: hardened "concede optimizer" (removed from PR #75 by ce-review 2026-07-31)
+
+PR #75 originally let the REQUIRED GitHub-hosted gate report green *without running its tests* when the
+self-hosted `highcpu` runner had already passed the same suite for the same SHA (`bin/ci-concede-check.sh`
++ `maven.yml` `if: steps.concede.outputs.skip != 'true'`). A 10-reviewer ce-review found this **not safe
+as built** and it was removed; the base highcpu workflow + VertxTest fix + PR-scoped PIT shipped. Findings
+to fix before ANY revival:
+
+- **P0 gate spoof (adversarial):** concede matched only on free-text `workflow_run.name` ("highcpu") +
+  job-name prefix + head SHA, with no binding to the real workflow ID/path. Because `pull_request`
+  workflows run the PR branch's own files, a PR could add a workflow file *named* `highcpu` with a
+  trivially-passing "Unit (optional)" job on `ubuntu-latest` and make the required gate skip real tests -
+  no self-hosted box needed. **Fix:** bind to the workflow's immutable path/ID, and verify the run's
+  `event == 'pull_request'` and `head_repository.full_name == GITHUB_REPOSITORY` and actor identity.
+- **P1 timeout (reliability/correctness/maint):** `MAX_WAIT=600s` vs the Unit job's 15-min budget - a
+  slow-but-alive highcpu run could burn ~10 min before falling back, timing out a good commit. **Fix:**
+  per-suite wait budget, or don't wait at all (only concede to an ALREADY-complete run).
+- **P1 non-equivalent contract (adversarial):** conceding hosted Integration (`forkCount=4`) to highcpu
+  (`forkCount=8`) - this PR's own inflight note shows the flake flip-flops between the two, so one green
+  ≠ the other. **Fix:** only concede between byte-identical suite invocations, or don't.
+- **Silent name-drift (maint/learnings):** job/workflow names were manually synced across 3 files with a
+  `KEEP IN SYNC` comment; a rename silently disables the feature. **Fix:** a drift self-check test.
+- **Invisibility (agent-native):** a conceded skip was only in raw logs - no step-summary/annotation and
+  no durable link to the trusted run. **Fix:** `$GITHUB_STEP_SUMMARY` + `::notice::` with the run URL.
+
+**Simplest safe alternative, recommended over reviving concede at all:** keep `highcpu` purely advisory
+(never let a self-hosted result satisfy a required gate). The speed win is the fast *feedback*, not
+skipping the hosted gate - the gate staying independent is worth more than the minutes saved.
+
 ## CI reliability / gate issues (follow-up work)
 
 - **Stacked PRs are ungated - dependency check "required" doesn't apply to them (2026-07-31).**
@@ -270,6 +299,15 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   **"Step 2" DEFERRED:** retry full thread-parallel on a shared broker to *validate* the #857 deadlock is
   gone (not merely avoided) — only **after** #857/#29 finishes and merges on its own merits (it's a
   ~454-line WIP concurrency refactor, "root cause still open"). Reproducer for then: `-Dparallel-tests=true`.
+  - **UPDATE (2026-07, fork×threads probed on the highcpu self-hosted runner - Ryzen 9 5950X, 16c/32t):** ran
+    the reproducer (`-Dparallel-tests=true`) ON TOP of forking. **Signal that thread-parallelism may be
+    healed:** the forked *unit* suite went **green** with threads enabled; the *integration* red was the known
+    flaky `PartitionStateCommittedOffsetIT` (fails on GitHub-hosted too), NOT a new thread-race. **Caveats:**
+    one green run ≠ proof (flakiness is intermittent - repeat before trusting), and #857 root cause is still
+    open, so this only *motivates* the proper Step-2 validation, it doesn't complete it. **Also measured: no
+    speedup** - fork×threads was ~identical to fork-only (unit 6m00 vs 5m53), because forking already saturates
+    the cores. So **forking stays the default**; threading would only pay off if it *replaces* forking (fewer
+    JVM starts), never stacked on top.
 - **DONE (PR #69): unit suite parallelised by FORKING (surefire `forkCount=1C`), not threading.** The `ci`
   profile now forks the unit suite one-JVM-per-core (`forkCount=1C`, `reuseForks=true`), keeping
   `parallel-tests=false`. Core unit dropped **5:14 → 1:39** (259 tests, 0 failures) on a 12-core box, and it
@@ -288,11 +326,12 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   `.github/workflows/maven.yml`) is turned off via `if: false`. It currently fails and adds a red X of noise
   to every PR (it is `continue-on-error`, so it never gated merges). **Re-enable when the Kafka 4.x migration
   work starts** by restoring `if: github.event_name == 'pull_request'` — that work will make it pass.
-- **DISABLED: the macOS self-hosted PR jobs** (`pr-mac-fast-feedback.yml` — Unit / Integration / Mutation
-  (PIT) "(macOS self-hosted, optional)" checks). The mac-laptop runner is offline for the foreseeable
-  future, so the jobs sat eternally *pending* on every PR, polluting the checks list. The `pull_request`
-  trigger is commented out (`was:` note in the workflow); `workflow_dispatch` still works. **Re-enable by
-  restoring the `pull_request:` trigger when the runner returns.**
+- **DISABLED: the `local` self-hosted PR jobs** (`pr-local-fast-feedback.yml` — Unit / Integration / Mutation
+  (PIT) "(local self-hosted, optional)" checks). The `local` runner (currently a mac-laptop) is offline for
+  the foreseeable future, so the jobs sat eternally *pending* on every PR, polluting the checks list. The
+  `pull_request` trigger is commented out (`was:` note in the workflow); `workflow_dispatch` still works.
+  Targets `runs-on: [self-hosted, local]`, so give the runner the `local` label (`./config.sh --labels local`)
+  when registering it. **Re-enable by restoring the `pull_request:` trigger when the runner returns.**
 - **pitest (Mutation Testing) was pre-existing RED — root cause found + fixed (PR #69): coverage-minion OOM
   at `-Xmx1g`.** The single coverage-generation minion (runs all target tests once to map coverage) crashed
   with `UNKNOWN_ERROR`; confirmed locally that 1g crashes and 4g completes → raised to `-Xmx2g`. Also switched
@@ -336,7 +375,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     On GitHub-hosted, a full `internal.*` sweep was impractically slow — `-Dthreads=2` maxed the 2 cores and it
     ran 17+ min without finishing. PIT is CPU-bound and process-parallel across minion JVMs, so it scales with
     cores. Removed the GitHub-hosted `mutation-testing` job and added a `Mutation (PIT)` entry to the
-    `pr-mac-fast-feedback.yml` matrix, driven by `bin/ci-mutation-test.sh` which defaults `-Dthreads` to the
+    `pr-local-fast-feedback.yml` matrix, driven by `bin/ci-mutation-test.sh` which defaults `-Dthreads` to the
     box's core count (~12 on the Mac ⇒ ~5-6× faster). **Caveats:** (i) advisory only, and the Mac may be offline,
     so there's now no PIT signal when the laptop's off (acceptable — it never gated); (ii) RAM = threads × 2g
     (~24g at 12 threads), lower `PIT_THREADS` if the box is constrained. This is the "more cores" answer;
@@ -448,6 +487,20 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.
+- **`PartitionStateCommittedOffsetIT.committedOffsetRemoved` — flaky awaitility timeout.**
+  `ConditionTimeoutException` after 10s (`expected not to be empty within 10 seconds`, `runPcUntilOffset` →
+  `committedOffsetRemoved`). Non-deterministic: within the same PR (#75) it has passed on GitHub-hosted while
+  failing on the self-hosted runner and vice-versa — so it is **not** runner-specific, it's a timing-sensitive
+  integration test. Likely adjacent to the #857 timing work; harden (longer/adaptive await, or fix the
+  underlying timing) rather than mask.
+- **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
+  resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
+  shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure
+  (`["failed","resolve"]`). On a network with a local resolver + search domain the name **resolves** to a LAN
+  IP, so the failure mode became *connection refused* and the assertion failed; on GitHub's public DNS it
+  passed. **Fixed** by pointing `getBadRequest()` at a **closed local port** (`127.0.0.1:1`) → deterministic
+  "connection refused" everywhere, no DNS. (Both sibling tests share the helper, so both assertions were
+  updated.) Found bringing up the self-hosted high-CPU runner.
 
 ## Copyright headers - open follow-up (2026-07-31)
 

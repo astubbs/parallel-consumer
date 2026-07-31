@@ -131,14 +131,18 @@ bin/performance-test.sh
 `CHANGELOG.adoc` (repo root) is the source of truth for release notes; `README.adoc` regenerates from it at build/release time (never hand-edit `README.adoc` - see Code Style / the generated-README rule). **When you make a user- or operator-visible change, add a `CHANGELOG.adoc` entry in the same PR**, under `== Unreleased` (create that heading if it's missing, above the latest version), in the right subsection: `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, or `=== Build & CI`.
 
 - **Do add:** behavioural/API changes, new features or modules, user-affecting bug fixes, and *notable or coordinated* dependency refreshes or any change to a user-facing runtime dependency (especially the Kafka client) - for a library these affect the transitive dependencies and compatibility that consumers inherit.
-- **Don't add:** routine/automated single dependency bumps (Dependabot), internal refactors, test-only changes, CI/tooling, docs, or formatting - those are visible in git history and just add noise.
+- **Do add (`=== Build & CI`):** notable build, CI, tooling and test-infrastructure changes. This is a deeply technical library and its own contributors/agents are a primary audience - a new CI capability, a runner/workflow, a mutation/quarantine mechanism, or a build-enforcement change is worth recording, not just buried in git history.
+- **Don't add:** routine/automated single dependency bumps (Dependabot), no-op internal refactors, and pure formatting - genuinely invisible churn. (Everything with a real effect on how the project builds, tests, releases, or behaves is fair game.)
 - **Reference convention:** a bare `#NN` refers to this fork; write `upstream #NN` for upstream references, and link the PR/issue.
 
 Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
 
 ## PR Discipline
 
+- **Keep the PR title and body in sync with what the PR actually covers.** As a PR grows, its description drifts - re-check it before requesting review and before merge. Update it only on *material* drift: whole changes/workstreams missing, wrong specifics (core counts, flags, forkCounts, file/label names), or scope that has outgrown the title. Do NOT churn the description for cosmetic wording - if it still accurately reflects the content, leave it.
 - **Open PRs from the template and complete its checklist honestly.** `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively (e.g. `gh pr create --body-file`), so base the PR body on it and resolve every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` CI gate (`.github/workflows/pr-checklist.yml`) fails the check on an unchecked box that has no `N/A` (bots/automated PRs without the template are exempt).
+- **After opening a PR, follow up on the duplication reports.** The duplicate-code and file-similarity checks post comments flagging new clones/similarity. Read them, remove duplication introduced by *this* PR before it merges; ignore clones that already existed on the base branch (out of scope for this PR).
+- **Stacked PRs: put `depends on #N` in the description** (one line per parent). The PR-dependency gate blocks the child from merging until the parent does; keep the list current if the chain changes.
 
 ## Releasing
 
