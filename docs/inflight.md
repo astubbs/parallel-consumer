@@ -63,22 +63,9 @@ the PR #53 branch):
 
 ## In-flight on other branches / worktrees
 
-- **`feats/chaos-pain-suite`** (**PR #83, open**; worktree `.claude/worktrees/chaos-on-master`) —
-  Chaos Pain Suite Phase 1: seeded, calibrated chaos detector for the "alive but not progressing" bug
-  class. Lives in `parallel-consumer-core/src/test-integration/.../chaostests/` (`ChaosConductor`,
-  `ProgressProbe`, `ChaosChurnStormIT`) + `ManagedPCInstance` (temporary credited copy from the #857
-  investigation branch, PR #29 — **transplant plan: #29's eventual rebase drops its copy**, this one
-  stays). Tagged `chaos`, excluded from every gating suite (pom `excluded.groups` default); run with
-  `-Dincluded.groups=chaos -Dexcluded.groups=`; in CI via the highcpu lane per PR commit
-  (`highcpu / Chaos Pain Suite`) or on-demand `chaos-pain.yml` (workflow_dispatch: seed/reps) - both
-  call `bin/chaos-test.sh`, which excludes `@Quarantined` scenarios (zero tests selected while W1
-  sits quarantined under #80, flagged in the job summary). Seed protocol: `-Dchaos.seed=<N>` replays; every run
-  logs seed + full replay command. **Calibration evidence** (PR #83 body, plan Unit 5): pre-drain-fix
-  defect arm 3/3 RED (`ZOMBIE_MEMBER/REBALANCE_BLOCKED`, dwell 15.6-15.9s), all-fixes arm 3/3 GREEN
-  (4.5-8.9s), master REDs blind (the drain-zombie fixed on PR #80). Class 2 lag-stagnation probe
-  GREEN-calibrated; its RED trigger (W4 revoke-under-work scenario) is Phase 2, next up — then
-  per-cause duplicate-ledger attribution and assignor/EoS variants. Design doc: branch
-  `docs/chaos-pain-suite-design`. See AGENTS.md "Chaos Pain Suite" for the run recipe.
+- **`ManagedPCInstance` transplant residue** (from the merged Chaos Pain Suite, #83/#85): the copy in
+  `chaostests/` is now canonical — PR #29's eventual rebase drops its own copy, this one stays.
+  Chaos run recipe lives in AGENTS.md "Chaos Pain Suite"; remaining chaos work: Phase 2+ roster below.
 - **`fix/859-metrics-leak-plus-cherrypicks`** (**PR #57, open**; worktree `.claude/worktrees/dev-cc`) —
   5 commits ahead of master, rebased clean, targets `master`. Fixes PCMetrics memory leak (#859):
   duplicate Micrometer meter re-registration on partition assignment/revocation. Owns `PCMetrics.java`,
@@ -211,7 +198,7 @@ with 4.10.3, so these drop out of "new". Track the actual fixes (make the counte
 Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
 .erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
 
-## Chaos Pain Suite - Phase 2+ roster (branch feats/chaos-w4-revoke-under-work, PR #85)
+## Chaos Pain Suite - Phase 2+ roster (Phase 1 #83 + W4 #85 merged)
 
 - **Class 2 RED hunt (open):** W4 is calibrated artifact-free but a true unbounded Class 2 stall did
   not reproduce on master - the open #857 root-cause stall is probabilistic. **Seed sweep DONE
@@ -227,10 +214,10 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
   violation only suppressed" invariant have no fast unit coverage - the samplers are private, so a
   small extract-and-test seam is needed first. Same for `ManagedPCInstance.Config.extraConsumerProps`
   (null vs present, wins-last ordering). Both become millisecond broker-free tests once seams exist.
-- **Ambient probe for EVERY integration test:** graduated from roster idea to **PR #86** (sibling of
-  #85, also based on `feats/chaos-pain-suite`) - ProgressProbe in OBSERVER mode under every broker IT
-  as a failure flight recorder. NB #85 and #86 both touch `ProgressProbe.java`; whichever merges
-  second takes a small conflict.
+- **Ambient probe for EVERY integration test:** in flight as **PR #86** - ProgressProbe in OBSERVER
+  mode under every broker IT as a failure flight recorder. The anticipated #85/#86
+  `ProgressProbe.java` conflict landed on #86's side and was resolved there (merge of master
+  post-#85). Delete this bullet when #86 merges.
 
 ## Quarantine lane (`@Quarantined`) — active roster
 
