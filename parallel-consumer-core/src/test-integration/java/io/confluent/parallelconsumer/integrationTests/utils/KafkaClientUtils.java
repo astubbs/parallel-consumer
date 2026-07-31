@@ -38,11 +38,13 @@ import pl.tlinkowski.unij.api.UniLists;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -73,7 +75,7 @@ public class KafkaClientUtils implements AutoCloseable {
      * instances all log under the same generic thread names and are impossible to tell apart - which made
      * the #857 silent-stall investigation much harder than it needed to be.
      */
-    private static final java.util.concurrent.atomic.AtomicInteger PC_INSTANCE_COUNTER = new java.util.concurrent.atomic.AtomicInteger();
+    private static final AtomicInteger PC_INSTANCE_COUNTER = new AtomicInteger();
 
     class PCVersion {
         public static final String V051 = "0.5.1";
@@ -430,7 +432,7 @@ public class KafkaClientUtils implements AutoCloseable {
         pc.setTimeBetweenCommits(ofSeconds(1));
 
         // unique per-instance id so concurrent PCs are distinguishable in the logs (see PC_INSTANCE_COUNTER)
-        pc.setMyId(java.util.Optional.of("PC" + PC_INSTANCE_COUNTER.incrementAndGet()));
+        pc.setMyId(Optional.of("PC" + PC_INSTANCE_COUNTER.incrementAndGet()));
 
         // sanity
         return pc;
