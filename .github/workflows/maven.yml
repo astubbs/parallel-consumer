@@ -309,6 +309,9 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: always
+          # github-script is MIT, but the license lookup returns null for
+          # floating major tags (@v7 -> "7.*.*"), so it warns as "unknown"
+          allow-dependencies-licenses: pkg:githubactions/actions/github-script
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 
