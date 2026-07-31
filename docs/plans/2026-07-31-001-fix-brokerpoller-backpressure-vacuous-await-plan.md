@@ -172,7 +172,9 @@ paused when shards hold only 50 (< 150) because the 150 blocked in-flight record
 
 ## Implementation Units
 
-- [ ] **Unit 1: Rewrite the vacuous await and rename the test**
+- [x] **Unit 1: Rewrite the vacuous await and rename the test** *(done 2026-07-31: RED reproduced
+  deterministically first try on a quiet box - arrival-synced original await timed out in exactly
+  10s, per prediction; rewritten test green 2/2 runs)*
 
 **Goal:** Replace the unsatisfiable `awaitingSelection == 0` await with the real steady-state
 condition; rename test + add explanatory javadoc; derive 150/50 from named constants.
@@ -183,6 +185,13 @@ condition; rename test + add explanatory javadoc; derive 150/50 from named const
 
 **Files:**
 - Modify: `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerPollerBackpressureTest.java`
+
+**Execution note:** Characterization-first - before rewriting, build the deterministic RED
+reproducer: keep the original `awaitingSelection == 0` await but precede it with an arrival-sync
+(await `awaitingSelection > 0`). Per the diagnosis this must time out every run with no load. If it
+passes, the cap analysis is wrong - stop and re-diagnose. Capture the RED output for the PR and
+solutions doc; do not commit the reproducer as a suite test (it proves a negative in 10s+). The
+arrival-sync step then stays in the rewritten test - it is what makes the final version race-free.
 
 **Approach:**
 - First await → steady state: out-for-processing == `MESSAGE_BUFFER_SIZE` (150) and
@@ -208,7 +217,8 @@ condition; rename test + add explanatory javadoc; derive 150/50 from named const
 - Reverting just the await change (back to `== 0`) with records forced to arrive first reproduces
   the deterministic timeout - confirming the rewrite addressed the actual mechanism.
 
-- [ ] **Unit 2: Record the finding as a solutions doc**
+- [x] **Unit 2: Record the finding as a solutions doc** *(done 2026-07-31:
+  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`)*
 
 **Goal:** Compound the lesson: "vacuously-true await conditions" as a distinct flaky-test class,
 separate from tight-timeout contention.

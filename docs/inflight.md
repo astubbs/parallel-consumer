@@ -319,9 +319,12 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
 - **`BrokerPollerBackpressureTest.brokerPollPausedWithEmptyShardsButHighInFlight` failed under load -
-  DIAGNOSED 2026-07-31: test-design bug (vacuous first await), fix planned on branch
-  `fix/brokerpoller-backpressure-vacuous-await`** (plan:
-  `docs/plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md`). Original event:
+  DIAGNOSED + FIXED 2026-07-31: test-design bug (vacuous first await), fix in PR #98 (branch
+  `fix/brokerpoller-backpressure-vacuous-await`** - test rewritten as
+  `brokerPollPausedWhenBlockedInFlightFillsBuffer`; plan:
+  `docs/plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md`; writeup:
+  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`).
+  Original event:
   10s Awaitility timeout on the FIRST await (shards-drained condition) in highcpu lane run
   30603617471 while the box ran two PIT sweeps + Unit + Performance; gating GitHub-hosted Integration
   on the same head was GREEN. Classification per AGENTS.md stress-failure discipline came out as
