@@ -78,12 +78,8 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
 
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
-        String seedProp = System.getProperty("chaos.seed");
-        long seed = seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
-        // the FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
-        // reproduce (the chaos tag is excluded by default, so the seed alone is not enough)
-        String replayCmd = "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
-                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+        long seed = resolveSeed();
+        String replayCmd = replayCommand(seed);
         log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed, replayCmd);
 
         String topic = getClass().getSimpleName() + "-w1-" + RandomUtils.nextInt();
