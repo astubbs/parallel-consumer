@@ -1,28 +1,22 @@
-# Chaos Pain Suite - stall hunting on the self-hosted high-CPU runner.
+# Chaos Pain Suite - ON-DEMAND seeded stall hunting on the self-hosted high-CPU runner.
 #
 # Runs the @Tag("chaos") suite (see integrationTests.chaostests + the design doc under docs/plans/):
 # seeded chaos schedules against a PC fleet with SLO probes (progress watermark, rebalance-dwell zombie
-# probe, drain bound) and a correctness ledger. NEVER PR-gating (not in the merge ruleset). Failures are
-# investigation food - the seed + chaos timeline in the logs replay the schedule, and reports upload as
-# artifacts.
+# probe, drain bound) and a correctness ledger. NEVER PR-gating. Failures are investigation food - the
+# seed + chaos timeline in the logs replay the schedule, and reports upload as artifacts.
 #
-# Triggers:
-#   - workflow_dispatch (manual)  - seed replay + reps; runs QUEUE (measurements are never killed)
-#   - pull_request                - one run per PR commit: duration visibility + ambient tripwire (a RED
-#                                   here is a real finding - the suite is calibrated GREEN on both
-#                                   assignors). Superseded commits on the same PR are CANCELLED, and a
-#                                   per-run timing table lands in the job summary.
+# This workflow is workflow_dispatch ONLY (seed replay + reps; runs QUEUE - measurements are never
+# killed). The per-PR-commit chaos run lives in the highcpu fast-feedback lane
+# (pr-highcpu-fast-feedback.yml, check "highcpu / Chaos Pain Suite") - both call bin/chaos-test.sh.
 #
-# QUARANTINE interaction: @Quarantined chaos scenarios are EXCLUDED here - the Quarantine Lane owns
-# them, and a known-RED scenario must not drown this job's tripwire signal. While W1
-# (ChaosChurnStormIT) is quarantined under PR #80 and no other chaos scenario exists on this branch,
-# the job selects ZERO tests - the timing summary says so loudly instead of impersonating a real
-# GREEN run. W4 variants (#85/#87) and/or the #80 fix landing restore real coverage.
+# QUARANTINE interaction: bin/chaos-test.sh EXCLUDES @Quarantined chaos scenarios - the Quarantine
+# Lane owns them, and a known-RED scenario must not drown the tripwire signal. While W1
+# (ChaosChurnStormIT) is quarantined under PR #80 and no other chaos scenario exists, runs select
+# ZERO tests - the summary says so loudly instead of impersonating a real GREEN run.
 #
-# SECURITY (public repo + self-hosted runner): the job is guarded to SAME-REPO pull requests only
-# (head.repo == this repo), so a fork PR's untrusted code NEVER runs on the home machine (RCE). We use
-# `pull_request` (untrusted-code trigger, no secrets exposed), never `pull_request_target`.
-# workflow_dispatch is write-access-only by construction. See docs/SELF_HOSTED_RUNNER.md.
+# SECURITY (public repo + self-hosted runner): workflow_dispatch only - write-access-gated by
+# construction, so no untrusted fork code can reach the self-hosted machine through this workflow.
+# Inputs pass through env (data), never ${{ }} inside run blocks (code). See docs/SELF_HOSTED_RUNNER.md.
 
 name: chaos-pain
 
@@ -37,25 +31,17 @@ on:
         description: 'How many times to run the suite'
         required: false
         default: '1'
-  pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  # Dispatch runs are measurements - queue per ref, never kill. PR runs are per-commit feedback -
-  # cancel superseded commits so the runner only measures the latest push.
-  group: chaos-pain-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: chaos-pain-${{ github.ref }}
+  cancel-in-progress: false   # chaos runs are measurements - queue, never kill
 
 jobs:
   chaos:
-    name: "Chaos Pain Suite (${{ github.event_name == 'pull_request' && 'per-PR-commit' || 'on-demand' }})"
-    # Same-repo PRs only: a fork PR is untrusted code and must NOT execute on the home machine.
-    # workflow_dispatch (manual, write-access-only) is always allowed.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+    name: "Chaos Pain Suite (on-demand)"
     runs-on: [self-hosted, highcpu]
     timeout-minutes: 120
     steps:
@@ -76,53 +62,10 @@ jobs:
           docker --version
 
       - name: Chaos runs
-        # Inputs go through env, never ${{ }} inside run: - template substitution pastes raw text
-        # into the script BEFORE bash parses it, so a seed like `$(...)` would execute on the
-        # self-hosted runner (review finding, PR #83). Env vars are data, not code.
         env:
           CHAOS_SEED: ${{ inputs.seed }}
           CHAOS_REPS: ${{ inputs.reps }}
-        run: |
-          echo "CHAOS_START=$(date +%s)" >> "$GITHUB_ENV"
-          SEED_ARG=""
-          if [ -n "$CHAOS_SEED" ]; then SEED_ARG="-Dchaos.seed=$CHAOS_SEED"; fi
-          REPS="${CHAOS_REPS:-1}"   # pull_request events carry no inputs - single rep
-          for i in $(seq 1 "$REPS"); do
-            echo "=== chaos rep $i/$REPS ==="
-            time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
-              -DskipUTs=true -Dlicense.skip \
-              -Dincluded.groups=chaos -Dexcluded.groups=quarantined \
-              ${SEED_ARG:+"$SEED_ARG"}
-          done
-
-      - name: Timing summary
-        if: always()
-        run: |
-          {
-            echo "## Chaos suite timing"
-            echo ""
-            if [ -n "${CHAOS_START:-}" ]; then
-              total=$(( $(date +%s) - CHAOS_START ))
-              printf 'Total chaos wall-clock: **%dm %02ds** (setup excluded)\n\n' $((total / 60)) $((total % 60))
-            fi
-            tests=$(find . -path '*/failsafe-reports/TEST-*.xml' | wc -l | tr -d ' ')
-            if [ "$tests" -eq 0 ]; then
-              echo "### ZERO chaos tests selected - this run measured NOTHING"
-              echo ""
-              echo "All chaos-tagged scenarios are currently @Quarantined (excluded here; the"
-              echo "Quarantine Lane runs them - see docs/QUARANTINED_TESTS.md). Real coverage"
-              echo "returns when the W4 variants or the quarantine owner fix (#80) land."
-            else
-              echo "| Test class | Time |"
-              echo "|---|---|"
-              find . -path '*/failsafe-reports/TEST-*.xml' -print0 | while IFS= read -r -d '' f; do
-                tag=$(head -3 "$f" | tr '\n' ' ')
-                n=$(printf '%s' "$tag" | grep -o 'name="[^"]*"' | head -1 | cut -d'"' -f2)
-                t=$(printf '%s' "$tag" | grep -o 'time="[^"]*"' | head -1 | cut -d'"' -f2)
-                [ -n "$n" ] && echo "| $n | ${t}s |"
-              done
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: bin/chaos-test.sh
 
       - name: Upload test reports
         if: always()

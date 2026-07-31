@@ -98,10 +98,13 @@ protocol-invisible per-partition lag stagnation, drain overruns, and record loss
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=`
 - **Replay a schedule**: every run logs its seed and the full replay command; add `-Dchaos.seed=<seed>`.
-- **On-demand CI**: `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`, self-hosted `highcpu` runner), e.g. `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. NB unlike
-  the local recipe above, the CI job EXCLUDES `@Quarantined` chaos scenarios (the Quarantine Lane owns
-  those) - while `ChaosChurnStormIT` is quarantined under PR #80 it therefore selects zero tests, and
-  its job summary flags that loudly.
+- **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
+  Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via
+  `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`), e.g.
+  `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. NB unlike the
+  local recipe above, CI runs EXCLUDE `@Quarantined` chaos scenarios (the Quarantine Lane owns those) -
+  while `ChaosChurnStormIT` is quarantined under PR #80 they therefore select zero tests, and the job
+  summary flags that loudly.
 - **Probe a fix PR** (the suite's primary purpose): on the fix PR's branch (merge master in first if
   the branch predates the suite landing there), run the suite at a commit before the fix (expect RED —
   the violation names the mechanism) and at the fix (expect GREEN). The local recipe above includes
