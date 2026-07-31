@@ -1,0 +1,13 @@
+3,1,io.confluent.parallelconsumer.mutiny.MutinyTest,runSubscriptionOnExample
+3,1,io.confluent.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+3,12,io.confluent.parallelconsumer.mutiny.MutinyTest,emitOnExample
+3,229,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[3]
+3,230,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[1]
+3,1240,io.confluent.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+3,4769,io.confluent.parallelconsumer.mutiny.MutinyPCTest,kickTires
+3,5144,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[2]
+3,8176,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[3]
+3,8199,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[2]
+3,8604,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[1]
+3,12568,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,averageBatchSizeTest
+3,17016,io.confluent.parallelconsumer.mutiny.MutinyPCTest,concurrencyTest

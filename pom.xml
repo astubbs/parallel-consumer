@@ -227,6 +227,17 @@
                      it does not resurrect the thread-parallel flakes). On GitHub's 2-core runners 1C = 2 forks
                      (well-matched, no CPU starvation); on the self-hosted box it scales up to the core count. -->
                 <surefire.forkCount>1C</surefire.forkCount>
+                <!-- Fork-tail packing: run the SLOWEST test classes first so no fork idles at the tail.
+                     Surefire's default runOrder=filesystem happened to schedule core's slowest class
+                     (RunLengthEncoderTest, ~2min on CI) last, leaving one fork idle ~60s while the other
+                     finished it. runOrder=balanced sorts classes by recorded runtime (slowest first) using
+                     per-module statistics files; the checksum override (surefire 3.5.5+) pins the stats
+                     file name to <module>/.surefire-pc-unit-times so the files can be CHECKED IN and work
+                     on a fresh CI checkout. Do not delete the .surefire-pc-unit-times files - without them
+                     balanced degrades to the unordered scan. Surefire refreshes them in place after each
+                     -Pci run; only relative times matter, so occasional refreshes are enough. -->
+                <surefire.runOrder>balanced</surefire.runOrder>
+                <surefire.runOrder.statisticsFile.checksum>pc-unit-times</surefire.runOrder.statisticsFile.checksum>
             </properties>
             <build>
                 <plugins>
