@@ -131,7 +131,8 @@ bin/performance-test.sh
 `CHANGELOG.adoc` (repo root) is the source of truth for release notes; `README.adoc` regenerates from it at build/release time (never hand-edit `README.adoc` - see Code Style / the generated-README rule). **When you make a user- or operator-visible change, add a `CHANGELOG.adoc` entry in the same PR**, under `== Unreleased` (create that heading if it's missing, above the latest version), in the right subsection: `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, or `=== Build & CI`.
 
 - **Do add:** behavioural/API changes, new features or modules, user-affecting bug fixes, and *notable or coordinated* dependency refreshes or any change to a user-facing runtime dependency (especially the Kafka client) - for a library these affect the transitive dependencies and compatibility that consumers inherit.
-- **Don't add:** routine/automated single dependency bumps (Dependabot), internal refactors, test-only changes, CI/tooling, docs, or formatting - those are visible in git history and just add noise.
+- **Do add (`=== Build & CI`):** notable build, CI, tooling and test-infrastructure changes. This is a deeply technical library and its own contributors/agents are a primary audience - a new CI capability, a runner/workflow, a mutation/quarantine mechanism, or a build-enforcement change is worth recording, not just buried in git history.
+- **Don't add:** routine/automated single dependency bumps (Dependabot), no-op internal refactors, and pure formatting - genuinely invisible churn. (Everything with a real effect on how the project builds, tests, releases, or behaves is fair game.)
 - **Reference convention:** a bare `#NN` refers to this fork; write `upstream #NN` for upstream references, and link the PR/issue.
 
 Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
