@@ -1,0 +1,13 @@
+3,1,io.confluent.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+3,5,io.confluent.parallelconsumer.reactor.ReactorTest,subscribeOn
+3,8,io.confluent.parallelconsumer.reactor.ReactorTest,publishOn
+3,233,io.confluent.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[3]
+3,234,io.confluent.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[1]
+3,1261,io.confluent.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+3,4769,io.confluent.parallelconsumer.reactor.ReactorPCTest,kickTires
+3,5111,io.confluent.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[2]
+3,8167,io.confluent.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[3]
+3,8266,io.confluent.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[2]
+3,8287,io.confluent.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[1]
+3,12217,io.confluent.parallelconsumer.reactor.ReactorBatchTest,averageBatchSizeTest
+3,16848,io.confluent.parallelconsumer.reactor.ReactorPCTest,concurrencyTest
