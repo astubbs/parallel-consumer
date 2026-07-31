@@ -35,6 +35,12 @@ BASE_REF="${PIT_BASE_REF:-${GITHUB_BASE_REF:-}}"
 TARGET_CLASSES="io.confluent.parallelconsumer.internal.*"
 if [ -n "$BASE_REF" ]; then
   git fetch --no-tags -q origin "$BASE_REF" 2>/dev/null || true
+fi
+# Only PR-scope if the base ref actually resolved. On a failed fetch / shallow checkout without the ref
+# (e.g. the highcpu job, which doesn't fetch-depth:0), the git diff below would hard-crash under
+# `set -euo pipefail` (unknown revision -> exit 128) instead of the intended skip/full-sweep - so fall
+# back to the full internal.* sweep when the ref is missing (review finding).
+if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}" >/dev/null 2>&1; then
   # Emit "Foo,Foo$*" per changed FQCN: the class itself PLUS its nested/synthetic members (Lombok
   # @Builder inner classes, anonymous classes, lambdas). A bare "Foo*" would over-match siblings that
   # merely share the prefix (PIT globs '*' as unbounded '.*', not '.'/'$'-bounded) - e.g. PartitionState*
@@ -51,7 +57,7 @@ if [ -n "$BASE_REF" ]; then
   TARGET_CLASSES="$CHANGED"
   echo "PIT: PR-scoped to CHANGED classes -> ${TARGET_CLASSES}"
 else
-  echo "PIT: no base ref - full internal.* sweep."
+  echo "PIT: no resolvable base ref - full internal.* sweep."
 fi
 
 # NB: pitest does not honour excluded.groups - @Quarantined (and chaos/performance) tests are only
