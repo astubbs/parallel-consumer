@@ -65,9 +65,17 @@ ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 "
 
 if ! git cat-file -e "${FORK_POINT}^{commit}" 2>/dev/null; then
-    echo "ERROR: fork-point commit ${FORK_POINT} not found in history." >&2
-    echo "       Fetch full history first (CI: actions/checkout with fetch-depth: 0)." >&2
-    exit 2
+    # Provenance can't be determined without the fork-point commit (e.g. a shallow clone, or a
+    # `mvn validate` build in an environment without full history). Default: WARN and skip rather
+    # than fail the build - the authoritative gate is copyright.yml, which fetches full history
+    # (fetch-depth: 0). Set COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 to hard-fail instead (CI does).
+    msg="fork-point commit ${FORK_POINT} not in history - need full history (CI: actions/checkout fetch-depth: 0)."
+    if [ "${COPYRIGHT_CHECK_REQUIRE_FORK_POINT:-0}" = "1" ]; then
+        echo "ERROR: ${msg}" >&2
+        exit 2
+    fi
+    echo "WARNING: ${msg} Skipping copyright header check." >&2
+    exit 0
 fi
 
 upstream_files=$(git ls-tree -r --name-only "$FORK_POINT")
