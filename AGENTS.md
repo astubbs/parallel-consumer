@@ -102,7 +102,11 @@ protocol-invisible per-partition lag stagnation, drain overruns, and record loss
   the local recipe above, the CI job EXCLUDES `@Quarantined` chaos scenarios (the Quarantine Lane owns
   those) - while `ChaosChurnStormIT` is quarantined under PR #80 it therefore selects zero tests, and
   its job summary flags that loudly.
-- **Probe a fix PR** (the suite's primary purpose): temporarily merge the chaos branch into the PR under test, run at a commit before the fix (expect RED — the violation names the mechanism) and at the fix (expect GREEN). See `ChaosChurnStormIT`'s class javadoc for the full recipe.
+- **Probe a fix PR** (the suite's primary purpose): on the fix PR's branch (merge master in first if
+  the branch predates the suite landing there), run the suite at a commit before the fix (expect RED —
+  the violation names the mechanism) and at the fix (expect GREEN). The local recipe above includes
+  `@Quarantined` scenarios (`-Dexcluded.groups=` is empty), so known-RED detectors still fire locally.
+  See `ChaosChurnStormIT`'s class javadoc for the full recipe.
 - A RED run is investigation food, not flake noise — the probes are calibrated against the real historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in measured gaps). Never loosen a probe to go green; tune the workload/conductor instead.
 
 ## Known Issues
