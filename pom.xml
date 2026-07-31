@@ -94,14 +94,16 @@
         <skipUTs>${skipTests}</skipUTs>
 
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
-             -Dgroups=performance         (run only performance tests)
-             -Dexcluded.groups=           (run everything including performance and quarantined)
-             -Dexcluded.groups=transactions,performance  (skip multiple groups)
-             `quarantined` = known-failing-on-master tests (see @Quarantined): out of the gating
-             suites so green means mergeable, but still run by the non-gating CI lane
+             -Dincluded.groups=performance    (run only performance tests)
+             -Dincluded.groups=chaos          (run only the Chaos Pain Suite - see integrationTests.chaostests)
+             -Dexcluded.groups=               (run everything incl. performance, chaos + quarantined)
+             -Dexcluded.groups=transactions,performance,chaos  (skip multiple groups)
+             NB overrides REPLACE the default list - include performance, chaos AND quarantined when
+             excluding. `quarantined` = known-failing-on-master tests (see @Quarantined): out of the
+             gating suites so green means mergeable, but still run by the non-gating CI lane
              (bin/quarantined-test.sh). -->
         <included.groups></included.groups>
-        <excluded.groups>performance,quarantined</excluded.groups>
+        <excluded.groups>performance,chaos,quarantined</excluded.groups>
 
         <!-- version numbers -->
         <!-- plugins -->

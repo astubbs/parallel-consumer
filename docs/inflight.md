@@ -2,7 +2,7 @@
 
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
-> from `git log`. Keep it current when context-switching. Last updated: 2026-07-28.
+> from `git log`. Keep it current when context-switching. Last updated: 2026-07-31.
 >
 > **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
 > No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
@@ -63,6 +63,22 @@ the PR #53 branch):
 
 ## In-flight on other branches / worktrees
 
+- **`feats/chaos-pain-suite`** (**PR #83, open**; worktree `.claude/worktrees/chaos-on-master`) —
+  Chaos Pain Suite Phase 1: seeded, calibrated chaos detector for the "alive but not progressing" bug
+  class. Lives in `parallel-consumer-core/src/test-integration/.../chaostests/` (`ChaosConductor`,
+  `ProgressProbe`, `ChaosChurnStormIT`) + `ManagedPCInstance` (temporary credited copy from the #857
+  investigation branch, PR #29 — **transplant plan: #29's eventual rebase drops its copy**, this one
+  stays). Tagged `chaos`, excluded from every gating suite (pom `excluded.groups` default); run with
+  `-Dincluded.groups=chaos -Dexcluded.groups=`; in CI via the highcpu lane per PR commit
+  (`highcpu / Chaos Pain Suite`) or on-demand `chaos-pain.yml` (workflow_dispatch: seed/reps) - both
+  call `bin/chaos-test.sh`, which excludes `@Quarantined` scenarios (zero tests selected while W1
+  sits quarantined under #80, flagged in the job summary). Seed protocol: `-Dchaos.seed=<N>` replays; every run
+  logs seed + full replay command. **Calibration evidence** (PR #83 body, plan Unit 5): pre-drain-fix
+  defect arm 3/3 RED (`ZOMBIE_MEMBER/REBALANCE_BLOCKED`, dwell 15.6-15.9s), all-fixes arm 3/3 GREEN
+  (4.5-8.9s), master REDs blind (the drain-zombie fixed on PR #80). Class 2 lag-stagnation probe
+  GREEN-calibrated; its RED trigger (W4 revoke-under-work scenario) is Phase 2, next up — then
+  per-cause duplicate-ledger attribution and assignor/EoS variants. Design doc: branch
+  `docs/chaos-pain-suite-design`. See AGENTS.md "Chaos Pain Suite" for the run recipe.
 - **`fix/859-metrics-leak-plus-cherrypicks`** (**PR #57, open**; worktree `.claude/worktrees/dev-cc`) —
   5 commits ahead of master, rebased clean, targets `master`. Fixes PCMetrics memory leak (#859):
   duplicate Micrometer meter re-registration on partition assignment/revocation. Owns `PCMetrics.java`,

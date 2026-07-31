@@ -49,6 +49,14 @@ Rules (full discipline in `AGENTS.md` → Testing, and the `@Quarantined` javado
 ## Currently quarantined
 
 
+- [ ] `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` - W1 churn storm trips the
+  `ZOMBIE_MEMBER/REBALANCE_BLOCKED` probe on master composition: the #857-family drain-zombie (a
+  draining member stops polling and wedges the group's rebalance until eviction) - the exact bug the
+  scenario was built to detect, reproduced workload-robustly across seeds/schedules (master-baseline
+  record in the class javadoc). Red on every chaos-pain PR run until the product fix merges.
+  **Owner: PR #80** (drain-poll busy-spin + zombie partition hold fix). Tracking:
+  `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md` (on the fix branch).
+
 - [ ] `PartitionStateCommittedOffsetIT.committedOffsetRemoved` - the `[latest]` nudge race: the single
   pre-await tail-nudge record can be produced before the consumer's `auto.offset.reset=latest` reset
   resolves on a slow/loaded broker, so the reset leapfrogs it and the await is unwinnable at any
