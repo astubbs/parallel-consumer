@@ -20,6 +20,7 @@ import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -30,9 +31,14 @@ import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
+ * Every broker IT also inherits the {@link AmbientProbeExtension} flight recorder: a background
+ * observer that turns generic test timeouts into diagnosed failures (see its javadoc). It never
+ * fails a test; opt out with {@link NoAmbientProbe} or {@code -Dambient.probe=off}.
+ *
  * @author Antony Stubbs
  */
 @Testcontainers
+@ExtendWith(AmbientProbeExtension.class)
 @Slf4j
 public abstract class BrokerIntegrationTest<K, V> {
 
