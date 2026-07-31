@@ -49,9 +49,15 @@ summary() {
 }
 
 # Emit the summary on EVERY exit - a RED run's autopsy needs the timing/selection data most.
+# MUST capture $? first and re-exit with it: an EXIT trap's own last command otherwise becomes
+# the script's exit status, and everything below is made to succeed - which would report a real
+# chaos RED as green (caught in PR #83 review round 6; repro: `set -e; trap true EXIT; false`
+# exits 0).
 emit_summaries() {
+    local ec=$?
     summary || true
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then summary >> "$GITHUB_STEP_SUMMARY" || true; fi
+    exit "$ec"
 }
 trap emit_summaries EXIT
 
