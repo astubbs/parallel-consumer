@@ -191,7 +191,9 @@ reproducer: keep the original `awaitingSelection == 0` await but precede it with
 (await `awaitingSelection > 0`). Per the diagnosis this must time out every run with no load. If it
 passes, the cap analysis is wrong - stop and re-diagnose. Capture the RED output for the PR and
 solutions doc; do not commit the reproducer as a suite test (it proves a negative in 10s+). The
-arrival-sync step then stays in the rewritten test - it is what makes the final version race-free.
+arrival-sync is scaffolding for the reproducer only - the rewritten test needs no separate
+arrival-sync await, because the steady-state assertion (150 out AND 50 awaiting in one
+`untilAsserted`) is unreachable before records arrive and therefore non-vacuous by construction.
 
 **Approach:**
 - First await → steady state: out-for-processing == `MESSAGE_BUFFER_SIZE` (150) and
