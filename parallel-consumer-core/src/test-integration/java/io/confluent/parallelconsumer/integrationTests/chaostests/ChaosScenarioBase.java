@@ -178,6 +178,31 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
                 producerThread, pc0, initialFleet, probe);
     }
 
+    /**
+     * Pre-wires the fleet-plumbing half of a {@link ChaosConductor} (executor, instance factory,
+     * protected member, initial fleet, probe observer). Scenarios chain their chaos SHAPE onto the
+     * returned builder - seed, tick range, weights, join bias - and {@code build()}.
+     */
+    protected ChaosConductor.ChaosConductorBuilder conductorFor(FleetBootstrap fleet,
+                                                                ManagedPCInstance.Config pcConfig,
+                                                                int heavyEvery, Duration heavySleep,
+                                                                int maxFleetSize) {
+        return ChaosConductor.builder()
+                .maxFleetSize(maxFleetSize)
+                .pcExecutor(fleet.getPcExecutor())
+                .instanceFactory(() -> newInstance(pcConfig, heavyEvery, heavySleep,
+                        fleet.getTotalConsumed(), fleet.getAllConsumed()))
+                .protectedInstance(fleet.getPc0())
+                .initialFleet(fleet.getInitialFleet())
+                .observer(fleet.getProbe());
+    }
+
+    /** Arm the probe, then unleash chaos. */
+    protected void startRun(ProgressProbe probe, ChaosConductor conductor) {
+        probe.start();
+        conductor.start();
+    }
+
     /** Shared finally-block epilogue: stop chaos and the probe, join the background producer, settle
      * the fleet, kill the executor, log the run summary. Runs on both the pass and fail path - it must
      * only tear down and report, never assert (asserting here would mask the primary failure). */

@@ -152,23 +152,16 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
                 // eviction horizon; widen the watermark beyond it
                 .withNoProgressWindow(Duration.ofSeconds(60));
 
-        ChaosConductor conductor = ChaosConductor.builder()
+        ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed)
                 // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
                 .minTick(Duration.ofMillis(300))
                 .maxTick(Duration.ofMillis(1000))
                 .weights(ChaosConductor.defaultW4Weights()) // NO drain stops - see class javadoc
                 .joinAfterDrainBias(0) // no drains to bias after
-                .maxFleetSize(MAX_FLEET)
-                .pcExecutor(fleet.getPcExecutor())
-                .instanceFactory(() -> newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed))
-                .protectedInstance(fleet.getPc0())
-                .initialFleet(fleet.getInitialFleet())
-                .observer(probe)
                 .build();
 
-        probe.start();
-        conductor.start();
+        startRun(probe, conductor);
 
         try {
             // Phase 1 - storm: revocations under heavy in-flight work; bail early on any violation

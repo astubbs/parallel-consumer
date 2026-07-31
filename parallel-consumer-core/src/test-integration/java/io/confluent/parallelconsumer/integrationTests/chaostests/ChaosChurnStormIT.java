@@ -112,21 +112,14 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         Set<String> expectedKeys = fleet.getExpectedKeys();
         ProgressProbe probe = fleet.getProbe();
 
-        ChaosConductor conductor = ChaosConductor.builder()
+        ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed)
                 .minTick(Duration.ofMillis(500))
                 .maxTick(Duration.ofMillis(1500))
                 .joinAfterDrainBias(0.9)
-                .maxFleetSize(MAX_FLEET)
-                .pcExecutor(fleet.getPcExecutor())
-                .instanceFactory(() -> newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed))
-                .protectedInstance(fleet.getPc0())
-                .initialFleet(fleet.getInitialFleet())
-                .observer(probe)
                 .build();
 
-        probe.start();
-        conductor.start();
+        startRun(probe, conductor);
 
         try {
             // the run: everything produced must be consumed by SOMEONE within the cap, chaos or not
