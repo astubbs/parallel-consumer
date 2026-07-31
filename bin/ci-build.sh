@@ -18,11 +18,13 @@ else
   echo "Building with default Kafka version from pom.xml"
 fi
 
-# Test-group exclusion (performance,chaos) comes from pom.xml's excluded.groups default -
-# the single source of truth; pass -Dexcluded.groups=... explicitly to deviate.
+# Group exclusions are HARDCODED here, not inherited from the pom default - enforced by
+# QuarantinedAnnotationContractTest (pom inheritance once made the quarantine exclusion a
+# silent no-op for unit tests). Keep in sync with the pom excluded.groups default.
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
   ${KAFKA_VERSION_ARG:+"$KAFKA_VERSION_ARG"} \
   -Dlicense.skip \
+  -Dexcluded.groups=performance,chaos,quarantined \
   -Dsurefire.rerunFailingTestsCount=2
