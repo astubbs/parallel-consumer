@@ -32,6 +32,9 @@ echo "PIT: using ${THREADS} thread(s) (cores=${CORES}); minion heap -Xmx2g => ~$
 # GITHUB_BASE_REF is set automatically on pull_request. No base ref => full internal.* sweep (push/nightly).
 # "Knee-cap to changed-only now; walk the scope back up as it proves fast enough."
 BASE_REF="${PIT_BASE_REF:-${GITHUB_BASE_REF:-}}"
+# Explicit full-sweep override: PIT_FULL_SWEEP=true ignores the PR base ref and mutates all of
+# internal.* (the "Mutation (PIT, full)" highcpu job uses this; PR runs are otherwise scoped).
+if [ "${PIT_FULL_SWEEP:-}" = "true" ]; then BASE_REF=""; fi
 TARGET_CLASSES="io.confluent.parallelconsumer.internal.*"
 if [ -n "$BASE_REF" ]; then
   git fetch --no-tags -q origin "$BASE_REF" 2>/dev/null || true
