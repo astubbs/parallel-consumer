@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 #
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+
 # Copyright header conformance check for the fork.
 #
 # Policy (AGENTS.md, "Copyright rules for this fork"):
@@ -32,7 +35,7 @@
 # COPYRIGHT_CHECK_EXTRA_RENAMES appends 'newpath|oldpath' lines,
 # COPYRIGHT_CHECK_EXTRA_EXTRACTIONS appends extraction paths.
 
-set -eu
+set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -85,7 +88,10 @@ require_confluent() { # <file> <header>
 }
 
 require_modifications_line() { # <file> <header> <reason>
-    if ! printf '%s' "$2" | grep -q "$FORK_HOLDER"; then
+    # The phrase and the holder must be on the SAME line: a mere mention of the
+    # holder elsewhere in the header (e.g. an @author byline) is not a notice.
+    # Years are deliberately not policed (see above).
+    if ! printf '%s' "$2" | grep -q "Modifications Copyright (C).*${FORK_HOLDER}"; then
         echo "FAIL ($3 but missing 'Modifications Copyright ... ${FORK_HOLDER}' line): $1"
         return 1
     fi
@@ -96,7 +102,9 @@ while IFS= read -r f; do
     checked=$((checked + 1))
     header=$(head -"$HEADER_WINDOW" "$f")
 
-    rename_entry=$(printf '%s\n' "$RENAMED_FROM_UPSTREAM" | grep -F "${f}|" || true)
+    # exact match on the newpath field - a substring match would misroute files
+    # whose path is a tail-substring of a registered newpath into the rename branch
+    rename_entry=$(printf '%s\n' "$RENAMED_FROM_UPSTREAM" | awk -F'|' -v f="$f" '$1 == f {print; exit}')
     if [ -n "$rename_entry" ]; then
         old_path=${rename_entry#*|}
         require_confluent "$f" "$header" || { fails=$((fails + 1)); continue; }
