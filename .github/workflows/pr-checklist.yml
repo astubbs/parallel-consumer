@@ -1,9 +1,12 @@
 # PR Checklist gate - makes .github/PULL_REQUEST_TEMPLATE.md's checklist actually binding.
 #
-# The template is only a passive nudge (and gh --body-file PRs skip it entirely), so this fails the
-# check when a checklist box is left unchecked WITHOUT an "N/A" annotation. Authors either tick the box
-# `[x]` or write `- [ ] ... N/A - <reason>`. PRs with no checklist at all (e.g. Dependabot/bots that
-# don't use the template) are exempt - this only enforces boxes that are present. Re-runs on body edits.
+# The template is only a passive nudge (and `gh --body-file` PRs skip it entirely), so this check
+# enforces it two ways for human-authored PRs:
+#   1. The checklist must be PRESENT - a human PR with zero task-list items fails (otherwise dropping
+#      the template is a silent bypass: no boxes -> nothing to be "unchecked" -> vacuous pass).
+#   2. Every box present must be resolved - ticked `[x]`, or left `- [ ] ... N/A - <reason>`.
+# Real bot PRs (Dependabot/Renovate etc., GitHub user type "Bot") don't use the template and are
+# exempt entirely. Re-runs on body edits.
 
 name: PR Checklist
 
@@ -24,26 +27,47 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Verify checklist boxes are resolved (checked or N/A)
+      - name: Verify checklist is present and resolved (checked or N/A)
         uses: actions/github-script@v7
         with:
           script: |
-            const body = context.payload.pull_request.body || "";
+            const pr = context.payload.pull_request;
+
+            // Real bots (Dependabot/Renovate) don't use the template - exempt them.
+            // This is a GitHub-assigned account type, not something a fork PR can spoof via its body.
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - checklist gate skipped.`);
+              return;
+            }
+
+            const body = pr.body || "";
+            let boxes = 0;
             const offenders = [];
             for (const line of body.split(/\r?\n/)) {
               // Match a markdown task-list item: "- [ ] text" / "- [x] text"
               const m = line.match(/^\s*[-*]\s*\[( |x|X)\]\s*(.*)$/);
               if (!m) continue;
+              boxes++;
               const checked = m[1].toLowerCase() === "x";
               const text = (m[2] || "").trim();
               const naMarked = /\bN\/?A\b/i.test(text);
               if (!checked && !naMarked) offenders.push(text || "(empty item)");
             }
+
+            // A human PR with no checklist at all is a template bypass, not an exemption.
+            if (boxes === 0) {
+              core.setFailed(
+                "No PR checklist found - paste the checklist from .github/PULL_REQUEST_TEMPLATE.md and " +
+                "resolve each box (tick `[x]` or mark `N/A - <reason>`). Bots are exempt; humans are not."
+              );
+              return;
+            }
+
             if (offenders.length) {
               core.setFailed(
                 "Incomplete PR checklist - tick each box [x] or mark it 'N/A - <reason>':\n" +
                 offenders.map(o => `  - [ ] ${o}`).join("\n")
               );
             } else {
-              core.info("PR checklist OK (all boxes checked or marked N/A).");
+              core.info(`PR checklist OK (${boxes} box(es), all checked or marked N/A).`);
             }

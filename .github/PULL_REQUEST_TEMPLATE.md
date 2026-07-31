@@ -6,8 +6,9 @@
 
 ## Checklist
 
-<!-- Resolve EVERY box: tick it [x], or mark it "N/A - <reason>". The "PR Checklist" CI check fails on
-     an unchecked box that has no N/A. Bots/automated PRs that don't use this template are exempt. -->
+<!-- Keep this checklist and resolve EVERY box: tick it [x], or mark it "N/A - <reason>". The "PR Checklist"
+     CI check fails a human PR when the checklist is missing entirely, or when a box has no [x] and no N/A.
+     Only real bot authors (Dependabot/Renovate etc.) are exempt. -->
 
 - [ ] Changelog entry added (`CHANGELOG.adoc`, under `== Unreleased`) - or `N/A - <reason>`
 - [ ] Docs updated - or `N/A`
