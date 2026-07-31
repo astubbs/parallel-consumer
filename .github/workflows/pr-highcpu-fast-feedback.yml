@@ -5,11 +5,10 @@
 # continue-on-error + not-required means an offline runner never blocks a merge (the required gate stays
 # GitHub-hosted, see maven.yml).
 #
-# TRIGGER - workflow_dispatch ONLY for now: with no `[self-hosted, highcpu]` runner registered yet, a
-# `pull_request:` trigger would leave these jobs QUEUED FOREVER as eternally-pending checks on every PR
-# (the exact pollution that got pr-local-fast-feedback.yml's PR trigger disabled). Re-add `pull_request:`
-# below once the runners are registered AND reliably online. Run on demand meanwhile:
-# `gh workflow run highcpu --ref <branch>` or Actions -> highcpu -> Run workflow.
+# TRIGGER: `pull_request` (same-repo only - see SECURITY below) plus manual `workflow_dispatch`. These
+# jobs are advisory (continue-on-error + not-required), so if the `[self-hosted, highcpu]` runner is
+# offline the checks simply sit pending and NEVER block a merge - the required gate stays GitHub-hosted
+# (maven.yml). Run on demand any time: `gh workflow run highcpu --ref <branch>` or Actions -> highcpu.
 #
 # Tuning (measured on this 16c/32t box): unit forks 1-per-core (1C=32); more (2C) is flat, so 1C is the knee.
 # Integration is capped at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism).
@@ -29,8 +28,7 @@
 name: highcpu
 
 on:
-  # was: pull_request: — re-enable when a [self-hosted, highcpu] runner is registered and reliably online
-  # (until then it would only queue eternally-pending PR checks). See the TRIGGER note above.
+  pull_request:
   workflow_dispatch:
 
 # NOTE: concurrency is JOB-level (per suite), not workflow-level - see the job's `concurrency:` block.
