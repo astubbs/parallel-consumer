@@ -2,7 +2,7 @@
 
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
-> from `git log`. Keep it current when context-switching. Last updated: 2026-07-31.
+> from `git log`. Keep it current when context-switching. Last updated: 2026-08-01.
 >
 > **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
 > No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
@@ -241,6 +241,70 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
     header (`Copyright (C) 2026 Antony Stubbs and contributors`, as the fork's unit tests already do).
     PR #87's two new files fixed in-PR; sweep the rest at their source PRs or in one pass after the
     stack merges.
+
+### 🔴 OPEN (2026-07-31): W4 revoke-under-work is reproducibly RED in CI - commit-response starvation
+
+**Full handoff report (vantage point, evidence, ranked hypotheses, ordered next steps):**
+[`docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md`](plans/2026-08-01-001-investigate-chaos-w4-red-report.md).
+
+Both W4 arms fail on the highcpu lane on **every** run since they landed, on branches with no related
+changes (so *not* caused by any one PR - first noticed while merging master into PR #57):
+
+| run | branch | failing scenario(s) |
+|---|---|---|
+| 30608468815 | `fix/859-metrics-leak-plus-cherrypicks` (PR #57) | coop (seed `8254214163208094917`) |
+| 30607535421 | `fix/flaky-partitionstate-committedoffset-it` | **both** eager + coop |
+| 30607480136 | `fix/brokerpoller-backpressure-vacuous-await` | coop (seed `5666019246240209747`) |
+| 30606726847 | `feats/chaos-w4-cooperative` | coop |
+| 30604723974 | `feats/chaos-w4-revoke-under-work` | eager |
+
+Green as recently as 2026-07-31 05:02, but only on branches that predate the W4 scenarios
+(`feats/chaos-ambient-probe`, `feats/chaos-pain-suite` = W1 only). **The eager arm fails too, so this
+is assignor-independent** - it is not the cooperative variant's problem, and it contradicts the
+"both arms GREEN" development result recorded above.
+
+**Signature (identical every time):** several fleet instances die with
+`InternalRuntimeException: Timeout waiting for commit response PT30S` thrown from
+`ConsumerOffsetCommitter.commitAndWait()` (`ConsumerOffsetCommitter.java:154`), often right after a
+`RebalanceInProgressException`. That kills the `pc-control` thread, so `ManagedPCInstance` restart
+reports "died from unexpected error", the cause is unclassified (the whitelist in
+`isExpectedCloseException` matches only `Interrupted`/`Wakeup`/`Disconnect`/`ClosedChannel`/
+`java.util.concurrent.TimeoutException`, and PC's exception is a bare `InternalRuntimeException` with
+no cause chain), and `ChaosScenarioBase.assertScenarioSlos:259` fails on "no instance may end the run
+with an unclassified failure cause".
+
+**Leading hypothesis - the highcpu lane starves its own chaos SLOs.** `pr-highcpu-fast-feedback.yml`
+sets concurrency per *suite* (`group: highcpu-${suite}-${ref}`), so unit + integration + performance +
+**two PIT mutation sweeps** + chaos all run concurrently on one box - and across branches, since the
+group includes the ref. In *every* red run above, the CPU-hungry mutation job(s) also failed, and in
+PR #57's run three jobs (Unit, both Mutation) died with "the self-hosted runner lost communication
+with the server" - the box was demonstrably starved. Chaos SLOs and a 10s commit-response wait are
+timing-based; the workflow already concedes "Performance: timing is noisy under concurrency - that's
+fine", but chaos is deliberately NOT `continue-on-error`, so the noise shows as a red finding.
+
+**Next steps, in order:**
+1. **Rule out the confound first** - replay a seed locally on an idle machine (both commands below).
+   If green locally and red only when the box is loaded, this is lane scheduling, not a PC bug.
+   ```
+   ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dchaos.seed=8254214163208094917
+   ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dchaos.seed=5666019246240209747
+   ```
+2. **If it is lane scheduling:** give chaos exclusive use of the box (a shared concurrency group with
+   the mutation suites, or move mutation off the highcpu lane). Do *not* widen the chaos SLOs to make
+   CI quiet - that de-calibrates the tripwire, which is the whole point of the suite.
+3. **If it reproduces idle:** it is a genuine commit-response stall under revoke-heavy load - the
+   #857-family behaviour the Class 2 probe was built to catch - and the tripwire has had its first
+   RED-side hit. Chase it as a PC bug, not a test bug.
+4. Either way, decide whether a commit-response timeout should be *classifiable* rather than
+   "unexpected". It is arguably real PC behaviour worth surfacing (the instance dies), so prefer a
+   dedicated classification + explicit SLO over silently whitelisting it.
+
+**Separate main-code bug found while reading the throw site (independent of the above, small):**
+`ConsumerOffsetCommitter.commitAndWait()` waits on `commitTimeout` (= `options.offsetCommitTimeout`,
+`PT10S` in these runs) but the exception message interpolates `AbstractParallelEoSStreamProcessor.
+DEFAULT_TIMEOUT` (`PT30S`) - so every one of these errors misreports how long it actually waited by
+3x, and the message ignores a user's configured timeout. Fix: interpolate `commitTimeout`. Worth a
+tiny standalone PR with a unit test.
 
 ## Quarantine lane (`@Quarantined`) — active roster
 
