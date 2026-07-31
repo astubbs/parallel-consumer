@@ -42,4 +42,8 @@ jobs:
         run: bash bin/test-check-copyright-headers.sh
 
       - name: Check copyright headers
+        # Strict: hard-fail (not warn+skip) if the fork point is missing - this job fetches full
+        # history, so a missing fork point means something is wrong rather than an expected shallow clone.
+        env:
+          COPYRIGHT_CHECK_REQUIRE_FORK_POINT: "1"
         run: bash bin/check-copyright-headers.sh

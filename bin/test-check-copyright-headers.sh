@@ -24,7 +24,8 @@
 #   12. fork-original file claiming Confluent copyright            -> FAIL
 #   13. fork-original file with no recognised header               -> FAIL
 #   14. clean repo                                                 -> exit 0
-#   15. fork-point commit missing from history (shallow clone)     -> exit 2
+#   15. fork-point commit missing from history (shallow clone)     -> exit 0 (warn+skip);
+#       exit 2 only with COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 (strict, as CI sets)
 #
 # Run: bin/test-check-copyright-headers.sh   (CI runs it before the real scan)
 
@@ -156,10 +157,17 @@ assert "clean repo exits 0" 0 "$rc"
 assert_contains "clean repo reports zero violations" "0 violation(s)" "$out"
 
 # --- Fixture C: fork point not in history (rule 15) ---------------------------------
+# Default: WARN and skip (exit 0) - can't determine provenance, so degrade gracefully (e.g. a
+# shallow clone or a `mvn validate` build); the authoritative gate is copyright.yml (fetch-depth: 0).
 out=$( (cd "$repoB" && COPYRIGHT_CHECK_FORK_POINT=0000000000000000000000000000000000000000 \
         bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
-assert          "missing fork point exits 2"            2 "$rc"
-assert_contains "missing fork point explains the fix"   "fetch-depth: 0" "$out"
+assert          "missing fork point skips (exit 0) by default" 0 "$rc"
+assert_contains "missing fork point warns + explains the fix"  "fetch-depth: 0" "$out"
+# Strict mode: COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 hard-fails (exit 2) - what CI sets.
+out=$( (cd "$repoB" && COPYRIGHT_CHECK_FORK_POINT=0000000000000000000000000000000000000000 \
+        COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
+assert          "missing fork point hard-fails (exit 2) in strict mode" 2 "$rc"
+assert_contains "strict-mode missing fork point explains the fix"       "fetch-depth: 0" "$out"
 
 echo
 if [ "$failures" -eq 0 ]; then
