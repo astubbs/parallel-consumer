@@ -66,7 +66,9 @@ jobs:
           # Useful finding for the inflight "Step 2" thread-parallelism question.)
           # Unit: 1 fork PER CORE (1C = 32). Integration: 8 broker-forks (16 was slower).
           - suite-name: "Unit"
-            cmd: "bin/ci-unit-test.sh -DforkCount=1C"
+            # -Dsurefire.forkCount (NOT bare -DforkCount): the pom pins <forkCount>${surefire.forkCount}</forkCount>,
+            # so surefire only honours the namespaced property; a bare -DforkCount is silently ignored.
+            cmd: "bin/ci-unit-test.sh -Dsurefire.forkCount=1C"
           - suite-name: "Integration"
             cmd: "bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true"
           # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
