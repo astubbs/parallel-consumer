@@ -123,8 +123,13 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
 
     @Test
     void revokeUnderWorkStaysProtocolHonest() throws Exception {
-        long seed = Long.getLong("chaos.seed", RandomUtils.nextLong());
-        log.info("=== CHAOS W4 revoke-under-work: seed={} (replay with -Dchaos.seed={}) ===", seed, seed);
+        String seedProp = System.getProperty("chaos.seed");
+        long seed = seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
+        // the FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
+        // reproduce (the chaos tag is excluded by default, so the seed alone is not enough)
+        String replayCmd = "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
+                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+        log.info("=== CHAOS W4 revoke-under-work: seed={} (replay: {}) ===", seed, replayCmd);
 
         String topic = getClass().getSimpleName() + "-w4-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS);
@@ -213,9 +218,9 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            settleRun(conductor, probe, producerThread, totalConsumed);
+            settleRun(conductor, probe, producerThread, pcExecutor, totalConsumed);
         }
 
-        assertScenarioSlos(probe, conductor, seed, expectedKeys, allConsumed);
+        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
     }
 }

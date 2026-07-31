@@ -1,18 +1,20 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -20,16 +22,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 /**
  * Seeded, replayable chaos scheduler for the Chaos Pain Suite (Phase 1 - see
  * {@code docs/plans/2026-07-30-002-feat-chaos-pain-suite-phase1-plan.md}).
  * <p>
- * Replaces the ad-hoc {@code Math.random()} chaos monkey with a deterministic action plan: same seed =
- * same action/target sequence (wall-clock interleaving still varies - the seed pins WHAT happens, load
- * pins exactly WHEN). Every executed action is appended to a timestamped {@link #getTimeline() timeline},
- * logged at execution and dumped wholesale by {@link #stop()} - a failing run's first artifact.
+ * Replaces the ad-hoc {@code Math.random()} chaos monkey with a deterministic draw stream: each tick
+ * consumes one complete {@link TickDraws} from the seeded RNG - up front and in full, regardless of
+ * live fleet state - so the random stream is a pure function of (seed, tick index). Same seed = same
+ * draw sequence, always. The REALIZED action/target is the draw filtered through live fleet state
+ * (the join-after-drain bias only fires after a successful STOP_DRAIN; a target roll resolves against
+ * the instances currently in the wanted state), so wall-clock timing pins what a draw lands on - never
+ * which draws occur, and never how many. Every executed action is appended to a timestamped
+ * {@link #getTimeline() timeline}, logged at execution and dumped wholesale by {@link #stop()} - a
+ * failing run's first artifact.
  * <p>
  * Phase 1 action set (W1 churn storm): {@link ChaosAction#STOP_DRAIN}, {@link ChaosAction#STOP_NO_DRAIN},
  * {@link ChaosAction#RESTART}, {@link ChaosAction#JOIN_NEW}. The conductor deliberately supports a
@@ -41,7 +49,9 @@ import java.util.function.Supplier;
  * Lifecycle notes: drives instances via {@link ManagedPCInstance#start(ExecutorService)},
  * {@link ManagedPCInstance#stopAsync()} (DONT_DRAIN) and - because the managed API only exposes
  * DONT_DRAIN closes - raw {@code getParallelConsumer().closeDrainFirst()} on a background thread for
- * DRAIN stops. The conductor keeps its own authoritative per-instance state machine and never calls
+ * DRAIN stops. Drain threads are tracked and joined (bounded by {@link #DRAINER_JOIN_BUDGET}) inside
+ * {@link #stop()}, so callers see a quiesced fleet - no drainer races the test's settle/teardown
+ * close. The conductor keeps its own authoritative per-instance state machine and never calls
  * {@code toggle()}, so the managed {@code started} flag (which only gates toggle) stays out of play.
  */
 @Slf4j
@@ -49,9 +59,28 @@ public class ChaosConductor {
 
     public enum ChaosAction {STOP_DRAIN, STOP_NO_DRAIN, RESTART, JOIN_NEW}
 
-    /** Conductor's authoritative view of each instance it manages. (Public: the truth-assertion
-     * generator emits cross-package accessors for nested types it discovers.) */
+    /** Conductor's authoritative view of each instance it manages. Public: referenced across the
+     * chaostests package (probe, scenarios, assertions). */
     public enum InstanceState {RUNNING, DRAINING, STOPPED}
+
+    /** Drain threads must not outlive {@link #stop()} - budget must exceed the heaviest legitimate
+     * drain (a heavy-tail record legitimately blocks its drain for the full dwell). Leftovers are
+     * recorded loudly in the timeline rather than silently leaked into teardown. */
+    public static final Duration DRAINER_JOIN_BUDGET = Duration.ofSeconds(60);
+
+    /**
+     * One tick's complete draw set, consumed from the seeded RNG before the tick acts. Consuming every
+     * draw every tick - used or not - is what makes the stream replayable: without it, the number of
+     * draws would depend on live fleet state (bias armed? candidates available?), which is mutated by
+     * wall-clock-timed drain completions, and two runs of the same seed could silently desynchronise.
+     */
+    @Value
+    public static class TickDraws {
+        long tickMs;
+        double biasRoll;
+        ChaosAction action;
+        int targetRoll;
+    }
 
     private final long seed;
     private final Random random;
@@ -67,6 +96,8 @@ public class ChaosConductor {
 
     private final List<ManagedPCInstance> fleet = new CopyOnWriteArrayList<>();
     private final Map<Integer, InstanceState> states = new ConcurrentHashMap<>();
+    private final List<Thread> drainers = new CopyOnWriteArrayList<>();
+    private final AtomicInteger disturbanceCount = new AtomicInteger();
     @Getter
     private final List<String> timeline = Collections.synchronizedList(new ArrayList<>());
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -77,6 +108,10 @@ public class ChaosConductor {
 
     public interface ChaosObserver {
         void onAction(int instanceId, ChaosAction action);
+
+        /** A STOP_DRAIN's background close finished (successfully or not) for this instance. */
+        default void onDrainComplete(int instanceId) {
+        }
     }
 
     @Builder
@@ -95,7 +130,9 @@ public class ChaosConductor {
         this.random = new Random(seed);
         this.minTick = minTick == null ? Duration.ofSeconds(1) : minTick;
         this.maxTick = maxTick == null ? Duration.ofSeconds(3) : maxTick;
-        this.weights = weights == null ? defaultW1Weights() : weights;
+        // defensive EnumMap copy: deterministic iteration order is what makes weightedPick
+        // seed-replayable - a caller-supplied HashMap would iterate in identity-hash order
+        this.weights = weights == null ? defaultW1Weights() : new EnumMap<>(weights);
         this.joinAfterDrainBias = joinAfterDrainBias;
         this.maxFleetSize = maxFleetSize;
         this.pcExecutor = pcExecutor;
@@ -115,7 +152,7 @@ public class ChaosConductor {
      * deterministic iteration order is what makes the weighted pick seed-replayable.
      */
     public static Map<ChaosAction, Integer> defaultW1Weights() {
-        Map<ChaosAction, Integer> w = new java.util.EnumMap<>(ChaosAction.class);
+        Map<ChaosAction, Integer> w = new EnumMap<>(ChaosAction.class);
         w.put(ChaosAction.STOP_DRAIN, 4);
         w.put(ChaosAction.STOP_NO_DRAIN, 2);
         w.put(ChaosAction.RESTART, 3);
@@ -131,7 +168,7 @@ public class ChaosConductor {
      * iteration order, same as W1.
      */
     public static Map<ChaosAction, Integer> defaultW4Weights() {
-        Map<ChaosAction, Integer> w = new java.util.EnumMap<>(ChaosAction.class);
+        Map<ChaosAction, Integer> w = new EnumMap<>(ChaosAction.class);
         w.put(ChaosAction.STOP_NO_DRAIN, 3);
         w.put(ChaosAction.RESTART, 3);
         w.put(ChaosAction.JOIN_NEW, 2);
@@ -139,15 +176,26 @@ public class ChaosConductor {
     }
 
     /**
-     * Pure function of the seed: the action sequence a conductor with this seed would draw (targets not
-     * resolved - target choice depends on live fleet state). Used by the determinism regression test.
+     * The single draw path - used by BOTH the live {@link #loop()} and {@link #planTicks}, so the
+     * determinism regression test ({@code ChaosConductorPlanIT}) exercises the exact production draw
+     * sequence, bias and target rolls included.
      */
-    public static List<ChaosAction> planActions(long seed, int steps, Map<ChaosAction, Integer> weights) {
+    static TickDraws drawTick(Random random, Duration minTick, Duration maxTick, Map<ChaosAction, Integer> weights) {
+        long tickMs = minTick.toMillis()
+                + (long) (random.nextInt(1000) / 1000.0 * (maxTick.toMillis() - minTick.toMillis()));
+        double biasRoll = random.nextDouble();
+        ChaosAction action = weightedPick(random, weights);
+        int targetRoll = random.nextInt(Integer.MAX_VALUE);
+        return new TickDraws(tickMs, biasRoll, action, targetRoll);
+    }
+
+    /** Pure function of the seed: the exact draw sequence a conductor with this seed consumes. */
+    public static List<TickDraws> planTicks(long seed, int steps, Duration minTick, Duration maxTick,
+                                            Map<ChaosAction, Integer> weights) {
         Random r = new Random(seed);
-        List<ChaosAction> plan = new ArrayList<>();
+        List<TickDraws> plan = new ArrayList<>();
         for (int i = 0; i < steps; i++) {
-            r.nextInt(1000); // consumes the tick draw, mirroring the live loop's draw order
-            plan.add(weightedPick(r, weights));
+            plan.add(drawTick(r, minTick, maxTick, weights));
         }
         return plan;
     }
@@ -172,6 +220,7 @@ public class ChaosConductor {
                 Thread.currentThread().interrupt();
             }
         }
+        joinDrainers();
         record("CONDUCTOR STOP - timeline follows", -1);
         synchronized (timeline) {
             for (String entry : timeline) {
@@ -180,31 +229,53 @@ public class ChaosConductor {
         }
     }
 
-    /** All instances the conductor knows about (excluding the protected instance). */
+    private void joinDrainers() {
+        Instant deadline = Instant.now().plus(DRAINER_JOIN_BUDGET);
+        for (Thread drainer : drainers) {
+            long left = Duration.between(Instant.now(), deadline).toMillis();
+            if (left <= 0) break;
+            try {
+                drainer.join(left);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        long alive = drainers.stream().filter(Thread::isAlive).count();
+        if (alive > 0) {
+            record("CONDUCTOR STOP: " + alive + " drain thread(s) still running after "
+                    + DRAINER_JOIN_BUDGET.getSeconds() + "s join budget - teardown may race them", -1);
+        }
+    }
+
+    /** All instances the conductor knows about, INCLUDING the protected instance (only chaos targeting
+     * excludes it - see {@link #pickInState}; the probe needs to see the whole fleet). */
     public List<ManagedPCInstance> getFleet() {
         return new ArrayList<>(fleet);
+    }
+
+    /** Disturbances (STOP_DRAIN + STOP_NO_DRAIN + RESTART) that actually fired - the authoritative
+     * input for the ledger's duplicate allowance, vs parsing the human-readable timeline. */
+    public int getDisturbanceCount() {
+        return disturbanceCount.get();
     }
 
     private void loop() {
         boolean forceJoinNext = false;
         while (running.get()) {
             try {
-                long tickMs = minTick.toMillis()
-                        + (long) (random.nextInt(1000) / 1000.0 * (maxTick.toMillis() - minTick.toMillis()));
-                Thread.sleep(tickMs);
+                TickDraws draws = drawTick(random, minTick, maxTick, weights);
+                Thread.sleep(draws.getTickMs());
 
-                ChaosAction action;
-                if (forceJoinNext && random.nextDouble() < joinAfterDrainBias) {
-                    action = ChaosAction.JOIN_NEW;
-                } else {
-                    action = weightedPick(random, weights);
-                }
+                ChaosAction action = forceJoinNext && draws.getBiasRoll() < joinAfterDrainBias
+                        ? ChaosAction.JOIN_NEW
+                        : draws.getAction();
                 forceJoinNext = false;
 
                 switch (action) {
-                    case STOP_DRAIN -> forceJoinNext = doStopDrain();
-                    case STOP_NO_DRAIN -> doStopNoDrain();
-                    case RESTART -> doRestart();
+                    case STOP_DRAIN -> forceJoinNext = doStopDrain(draws.getTargetRoll());
+                    case STOP_NO_DRAIN -> doStopNoDrain(draws.getTargetRoll());
+                    case RESTART -> doRestart(draws.getTargetRoll());
                     case JOIN_NEW -> doJoin();
                 }
             } catch (InterruptedException e) {
@@ -217,10 +288,11 @@ public class ChaosConductor {
         }
     }
 
-    private boolean doStopDrain() {
-        ManagedPCInstance victim = pickInState(InstanceState.RUNNING);
+    private boolean doStopDrain(int targetRoll) {
+        ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return false;
         states.put(victim.getInstanceId(), InstanceState.DRAINING);
+        disturbanceCount.incrementAndGet();
         record("STOP_DRAIN", victim.getInstanceId());
         observer.onAction(victim.getInstanceId(), ChaosAction.STOP_DRAIN);
         var pc = victim.getParallelConsumer();
@@ -228,55 +300,60 @@ public class ChaosConductor {
             try {
                 pc.closeDrainFirst();
             } catch (Exception e) {
-                log.warn("Drain-close of instance {} threw (classified by restart path): {}",
+                log.warn("Drain-close of instance {} threw (classified on restart or by the end-of-run sweep): {}",
                         victim.getInstanceId(), e.getMessage());
             } finally {
                 states.put(victim.getInstanceId(), InstanceState.STOPPED);
                 record("DRAIN_COMPLETE", victim.getInstanceId());
-                observer.onAction(victim.getInstanceId(), null); // null action = drain finished marker
+                observer.onDrainComplete(victim.getInstanceId());
             }
         }, "chaos-drain-" + victim.getInstanceId());
         drainer.setDaemon(true);
+        drainers.add(drainer);
         drainer.start();
         return true; // candidate for join-after-drain bias
     }
 
-    private void doStopNoDrain() {
-        ManagedPCInstance victim = pickInState(InstanceState.RUNNING);
+    private void doStopNoDrain(int targetRoll) {
+        ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return;
         states.put(victim.getInstanceId(), InstanceState.STOPPED);
+        disturbanceCount.incrementAndGet();
         record("STOP_NO_DRAIN", victim.getInstanceId());
         observer.onAction(victim.getInstanceId(), ChaosAction.STOP_NO_DRAIN);
         victim.stopAsync();
     }
 
-    private void doRestart() {
-        ManagedPCInstance target = pickInState(InstanceState.STOPPED);
+    private void doRestart(int targetRoll) {
+        ManagedPCInstance target = pickInState(InstanceState.STOPPED, targetRoll);
         if (target == null) return;
+        // start() first: it can throw (the unexpected-failure-cause canary), in which case the
+        // instance must stay STOPPED and untargetable rather than lying as RUNNING
+        target.start(pcExecutor);
         states.put(target.getInstanceId(), InstanceState.RUNNING);
+        disturbanceCount.incrementAndGet();
         record("RESTART", target.getInstanceId());
         observer.onAction(target.getInstanceId(), ChaosAction.RESTART);
-        target.start(pcExecutor);
     }
 
     private void doJoin() {
         if (fleet.size() >= maxFleetSize) return;
         ManagedPCInstance recruit = instanceFactory.get();
+        recruit.start(pcExecutor);
         fleet.add(recruit);
         states.put(recruit.getInstanceId(), InstanceState.RUNNING);
         record("JOIN_NEW", recruit.getInstanceId());
         observer.onAction(recruit.getInstanceId(), ChaosAction.JOIN_NEW);
-        recruit.start(pcExecutor);
     }
 
-    private ManagedPCInstance pickInState(InstanceState wanted) {
+    private ManagedPCInstance pickInState(InstanceState wanted, int targetRoll) {
         List<ManagedPCInstance> candidates = new ArrayList<>();
         for (ManagedPCInstance pc : fleet) {
             if (pc == protectedInstance) continue;
             if (states.get(pc.getInstanceId()) == wanted) candidates.add(pc);
         }
         if (candidates.isEmpty()) return null;
-        return candidates.get(random.nextInt(candidates.size()));
+        return candidates.get(targetRoll % candidates.size());
     }
 
     private static ChaosAction weightedPick(Random r, Map<ChaosAction, Integer> weights) {

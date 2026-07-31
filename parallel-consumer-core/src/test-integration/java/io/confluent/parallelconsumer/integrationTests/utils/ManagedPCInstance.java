@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests.utils;
 
 /*-
  * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
@@ -81,65 +82,70 @@ public class ManagedPCInstance implements Runnable {
     @Override
     public void run() {
         org.slf4j.MDC.put(MDC_INSTANCE_ID, "Runner-" + instanceId);
+        try {
 
-        // Wait for the previous PC to fully close — including its internal threads finishing
-        // and the KafkaConsumer being closed on the poll thread. PC.close() blocks until
-        // the control thread finishes, which waits for the poll thread (brokerPollSubsystem
-        // .closeAndWait), which closes the consumer. So by the time isClosedOrFailed() returns
-        // true, the consumer should be fully closed and deregistered from the group.
-        // See #857.
-        if (parallelConsumer != null) {
-            int waitMs = 0;
-            while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000) {
-                try {
-                    Thread.sleep(100);
-                    waitMs += 100;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
+            // Wait for the previous PC to fully close — including its internal threads finishing
+            // and the KafkaConsumer being closed on the poll thread. PC.close() blocks until
+            // the control thread finishes, which waits for the poll thread (brokerPollSubsystem
+            // .closeAndWait), which closes the consumer. So by the time isClosedOrFailed() returns
+            // true, the consumer should be fully closed and deregistered from the group.
+            // See #857.
+            if (parallelConsumer != null) {
+                int waitMs = 0;
+                while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000) {
+                    try {
+                        Thread.sleep(100);
+                        waitMs += 100;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                if (waitMs >= 10_000) {
+                    log.warn("Instance {} previous PC did not close within 10s, proceeding anyway", instanceId);
                 }
             }
-            if (waitMs >= 10_000) {
-                log.warn("Instance {} previous PC did not close within 10s, proceeding anyway", instanceId);
+
+            // started flag is set in start(), not here — prevents double-submission
+            log.info("Running consumer instance {}", instanceId);
+
+            Properties consumerProps = new Properties();
+            consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, config.maxPoll);
+            if (config.useCooperativeAssignor) {
+                consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG,
+                        "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
             }
-        }
+            if (config.extraConsumerProps != null) {
+                consumerProps.putAll(config.extraConsumerProps); // scenario-specific overrides win last
+            }
+            KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
 
-        // started flag is set in start(), not here — prevents double-submission
-        log.info("Running consumer instance {}", instanceId);
+            this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
+                    .ordering(config.order)
+                    .consumer(newConsumer)
+                    .commitMode(config.commitMode)
+                    .maxConcurrency(config.maxConcurrency)
+                    .build());
 
-        Properties consumerProps = new Properties();
-        consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, config.maxPoll);
-        if (config.useCooperativeAssignor) {
-            consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG,
-                    "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
-        }
-        if (config.extraConsumerProps != null) {
-            consumerProps.putAll(config.extraConsumerProps); // scenario-specific overrides win last
-        }
-        KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
+            this.parallelConsumer.setTimeBetweenCommits(Duration.ofSeconds(1));
+            this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));
+            this.parallelConsumer.subscribe(of(config.inputTopic));
 
-        this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
-                .ordering(config.order)
-                .consumer(newConsumer)
-                .commitMode(config.commitMode)
-                .maxConcurrency(config.maxConcurrency)
-                .build());
-
-        this.parallelConsumer.setTimeBetweenCommits(Duration.ofSeconds(1));
-        this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));
-        this.parallelConsumer.subscribe(of(config.inputTopic));
-
-        parallelConsumer.poll(record -> {
-            if (config.pollDelayMs > 0) {
-                try {
-                    Thread.sleep(config.pollDelayMs);
-                } catch (InterruptedException e) {
-                    // ignore — shutdown in progress
+            parallelConsumer.poll(record -> {
+                if (config.pollDelayMs > 0) {
+                    try {
+                        Thread.sleep(config.pollDelayMs);
+                    } catch (InterruptedException e) {
+                        // ignore — shutdown in progress
+                    }
                 }
-            }
-            consumedKeys.add(record.key());
-            onConsumed.accept(record.key());
-        });
+                consumedKeys.add(record.key());
+                onConsumed.accept(record.key());
+            });
+        } finally {
+            // pool threads are reused across instances - do not leak this instance id into later runners (PR #83 review)
+            org.slf4j.MDC.remove(MDC_INSTANCE_ID);
+        }
     }
 
     /** True while a background close is in progress — prevents toggle from restarting prematurely */

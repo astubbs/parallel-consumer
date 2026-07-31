@@ -1,14 +1,22 @@
-# Chaos Pain Suite - on-demand stall hunting on the self-hosted high-CPU runner.
+# Chaos Pain Suite - ON-DEMAND seeded stall hunting on the self-hosted high-CPU runner.
 #
 # Runs the @Tag("chaos") suite (see integrationTests.chaostests + the design doc under docs/plans/):
 # seeded chaos schedules against a PC fleet with SLO probes (progress watermark, rebalance-dwell zombie
-# probe, drain bound) and a correctness ledger. NEVER PR-gating: workflow_dispatch only. Failures are
-# investigation food - the seed + chaos timeline in the logs replay the schedule, and reports upload as
-# artifacts.
+# probe, drain bound) and a correctness ledger. NEVER PR-gating. Failures are investigation food - the
+# seed + chaos timeline in the logs replay the schedule, and reports upload as artifacts.
 #
-# SECURITY (public repo + self-hosted runner): workflow_dispatch only - it can only be triggered by users
-# with write access, so no untrusted fork code can reach the self-hosted machine through this workflow.
-# See docs/SELF_HOSTED_RUNNER.md and pr-highcpu-fast-feedback.yml's header for the fork-PR backstop story.
+# This workflow is workflow_dispatch ONLY (seed replay + reps; runs QUEUE - measurements are never
+# killed). The per-PR-commit chaos run lives in the highcpu fast-feedback lane
+# (pr-highcpu-fast-feedback.yml, check "highcpu / Chaos Pain Suite") - both call bin/chaos-test.sh.
+#
+# QUARANTINE interaction: bin/chaos-test.sh EXCLUDES @Quarantined chaos scenarios - the Quarantine
+# Lane owns them, and a known-RED scenario must not drown the tripwire signal. While W1
+# (ChaosChurnStormIT) is quarantined under PR #80 and no other chaos scenario exists, runs select
+# ZERO tests - the summary says so loudly instead of impersonating a real GREEN run.
+#
+# SECURITY (public repo + self-hosted runner): workflow_dispatch only - write-access-gated by
+# construction, so no untrusted fork code can reach the self-hosted machine through this workflow.
+# Inputs pass through env (data), never ${{ }} inside run blocks (code). See docs/SELF_HOSTED_RUNNER.md.
 
 name: chaos-pain
 
@@ -54,16 +62,10 @@ jobs:
           docker --version
 
       - name: Chaos runs
-        run: |
-          SEED_ARG=""
-          if [ -n "${{ inputs.seed }}" ]; then SEED_ARG="-Dchaos.seed=${{ inputs.seed }}"; fi
-          for i in $(seq 1 ${{ inputs.reps }}); do
-            echo "=== chaos rep $i/${{ inputs.reps }} ==="
-            time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
-              -DskipUTs=true -Dlicense.skip \
-              -Dincluded.groups=chaos -Dexcluded.groups= \
-              $SEED_ARG
-          done
+        env:
+          CHAOS_SEED: ${{ inputs.seed }}
+          CHAOS_REPS: ${{ inputs.reps }}
+        run: bin/chaos-test.sh
 
       - name: Upload test reports
         if: always()
