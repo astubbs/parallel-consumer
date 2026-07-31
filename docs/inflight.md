@@ -4,6 +4,11 @@
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
 > from `git log`. Keep it current when context-switching. Last updated: 2026-07-28.
 >
+> **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
+> No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
+> AGENTS.md (policy), PR descriptions/commit messages (history), or `docs/solutions/` (lessons).
+> When work finishes, delete or shrink its entry rather than converting it into a record.
+>
 > **The durable fork↔upstream mapping now lives in a machine-readable cache:**
 > [`src/docs/development/upstream-map.yaml`](../src/docs/development/upstream-map.yaml) is the
 > source of truth for which fork branch/PR maps to which upstream issue/PR and its status
@@ -496,3 +501,11 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   passed. **Fixed** by pointing `getBadRequest()` at a **closed local port** (`127.0.0.1:1`) → deterministic
   "connection refused" everywhere, no DNS. (Both sibling tests share the helper, so both assertions were
   updated.) Found bringing up the self-hosted high-CPU runner.
+
+## Copyright headers - open follow-up (2026-07-31)
+
+- **Chaos stack must pass the new header check once PR #90 merges.** The scanner
+  (`bin/check-copyright-headers.sh`, policy in AGENTS.md) registers `ManagedPCInstance` as an
+  upstream EXTRACTION, requiring Confluent + the `Modifications Copyright (C) 2026 Antony Stubbs
+  and contributors` line - PR #83 currently has it Confluent-only, so add that line on the stack.
+  The stack's other fork-header fixes are already committed (#83) or in flight (#85).

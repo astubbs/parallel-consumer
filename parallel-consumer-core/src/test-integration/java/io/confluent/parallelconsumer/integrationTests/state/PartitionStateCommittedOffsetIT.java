@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests.state;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.StringSubject;

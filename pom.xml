@@ -67,6 +67,14 @@
         <jvm.location>${java.home}</jvm.location>
         <jvm8.location>-insert jvm8 location via environment variable-</jvm8.location>
         <jvm9.location>-insert jvm9 location via environment variable-</jvm9.location>
+        <!-- The mycila license plugin is SKIPPED BY DEFAULT for this fork: it knows only one header
+             template (the Confluent one), so its format goal used to rewrite fork-original files with
+             the wrong attribution, and its git-based year resolver auto-bumps years and breaks in git
+             worktrees. Header conformance is enforced by bin/check-copyright-headers.sh instead
+             (provenance-aware: upstream-derived files keep the Confluent header, fork-original files
+             use the fork header - see AGENTS.md "Copyright rules for this fork"). Re-enable the plugin
+             deliberately with -Dlicense.skip=false if you ever need its format goal on upstream files. -->
+        <license.skip>true</license.skip>
         <!-- default to format when on developer machines, check when in CI -->
         <license.mode>format</license.mode>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
