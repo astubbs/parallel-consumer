@@ -4,6 +4,11 @@
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
 > from `git log`. Keep it current when context-switching. Last updated: 2026-07-31.
 >
+> **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
+> No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
+> AGENTS.md (policy), PR descriptions/commit messages (history), or `docs/solutions/` (lessons).
+> When work finishes, delete or shrink its entry rather than converting it into a record.
+>
 > **The durable fork↔upstream mapping now lives in a machine-readable cache:**
 > [`src/docs/development/upstream-map.yaml`](../src/docs/development/upstream-map.yaml) is the
 > source of truth for which fork branch/PR maps to which upstream issue/PR and its status
@@ -20,7 +25,7 @@ change. Release = strip `-SNAPSHOT` → `0.6.0.0` and merge to `master`. Release
 Antony separately (not in this doc).
 
 **Release mechanics:** no `maven-release-plugin`; the pom `<version>` is the single source of truth.
-Merge to `master` → `.github/workflows/publish.yml` runs after "Build and Test" succeeds and deploys via
+Merge to `master` → `.github/workflows/publish.yml` runs after the "CI" workflow succeeds and deploys via
 the `maven-central` profile (`central-publishing-maven-plugin`, GPG signed). A non-`-SNAPSHOT` version
 also tags `v<version>` and cuts a GitHub release. See `AGENTS.md` "Releasing".
 
@@ -164,6 +169,17 @@ and Confluent `-ce`/`-ccs` Kafka builds — without the `-ce` filter, kafka "lat
   to compile against 1.17. Both are pinned with in-pom comments. **To upgrade:** migrate the `CoreApp`
   imports + registry construction, then bump the whole micrometer family together (keep the two aligned).
 
+**jackson-databind — hand-managed, module-local test pin (Dependabot told to ignore):**
+- **jackson-databind** held at `2.17.2` in `parallel-consumer-example-metrics` (test scope) — parses the
+  Prometheus metadata JSON in that module's integration test. Kept as a module-local, explicitly-versioned
+  test dep **on purpose**: pinning it globally via root `dependencyManagement` forces WireMock
+  (`parallel-consumer-vertx`, `wiremock-jre8`) onto an incompatible Jackson and breaks `VertxTest` (HTTP
+  500), so it stays scoped to this one module. Dependabot proposed `2.17.2 → 2.18.9` (PR #76); we told it
+  `@dependabot ignore this dependency` because these bumps belong in the curated `versions-maven-plugin`
+  sweep with an `example-metrics` integration-test run, not standalone PRs. **To upgrade:** bump the pin in
+  the next sweep and confirm the example-metrics integration test is green (the module-local scope means it
+  cannot affect `VertxTest`). Test-scoped, so it never reaches the published artifact classpath.
+
 **Build plugins — only pre-releases available, held by the risk policy:**
 - Maven-4-era plugins offered only as betas/milestones: `maven-clean/deploy/install/jar/resources/source/
   compiler` `4.0.0-beta-*`; `maven-surefire`/`maven-failsafe` `3.6.0-M1`; `maven-site-plugin` `4.0.0-M16`
@@ -193,7 +209,63 @@ with 4.10.3, so these drop out of "new". Track the actual fixes (make the counte
 Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
 .erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
 
+## Quarantine lane (`@Quarantined`) — active roster
+
+Branch `ci/quarantined-test-lane`. Known-failing-on-master tests leave the *gating* suites (green means
+mergeable) but keep running on every PR in the non-gating "Quarantined Tests" CI job (audit + per-test
+results in its step summary; locally `bin/quarantined-test.sh`). Rules live in AGENTS.md (Testing): no
+quarantine without diagnosis; quarantine is master-state, not PR-state; the owning fix PR deletes the
+annotation after merging master, atomically restoring the test to the gating lane.
+
+The live roster is **`docs/QUARANTINED_TESTS.md`** — a CI-enforced registry
+(`bin/check-quarantine-registry.sh` fails on any drift vs the `@Quarantined` annotations, both
+directions), so it acts as the task list of tests to return to the gating lane. Current sole occupant:
+`PartitionStateCommittedOffsetIT.committedOffsetRemoved` (the `[latest]` nudge race), **owner PR #80**,
+which must delete the annotation + registry entry once it has master merged in.
+
+## Parked: extract the quarantine lane as its own FOSS project?
+
+The `@Quarantined` lane (annotation + enforced registry + owner-claim verification + non-gating CI job
++ release blocking + self-tests) is generic - nothing in it is parallel-consumer-specific. Evaluate
+whether an equivalent FOSS tool already exists before extracting; known adjacent art (mostly commercial
+SaaS, none quite this shape): Trunk.io flaky-test quarantining, BuildPulse, Datadog Test Optimization's
+quarantine feature, Develocity (Gradle Enterprise) flaky management, JUnit Pioneer's `@DisabledUntil`
+(date-based, no ownership loop). The differentiator here: the CLOSED LOOP is enforced in CI (registry
+can't drift, owner PR must exist/stay open, merged-owner-without-re-enable turns red, releases blocked)
+rather than relying on humans or a SaaS dashboard. Could extract as annotation + scripts + a reusable
+GitHub Action. Revisit after the current PR queue drains.
+
+## Parked: user-facing upstream issue mirroring
+
+We have strong *internal* upstream tracking (`upstream-map.yaml`, this ledger, `docs/solutions/`) but
+nothing user-facing: a user on the fork's Issues tab can't tell whether upstream #857 is fixed here, in
+flight, or won't-fix — and upstream (unmaintained) data could disappear/be archived one day. Plan:
+
+- **Mirror on touch, not in bulk** — create a fork issue only when we address an upstream issue (fix,
+  won't-fix, or active investigation). No mass import (noise + maintenance debt).
+- Canonical structure per mirror: title `upstream #NNN: ...`; snapshot of the upstream issue's essential
+  content (quoted, attributed, linked — the data-preservation goal); our disposition (fixed-in /
+  won't-fix + why / investigating); links to fixing PRs + solutions docs; `upstream-mirror` label.
+- **Ongoing conversation lives on the fork issue**; the upstream thread is historical record.
+- Script it off `upstream-map.yaml` (gh CLI) so map and issues can't drift — the map stays the source
+  of truth, issues are a rendered view. **Script requirements (user-specified): operates on exactly ONE
+  upstream issue per invocation (no batch mode), and has a first-class dry-run mode** (print the full
+  issue title/body/labels that *would* be created/updated, and whether it's a create or an update,
+  without touching GitHub).
+- First candidates once the current PR queue drains: upstream #857 (stall saga), #909, #893/#905
+  (PCMetrics leak), #912 (vertx leak).
+
 ## CI reliability / gate issues (follow-up work)
+
+- **Stacked PRs are ungated - dependency check "required" doesn't apply to them (2026-07-31).**
+  Observed: PR #87 (base = #85's branch) FAILS the PR-dependency check yet shows as mergeable.
+  Diagnosis: required status checks are configured in the ruleset targeting `master`, so they only
+  gate PRs whose BASE is master - a stacked PR merging into its parent branch bypasses every
+  required check, not just the dep gate. Fix options: (a) add a second ruleset targeting ALL
+  branches (`**`) requiring just the dependency check (safe: it passes trivially on non-stacked
+  PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
+  needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
+  matches exactly what the ruleset requires (rulesets match by name).
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
@@ -230,6 +302,11 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   `.github/workflows/maven.yml`) is turned off via `if: false`. It currently fails and adds a red X of noise
   to every PR (it is `continue-on-error`, so it never gated merges). **Re-enable when the Kafka 4.x migration
   work starts** by restoring `if: github.event_name == 'pull_request'` — that work will make it pass.
+- **DISABLED: the macOS self-hosted PR jobs** (`pr-mac-fast-feedback.yml` — Unit / Integration / Mutation
+  (PIT) "(macOS self-hosted, optional)" checks). The mac-laptop runner is offline for the foreseeable
+  future, so the jobs sat eternally *pending* on every PR, polluting the checks list. The `pull_request`
+  trigger is commented out (`was:` note in the workflow); `workflow_dispatch` still works. **Re-enable by
+  restoring the `pull_request:` trigger when the runner returns.**
 - **pitest (Mutation Testing) was pre-existing RED — root cause found + fixed (PR #69): coverage-minion OOM
   at `-Xmx1g`.** The single coverage-generation minion (runs all target tests once to map coverage) crashed
   with `UNKNOWN_ERROR`; confirmed locally that 1g crashes and 4g completes → raised to `-Xmx2g`. Also switched
@@ -381,7 +458,15 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
 - **`Mutation Testing (PIT)` cascades from any flaky test.** PIT requires a fully green suite, so a
   single flaky/timeout test aborts the whole run ("1 test did not pass without mutation"). **Fix:**
   depends on the Integration flake fix; consider not gating PIT on the integration suite. Advisory.
-- **Path-filter inconsistency.** `Build and Test` (and `SpotBugs Baseline`) are *skipped* on docs-only
+- **Path-filter inconsistency.** the `CI` workflow (and `static: spotbugs baseline`) are *skipped* on docs-only
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.
+
+## Copyright headers - open follow-up (2026-07-31)
+
+- **Chaos stack must pass the new header check once PR #90 merges.** The scanner
+  (`bin/check-copyright-headers.sh`, policy in AGENTS.md) registers `ManagedPCInstance` as an
+  upstream EXTRACTION, requiring Confluent + the `Modifications Copyright (C) 2026 Antony Stubbs
+  and contributors` line - PR #83 currently has it Confluent-only, so add that line on the stack.
+  The stack's other fork-header fixes are already committed (#83) or in flight (#85).

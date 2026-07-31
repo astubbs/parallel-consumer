@@ -68,6 +68,24 @@ bin/performance-test.sh
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
+- **Quarantine lane for known-failing-on-master tests (`@Quarantined`).** When a test is red on master's
+  *gating* CI and its fix lives in another (open) PR, do NOT leave it red (ambiguous checks, error-prone
+  merge decisions) and do NOT `@Disabled` it (loses the signal — a "known flake" can be a real product
+  bug - see the drain-zombie write-up, `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`, which lands with PR #80). Instead annotate it
+  `@Quarantined(reason, tracking, fixedBy)` (in core's shared test sources): it leaves the gating suites
+  (green means mergeable) but keeps running on every PR push and after every merge to master (workflow_dispatch on
+  demand) in the non-gating "Quarantine Lane / tests" CI job, whose summary carries pass/fail + the audit of every
+  quarantined test and its owner; the seconds-fast "Quarantine Audit" job enforces the rules on every
+  PR (registry drift / broken owner claims fail fast - no tests are run there). The live registry
+  / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
+  the annotations in both directions, so it can't drift; `bin/check-quarantine-owners.sh` additionally
+  verifies each entry's owner claim (owning PR exists + is open + eventually removes the quarantine). Rules: **(1) no
+  quarantine without diagnosis** — undiagnosed red stays red and blocks, on purpose; **(2) quarantine is
+  master-state, not PR-state** — a test red on only one PR is that PR's problem; **(3) the owning fix PR
+  deletes the annotation AND its registry entry in the same commit** after merging master, atomically
+  restoring the test to the gating lane. Releases are blocked
+  while the lane is non-empty (`release.yml` guard; snapshots still publish). Run
+  the lane locally with `bin/quarantined-test.sh`.
 - **Reuse test utilities — search before you add (DRY).** Shared client/broker helpers live in `KafkaClientUtils` (topic creation, producers, consumers, PC builders) and `BrokerIntegrationTest` (the base class most integration tests extend). Before writing a new helper or a raw `admin`/producer/consumer call in a test, search these two first and extend them. Duplicating an existing helper is how bugs get reintroduced — e.g. a copy of topic-creation logic drifted to a 1-second timeout and became a flaky-CI source (see `docs/solutions/test-issues/`). When you must add a helper, put it in the shared util, not the test. Also check `docs/solutions/` for prior art before solving a problem that feels familiar.
 
 ### Chaos Pain Suite (on-demand bug detector — never gates)
@@ -92,19 +110,34 @@ protocol-invisible per-partition lag stagnation, drain overruns, and record loss
 
 - **Lombok**: Used extensively (builders, getters, logging). IntelliJ Lombok plugin required.
 - **EditorConfig**: Enforced via `.editorconfig` - 4-space indent for Java, 120 char line length.
-- **License headers**: Managed by `license-maven-plugin` (Mycila). Use `-Dlicense.skip` locally to skip checks.
+- **License headers**: Enforced by `bin/check-copyright-headers.sh` (runs in CI via the
+  `Copyright Headers` workflow; run it locally before pushing header-related changes). The mycila
+  `license-maven-plugin` is skipped by default in the root pom - it knows only the Confluent header
+  template, so its `format` goal used to stamp the wrong attribution onto fork-original files and its
+  git-year resolver auto-bumped years and broke in worktrees. `-Dlicense.skip` on the command line is
+  no longer needed (harmless if still passed).
 - **Copyright rules for this fork**:
   - Do not change copyright headers on existing files unless the file has substantive code changes in the same commit
   - Do not bump copyright years as an incidental or standalone change
   - The `NOTICE` file at repo root contains the legal attribution structure for the fork
-  - New files written entirely for the fork should not claim Confluent copyright
-  - Always pass `-Dlicense.skip` to Maven to prevent the license plugin from auto-bumping years
+  - New files written entirely for the fork use `Copyright (C) <year> Antony Stubbs and contributors` -
+    never the Confluent header
+  - Upstream-derived files MODIFIED on the fork retain the Confluent notice and ADD
+    `Modifications Copyright (C) <year> Antony Stubbs and contributors` beneath it (Apache 2.0
+    4(b) retain-notices + 4(c) change-notice - the convention used by e.g. Amazon Corretto and
+    MariaDB for derived files). The scanner detects modification against the fork point
+    automatically, so forgetting the line fails CI
+  - Files renamed or extracted from upstream keep the Confluent header - register renames in
+    `RENAMED_FROM_UPSTREAM` (`newpath|oldpath` lines) and extractions in `EXTRACTED_FROM_UPSTREAM`
+    inside `bin/check-copyright-headers.sh`. Renames with content changes, and all extractions,
+    also require the modifications line
 - **Google Truth**: Used for test assertions alongside JUnit 5 and Mockito.
 
 ## CI
 
-- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
+- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). A seconds-fast "Quarantine Audit" job enforces the quarantine registry on every PR; the `@Quarantined` lane itself runs non-gating on every PR push and every push to master (+ dispatch) in its own workflow (`quarantine-lane.yml`) — see Testing. Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
+- **`.github/workflows/copyright.yml`** — Copyright-header conformance via `bin/check-copyright-headers.sh` (runs its self-test `bin/test-check-copyright-headers.sh` first, then the real scan) on every push/PR. GitHub-hosted; needs `fetch-depth: 0` so the fork-point commit is in history.
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
 
 ## Changelog
@@ -129,7 +162,7 @@ commit; see `docs/plans/2026-07-28-release-pipeline-hardening.md`).
    `0.6.0.0`) and next dev version (e.g. `0.6.0.1-SNAPSHOT`). Tick **Dry run** first to rehearse with no
    commits/tags/deploy.
 2. It runs `release:prepare` (rewrites poms, makes the two release commits, tags `v<version>`, **pushes
-   to `master`** via `RELEASE_PAT`), refuses if master's latest *Build and Test* isn't green, then checks
+   to `master`** via `RELEASE_PAT`), refuses if master's latest *CI* workflow run isn't green, then checks
    out that tag and deploys it to Maven Central, then cuts a GitHub release. `master` ends on the next
    `-SNAPSHOT`.
 
