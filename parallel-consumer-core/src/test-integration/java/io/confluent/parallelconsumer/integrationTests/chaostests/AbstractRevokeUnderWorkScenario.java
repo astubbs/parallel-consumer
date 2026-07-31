@@ -13,19 +13,11 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static com.google.common.truth.Truth.assertWithMessage;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -85,15 +77,17 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected abstract String scenarioLabel();
 
     protected void runRevokeUnderWorkScenario() throws Exception {
-        long seed = Long.getLong("chaos.seed", RandomUtils.nextLong());
-        log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay with -Dchaos.seed={}) ===",
-                scenarioLabel(), useCooperativeAssignor(), seed, seed);
+        String seedProp = System.getProperty("chaos.seed");
+        long seed = seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
+        // the FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
+        // reproduce (the chaos tag is excluded by default, so the seed alone is not enough)
+        String replayCmd = "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
+                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+        log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
+                scenarioLabel(), useCooperativeAssignor(), seed, replayCmd);
 
         String topic = getClass().getSimpleName() + "-" + scenarioLabel() + "-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS);
-
-        AtomicLong totalConsumed = new AtomicLong();
-        Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
 
         Properties quickEviction = new Properties();
         quickEviction.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, MAX_POLL_INTERVAL_MS);
@@ -108,31 +102,12 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 .extraConsumerProps(quickEviction)
                 .build();
 
-        ExecutorService pcExecutor = Executors.newWorkStealingPool();
-
-        Set<String> expectedKeys = new ConcurrentSkipListSet<>();
-        int preProduce = (int) (EXPECTED_MESSAGES * PRE_PRODUCE_FRACTION);
-        produceRange(topic, 0, preProduce, expectedKeys);
-
-        // protected first member - chaos never touches it, so the group always has a healthy survivor
-        ManagedPCInstance pc0 = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-        pc0.start(pcExecutor);
-        await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
-
-        Thread producerThread = new Thread(() -> produceRange(topic, preProduce, EXPECTED_MESSAGES, expectedKeys),
-                "chaos-background-producer");
-        producerThread.start();
-
-        List<ManagedPCInstance> initialFleet = new ArrayList<>();
-        initialFleet.add(pc0);
-        for (int i = 1; i < INITIAL_FLEET; i++) {
-            ManagedPCInstance pc = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-            initialFleet.add(pc);
-            pc.start(pcExecutor);
-        }
-
-        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
-                totalConsumed::get, EXPECTED_MESSAGES)
+        FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
+                INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
+        AtomicLong totalConsumed = fleet.getTotalConsumed();
+        Queue<String> allConsumed = fleet.getAllConsumed();
+        Set<String> expectedKeys = fleet.getExpectedKeys();
+        ProgressProbe probe = fleet.getProbe()
                 // Class 1 dwell gating belongs to W1; here blocked rebalances self-resolve by eviction
                 // (30s max.poll.interval) and firing on them would mask the Class 2 measurement
                 .disableRebalanceDwellViolation()
@@ -140,23 +115,16 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 // eviction horizon (all of it, under the eager assignor); widen the watermark beyond it
                 .withNoProgressWindow(Duration.ofSeconds(60));
 
-        ChaosConductor conductor = ChaosConductor.builder()
+        ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed)
                 // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
                 .minTick(Duration.ofMillis(300))
                 .maxTick(Duration.ofMillis(1000))
                 .weights(ChaosConductor.defaultW4Weights()) // NO drain stops - see scenario javadoc
                 .joinAfterDrainBias(0) // no drains to bias after
-                .maxFleetSize(MAX_FLEET)
-                .pcExecutor(pcExecutor)
-                .instanceFactory(() -> newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed))
-                .protectedInstance(pc0)
-                .initialFleet(initialFleet)
-                .observer(probe)
                 .build();
 
-        probe.start();
-        conductor.start();
+        startRun(probe, conductor);
 
         try {
             // Phase 1 - storm: revocations under heavy in-flight work; bail early on any violation
@@ -177,22 +145,9 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            conductor.stop();
-            List<String> violations = probe.stop();
-            producerThread.join(10_000);
-            settleFleet(conductor);
-            log.info("Run summary: consumed={} probe violations={}", totalConsumed.get(), violations);
+            settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
-        assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
-                "seed %s replays this schedule)", seed)
-                .that(probe.getViolations()).isEmpty();
-
-        int disturbances = (int) conductor.getTimeline().stream()
-                .filter(entry -> entry.contains("STOP_") || entry.contains("RESTART")).count();
-        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
-                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
-        assertWithMessage("correctness ledger must balance (seed %s)", seed)
-                .that(ledgerProblems).isEmpty();
+        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
     }
 }

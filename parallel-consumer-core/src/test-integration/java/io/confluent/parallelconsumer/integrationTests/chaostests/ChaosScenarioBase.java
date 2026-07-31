@@ -1,11 +1,12 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -17,8 +18,16 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+
+import static com.google.common.truth.Truth.assertWithMessage;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Shared scaffolding for Chaos Pain Suite scenarios (W1 churn storm, W4 revoke-under-work, ...): the
@@ -93,6 +102,12 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
     protected void settleFleet(ChaosConductor conductor) {
         for (ManagedPCInstance pc : conductor.getFleet()) {
             try {
+                // let any stopAsync background close finish first - close() below is then a no-op
+                long waited = 0;
+                while (pc.isClosePending() && waited < 15_000) {
+                    Thread.sleep(100);
+                    waited += 100;
+                }
                 if (pc.getParallelConsumer() != null && !pc.getParallelConsumer().isClosedOrFailed()) {
                     pc.getParallelConsumer().close();
                 }
@@ -100,5 +115,139 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
                 log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * Everything {@link #bootstrapFleet} wires up: consumption tracking, the pre-produced backlog (with
+     * a background producer streaming the rest), the protected first member plus the started initial
+     * fleet, and an UNSTARTED probe watching it all. Scenarios unpack what they need and wire their own
+     * {@link ChaosConductor} - the chaos SHAPE stays per-scenario, the bootstrap mechanics stay shared.
+     */
+    @Value
+    protected static class FleetBootstrap {
+        ExecutorService pcExecutor;
+        AtomicLong totalConsumed;
+        Queue<String> allConsumed;
+        Set<String> expectedKeys;
+        Thread producerThread;
+        ManagedPCInstance pc0;
+        List<ManagedPCInstance> initialFleet;
+        ProgressProbe probe;
+    }
+
+    /**
+     * Shared scenario prologue: pre-produce {@code preProduceFraction} of the backlog, start the
+     * protected first member and wait for first consumption, stream the remaining records from a
+     * background producer, start the rest of the initial fleet, and construct the probe. The probe is
+     * returned UNSTARTED - scenarios apply their per-scenario toggles first, then {@code probe.start()}.
+     */
+    protected FleetBootstrap bootstrapFleet(String topic, ManagedPCInstance.Config pcConfig,
+                                            int expectedMessages, double preProduceFraction,
+                                            int initialFleetSize, int heavyEvery, Duration heavySleep) {
+        // fleet-wide consumption tracking (the probe's watermark + the ledger's evidence)
+        AtomicLong totalConsumed = new AtomicLong();
+        Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
+        ExecutorService pcExecutor = Executors.newWorkStealingPool();
+
+        // pre-produce a backlog, keep the rest flowing in the background (mirrors the existing
+        // MultiInstanceRebalanceTest shape; suite-local orchestration because runTest there is private)
+        Set<String> expectedKeys = new ConcurrentSkipListSet<>();
+        int preProduce = (int) (expectedMessages * preProduceFraction);
+        produceRange(topic, 0, preProduce, expectedKeys);
+
+        // protected first member - chaos never touches it, so the group always has a healthy survivor
+        ManagedPCInstance pc0 = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+        pc0.start(pcExecutor);
+        await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
+
+        Thread producerThread = new Thread(() -> produceRange(topic, preProduce, expectedMessages, expectedKeys),
+                "chaos-background-producer");
+        producerThread.start();
+
+        List<ManagedPCInstance> initialFleet = new ArrayList<>();
+        initialFleet.add(pc0);
+        for (int i = 1; i < initialFleetSize; i++) {
+            ManagedPCInstance pc = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+            initialFleet.add(pc);
+            pc.start(pcExecutor);
+        }
+
+        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
+                totalConsumed::get, expectedMessages);
+        return new FleetBootstrap(pcExecutor, totalConsumed, allConsumed, expectedKeys,
+                producerThread, pc0, initialFleet, probe);
+    }
+
+    /**
+     * Pre-wires the fleet-plumbing half of a {@link ChaosConductor} (executor, instance factory,
+     * protected member, initial fleet, probe observer). Scenarios chain their chaos SHAPE onto the
+     * returned builder - seed, tick range, weights, join bias - and {@code build()}.
+     */
+    protected ChaosConductor.ChaosConductorBuilder conductorFor(FleetBootstrap fleet,
+                                                                ManagedPCInstance.Config pcConfig,
+                                                                int heavyEvery, Duration heavySleep,
+                                                                int maxFleetSize) {
+        return ChaosConductor.builder()
+                .maxFleetSize(maxFleetSize)
+                .pcExecutor(fleet.getPcExecutor())
+                .instanceFactory(() -> newInstance(pcConfig, heavyEvery, heavySleep,
+                        fleet.getTotalConsumed(), fleet.getAllConsumed()))
+                .protectedInstance(fleet.getPc0())
+                .initialFleet(fleet.getInitialFleet())
+                .observer(fleet.getProbe());
+    }
+
+    /** Arm the probe, then unleash chaos. */
+    protected void startRun(ProgressProbe probe, ChaosConductor conductor) {
+        probe.start();
+        conductor.start();
+    }
+
+    /** Shared finally-block epilogue: stop chaos and the probe, join the background producer, settle
+     * the fleet, kill the executor, log the run summary. Runs on both the pass and fail path - it must
+     * only tear down and report, never assert (asserting here would mask the primary failure). */
+    protected void settleRun(ChaosConductor conductor, ProgressProbe probe, Thread producerThread,
+                             ExecutorService pcExecutor, AtomicLong totalConsumed) throws InterruptedException {
+        conductor.stop(); // also joins outstanding drain threads (bounded) - fleet is quiesced after
+        List<String> violations = probe.stop();
+        producerThread.join(10_000);
+        settleFleet(conductor);
+        pcExecutor.shutdownNow();
+        log.info("Run summary: consumed={} (unique tracking via correctness ledger), probe violations={}",
+                totalConsumed.get(), violations);
+    }
+
+    /** The suite-wide verdict, identical for every scenario by design: probes must be violation-free
+     * (each violation carries its own diagnosis), every instance's terminal failure cause must be
+     * classified, and the correctness ledger must balance - no loss ever, duplicates bounded per
+     * disturbance. Every message carries the full replay command - a raw CI log must be
+     * self-sufficient to reproduce. */
+    protected void assertScenarioSlos(ProgressProbe probe, ChaosConductor conductor, String replayCmd,
+                                      Set<String> expectedKeys, Queue<String> allConsumed) {
+        assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
+                "replay: %s)", replayCmd)
+                .that(probe.getViolations()).isEmpty();
+
+        // end-of-run canary sweep: every instance's terminal failure cause must be classified - an
+        // instance stopped and never restarted would otherwise carry an unexpected error silently
+        // (restart is the only other place classification happens)
+        List<String> unexpectedFailures = new ArrayList<>();
+        for (ManagedPCInstance pc : conductor.getFleet()) {
+            var consumer = pc.getParallelConsumer();
+            Exception cause = consumer == null ? null : consumer.getFailureCause();
+            if (cause != null && !ManagedPCInstance.isExpectedCloseException(cause)) {
+                unexpectedFailures.add("instance " + pc.getInstanceId() + ": " + cause);
+            }
+        }
+        assertWithMessage("no instance may end the run with an unclassified failure cause (replay: %s)",
+                replayCmd)
+                .that(unexpectedFailures).isEmpty();
+
+        // correctness ledger: no loss ever; duplicates bounded per disturbance
+        int disturbances = conductor.getDisturbanceCount();
+        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
+                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
+        assertWithMessage("correctness ledger must balance (replay: %s)", replayCmd)
+                .that(ledgerProblems).isEmpty();
     }
 }

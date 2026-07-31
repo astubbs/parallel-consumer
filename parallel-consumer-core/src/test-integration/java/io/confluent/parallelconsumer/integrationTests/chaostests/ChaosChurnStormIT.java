@@ -1,11 +1,12 @@
 package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 /*-
- * Copyright (C) 2020-2026 Confluent, Inc. and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import io.confluent.parallelconsumer.Quarantined;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
@@ -15,18 +16,10 @@ import org.junit.jupiter.api.Timeout;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static com.google.common.truth.Truth.assertWithMessage;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -45,6 +38,16 @@ import static org.awaitility.Awaitility.await;
  * <p>
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
  * Excluded from default suites via {@code @Tag("chaos")}; run with {@code -Dincluded.groups=chaos}.
+ * <p>
+ * <b>Usage - probing a fix PR (the suite's primary purpose)</b>: on the fix PR's branch (merge
+ * master in first if the branch predates the suite landing there), run
+ * <pre>{@code ./mvnw -Pci -pl parallel-consumer-core -am verify \
+ *     -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=}</pre>
+ * at a commit BEFORE the fix (expect RED - the probe violation names the mechanism) and again at the
+ * fix commit (expect GREEN). The RED->GREEN flip is the evidence that the fix addresses the mechanism
+ * the probe watches. Add {@code -Dchaos.seed=<seed>} to replay a specific schedule; on-demand CI runs
+ * via {@code .github/workflows/chaos-pain.yml} (workflow_dispatch: seed, reps). See AGENTS.md
+ * "Chaos Pain Suite".
  */
 @Tag("chaos")
 @Timeout(600)
@@ -61,8 +64,9 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
     /**
      * Heavy-tailed work: 1 in HEAVY_EVERY records sleeps HEAVY_SLEEP in the user function. This is what
      * makes drains take real time - the zombie-drain defect freezes the group for the DURATION of a
-     * drain, so without a heavy tail the freeze clears in seconds and the rebalance-dwell probe (60s)
-     * cannot discriminate defect from healthy. Healthy arm: heavy records occupy one worker slot each and
+     * drain, so without a heavy tail the freeze clears in seconds and the rebalance-dwell probe
+     * ({@link ProgressProbe#REBALANCE_DWELL_BOUND}) cannot discriminate defect from healthy. Healthy arm:
+     * heavy records occupy one worker slot each and
      * drains still complete within ProgressProbe#DRAIN_BOUND (which must exceed HEAVY_SLEEP).
      */
     private static final int HEAVY_EVERY = 4_000;
@@ -73,17 +77,25 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
      * sits comfortably under LAG_STAGNATION_BOUND (150s). */
     private static final Duration HEAVY_SLEEP = Duration.ofSeconds(45);
 
+    @Quarantined(
+            reason = "ZOMBIE_MEMBER/REBALANCE_BLOCKED on master composition: the #857-family drain-zombie - " +
+                    "a draining member stops polling and wedges the group's rebalance until eviction. This is " +
+                    "the bug the scenario was built to detect, reproduced workload-robustly across seeds and " +
+                    "schedules (master-baseline calibration record in the class javadoc).",
+            tracking = "docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md (lands with PR #80)",
+            fixedBy = "#80")
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
-        long seed = Long.getLong("chaos.seed", RandomUtils.nextLong());
-        log.info("=== CHAOS W1 churn storm: seed={} (replay with -Dchaos.seed={}) ===", seed, seed);
+        String seedProp = System.getProperty("chaos.seed");
+        long seed = seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
+        // the FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
+        // reproduce (the chaos tag is excluded by default, so the seed alone is not enough)
+        String replayCmd = "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
+                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+        log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed, replayCmd);
 
         String topic = getClass().getSimpleName() + "-w1-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS); // explicit partition count (base numPartitions is package-private)
-
-        // fleet-wide consumption tracking (the probe's watermark + the ledger's evidence)
-        AtomicLong totalConsumed = new AtomicLong();
-        Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
 
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
                 .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
@@ -93,49 +105,21 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
                 .maxConcurrency(10)
                 .build();
 
-        ExecutorService pcExecutor = Executors.newWorkStealingPool();
+        FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
+                INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
+        AtomicLong totalConsumed = fleet.getTotalConsumed();
+        Queue<String> allConsumed = fleet.getAllConsumed();
+        Set<String> expectedKeys = fleet.getExpectedKeys();
+        ProgressProbe probe = fleet.getProbe();
 
-        // pre-produce a backlog, keep the rest flowing in the background (mirrors the existing
-        // MultiInstanceRebalanceTest shape; suite-local orchestration because runTest there is private)
-        Set<String> expectedKeys = new ConcurrentSkipListSet<>();
-        int preProduce = (int) (EXPECTED_MESSAGES * PRE_PRODUCE_FRACTION);
-        produceRange(topic, 0, preProduce, expectedKeys);
-
-        // protected first member - chaos never touches it, so the group always has a healthy survivor
-        ManagedPCInstance pc0 = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-        pc0.start(pcExecutor);
-        await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
-
-        Thread producerThread = new Thread(() -> produceRange(topic, preProduce, EXPECTED_MESSAGES, expectedKeys),
-                "chaos-background-producer");
-        producerThread.start();
-
-        List<ManagedPCInstance> initialFleet = new ArrayList<>();
-        initialFleet.add(pc0);
-        for (int i = 1; i < INITIAL_FLEET; i++) {
-            ManagedPCInstance pc = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-            initialFleet.add(pc);
-            pc.start(pcExecutor);
-        }
-
-        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
-                totalConsumed::get, EXPECTED_MESSAGES);
-
-        ChaosConductor conductor = ChaosConductor.builder()
+        ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed)
                 .minTick(Duration.ofMillis(500))
                 .maxTick(Duration.ofMillis(1500))
                 .joinAfterDrainBias(0.9)
-                .maxFleetSize(MAX_FLEET)
-                .pcExecutor(pcExecutor)
-                .instanceFactory(() -> newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed))
-                .protectedInstance(pc0)
-                .initialFleet(initialFleet)
-                .observer(probe)
                 .build();
 
-        probe.start();
-        conductor.start();
+        startRun(probe, conductor);
 
         try {
             // the run: everything produced must be consumed by SOMEONE within the cap, chaos or not
@@ -146,26 +130,9 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            conductor.stop();
-            List<String> violations = probe.stop();
-            producerThread.join(10_000);
-            settleFleet(conductor);
-            log.info("Run summary: consumed={} (unique tracking via ledger below), probe violations={}",
-                    totalConsumed.get(), violations);
+            settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
-        // SLO verdict
-        assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
-                "seed %s replays this schedule)", seed)
-                .that(probe.getViolations()).isEmpty();
-
-        // correctness ledger: no loss ever; duplicates bounded per disturbance
-        int disturbances = (int) conductor.getTimeline().stream()
-                .filter(entry -> entry.contains("STOP_") || entry.contains("RESTART")).count();
-        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
-                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
-        assertWithMessage("correctness ledger must balance (seed %s)", seed)
-                .that(ledgerProblems).isEmpty();
+        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
     }
-
 }
