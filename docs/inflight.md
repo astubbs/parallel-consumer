@@ -70,7 +70,8 @@ the PR #53 branch):
   investigation branch, PR #29 — **transplant plan: #29's eventual rebase drops its copy**, this one
   stays). Tagged `chaos`, excluded from every gating suite (pom `excluded.groups` default); run with
   `-Dincluded.groups=chaos -Dexcluded.groups=` or `.github/workflows/chaos-pain.yml`
-  (workflow_dispatch: seed/reps, highcpu runner). Seed protocol: `-Dchaos.seed=<N>` replays; every run
+  (workflow_dispatch: seed/reps, highcpu runner; NB the CI job additionally excludes `@Quarantined`
+  scenarios - zero tests selected while W1 sits quarantined under #80, flagged in the job summary). Seed protocol: `-Dchaos.seed=<N>` replays; every run
   logs seed + full replay command. **Calibration evidence** (PR #83 body, plan Unit 5): pre-drain-fix
   defect arm 3/3 RED (`ZOMBIE_MEMBER/REBALANCE_BLOCKED`, dwell 15.6-15.9s), all-fixes arm 3/3 GREEN
   (4.5-8.9s), master REDs blind (the drain-zombie fixed on PR #80). Class 2 lag-stagnation probe

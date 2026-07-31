@@ -98,7 +98,10 @@ protocol-invisible per-partition lag stagnation, drain overruns, and record loss
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=`
 - **Replay a schedule**: every run logs its seed and the full replay command; add `-Dchaos.seed=<seed>`.
-- **On-demand CI**: `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`, self-hosted `highcpu` runner), e.g. `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`.
+- **On-demand CI**: `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`, self-hosted `highcpu` runner), e.g. `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. NB unlike
+  the local recipe above, the CI job EXCLUDES `@Quarantined` chaos scenarios (the Quarantine Lane owns
+  those) - while `ChaosChurnStormIT` is quarantined under PR #80 it therefore selects zero tests, and
+  its job summary flags that loudly.
 - **Probe a fix PR** (the suite's primary purpose): temporarily merge the chaos branch into the PR under test, run at a commit before the fix (expect RED — the violation names the mechanism) and at the fix (expect GREEN). See `ChaosChurnStormIT`'s class javadoc for the full recipe.
 - A RED run is investigation food, not flake noise — the probes are calibrated against the real historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in measured gaps). Never loosen a probe to go green; tune the workload/conductor instead.
 
