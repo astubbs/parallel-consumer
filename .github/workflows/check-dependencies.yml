@@ -1,8 +1,12 @@
 name: PR Dependency Check
 
+# synchronize is REQUIRED in the types list: this check is a required status, and required checks
+# are evaluated per head SHA - without synchronize no run exists for newly pushed commits, so the
+# check sits "Expected - waiting for status" forever and blocks the merge (bitten on PR #83,
+# 2026-07-31, right after the check was made required).
 on:
   pull_request:
-    types: [opened, edited, closed, reopened]
+    types: [opened, edited, closed, reopened, synchronize]
 
 permissions:
   issues: read
@@ -12,7 +16,7 @@ permissions:
 jobs:
   check_dependencies:
     runs-on: ubuntu-latest
-    name: Check Dependencies
+    name: Check PR Dependencies
     steps:
     - uses: astubbs/dependencies-action@a09974c14e84fb3e4c0df10c04f17bdc6ccc8878 # feat/auto-unblock-children-on-merge
       env:

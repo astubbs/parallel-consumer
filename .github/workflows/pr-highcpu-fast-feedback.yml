@@ -43,14 +43,16 @@ permissions:
 
 jobs:
   highcpu-build-test:
-    # Check name shows as "highcpu / <suite> (optional)".
-    name: "${{ matrix.suite-name }} (optional)"
+    # Check name shows as "highcpu / <suite> (optional)" - except entries with optional: "false"
+    # (Chaos Pain Suite), which show bare and are NOT continue-on-error: a chaos RED is a real
+    # finding and must show red, not neutral.
+    name: "${{ matrix.optional == 'false' && matrix.suite-name || format('{0} (optional)', matrix.suite-name) }}"
     # Same-repo PRs only: fork PRs are untrusted and must NOT execute on the self-hosted machine.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, highcpu]
-    continue-on-error: true      # optional / FYI - never a required gate (the runner may be offline)
+    continue-on-error: ${{ matrix.optional != 'false' }}   # optional / FYI - except chaos (see name comment)
     timeout-minutes: 60
     # Per-suite superseding: a new push cancels only ITS OWN suite's previous run, so fast suites start
     # within seconds instead of queueing behind the old run's slow-dying Mutation job (see header note).
@@ -83,6 +85,14 @@ jobs:
           - suite-name: "Mutation (PIT, full)"
             cmd: "bin/ci-mutation-test.sh -Dverbose=true -Dthreads=16"
             full-sweep: "true"
+          # Chaos Pain Suite: the per-PR ambient tripwire (moved here from chaos-pain.yml so all
+          # self-hosted per-PR feedback shares one lane and its per-suite superseding concurrency).
+          # NOT optional: a chaos RED is a real finding. bin/chaos-test.sh excludes @Quarantined
+          # scenarios (the Quarantine Lane owns them) and flags the zero-test window loudly in the
+          # job summary. On-demand seeded hunts stay in chaos-pain.yml (workflow_dispatch).
+          - suite-name: "Chaos Pain Suite"
+            cmd: "bin/chaos-test.sh"
+            optional: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v6

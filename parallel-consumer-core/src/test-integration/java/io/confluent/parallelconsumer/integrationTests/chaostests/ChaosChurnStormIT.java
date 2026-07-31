@@ -52,8 +52,8 @@ import static org.awaitility.Awaitility.await;
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
  * Excluded from default suites via {@code @Tag("chaos")}; run with {@code -Dincluded.groups=chaos}.
  * <p>
- * <b>Usage - probing a fix PR (the suite's primary purpose)</b>: temporarily merge the chaos-suite
- * branch into the PR under test, then run
+ * <b>Usage - probing a fix PR (the suite's primary purpose)</b>: on the fix PR's branch (merge
+ * master in first if the branch predates the suite landing there), run
  * <pre>{@code ./mvnw -Pci -pl parallel-consumer-core -am verify \
  *     -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=}</pre>
  * at a commit BEFORE the fix (expect RED - the probe violation names the mechanism) and again at the
