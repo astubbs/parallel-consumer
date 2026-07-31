@@ -16,17 +16,10 @@ import org.junit.jupiter.api.Timeout;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -104,10 +97,6 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         String topic = getClass().getSimpleName() + "-w1-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS); // explicit partition count (base numPartitions is package-private)
 
-        // fleet-wide consumption tracking (the probe's watermark + the ledger's evidence)
-        AtomicLong totalConsumed = new AtomicLong();
-        Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
-
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
                 .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
                 .order(ProcessingOrder.UNORDERED)
@@ -116,33 +105,12 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
                 .maxConcurrency(10)
                 .build();
 
-        ExecutorService pcExecutor = Executors.newWorkStealingPool();
-
-        // pre-produce a backlog, keep the rest flowing in the background (mirrors the existing
-        // MultiInstanceRebalanceTest shape; suite-local orchestration because runTest there is private)
-        Set<String> expectedKeys = new ConcurrentSkipListSet<>();
-        int preProduce = (int) (EXPECTED_MESSAGES * PRE_PRODUCE_FRACTION);
-        produceRange(topic, 0, preProduce, expectedKeys);
-
-        // protected first member - chaos never touches it, so the group always has a healthy survivor
-        ManagedPCInstance pc0 = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-        pc0.start(pcExecutor);
-        await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
-
-        Thread producerThread = new Thread(() -> produceRange(topic, preProduce, EXPECTED_MESSAGES, expectedKeys),
-                "chaos-background-producer");
-        producerThread.start();
-
-        List<ManagedPCInstance> initialFleet = new ArrayList<>();
-        initialFleet.add(pc0);
-        for (int i = 1; i < INITIAL_FLEET; i++) {
-            ManagedPCInstance pc = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-            initialFleet.add(pc);
-            pc.start(pcExecutor);
-        }
-
-        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
-                totalConsumed::get, EXPECTED_MESSAGES);
+        FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
+                INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
+        AtomicLong totalConsumed = fleet.getTotalConsumed();
+        Queue<String> allConsumed = fleet.getAllConsumed();
+        Set<String> expectedKeys = fleet.getExpectedKeys();
+        ProgressProbe probe = fleet.getProbe();
 
         ChaosConductor conductor = ChaosConductor.builder()
                 .seed(seed)
@@ -150,10 +118,10 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
                 .maxTick(Duration.ofMillis(1500))
                 .joinAfterDrainBias(0.9)
                 .maxFleetSize(MAX_FLEET)
-                .pcExecutor(pcExecutor)
+                .pcExecutor(fleet.getPcExecutor())
                 .instanceFactory(() -> newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed))
-                .protectedInstance(pc0)
-                .initialFleet(initialFleet)
+                .protectedInstance(fleet.getPc0())
+                .initialFleet(fleet.getInitialFleet())
                 .observer(probe)
                 .build();
 
@@ -169,7 +137,7 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            settleRun(conductor, probe, producerThread, pcExecutor, totalConsumed);
+            settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
         assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);

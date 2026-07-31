@@ -17,18 +17,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -134,9 +127,6 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
         String topic = getClass().getSimpleName() + "-w4-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS);
 
-        AtomicLong totalConsumed = new AtomicLong();
-        Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
-
         Properties quickEviction = new Properties();
         quickEviction.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, MAX_POLL_INTERVAL_MS);
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
@@ -149,31 +139,12 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
                 .extraConsumerProps(quickEviction)
                 .build();
 
-        ExecutorService pcExecutor = Executors.newWorkStealingPool();
-
-        Set<String> expectedKeys = new ConcurrentSkipListSet<>();
-        int preProduce = (int) (EXPECTED_MESSAGES * PRE_PRODUCE_FRACTION);
-        produceRange(topic, 0, preProduce, expectedKeys);
-
-        // protected first member - chaos never touches it, so the group always has a healthy survivor
-        ManagedPCInstance pc0 = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-        pc0.start(pcExecutor);
-        await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
-
-        Thread producerThread = new Thread(() -> produceRange(topic, preProduce, EXPECTED_MESSAGES, expectedKeys),
-                "chaos-background-producer");
-        producerThread.start();
-
-        List<ManagedPCInstance> initialFleet = new ArrayList<>();
-        initialFleet.add(pc0);
-        for (int i = 1; i < INITIAL_FLEET; i++) {
-            ManagedPCInstance pc = newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed);
-            initialFleet.add(pc);
-            pc.start(pcExecutor);
-        }
-
-        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
-                totalConsumed::get, EXPECTED_MESSAGES)
+        FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
+                INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
+        AtomicLong totalConsumed = fleet.getTotalConsumed();
+        Queue<String> allConsumed = fleet.getAllConsumed();
+        Set<String> expectedKeys = fleet.getExpectedKeys();
+        ProgressProbe probe = fleet.getProbe()
                 // Class 1 dwell gating belongs to W1; here blocked rebalances self-resolve by eviction
                 // (30s max.poll.interval) and firing on them would mask the Class 2 measurement
                 .disableRebalanceDwellViolation()
@@ -189,10 +160,10 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
                 .weights(ChaosConductor.defaultW4Weights()) // NO drain stops - see class javadoc
                 .joinAfterDrainBias(0) // no drains to bias after
                 .maxFleetSize(MAX_FLEET)
-                .pcExecutor(pcExecutor)
+                .pcExecutor(fleet.getPcExecutor())
                 .instanceFactory(() -> newInstance(pcConfig, HEAVY_EVERY, HEAVY_SLEEP, totalConsumed, allConsumed))
-                .protectedInstance(pc0)
-                .initialFleet(initialFleet)
+                .protectedInstance(fleet.getPc0())
+                .initialFleet(fleet.getInitialFleet())
                 .observer(probe)
                 .build();
 
@@ -218,7 +189,7 @@ class ChaosRevokeUnderWorkIT extends ChaosScenarioBase {
                     .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
                             && allConsumedCovers(expectedKeys, allConsumed));
         } finally {
-            settleRun(conductor, probe, producerThread, pcExecutor, totalConsumed);
+            settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
         assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);

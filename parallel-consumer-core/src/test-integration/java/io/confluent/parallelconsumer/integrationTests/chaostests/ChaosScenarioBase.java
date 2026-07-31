@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -17,11 +18,16 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.truth.Truth.assertWithMessage;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Shared scaffolding for Chaos Pain Suite scenarios (W1 churn storm, W4 revoke-under-work, ...): the
@@ -109,6 +115,67 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
                 log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * Everything {@link #bootstrapFleet} wires up: consumption tracking, the pre-produced backlog (with
+     * a background producer streaming the rest), the protected first member plus the started initial
+     * fleet, and an UNSTARTED probe watching it all. Scenarios unpack what they need and wire their own
+     * {@link ChaosConductor} - the chaos SHAPE stays per-scenario, the bootstrap mechanics stay shared.
+     */
+    @Value
+    protected static class FleetBootstrap {
+        ExecutorService pcExecutor;
+        AtomicLong totalConsumed;
+        Queue<String> allConsumed;
+        Set<String> expectedKeys;
+        Thread producerThread;
+        ManagedPCInstance pc0;
+        List<ManagedPCInstance> initialFleet;
+        ProgressProbe probe;
+    }
+
+    /**
+     * Shared scenario prologue: pre-produce {@code preProduceFraction} of the backlog, start the
+     * protected first member and wait for first consumption, stream the remaining records from a
+     * background producer, start the rest of the initial fleet, and construct the probe. The probe is
+     * returned UNSTARTED - scenarios apply their per-scenario toggles first, then {@code probe.start()}.
+     */
+    protected FleetBootstrap bootstrapFleet(String topic, ManagedPCInstance.Config pcConfig,
+                                            int expectedMessages, double preProduceFraction,
+                                            int initialFleetSize, int heavyEvery, Duration heavySleep) {
+        // fleet-wide consumption tracking (the probe's watermark + the ledger's evidence)
+        AtomicLong totalConsumed = new AtomicLong();
+        Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
+        ExecutorService pcExecutor = Executors.newWorkStealingPool();
+
+        // pre-produce a backlog, keep the rest flowing in the background (mirrors the existing
+        // MultiInstanceRebalanceTest shape; suite-local orchestration because runTest there is private)
+        Set<String> expectedKeys = new ConcurrentSkipListSet<>();
+        int preProduce = (int) (expectedMessages * preProduceFraction);
+        produceRange(topic, 0, preProduce, expectedKeys);
+
+        // protected first member - chaos never touches it, so the group always has a healthy survivor
+        ManagedPCInstance pc0 = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+        pc0.start(pcExecutor);
+        await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
+
+        Thread producerThread = new Thread(() -> produceRange(topic, preProduce, expectedMessages, expectedKeys),
+                "chaos-background-producer");
+        producerThread.start();
+
+        List<ManagedPCInstance> initialFleet = new ArrayList<>();
+        initialFleet.add(pc0);
+        for (int i = 1; i < initialFleetSize; i++) {
+            ManagedPCInstance pc = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+            initialFleet.add(pc);
+            pc.start(pcExecutor);
+        }
+
+        ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
+                totalConsumed::get, expectedMessages);
+        return new FleetBootstrap(pcExecutor, totalConsumed, allConsumed, expectedKeys,
+                producerThread, pc0, initialFleet, probe);
     }
 
     /** Shared finally-block epilogue: stop chaos and the probe, join the background producer, settle
