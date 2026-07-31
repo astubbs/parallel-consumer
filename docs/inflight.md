@@ -211,6 +211,27 @@ with 4.10.3, so these drop out of "new". Track the actual fixes (make the counte
 Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a follow-up. Note `ConsumerManager
 .erroneousWakups` is also a pre-existing typo ("Wakups") worth fixing while there.
 
+## Chaos Pain Suite - Phase 2+ roster (branch feats/chaos-w4-revoke-under-work, PR #85)
+
+- **Class 2 RED hunt (open):** W4 is calibrated artifact-free but a true unbounded Class 2 stall did
+  not reproduce on master - the open #857 root-cause stall is probabilistic. **Seed sweep DONE
+  (2026-07-30): 9 seeds total (calibration seed + 8-seed sweep), 0 Class 2 hits**; stagnation peaks
+  tightly banded 95-112s (all legit-window), dwell peaks 33-68s (protocol-visible wedging, always
+  resolved). Seed volume alone is not finding it - next lever: the cooperative-sticky W4 variant,
+  **now in flight as PR #87** (stacked on #85; also removes the eager-reassignment heavy-restart
+  artifact class entirely, so the storm no longer restarts every in-flight heavy).
+- **Thin margin note:** W4's measured legit lag-stagnation peaks (117-123s) sit ~1.25x under the 150s
+  Class 2 bound. Fine for a non-gating suite; widen (shorter storm or dwell) if it ever flakes.
+- **Unit-test seams (PR #85 review):** ProgressProbe's per-scenario toggles
+  (`disableRebalanceDwellViolation` / `withNoProgressWindow`) and their "peak always measured,
+  violation only suppressed" invariant have no fast unit coverage - the samplers are private, so a
+  small extract-and-test seam is needed first. Same for `ManagedPCInstance.Config.extraConsumerProps`
+  (null vs present, wins-last ordering). Both become millisecond broker-free tests once seams exist.
+- **Ambient probe for EVERY integration test:** graduated from roster idea to **PR #86** (sibling of
+  #85, also based on `feats/chaos-pain-suite`) - ProgressProbe in OBSERVER mode under every broker IT
+  as a failure flight recorder. NB #85 and #86 both touch `ProgressProbe.java`; whichever merges
+  second takes a small conflict.
+
 ## Quarantine lane (`@Quarantined`) — active roster
 
 Branch `ci/quarantined-test-lane`. Known-failing-on-master tests leave the *gating* suites (green means
@@ -297,6 +318,18 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
+- **`BrokerPollerBackpressureTest.brokerPollPausedWithEmptyShardsButHighInFlight` failed under load -
+  diagnose, don't dismiss (2026-07-31, highcpu lane run 30603617471).** 10s Awaitility timeout on the
+  FIRST await (shards-drained condition) while the box concurrently ran two PIT sweeps + Unit +
+  Performance; the gating GitHub-hosted Integration run on the same head was GREEN. The test chains
+  five ABSOLUTE 10s bounds - the exact tight-absolute-timeout-under-contention pattern root-caused in
+  `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md` -
+  but per the AGENTS.md stress-failure discipline it must be CLASSIFIED first: (a) re-run on a quiet
+  box - if it passes, it's contention-sensitivity, then harden the bounds per that solutions doc
+  (operator stance: busy boxes should NOT cause test failures); (b) review the first await's
+  semantics - all 10 workers are latch-blocked while it waits for
+  `getNumberOfWorkQueuedInShardsAwaitingSelection() == 0`, so establish whether a slow path there
+  can mask a real backpressure wedge before touching any timeout.
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):

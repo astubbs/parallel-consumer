@@ -91,8 +91,9 @@ bin/performance-test.sh
 ### Chaos Pain Suite (on-demand bug detector — never gates)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
-`ChaosChurnStormIT`) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,
-protocol-invisible per-partition lag stagnation, drain overruns, and record loss/duplication. Tagged
+`ChaosScenarioBase` + scenarios `ChaosChurnStormIT` W1, `ChaosRevokeUnderWorkIT` W4) that hunts the
+"alive but not progressing" bug class: rebalance-dwell zombies, protocol-invisible per-partition lag
+stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Tagged
 `@Tag("chaos")` and excluded from all default/gating suites via `pom.xml`'s `excluded.groups` default.
 
 - **Run locally** (requires Docker; ~5-6 min):

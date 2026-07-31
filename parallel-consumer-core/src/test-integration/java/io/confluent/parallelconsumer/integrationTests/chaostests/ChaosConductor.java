@@ -161,6 +161,21 @@ public class ChaosConductor {
     }
 
     /**
+     * W4 revoke-under-work defaults: NO drain stops at all - hard stops, restarts and joins only. The
+     * point is to force partition REVOCATIONS while heavy work is in flight without ever opening a
+     * Class 1 drain-zombie window, isolating the protocol-invisible Class 2 stall mechanism (a member
+     * that keeps heartbeating while its partitions' committed offsets freeze). EnumMap for seed-replayable
+     * iteration order, same as W1.
+     */
+    public static Map<ChaosAction, Integer> defaultW4Weights() {
+        Map<ChaosAction, Integer> w = new EnumMap<>(ChaosAction.class);
+        w.put(ChaosAction.STOP_NO_DRAIN, 3);
+        w.put(ChaosAction.RESTART, 3);
+        w.put(ChaosAction.JOIN_NEW, 2);
+        return w;
+    }
+
+    /**
      * The single draw path - used by BOTH the live {@link #loop()} and {@link #planTicks}, so the
      * determinism regression test ({@code ChaosConductorPlanIT}) exercises the exact production draw
      * sequence, bias and target rolls included.
