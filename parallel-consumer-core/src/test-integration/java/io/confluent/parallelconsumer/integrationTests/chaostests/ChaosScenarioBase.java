@@ -8,6 +8,7 @@ import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -115,6 +116,20 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
                 log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
             }
         }
+    }
+
+    /** Resolve the run's schedule seed: {@code -Dchaos.seed=<long>} replays a schedule; unset = random
+     * seed (always logged via {@link #replayCommand}). */
+    protected static long resolveSeed() {
+        String seedProp = System.getProperty("chaos.seed");
+        return seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
+    }
+
+    /** The FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
+     * reproduce (the chaos tag is excluded by default, so the seed alone is not enough). */
+    protected static String replayCommand(long seed) {
+        return "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
+                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
     }
 
     /**

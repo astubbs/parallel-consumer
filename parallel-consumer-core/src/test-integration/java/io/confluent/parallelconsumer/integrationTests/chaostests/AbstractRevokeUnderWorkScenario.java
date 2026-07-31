@@ -77,12 +77,8 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected abstract String scenarioLabel();
 
     protected void runRevokeUnderWorkScenario() throws Exception {
-        String seedProp = System.getProperty("chaos.seed");
-        long seed = seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
-        // the FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
-        // reproduce (the chaos tag is excluded by default, so the seed alone is not enough)
-        String replayCmd = "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
-                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+        long seed = resolveSeed();
+        String replayCmd = replayCommand(seed);
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
                 scenarioLabel(), useCooperativeAssignor(), seed, replayCmd);
 
