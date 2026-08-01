@@ -16,6 +16,33 @@
 > *transient* working notes -- what's parked/in-flight right now. When adding a branch that maps
 > to an upstream issue/PR, record the mapping in `upstream-map.yaml`, not (only) here.
 
+## ✅ DONE (2026-08-01), awaiting PR: test-integrity defects found during PR #100
+
+Branch **`fix/tests-that-never-run-and-codec-static-leak`** (off `master`), worktree
+`.claude/worktrees/test-integrity`. Both defects below let **green CI mean nothing**; found while
+fixing the W4 chaos RED, deliberately kept out of #100 to keep that fix reviewable. Expect a trivial
+conflict with #100's copy of this entry if that lands first - keep whichever is newer.
+
+1. **Three tests had never run in CI.** `MockConsumerTestWith{CommitTimeout,SaslAuthentication}Exception`
+   and `MockConsumerTestWithEarlyClose` matched none of surefire's default includes (this repo declares
+   no `<includes>`), so they were never collected - and two of them cover other rungs of the very
+   commit-exception ladder #100 fixes. Renamed to `MockConsumer{CommitTimeout,SaslAuthentication,
+   EarlyClose}Test`; **all three pass** (no hidden failures). Renames registered in
+   `bin/check-copyright-headers.sh`'s provenance list, since they are upstream-derived files.
+   **Durable fix:** new ArchUnit rule `test_classes_must_be_named_so_surefire_collects_them` in the
+   shared `TestConventionRules`, so any future class with `@Test`/`@ParameterizedTest` methods whose
+   name surefire cannot collect fails the build. Verified RED-side with a deliberately misnamed probe,
+   not just assumed. Interfaces, abstract bases and `integrationTest` packages are exempt (failsafe
+   selects ITs by package, not name).
+2. **`largeOffsetMap` flake fixed at source.** `OffsetMapCodecManager.forcedCodec` /
+   `DefaultMaxMetadataSize` are mutable statics whose lock was one-sided - the three writer classes
+   declared `@ResourceLock`, the reader `WorkManagerOffsetMapCodecManagerTest` did not, so under
+   `<parallel>methods</parallel>` it could observe a forced codec (seen: 32 bytes of `BitSetV2` where a
+   compressed ~7 was asserted). The reader now declares both locks in READ mode - excluding the
+   writers while still allowing readers to run concurrently.
+   **Still open (deeper):** the class's own `todo remove static state manipulation from tests`. The
+   lock makes the flake go away; removing the static would make the hazard go away.
+
 ## 0.6.0 — first fork release (off `master`)
 
 The fork's debut is the **rebrand already on `master`** (`bz.stub.parallelconsumer`, Java 8,

@@ -5,16 +5,16 @@ package io.confluent.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LongPollingMockConsumer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.errors.SaslAuthenticationException;
+import org.apache.kafka.common.errors.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.awaitility.Awaitility;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -27,43 +27,42 @@ import static com.google.common.truth.Truth.assertThat;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * Tests that PC can be closed ahead of time. Make sure PC can shut down cleanly.
+ * Tests that PC works fine with a consumer where the commitSync fails with TimeoutException after 5 seconds.
  *
- * In this test, the MockConsumer will start throwing SaslAuthenticationException from 2 seconds onwards, until infinity.
+ * After the first 20 seconds, commitSync will resume normal behavior: Succeed immediately
  *
- * The offsetCommitTimeout as well as the saslAuthenticationRetryTimeout had been set to infinity as well.
- *
- * After 5 seconds PC will be requested to close. The expected behavior is that the PC can be shutdown cleanly.
+ * In this test, we want to make sure the PC still resumes normal operation after several TimeoutException on commitSync timeout.
+ * @author Shilin Wu
  */
 @Slf4j
 @Timeout(60000L)
-class MockConsumerTestWithEarlyClose {
+class MockConsumerCommitTimeoutTest {
 
-    private final String topic = MockConsumerTestWithEarlyClose.class.getSimpleName();
+    private final String topic = MockConsumerCommitTimeoutTest.class.getSimpleName();
 
     /**
-     * Test that the mock consumer works as expected
+     * Test that the PC can resume operation after several failures
      */
     @Test
     void mockConsumer() {
-        final AtomicLong startFail = new AtomicLong(System.currentTimeMillis() + 2000L); // start failing after 2 seconds
-        final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 200000000L); // never recover
+        final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 20000L);
         var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized ConsumerRecords<String, String> poll(Duration timeout) {
-                long now = System.currentTimeMillis();
-                if(now > startFail.get() && now < failUntil.get()) {
-                    log.info("Mocking failure before 20 seconds");
-                    throw new SaslAuthenticationException("Invalid username or password");
-                }
+                // polls are normal
                 return super.poll(timeout);
             }
 
             @Override
             public synchronized void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
-                long now = System.currentTimeMillis();
-                if(now > startFail.get() && now < failUntil.get()) {
-                    throw new SaslAuthenticationException("Invalid username or password");
+                // fail with timeout after 5 seconds for the first 20 seconds
+                if(System.currentTimeMillis() < failUntil.get()) {
+                    try {
+                        Thread.sleep(5000L);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    throw new TimeoutException("Timeout after 5 seconds (mocking)");
                 }
                 super.commitSync(offsets);
             }
@@ -75,8 +74,9 @@ class MockConsumerTestWithEarlyClose {
         //
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(mockConsumer)
-                .offsetCommitTimeout(Duration.ofSeconds(10000000L))
-                .saslAuthenticationRetryTimeout(Duration.ofSeconds(250000000L))
+                .offsetCommitTimeout(Duration.ofSeconds(25L)) // commit timeout set to 25 seconds
+                .commitInterval(Duration.ofSeconds(1L)) // commit interval set to 1 second
+                .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC) // use sync commit
                 .build();
         var parallelConsumer = new ParallelEoSStreamProcessor<String, String>(options);
         parallelConsumer.subscribe(of(topic));
@@ -89,9 +89,9 @@ class MockConsumerTestWithEarlyClose {
         // Daemon thread: must NOT survive past this test method, or when it wakes
         // from sleep it'll addRecord() on a closed mockConsumer and throw an
         // uncaught exception that PIT attributes to whatever test is running next
-        // in the same minion JVM. We also interrupt it explicitly in the finally
-        // block to stop the loop promptly.
-        Thread recordAdder = new Thread(() -> addRecords(mockConsumer), "early-close-record-adder");
+        // in the same minion JVM. We also interrupt it and close PC in the finally
+        // block.
+        Thread recordAdder = new Thread(() -> addRecords(mockConsumer), "commit-timeout-record-adder");
         recordAdder.setDaemon(true);
         recordAdder.start();
 
@@ -104,22 +104,20 @@ class MockConsumerTestWithEarlyClose {
                     records.add(recordContext);
                 });
             });
-            try {
-                Thread.sleep(5000L);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
 
-            log.info("Trying to close...");
-            parallelConsumer.close(); // request close after 5 seconds
-            log.info("Close successful!");
+            // Scope the timeout locally (don't mutate Awaitility's global default —
+            // that was leaking across tests if the assertion below throws before reset()).
+            Awaitility.await().atMost(Duration.ofSeconds(50)).untilAsserted(() -> {
+                assertThat(records).hasSize(10);
+            });
         } finally {
             recordAdder.interrupt();
+            parallelConsumer.close();
         }
     }
 
     private void addRecords(MockConsumer<String, String> mockConsumer) {
-        for (int i = 0; i < 100000; i++) {
+        for (int i = 0; i < 10; i++) {
             try {
                 mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, i, "key", "value"));
                 Thread.sleep(1000L);
