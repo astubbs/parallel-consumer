@@ -505,27 +505,28 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     `OffsetSimultaneousEncoder.invoke()` walks *every* offset in the range (`range(length).forEach(...)`), so
     an int overflow genuinely iterates ~2.1B. Speeding it up needs a delta-aware `invoke()` (the run-length
     optimisation TODO already in `OffsetSimultaneousEncoder`) — a real main-code change, left for later.
-- **TRIAGED (2026-08-01): `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-  is a TEST-SIDE timing race, not a product bug - and NOT the #857 commit-lock family.** This entry
-  previously said "revisit alongside the #857 locking work"; PR #100 *is* that work, so it was checked
-  from there. Evidence:
-  - The assertion is `hasSameElementsAs`, i.e. set-wise, so the observed `[2, 2]` vs expected `[1, 2]`
-    means **offset 1 was never committed at all** - not that an extra commit appeared.
-  - The test needs a commit to land while `v1` is still blocked on its latch. `latch.countDown()` is
-    immediately followed by `close()`, and the user function then sleeps 100ms before completing, so
-    whether offset 1 is ever committed alone depends on a ~100ms race between that completion and the
-    close-path commit. `commitInterval` is left at its 5s default here, so no periodic commit rescues
-    it. Waits are `awaitForSomeLoopCycles(n)` - loop *cycles*, while commits are driven by wall-clock.
-  - It is definitely not PR #100's mechanism: that one needs a `RebalanceInProgressException`, which a
-    `MockConsumer` never raises, and an instrumented full-suite run showed the new deferral path
-    executing exactly 3 times across every module - all of them inside #100's own dedicated test.
-    #100's failure shape is also a thrown exception and a dead instance, not a missing commit.
-  **So: do not expect #100 to fix this**, and do not mask it. The fix is the event/trigger-based
-  conversion filed under *Test infrastructure - timing-based waits* in `docs/refactoring.md`.
-  **It costs more than a red unit run:** PIT aborts outright when a test is unstable *without*
-  mutation, so this single test reddens the `Mutation Tests (PIT, PR-scoped)` job on unrelated PRs -
-  it is why #100's mutation check is red. That raises it from cosmetic flake to CI-blocking noise, and
-  is the strongest argument for doing the conversion sooner rather than later.
+- **FIXED (2026-08-01): `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+  was a test-side timing race - NOT a product bug, and NOT the #857 commit-lock family.** The ledger
+  asked for this to be classified before masking and revisited "alongside the #857 locking work"; PR
+  #100 is that work, so it was checked from there, then fixed.
+  - **Diagnosis:** the assertion is set-wise (`hasSameElementsAs`), so the observed `[2, 2]` vs
+    expected `[1, 2]` meant **offset 1 was never committed at all**. The test needs a commit while
+    `v1` is latched, but waited on loop *cycles* (`awaitForSomeLoopCycles(2)`) while commits are
+    driven by wall-clock, with `commitInterval` at its 5s default. Release the latch first and `v1`
+    completes (100ms sleep), so the next commit covers offset 2 and offset 1 is never seen alone.
+  - **Not #100's mechanism**, on three counts: it needs a `RebalanceInProgressException`, which a
+    `MockConsumer` never raises; an instrumented full-suite run showed the deferral path executing
+    exactly 3 times across all modules, every one inside #100's own test; and #100 fails as a thrown
+    exception plus a dead instance, not a missing commit.
+  - **Fix:** wait on the event instead of on cycles - `awaitUntilTrue(gotK0::get)` then
+    `awaitForCommit(1)` (a primitive the test base already had). Plus a 100ms `commitInterval` for
+    this test only, via a new `getBaseOptionsKeyOrdered` overload, so a periodic commit actually
+    exists to wait for. Verified 6/6 clean runs, all three commit modes.
+  - **Why it mattered more than a red unit run:** PIT aborts outright when a test is unstable
+    *without* mutation, so this one test reddened `Mutation Tests (PIT, PR-scoped)` on unrelated PRs -
+    it is why #100's mutation check was red. The remaining `awaitForSomeLoopCycles` /
+    `verify(after(...)).never()` waits in this class are still cycle- and sleep-based; converting them
+    is filed under *Test infrastructure - timing-based waits* in `docs/refactoring.md`.
 - **DONE (PR #69): unified Awaitility + Hamcrest onto the real libraries.** Swapped all 11 shaded usages
   (`org.testcontainers.shaded.org.awaitility` in 3 `MockConsumerTest*` + 8 integration tests; also discovered
   `org.testcontainers.shaded.org.hamcrest` in 3 of them) to the real `org.awaitility` / `org.hamcrest` (both

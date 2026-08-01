@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.*;
@@ -199,7 +200,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     public void queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode commitMode) {
         AtomicBoolean interrupted = new AtomicBoolean(false);
         CountDownLatch latch = new CountDownLatch(1);
-        setupParallelConsumerInstance(getBaseOptionsKeyOrdered(commitMode, Duration.ofSeconds(1)));
+        // Short commit interval so the primed record's commit lands while v1 is still blocked, at a point
+        // the test can deterministically wait for. With the 5s default, the only commit before the latch
+        // released was whichever one the close sequence happened to emit first - see the await below.
+        setupParallelConsumerInstance(getBaseOptionsKeyOrdered(commitMode, Duration.ofSeconds(1), Duration.ofMillis(100)));
 
         primeFirstRecord();
 
@@ -223,12 +227,19 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 gotK1.set(true);
             }
         });
-        // let it process
-        while (!gotK0.get() && !gotK1.get()) {
-            awaitForSomeLoopCycles(1);
-        }
-        // a bit more time to help with flakiness on slower CI
-        awaitForSomeLoopCycles(2);
+        // Wait for the blocking record to actually be in flight - only then is v1 latched and v2 queued
+        // behind it (KEY ordering), which is the state this test is about.
+        awaitUntilTrue(gotK0::get);
+
+        // Then wait for the PRECONDITION the final assertion depends on: offset 1 committed, i.e. the
+        // primed record committed while v1 is still blocked.
+        //
+        // This used to wait on loop CYCLES (`awaitForSomeLoopCycles(2)`), but commits are driven by
+        // wall-clock, not by cycle count. Nothing guaranteed a commit had happened before the latch was
+        // released, after which v1 completes (it sleeps 100ms) and the next commit covers offset 2 - so
+        // offset 1 was never committed on its own and the set-wise assertion saw only [2, 2]. Waiting on
+        // the commit itself makes the precondition explicit instead of probable. See docs/inflight.md.
+        awaitForCommit(1);
 
         latch.countDown();
         parallelConsumer.close();
@@ -320,12 +331,26 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     }
 
     private ParallelConsumerOptions getBaseOptionsKeyOrdered(final CommitMode commitMode, final Duration shutdownDuration) {
-        return ParallelConsumerOptions.<String, String>builder()
+        return getBaseOptionsKeyOrdered(commitMode, shutdownDuration, null);
+    }
+
+    /**
+     * @param commitInterval null to keep the default. Pass a short interval when the test needs a periodic
+     *                       commit to actually land at a point it can wait for, rather than hoping one
+     *                       coincides with the close sequence.
+     */
+    private ParallelConsumerOptions getBaseOptionsKeyOrdered(final CommitMode commitMode, final Duration shutdownDuration,
+                                                             final Duration commitInterval) {
+        var builder = ParallelConsumerOptions.<String, String>builder()
                 .commitMode(commitMode)
                 .consumer(consumerSpy)
                 .producer(producerSpy)
                 .shutdownTimeout(shutdownDuration)
-                .ordering(KEY).build();
+                .ordering(KEY);
+        if (commitInterval != null) {
+            builder.commitInterval(commitInterval);
+        }
+        return builder.build();
     }
 
     /**
