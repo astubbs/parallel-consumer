@@ -108,7 +108,9 @@ public class TestConventionRules {
      * {@code MockConsumerTestWithEarlyClose} sat dormant, and how a regression test added in PR #100 would have
      * been a permanent no-op had this rule existed to catch it (it was renamed instead).
      * <p>
-     * Integration tests are exempt: failsafe selects them by <em>package</em>
+     * Exempt: {@code @Nested} classes (JUnit finds them via their enclosing class, so the patterns do not
+     * apply), interfaces and abstract bases (their implementors/subclasses are what run), and integration
+     * tests - failsafe selects those by <em>package</em>
      * ({@code **}{@code /integrationTest*}{@code /**}{@code /*.java}), not by class name, so an {@code *IT} name
      * is correct there.
      */
@@ -118,10 +120,22 @@ public class TestConventionRules {
                     .that(HAVE_A_TEST_METHOD)
                     .and().areNotInterfaces()
                     .and().doNotHaveModifier(JavaModifier.ABSTRACT)
+                    // @Nested classes are discovered THROUGH their (correctly named) enclosing class, so
+                    // surefire never selects them by name and the naming patterns simply don't apply. Without
+                    // this, the first @Nested test added anywhere would fail the build, and the violation
+                    // message would tell you to rename it - actively wrong advice. Note this exempts only the
+                    // annotation, not inner classes generally: a plain inner class holding @Test methods really
+                    // is uncollected, and should still be flagged.
+                    .and().areNotAnnotatedWith("org.junit.jupiter.api.Nested")
                     .and().resideOutsideOfPackages("..integrationTest..", "..integrationTests..")
                     .should(HAVE_A_NAME_SUREFIRE_COLLECTS)
                     .because("surefire only collects Test*.java / *Test.java / *Tests.java / *TestCase.java - a "
                             + "test class named anything else silently never runs, and the suite stays green "
-                            + "without it");
+                            + "without it")
+                    // Several modules legitimately match nothing: the example modules keep their tests in
+                    // integrationTests packages (exempted above, since failsafe selects those by package), so
+                    // this rule evaluates against an empty set there. That is a pass, not a violation -
+                    // without this, ArchUnit's verifyNoEmptyShouldIfEnabled fails those modules.
+                    .allowEmptyShould(true);
 
 }
