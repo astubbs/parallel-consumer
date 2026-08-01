@@ -112,15 +112,16 @@ generate() {
 Every \`TODO\` / \`FIXME\` / \`XXX\` marker in the tracked tree, grouped by module. **$count marker(s)** at
 the time of generation.
 
-## Prioritised? See the triage
+## Prioritised? See the refactoring backlog
 
-This file is a raw, generated inventory - it is deliberately **not** prioritised, because it is
-rewritten wholesale on every run. The judgement lives next door in
-[\`docs/TODO_TRIAGE.md\`](TODO_TRIAGE.md): hand-curated groups in priority order, naming classes and
-themes rather than line numbers, so **regenerating this index never invalidates it**.
+This file is a raw, generated inventory - deliberately **not** prioritised, because it is rewritten
+wholesale on every run. Triage lives in [\`docs/refactoring.md\`](refactoring.md), which is the
+repo's existing backlog: markers that turn out to be real deferred work get written up there (grouped
+by file, with breaking changes in their own release-gated section). Do **not** start a parallel
+priority list - that was tried and duplicated the backlog.
 
-Split that way on purpose: the machine owns what/where, a human owns what-matters. If you add or
-remove markers, just regenerate - only revisit the triage when a *theme* changes.
+Most markers are notes-to-self and should stay exactly where they are; this index makes them
+discoverable in aggregate without promoting them to tasks.
 
 ## How to use this
 
