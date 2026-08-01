@@ -505,16 +505,27 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     `OffsetSimultaneousEncoder.invoke()` walks *every* offset in the range (`range(length).forEach(...)`), so
     an int overflow genuinely iterates ~2.1B. Speeding it up needs a delta-aware `invoke()` (the run-length
     optimisation TODO already in `OffsetSimultaneousEncoder`) — a real main-code change, left for later.
-- **BUG-OR-FLAKE to triage: `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-  fails under thread-parallel unit tests.** The full thread-parallel unit run (`-Dparallel-tests=true`, 2:32)
-  went red only on this one — an `AssertionError` in `assertCommits`
-  (`AbstractParallelEoSStreamProcessorTestBase.java:382`); a mock shutdown-timing/commit-assertion test.
-  Per AGENTS.md: establish **static-state/timing artifact vs real concurrency bug** before masking — do NOT
-  just `@Isolated`/serialise it to go green. (Surefire mis-attributed it to `PartitionStateCommittedOffsetTest`
-  in the per-class report — report cross-contamination under parallelism; the real failing class is
-  `ParallelEoSStreamProcessorTest`.) **Revisit alongside the #857 locking work** — it's a shutdown/commit
-  assertion, so it may be the same commit-lock timing family; don't investigate/mask it in isolation, look
-  at it when we're back in the locking code.
+- **TRIAGED (2026-08-01): `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+  is a TEST-SIDE timing race, not a product bug - and NOT the #857 commit-lock family.** This entry
+  previously said "revisit alongside the #857 locking work"; PR #100 *is* that work, so it was checked
+  from there. Evidence:
+  - The assertion is `hasSameElementsAs`, i.e. set-wise, so the observed `[2, 2]` vs expected `[1, 2]`
+    means **offset 1 was never committed at all** - not that an extra commit appeared.
+  - The test needs a commit to land while `v1` is still blocked on its latch. `latch.countDown()` is
+    immediately followed by `close()`, and the user function then sleeps 100ms before completing, so
+    whether offset 1 is ever committed alone depends on a ~100ms race between that completion and the
+    close-path commit. `commitInterval` is left at its 5s default here, so no periodic commit rescues
+    it. Waits are `awaitForSomeLoopCycles(n)` - loop *cycles*, while commits are driven by wall-clock.
+  - It is definitely not PR #100's mechanism: that one needs a `RebalanceInProgressException`, which a
+    `MockConsumer` never raises, and an instrumented full-suite run showed the new deferral path
+    executing exactly 3 times across every module - all of them inside #100's own dedicated test.
+    #100's failure shape is also a thrown exception and a dead instance, not a missing commit.
+  **So: do not expect #100 to fix this**, and do not mask it. The fix is the event/trigger-based
+  conversion filed under *Test infrastructure - timing-based waits* in `docs/refactoring.md`.
+  **It costs more than a red unit run:** PIT aborts outright when a test is unstable *without*
+  mutation, so this single test reddens the `Mutation Tests (PIT, PR-scoped)` job on unrelated PRs -
+  it is why #100's mutation check is red. That raises it from cosmetic flake to CI-blocking noise, and
+  is the strongest argument for doing the conversion sooner rather than later.
 - **DONE (PR #69): unified Awaitility + Hamcrest onto the real libraries.** Swapped all 11 shaded usages
   (`org.testcontainers.shaded.org.awaitility` in 3 `MockConsumerTest*` + 8 integration tests; also discovered
   `org.testcontainers.shaded.org.hamcrest` in 3 of them) to the real `org.awaitility` / `org.hamcrest` (both
