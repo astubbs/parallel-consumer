@@ -351,11 +351,19 @@ skipping the hosted gate - the gate staying independent is worth more than the m
 - **Parallel-suite unit flakes - four distinct tests in one session (2026-07-31), watch for
   recurrence:** `ParallelEoSStreamProcessorTest`, `PCMetricsTest`, `ProducerManagerTest`, and
   `WorkManagerOffsetMapCodecManagerTest.largeOffsetMap` each failed once under the parallel unit
-  suite. The first three fit the known tight-timeout-under-contention pattern (solutions doc below),
-  but `largeOffsetMap` smells like a shared-static codec-state race rather than timing - check
-  `OffsetMapCodecManager`'s static state (e.g. forced-codec/compression flags) for cross-test leakage
-  before blaming contention. If any recurs, classify per the AGENTS.md stress-failure discipline
-  (contention-sensitivity vs real bug) before touching bounds.
+  suite. The first three fit the known tight-timeout-under-contention pattern (solutions doc below).
+  **`largeOffsetMap`: hypothesis CONFIRMED (2026-08-01), mechanism found - it is shared-static
+  leakage, not contention.** Reproduced during the PR #100 work: it failed asserting the encoded size
+  is `< 10` but got **32 bytes**, i.e. a `BitSetV2` encoding rather than the expected compressed ~7.
+  `OffsetMapCodecManager.forcedCodec` is a mutable `public static` that
+  `OffsetEncodingBackPressureTest`, `OffsetEncodingBackPressureUnitTest` and `OffsetEncodingTests` all
+  set - and **the lock is one-sided**: those mutators declare `@ResourceLock(...)`, but the *reader*
+  `WorkManagerOffsetMapCodecManagerTest` declares none, so it can run concurrently with a mutator and
+  observe a forced codec. (`OffsetMapCodecManager` even carries a `todo remove static state
+  manipulation from tests`.) **Fix**: give the reader class the same `@ResourceLock` as the mutators -
+  or better, do the todo and remove the static. Deliberately NOT fixed in PR #100 to keep that fix
+  reviewable; anything that changes unit-suite scheduling (such as adding a test class) makes this
+  flake more likely, so it is worth doing soon.
 - **Stacked PRs are ungated - dependency check "required" doesn't apply to them (2026-07-31).**
   Observed: PR #87 (base = #85's branch) FAILS the PR-dependency check yet shows as mergeable.
   Diagnosis: required status checks are configured in the ruleset targeting `master`, so they only

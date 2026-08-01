@@ -51,14 +51,14 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  */
 @Slf4j
 @Timeout(120)
-class MockConsumerTestWithRebalanceInProgressException {
+class MockConsumerRebalanceInProgressTest {
 
     private static final int RECORDS = 10;
 
     /** Commits that throw before the mock consumer starts accepting them. */
     private static final int FAILING_COMMITS = 3;
 
-    private final String topic = MockConsumerTestWithRebalanceInProgressException.class.getSimpleName();
+    private final String topic = MockConsumerRebalanceInProgressTest.class.getSimpleName();
 
     /**
      * PC must survive a run of {@link RebalanceInProgressException}s on commit and still drain the
