@@ -16,6 +16,29 @@
 > *transient* working notes -- what's parked/in-flight right now. When adding a branch that maps
 > to an upstream issue/PR, record the mapping in `upstream-map.yaml`, not (only) here.
 
+## ⏭️ NEXT UP — test-integrity defects found during PR #100 (do these next)
+
+Both are **test-infrastructure defects that let green CI mean nothing**, found while fixing the W4
+chaos RED. Neither is fixed in #100 (kept reviewable); both are cheap and should land right after it.
+
+1. **Three tests on master have never run in CI.** `MockConsumerTestWithCommitTimeoutException`,
+   `MockConsumerTestWithSaslAuthenticationException` and `MockConsumerTestWithEarlyClose` all end in
+   something other than `Test`, and this repo declares no surefire `<includes>`, so the defaults
+   (`**/Test*.java`, `**/*Test.java`, `**/*Tests.java`, `**/*TestCase.java`) never match them. They
+   are dead weight today - and two of them cover *other rungs of the very commit-exception ladder*
+   #100 fixes. **Fix:** rename to `*Test`, then actually look at the results - they have not run in a
+   long time, so expect real failures rather than assuming a clean rename. Consider a guard (an
+   ArchUnit rule, or `TestConventionsArchTest`) so a test class that surefire cannot collect fails
+   the build instead of silently disappearing - that guard is the durable fix, the renames are the
+   one-off.
+2. **`largeOffsetMap` flake: confirmed shared-static leakage, one-sided lock.**
+   `OffsetMapCodecManager.forcedCodec` is a mutable `public static`; the three classes that mutate it
+   declare `@ResourceLock`, the reader `WorkManagerOffsetMapCodecManagerTest` does not, so under
+   `<parallel>methods</parallel>` it can observe another test's forced codec (seen: 32 bytes of
+   `BitSetV2` where ~7 compressed was asserted). **Fix:** give the reader the same lock, or do the
+   `todo remove static state manipulation from tests` the class already carries. Details in the CI
+   reliability section below.
+
 ## 0.6.0 — first fork release (off `master`)
 
 The fork's debut is the **rebrand already on `master`** (`bz.stub.parallelconsumer`, Java 8,
