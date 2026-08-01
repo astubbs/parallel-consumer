@@ -1,10 +1,103 @@
 # Investigation handoff: Chaos Pain Suite W4 is reproducibly RED in CI
 
-**Written:** 2026-08-01 by a prior agent session (task: "merge master into PR #57", the chaos RED was
-found incidentally while watching that PR's CI).
-**Status:** diagnosed to a leading hypothesis, **not fixed, not verified locally**.
-**Ledger entry:** `docs/inflight.md`, section "OPEN (2026-07-31): W4 revoke-under-work is reproducibly
-RED in CI - commit-response starvation". This report is the long form of that entry.
+**Written:** 2026-08-01 (task: "merge master into PR #57", the chaos RED was found incidentally while
+watching that PR's CI). **Updated the same day** after the investigation ran to completion.
+
+> ## ✅ RESOLVED - root cause confirmed, reproduced locally, fixed
+>
+> **Root cause: `RebalanceInProgressException` was not handled on the commit path, and killed the
+> broker-poll thread permanently.** See section 0 for the confirmed chain. The load-starvation
+> hypothesis that this report originally led with (H0/H1 below) is **falsified** - the failure
+> reproduces on an idle developer machine. Sections 4.1-9 are preserved as the investigation record;
+> where they disagree with section 0, section 0 wins.
+>
+> **Fix:** branch `fix/commit-rebalance-in-progress-kills-poll-thread` (off `master` `192d32bc`) -
+> one `catch` in `ConsumerManager.commitSync()` plus
+> `MockConsumerTestWithRebalanceInProgressException`, a broker-free unit reproducer that fails in
+> ~10s on unfixed code.
+>
+> **No open PR fixed this.** PR #80 is the nearest relative (same #857 family, also a close/commit
+> path bug) and was verified *present* in a CI run that still went red - see section 0.4.
+
+**Ledger entry:** `docs/inflight.md`. This report is the long form of that entry.
+
+---
+
+## 0. CONFIRMED root cause (added after the investigation completed)
+
+### 0.1 The chain
+
+An unhandled `RebalanceInProgressException` on the commit path permanently kills the broker-poll
+thread, and everything else follows from that:
+
+1. The control thread wants to commit, guarded by `!isRebalanceInProgress.get()`
+   (`AbstractParallelEoSStreamProcessor.java:956`) - a best-effort pre-check that races.
+2. Under `PERIODIC_CONSUMER_SYNC` the control thread is not the commit owner (the broker-poll thread
+   claims ownership at `BrokerPollSystem.java:133`), so it calls
+   `ConsumerOffsetCommitter.commitAndWait()`, enqueues a request, and blocks.
+3. The broker-poll thread services it: `BrokerPollSystem.java:138 maybeDoCommit()` →
+   `retrieveOffsetsAndCommit()` → `ConsumerManager.commitSync()` → `consumer.commitSync()`.
+4. A rebalance is underway, so Kafka throws `RebalanceInProgressException`. `commitSync()`'s
+   exception ladder (`ConsumerManager.java:156-196`) handles `CommitFailedException`,
+   `TimeoutException` and `SaslAuthenticationException` - **but not this one**, its closest sibling.
+5. It escapes into `BrokerPollSystem.controlLoop()`'s `catch (Exception e)` (`:151`), which logs
+   "Unknown error" and **rethrows** - the broker-poll thread dies for good.
+6. That thread is the only producer of commit responses. The blocked control thread waits the full
+   `offsetCommitTimeout` and throws `Timeout waiting for commit response`.
+7. The control thread dies, PC self-closes with a failure cause, and the close-path commit fails too
+   (the poll thread is gone). The chaos sweep flags it at `ChaosScenarioBase.java:259`.
+
+One retriable protocol condition therefore kills the consumer. In production this is the
+"#857 locks forever until manual restart" symptom.
+
+### 0.2 Verified locally, which falsifies the load hypothesis
+
+Replaying seed `8254214163208094917` at `192d32bc` on a developer machine (12 cores, load ~5.5, not a
+starved CI runner) reproduced the failure exactly: `ChaosRevokeUnderWorkCooperativeIT` failed in
+132.5s with the same assertion, and the log shows the sequence above with the 10-second gap between
+the poll thread's death (`27:00.187`) and the control thread's timeout (`27:10.190`).
+
+`MockConsumerTestWithRebalanceInProgressException` then reduced it to a **broker-free unit test that
+fails in ~10s** - a `MockConsumer` whose `commitSync` throws `RebalanceInProgressException`
+reproduces the whole chain, including the misleading timeout.
+
+### 0.3 Why it correlates with #87 (the correlation was real, the inference was wrong)
+
+Section 4.1's correlation stands as data, but the causal reading was wrong. #87 did not introduce the
+bug - it *exposed* it. Cooperative rebalancing keeps members processing and **committing during**
+rebalances by design, which is precisely the window where `commitSync` meets an in-progress rebalance.
+Eager rebalancing stops the world instead, so the window is much narrower - which is why the coop arm
+fails in every run containing it while the eager arm fails intermittently. The bug itself is
+long-standing and inherited from upstream: the exception ladder arrived with `29795bf5` (upstream
+#819), and no fork commit touched it.
+
+### 0.4 No open PR fixes it (checked)
+
+PR #80 is the nearest relative - same #857 family, also a close/commit path bug - but it does not
+touch this exception. Verified two ways: `RebalanceInProgressException` appears nowhere in main code
+on either branch, and the failing CI run `30607535421` was PR #80's own branch head (`c28c0e09`) with
+its fix demonstrably present (`shutdownRequested` fully removed there; still present 8× on master) -
+and it still went red on **both** arms.
+
+### 0.5 A trap worth knowing about (first fix attempt was wrong)
+
+The obvious fix - catching `RebalanceInProgressException` inside `ConsumerManager.commitSync()`
+alongside its siblings - stops the crash but is **incorrect**, and the unit test caught it.
+`AbstractOffsetCommitter.retrieveOffsetsAndCommit()` calls `onOffsetCommitSuccess()` unconditionally
+once `commitOffsets()` returns normally, so swallowing the exception down there makes PC record a
+commit that never reached the broker: the partitions go clean, nothing is retried, and the test's
+commit counter stalls at 2 instead of climbing.
+
+The fix therefore lives one layer up, in `ConsumerOffsetCommitter`, where the exception can abort
+`retrieveOffsetsAndCommit()` **before** the success marking (so offsets stay dirty and really are
+re-committed next cycle) while still (a) not escaping to kill the poll thread and (b) sending the
+commit response anyway, so the waiter is released immediately instead of hanging for
+`offsetCommitTimeout`.
+
+> **Note for whoever touches this next:** the pre-existing `CommitFailedException` handler at
+> `ConsumerManager.java:156` has the *same* latent flaw - it breaks out of the commit and lets
+> `onOffsetCommitSuccess()` mark the offsets clean, despite its comment saying the poller will "seek
+> commit later". Worth a follow-up; not changed here to keep this fix reviewable.
 
 ---
 
@@ -265,7 +358,12 @@ fleet-size, `maxConcurrency`, commit-mode or consumer-property default that chan
 
 ---
 
-## 7. What I recommend you do, in order
+## 7. Original next-steps plan (all now executed - see section 0)
+
+> Kept for the record. Step 1 was run and came back **red on an idle box**, which sent the
+> investigation down the H2 branch and found the root cause in section 0. Steps 2 and 3 are therefore
+> superseded; the "decide the classification question" item in step 4 is still open and now lives in
+> the follow-ups list in `docs/inflight.md`.
 
 1. **Replay a captured seed on an idle machine, at `192d32bc`.** This one step separates every
    hypothesis. Both of these failed in CI:
