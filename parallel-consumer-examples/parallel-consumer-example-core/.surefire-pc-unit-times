@@ -1,0 +1,2 @@
+2,1013,io.confluent.parallelconsumer.examples.core.CoreAppTest,test
+2,2407,io.confluent.parallelconsumer.examples.core.CoreAppTest,testPollAndProduce

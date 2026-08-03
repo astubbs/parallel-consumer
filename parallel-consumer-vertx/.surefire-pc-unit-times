@@ -1,16 +1,16 @@
-2,231,io.confluent.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[3]
-4,0,io.confluent.parallelconsumer.vertx.VertxTest,handleHttpResponseCodes
-4,3,io.confluent.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-4,89,io.confluent.parallelconsumer.vertx.VertxTest,sanityTest(Vertx, VertxTestContext)
-4,102,io.confluent.parallelconsumer.vertx.VertxTest,failingHttpCall
-4,130,io.confluent.parallelconsumer.vertx.VertxTest,testHttpMinimal
-4,301,io.confluent.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[1]
-4,481,io.confluent.parallelconsumer.vertx.VertxTest,testVertxFunctionFail(Vertx, VertxTestContext)
-4,1078,io.confluent.parallelconsumer.vertx.VertxTest,genericVertxFuture(Vertx, VertxTestContext)
-4,4299,io.confluent.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-4,5091,io.confluent.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[2]
-4,8130,io.confluent.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[3]
-4,8144,io.confluent.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[2]
-4,8153,io.confluent.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[1]
-4,8891,io.confluent.parallelconsumer.vertx.VertxTest,testHttp
-4,32909,io.confluent.parallelconsumer.vertx.VertxBatchTest,averageBatchSizeTest(Vertx, VertxTestContext)
+3,254,io.confluent.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[3]
+5,0,io.confluent.parallelconsumer.vertx.VertxTest,handleHttpResponseCodes
+5,4,io.confluent.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+5,88,io.confluent.parallelconsumer.vertx.VertxTest,sanityTest(Vertx, VertxTestContext)
+5,99,io.confluent.parallelconsumer.vertx.VertxTest,failingHttpCall
+5,206,io.confluent.parallelconsumer.vertx.VertxTest,testHttpMinimal
+5,253,io.confluent.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[1]
+5,300,io.confluent.parallelconsumer.vertx.VertxTest,testVertxFunctionFail(Vertx, VertxTestContext)
+5,1097,io.confluent.parallelconsumer.vertx.VertxTest,genericVertxFuture(Vertx, VertxTestContext)
+5,5119,io.confluent.parallelconsumer.vertx.VertxBatchTest,simpleBatchTest(ProcessingOrder, Vertx, VertxTestContext)[2]
+5,5831,io.confluent.parallelconsumer.vertx.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+5,8123,io.confluent.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[2]
+5,8154,io.confluent.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[3]
+5,8178,io.confluent.parallelconsumer.vertx.VertxBatchTest,batchFailureTest(ProcessingOrder, Vertx, VertxTestContext)[1]
+5,8881,io.confluent.parallelconsumer.vertx.VertxTest,testHttp
+5,33910,io.confluent.parallelconsumer.vertx.VertxBatchTest,averageBatchSizeTest(Vertx, VertxTestContext)

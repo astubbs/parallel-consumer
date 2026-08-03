@@ -1,297 +1,311 @@
-3,0,io.confluent.parallelconsumer.sanity.QueueingSanityTests,test
-3,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[9]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[21]
-3,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[8]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[11]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[12]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[24]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[8]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[25]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[14]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[26]
-3,0,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,processInKeyOrder(CommitMode)
-3,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[7]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[27]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[15]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[9]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[16]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[29]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[17]
-3,0,io.confluent.csid.utils.LoopingResumingIteratorTest,emptyInitialStartingKey
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[3]
-3,0,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightLong(CommitMode)
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[6]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[19]
-3,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[3]
-3,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[2]
-3,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[10]
-3,0,io.confluent.csid.utils.SupplierUtilsTest,testMemoizeExceptionThrown
-3,0,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,causeConstructor
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[30]
-3,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[20]
-3,1,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,messageConstructor
-3,1,io.confluent.csid.utils.LoopingResumingIteratorTest,fromIsEnd
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[5]
-3,1,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,varargsConstructorFormatsMessageAndKeepsCause
-3,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[8]
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[10]
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[6]
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[22]
-3,1,io.confluent.csid.utils.SupplierUtilsTest,testMemoizeNullSupplier
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[23]
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[3]
-3,1,io.confluent.csid.utils.LoopingResumingIteratorTest,fromDoesntExist
-3,1,io.confluent.csid.utils.SupplierUtilsTest,testMemoizeSupplierReturnsNull
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[4]
-3,1,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,normalCaseWithPreExistingEpochIsUnaffected
-3,1,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,registryFileExistsWhereTheCheckScriptsExpectIt
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,keyTestByteArray
-3,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[4]
-3,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,decodeOffsetMap
-3,1,io.confluent.parallelconsumer.state.ShardManagerTest,testAssignedQuickRevokeNPE
-3,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[12]
-3,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV2WithDefaultErrorPolicy
-3,1,io.confluent.csid.utils.LoopingResumingIteratorTest,fromBeginningFirstElement
-3,1,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,mixedPartitionPollSkipsOnlyUnassignedPartitions
-3,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[6]
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[28]
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[4]
-3,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,base64Encoding
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,basic(ProcessingOrder)[1]
-3,1,io.confluent.parallelconsumer.state.WorkContainerTest,retryDelayProvider
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[18]
-3,1,io.confluent.csid.utils.SupplierUtilsTest,testMemoize
-3,1,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,msgFactoryFormatsMessage
-3,1,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,vTwoIntegerOverflow(Version)[2]
-3,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[11]
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[5]
-3,1,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,noGaps
-3,1,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,workCompletedDuringAsyncCommitShouldKeepStateAsDirty
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,keyTest
-3,1,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[12]
-3,1,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,messageAndCauseConstructor
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[2]
-3,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[9]
-3,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[2]
-3,1,io.confluent.csid.utils.LoopingResumingIteratorTest,demoOfNoSuchElementIssue
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,basic(ProcessingOrder)[3]
-3,1,io.confluent.parallelconsumer.state.WorkManagerTest,maxInFlight
-3,1,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,pollBeforeAssignmentShouldSkipRecordsNotCrash
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[12]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[7]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[11]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[5]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,serialiseCycle
-3,2,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeWithoutRunningShouldBeEventBasedFast(CommitMode)[2]
-3,2,io.confluent.parallelconsumer.ParallelConsumerOptionsTest,setTimeBetweenCommits
-3,2,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[13]
-3,2,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,pomExcludesTheQuarantinedGroupFromDefaultSuites
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[4]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV2WithIgnoreErrorPolicy
-3,2,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[7]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[2]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[17]
-3,2,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,runLengthDeserialise
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,largeOffsetMap
-3,2,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[11]
-3,2,io.confluent.parallelconsumer.state.WorkManagerTest,orderedByKeyParallel
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,binaryArrayConstruction
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,runLengthEncoding
-3,2,io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorConfigurationTest,testHandleStaleWorkNoSplit
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV1WithDefaultErrorPolicy
-3,2,io.confluent.parallelconsumer.state.ShardManagerTest,testRetryQueueOrdering
-3,2,io.confluent.parallelconsumer.state.WorkManagerTest,resumesFromNextShard(ProcessingOrder)[1]
-3,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[10]
-3,2,io.confluent.csid.utils.LoopingResumingIteratorTest,fromInMiddle
-3,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[14]
-3,3,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,releaseWorkflowBlocksOnQuarantinedTests
-3,3,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeWithoutRunningShouldBeEventBasedFast(CommitMode)[1]
-3,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[13]
-3,3,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeWithoutRunningShouldBeEventBasedFast(CommitMode)[3]
-3,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[3]
-3,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[15]
-3,3,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,noArgConstructor
-3,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[1]
-3,3,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[2]
-3,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressDecompressWithBase64SanityGzip
-3,3,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetCommitsAreIsolatedPerPartition(CommitMode)[3]
-3,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV1WithIgnoreErrorPolicy
-3,3,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[1]
-3,3,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,perPrWorkflowRunsTheAuditAndTheNightlyWorkflowRunsTheLane
-3,3,io.confluent.parallelconsumer.offsets.BitSetEncodingTest,basic
-3,4,io.confluent.parallelconsumer.state.WorkManagerTest,testOrderedAndDelayed
-3,4,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[6]
-3,4,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,optionsProduceMessageFlowRequiresProducer
-3,4,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,bothSurefireAndFailsafeBindTheGroupProperties
-3,4,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,verifyEncodingWithNextExpectedBelowWatermark
-3,4,io.confluent.parallelconsumer.state.WorkManagerTest,orderedByPartitionsParallel
-3,4,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,gapsInOffsetsWork
-3,4,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetCommitsAreIsolatedPerPartition(CommitMode)[2]
-3,4,io.confluent.parallelconsumer.state.WorkManagerTest,insertWrongOrderPreservesOffsetOrdering
-3,4,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,consumeFlowDoesntRequireProducer(CommitMode)[1]
-3,4,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[1]
-3,5,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,annotationIsMetaTaggedWithTheQuarantinedTag
-3,5,io.confluent.parallelconsumer.state.WorkManagerTest,testUnorderedAndDelayed
-3,5,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,largeIncompleteOffsetValues(long)[1]
-3,5,io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorConfigurationTest,queueTargetLoad
-3,5,io.confluent.csid.utils.JavaEnvTest,checkJavaEnvironment
-3,5,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,quarantineLaneRunnerIncludesOnlyTheQuarantinedGroup
-3,5,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[1]
-3,5,io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorConfigurationTest,testHandleStaleWorkSplit
-3,6,io.confluent.parallelconsumer.internal.ProducerManagerTest,txOnlyStartedUponMessageSend
-3,6,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,annotationIsRuntimeRetainedAndTargetsClassesAndMethods
-3,6,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,concurrentSkipListMapSanityCheck
-3,6,io.confluent.parallelconsumer.state.WorkManagerTest,containerDelay
-3,6,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[16]
-3,6,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,controlFlowException(CommitMode)[2]
-3,6,io.confluent.csid.utils.LoopingResumingIteratorTest,noFrom
-3,6,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,fullLifecycleRecordsRecoveredAfterAssignment
-3,6,io.confluent.csid.utils.LoopingResumingIteratorTest,loopsCorrectly
-3,6,io.confluent.parallelconsumer.state.WorkManagerTest,resumesFromNextShard(ProcessingOrder)[3]
-3,7,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsArentSequentialTwo
-3,7,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[8]
-3,7,io.confluent.parallelconsumer.sanity.StreamTest,testStreamSpliterators
-3,8,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,ensureLibraryCantBeUsedTwice
-3,8,io.confluent.parallelconsumer.state.WorkContainerTest,basics
-3,8,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,compactedTopic
-3,9,io.confluent.parallelconsumer.state.WorkManagerTest,workQueuesEmptyWhenAllWorkComplete
-3,10,io.confluent.parallelconsumer.state.ShardManagerTest,retryQueueOrdering
-3,11,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,fullyQualifiedAnnotationIsDetected
-3,11,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,testVoidPollMethod(CommitMode)[3]
-3,11,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,controlFlowException(CommitMode)[1]
-3,12,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,testVoidPollMethod(CommitMode)[2]
-3,12,io.confluent.parallelconsumer.sanity.InterruptionTests,waitOnZeroCausesInfiniteWait
-3,12,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[10]
-3,13,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,stringVsByteVsBitSetEncoding
-3,14,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,javaSerialisationComparison
-3,14,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,cantUseProduceFlowWithWrongOptions
-3,14,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,vTwoIntegerOverflow(Version)[1]
-3,15,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,annotatedTestMissingFromRegistryFails
-3,15,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,closedUnmergedOwnerIsAnError
-3,15,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[7]
-3,16,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,emptyLaneAndEmptyRegistryPasses
-3,18,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,sameLineStackedAnnotationIsDetected
-3,19,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,missingOwnerPrIsAnError
-3,21,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,testVoidPollMethod(CommitMode)[1]
-3,21,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,consistentRegistryPasses
-3,22,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,mergedOwnerWithTestStillQuarantinedIsAnError
-3,24,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[6]
-3,24,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,fileMissingFromMergePreviewIsAdvisory
-3,25,io.confluent.parallelconsumer.state.WorkManagerTest,treeMapOrderingCorrect
-3,25,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,fixedByDisagreeingWithRegistryOwnerIsFlagged
-3,27,io.confluent.csid.utils.TrimListRepresentationTest,customRepresentationFail
-3,29,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,openOwnerWhosePreviewRemovesTheAnnotationClosesTheLoop
-3,35,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,openOwnerWithQuarantineNotOnBaseIsAdvisory
-3,37,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,openOwnerWhosePreviewKeepsTheAnnotationIsAdvisory
-3,39,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,controlFlowException(CommitMode)[3]
-3,40,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,unownedEntryIsAdvisory
-3,54,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseBitSet
-3,54,io.confluent.parallelconsumer.state.WorkManagerTest,basic(ProcessingOrder)[2]
-3,56,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[9]
-3,59,io.confluent.parallelconsumer.state.WorkManagerTest,resumesFromNextShard(ProcessingOrder)[2]
-3,60,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[18]
-3,64,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,loadCompressedRunLengthEncoding
-3,68,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,committedOffsetLower
-3,69,io.confluent.parallelconsumer.state.WorkManagerTest,testOrderedInFlightShouldBlockQueue
-3,70,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[7]
-3,70,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,secondUndiagnosedMethodCannotRideAlongOnTheFirstEntry
-3,70,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[1]
-3,71,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,largeIncompleteOffsetValues(long)[2]
-3,71,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[4]
-3,73,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,gatingCiScriptsExcludeTheQuarantinedGroup
-3,75,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[5]
-3,77,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressDecompressSanityZstd
-3,77,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,staleRegistryEntryWithoutAnnotationFails
-3,79,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,laneWorkflowDeclaresItsTriggers
-3,79,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,stringLiteralMentionsOfTheAnnotationDoNotCountAsQuarantined
-3,86,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,staleMethodEntryIsFlagged
-3,87,io.confluent.csid.utils.LoopingResumingIteratorTest,loopsCorrectlyWithStartingObjectIndexZero
-3,88,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,nonQuarantinedTestInReportsFailsTheLaneLeakSelfCheck
-3,88,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[5]
-3,89,io.confluent.parallelconsumer.JStreamParallelEoSStreamProcessorTest,testConsumeAndProduce
-3,90,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,multiLineAnnotationArgumentsAreDetected
-3,91,io.confluent.parallelconsumer.truth.TruthGeneratorTests,generate
-3,92,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,flapperPassIsReportOnly
-3,93,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,missingReportIsFlaggedNotRun
-3,93,io.confluent.parallelconsumer.state.WorkManagerTest,starvation
-3,97,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,failingQuarantinedTestIsExpectedReportOnly
-3,97,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[8]
-3,98,io.confluent.parallelconsumer.offsets.OffsetEncodingBackPressureUnitTest,backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing
-3,100,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressDecompressSanityGzip
-3,100,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,parameterizedEntriesWithAnyFailureCountAsFailed
-3,102,io.confluent.parallelconsumer.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-3,107,io.confluent.parallelconsumer.MockConsumerTest,mockConsumer
-3,109,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,consumeFlowDoesntRequireProducer(CommitMode)[3]
-3,112,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,deterministicPassDemandsActionAndThread
-3,113,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeAfterSingleMessageShouldBeEventBasedFast(CommitMode)[2]
-3,113,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,consumeFlowDoesntRequireProducer(CommitMode)[2]
-3,114,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,runLengthEncodingCompression
-3,115,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeAfterSingleMessageShouldBeEventBasedFast(CommitMode)[3]
-3,116,io.confluent.parallelconsumer.internal.ProducerManagerTest,testOptions
-3,118,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeAfterSingleMessageShouldBeEventBasedFast(CommitMode)[1]
-3,119,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[19]
-3,124,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)[2]
-3,125,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[3]
-3,129,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,produceMessageFlow(CommitMode)[2]
-3,188,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,testSimultaneousWithOverflowErrors(TypeKind)[1]
-3,206,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,leakSelfCheckPassesWhenOnlyQuarantinedTestsRan
-3,207,io.confluent.parallelconsumer.state.ShardKeyTest,nullKey
-3,209,io.confluent.parallelconsumer.JStreamParallelEoSStreamProcessorTest,testFlatMapProduce
-3,209,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)[1]
-3,218,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,failingActionNothingCommitted(CommitMode)[2]
-3,221,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[3]
-3,223,io.confluent.parallelconsumer.CoreBatchTest,simpleBatchTest(ProcessingOrder)[3]
-3,223,io.confluent.parallelconsumer.CoreBatchTest,simpleBatchTest(ProcessingOrder)[1]
-3,223,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,failingActionNothingCommitted(CommitMode)[1]
-3,223,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,failingActionNothingCommitted(CommitMode)[3]
-3,225,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[2]
-3,228,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightSimplest(CommitMode)[3]
-3,233,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightSimplest(CommitMode)[2]
-3,239,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)[3]
-3,243,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,produceMessageFlow(CommitMode)[3]
-3,255,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetCommitsAreIsolatedPerPartition(CommitMode)[1]
-3,267,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[1]
-3,298,io.confluent.parallelconsumer.state.ShardManagerTest,testRetryQueueOrderingMultipleTries
-3,303,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,largeIncompleteOffsetValues(long)[3]
-3,305,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,noGapsSerialisation
-3,310,io.confluent.parallelconsumer.JStreamParallelEoSStreamProcessorTest,testStream
-3,315,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightSimplest(CommitMode)[1]
-3,316,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,optionsGroupIdRequiredAndAutoCommitDisabled
-3,322,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightShort(CommitMode)[3]
-3,326,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightShort(CommitMode)[2]
-3,339,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,processInKeyOrderWorkNotReturnedDoesntBreakCommits
-3,349,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightShort(CommitMode)[1]
-3,366,io.confluent.parallelconsumer.ParallelEoSSStreamProcessorRebalancedTest,pausingAndResumingProcessingShouldWork(CommitMode)[1]
-3,404,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,bootstrapPollOffsetHigherDueToRetentionOrCompaction
-3,416,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[20]
-3,617,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressionCycle
-3,715,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,quarantinedAnnotationsMustCarryNonBlankDiagnosis
-3,938,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,testThatInFlightWorkIsFinishedSuccessfullyAndOffsetsAreCommitted(CommitMode)[1]
-3,957,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,testThatInFlightWorkIsFinishedSuccessfullyAndOffsetsAreCommitted(CommitMode)[2]
-3,966,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,testThatInFlightWorkIsFinishedSuccessfullyAndOffsetsAreCommitted(CommitMode)[3]
-3,1008,io.confluent.parallelconsumer.state.WorkManagerTest,testAvailableWorkerCnt
-3,1118,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,executorThreadsInterruptedOnShutdownTimeout(CommitMode)[3]
-3,1128,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,executorThreadsInterruptedOnShutdownTimeout(CommitMode)[1]
-3,1135,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,executorThreadsInterruptedOnShutdownTimeout(CommitMode)[2]
-3,1276,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,pausingAndResumingProcessingShouldWork(CommitMode)[2]
-3,1300,io.confluent.csid.utils.TrimListRepresentationTest,customRepresentationPass
-3,1363,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,pausingAndResumingProcessingShouldWork(CommitMode)[3]
-3,1366,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,pausingAndResumingProcessingShouldWork(CommitMode)[1]
-3,2228,io.confluent.parallelconsumer.internal.ProducerManagerTest,sendingGetsLockedInTx
-3,2616,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,produceMessageFlow(CommitMode)[1]
-3,3058,io.confluent.parallelconsumer.PCMetricsTest,pcStatusMetricUpdatesOnChange
-3,3857,io.confluent.parallelconsumer.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-3,4749,io.confluent.parallelconsumer.offsets.OffsetEncodingBackPressureTest,backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing
-3,5045,io.confluent.parallelconsumer.CoreBatchTest,simpleBatchTest(ProcessingOrder)[2]
-3,5157,io.confluent.parallelconsumer.ParallelEoSSStreamProcessorRebalancedTest,pausingAndResumingProcessingShouldWork(CommitMode)[2]
-3,5231,io.confluent.parallelconsumer.ParallelEoSSStreamProcessorRebalancedTest,pausingAndResumingProcessingShouldWork(CommitMode)[3]
-3,6061,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,transientGhFailureIsAdvisoryNotError
-3,8081,io.confluent.parallelconsumer.CoreBatchTest,batchFailureTest(ProcessingOrder)[3]
-3,8152,io.confluent.parallelconsumer.CoreBatchTest,batchFailureTest(ProcessingOrder)[1]
-3,8194,io.confluent.parallelconsumer.CoreBatchTest,batchFailureTest(ProcessingOrder)[2]
-3,9767,io.confluent.parallelconsumer.PCMetricsTest,metricsRegisterBinding
-3,11397,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closePCWhenInvalidPidMappingException
-3,15492,io.confluent.parallelconsumer.CoreBatchTest,averageBatchSizeTest
-3,20358,io.confluent.parallelconsumer.internal.ProducerManagerTest,producedRecordsCantBeInTransactionWithoutItsOffsetDirect
-3,55170,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,lessKeysThanThreads
-3,66938,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,testSimultaneousWithOverflowErrors(TypeKind)[2]
+1,1,io.confluent.parallelconsumer.AmbientProbeExtensionTest,frozenPartitionLinesFilterOutHealthyPartitions
+1,1,io.confluent.parallelconsumer.AmbientProbeExtensionTest,disabledByMethodLevelAnnotation
+1,2,io.confluent.parallelconsumer.AmbientProbeExtensionTest,disabledByInheritedClassLevelAnnotation
+1,2,io.confluent.parallelconsumer.AmbientProbeExtensionTest,progressProbeStopIsIdempotent
+1,3,io.confluent.parallelconsumer.AmbientProbeExtensionTest,disabledGloballyBySystemProperty
+1,3,io.confluent.parallelconsumer.AmbientProbeExtensionTest,disabledByClassLevelAnnotation
+1,3,io.confluent.parallelconsumer.AmbientProbeExtensionTest,autopsyListsViolationsWithCount
+1,4,io.confluent.parallelconsumer.AmbientProbeExtensionTest,enabledByDefault
+1,4,io.confluent.parallelconsumer.AmbientProbeExtensionTest,autopsyReportsProbeCleanWhenNothingObserved
+1,7,io.confluent.parallelconsumer.AmbientProbeExtensionTest,probeSetupFailureIsCaughtAndTestProceedsUnobserved
+1,78,io.confluent.parallelconsumer.AmbientProbeExtensionTest,otherPropertyValuesDoNotDisable
+1,91,io.confluent.parallelconsumer.AmbientProbeExtensionTest,observerModeRecordsViolationsButNeverLogsError
+1,389,io.confluent.parallelconsumer.AmbientProbeExtensionTest,autopsyShowsFrozenPartitionDetailWhenNoViolationCrossedBounds
+1,2812,io.confluent.parallelconsumer.AmbientProbeExtensionTest,nonBrokerTestInstanceIsIgnoredAndAllCallbacksNoOp
+4,0,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,messageConstructor
+4,0,io.confluent.parallelconsumer.sanity.QueueingSanityTests,test
+4,0,io.confluent.csid.utils.LoopingResumingIteratorTest,fromIsEnd
+4,0,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,varargsConstructorFormatsMessageAndKeepsCause
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[10]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[22]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[23]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[11]
+4,0,io.confluent.csid.utils.LoopingResumingIteratorTest,fromDoesntExist
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[12]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[24]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[8]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[25]
+4,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[5]
+4,0,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,registryFileExistsWhereTheCheckScriptsExpectIt
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,keyTestByteArray
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[7]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[26]
+4,0,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,decodeOffsetMap
+4,0,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV2WithDefaultErrorPolicy
+4,0,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,processInKeyOrder(CommitMode)
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[9]
+4,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[6]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[16]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[28]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[4]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[29]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[17]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[3]
+4,0,io.confluent.csid.utils.LoopingResumingIteratorTest,loopsCorrectly
+4,0,io.confluent.parallelconsumer.state.WorkManagerTest,basic(ProcessingOrder)[2]
+4,0,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightLong(CommitMode)
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[6]
+4,0,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,msgFactoryFormatsMessage
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[19]
+4,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[11]
+4,0,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[10]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,keyTest
+4,0,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,causeConstructor
+4,0,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,messageAndCauseConstructor
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[30]
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[2]
+4,0,io.confluent.csid.utils.LoopingResumingIteratorTest,demoOfNoSuchElementIssue
+4,0,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[20]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[12]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[7]
+4,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[9]
+4,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[21]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[8]
+4,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[8]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[11]
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[6]
+4,1,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,annotationIsMetaTaggedWithTheQuarantinedTag
+4,1,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,releaseWorkflowBlocksOnQuarantinedTests
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[5]
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,testUnorderedAndDelayed
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[13]
+4,1,io.confluent.csid.utils.SupplierUtilsTest,testMemoizeSupplierReturnsNull
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[6]
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[4]
+4,1,io.confluent.parallelconsumer.ParallelConsumerOptionsTest,setTimeBetweenCommits
+4,1,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,normalCaseWithPreExistingEpochIsUnaffected
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[3]
+4,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[13]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[15]
+4,1,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,pomExcludesTheQuarantinedGroupFromDefaultSuites
+4,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[14]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[4]
+4,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[4]
+4,1,io.confluent.parallelconsumer.state.ShardManagerTest,testAssignedQuickRevokeNPE
+4,1,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,quarantineLaneRunnerIncludesOnlyTheQuarantinedGroup
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV2WithIgnoreErrorPolicy
+4,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[12]
+4,1,io.confluent.csid.utils.LoopingResumingIteratorTest,fromBeginningFirstElement
+4,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[7]
+4,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[27]
+4,1,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,mixedPartitionPollSkipsOnlyUnassignedPartitions
+4,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[15]
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[7]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[2]
+4,1,io.confluent.csid.utils.LoopingResumingIteratorTest,noFrom
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[17]
+4,1,io.confluent.csid.utils.LoopingResumingIteratorTest,emptyInitialStartingKey
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,base64Encoding
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,basic(ProcessingOrder)[1]
+4,1,io.confluent.parallelconsumer.state.WorkContainerTest,retryDelayProvider
+4,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[18]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,largeOffsetMap
+4,1,io.confluent.csid.utils.SupplierUtilsTest,testMemoize
+4,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[3]
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,resumesFromNextShard(ProcessingOrder)[2]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressDecompressWithBase64SanityGzip
+4,1,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[5]
+4,1,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[2]
+4,1,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,noGaps
+4,1,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,workCompletedDuringAsyncCommitShouldKeepStateAsDirty
+4,1,io.confluent.csid.utils.SupplierUtilsTest,testMemoizeExceptionThrown
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,orderedByKeyParallel
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[1]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,binaryArrayConstruction
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV1WithDefaultErrorPolicy
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[2]
+4,1,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,perPrWorkflowRunsTheAuditAndTheNightlyWorkflowRunsTheLane
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[9]
+4,1,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[10]
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,testOrderedInFlightShouldBlockQueue
+4,1,io.confluent.parallelconsumer.state.WorkManagerTest,maxInFlight
+4,1,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,pollBeforeAssignmentShouldSkipRecordsNotCrash
+4,1,io.confluent.csid.utils.LoopingResumingIteratorTest,fromInMiddle
+4,2,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[5]
+4,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[14]
+4,2,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[3]
+4,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,serialiseCycle
+4,2,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,gatingCiScriptsExcludeTheQuarantinedGroup
+4,2,io.confluent.parallelconsumer.internal.InternalRuntimeExceptionTest,noArgConstructor
+4,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[1]
+4,2,io.confluent.parallelconsumer.state.WorkManagerTest,orderedByPartitionsParallel
+4,2,io.confluent.parallelconsumer.internal.EpochAndRecordsMapRaceTest,fullLifecycleRecordsRecoveredAfterAssignment
+4,2,io.confluent.csid.utils.LoopingResumingIteratorTest,loopsCorrectlyWithStartingObjectIndexZero
+4,2,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,vTwoIntegerOverflow(Version)[2]
+4,2,io.confluent.parallelconsumer.state.WorkManagerTest,insertWrongOrderPreservesOffsetOrdering
+4,2,io.confluent.parallelconsumer.state.WorkManagerTest,resumesFromNextShard(ProcessingOrder)[3]
+4,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseKafkaStreamsV1WithIgnoreErrorPolicy
+4,2,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,runLengthEncoding
+4,2,io.confluent.parallelconsumer.state.WorkManagerTest,resumesFromNextShard(ProcessingOrder)[1]
+4,2,io.confluent.parallelconsumer.offsets.BitSetEncodingTest,basic
+4,2,io.confluent.parallelconsumer.state.ShardKeyTest,testKeyEquality(Object, Object)[1]
+4,3,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeWithoutRunningShouldBeEventBasedFast(CommitMode)[1]
+4,3,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,concurrentSkipListMapSanityCheck
+4,3,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeWithoutRunningShouldBeEventBasedFast(CommitMode)[2]
+4,3,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressDecompressSanityZstd
+4,3,io.confluent.parallelconsumer.sanity.InterruptionTests,waitOnZeroCausesInfiniteWait
+4,3,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeWithoutRunningShouldBeEventBasedFast(CommitMode)[3]
+4,3,io.confluent.csid.utils.JavaEnvTest,checkJavaEnvironment
+4,3,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,bothSurefireAndFailsafeBindTheGroupProperties
+4,3,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,verifyEncodingWithNextExpectedBelowWatermark
+4,3,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,runLengthDeserialise
+4,3,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetCommitsAreIsolatedPerPartition(CommitMode)[3]
+4,3,io.confluent.parallelconsumer.state.ShardManagerTest,testRetryQueueOrdering
+4,4,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,javaSerialisationComparison
+4,4,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetCommitsAreIsolatedPerPartition(CommitMode)[2]
+4,4,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[2]
+4,4,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[11]
+4,4,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[12]
+4,4,io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorConfigurationTest,testHandleStaleWorkSplit
+4,4,io.confluent.parallelconsumer.state.WorkManagerTest,basic(ProcessingOrder)[3]
+4,5,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,annotationIsRuntimeRetainedAndTargetsClassesAndMethods
+4,5,io.confluent.parallelconsumer.state.WorkManagerTest,testOrderedAndDelayed
+4,5,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressDecompressSanityGzip
+4,5,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,deserialiseBitSet
+4,5,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsArentSequentialTwo
+4,5,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,stringVsByteVsBitSetEncoding
+4,5,io.confluent.parallelconsumer.state.WorkManagerTest,highVolumeKeyOrder(int)[8]
+4,5,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,loadCompressedRunLengthEncoding
+4,5,io.confluent.parallelconsumer.state.WorkManagerTest,workQueuesEmptyWhenAllWorkComplete
+4,5,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,consumeFlowDoesntRequireProducer(CommitMode)[1]
+4,5,io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorConfigurationTest,testHandleStaleWorkNoSplit
+4,5,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,laneWorkflowDeclaresItsTriggers
+4,6,io.confluent.parallelconsumer.state.WorkManagerTest,containerDelay
+4,6,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[16]
+4,7,io.confluent.csid.utils.SupplierUtilsTest,testMemoizeNullSupplier
+4,7,io.confluent.parallelconsumer.internal.ExceptionConstructorsTest,exposedStandardConstructorsPropagate(Class)[1]
+4,8,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,controlFlowException(CommitMode)[3]
+4,8,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[18]
+4,8,io.confluent.parallelconsumer.sanity.StreamTest,testStreamSpliterators
+4,9,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,ensureLibraryCantBeUsedTwice
+4,10,io.confluent.parallelconsumer.internal.ProducerManagerTest,txOnlyStartedUponMessageSend
+4,10,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,controlFlowException(CommitMode)[1]
+4,13,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,emptyLaneAndEmptyRegistryPasses
+4,14,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,largeIncompleteOffsetValues(long)[1]
+4,14,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,compactedTopic
+4,14,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,stringLiteralMentionsOfTheAnnotationDoNotCountAsQuarantined
+4,15,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,testVoidPollMethod(CommitMode)[2]
+4,15,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,nonQuarantinedTestInReportsFailsTheLaneLeakSelfCheck
+4,15,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,missingReportIsFlaggedNotRun
+4,16,io.confluent.parallelconsumer.JStreamParallelEoSStreamProcessorTest,testConsumeAndProduce
+4,16,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[7]
+4,17,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,fullyQualifiedAnnotationIsDetected
+4,17,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,cantUseProduceFlowWithWrongOptions
+4,17,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,closedUnmergedOwnerIsAnError
+4,18,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[9]
+4,18,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,staleRegistryEntryWithoutAnnotationFails
+4,18,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[5]
+4,18,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,failingQuarantinedTestIsExpectedReportOnly
+4,19,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[6]
+4,20,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,staleMethodEntryIsFlagged
+4,21,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,consistentRegistryPasses
+4,21,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,openOwnerWhosePreviewRemovesTheAnnotationClosesTheLoop
+4,21,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,flapperPassIsReportOnly
+4,22,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,fileMissingFromMergePreviewIsAdvisory
+4,24,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,sameLineStackedAnnotationIsDetected
+4,27,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,missingOwnerPrIsAnError
+4,27,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,mergedOwnerWithTestStillQuarantinedIsAnError
+4,28,io.confluent.parallelconsumer.state.ShardManagerTest,retryQueueOrdering
+4,30,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,largeIncompleteOffsetValues(long)[2]
+4,30,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,runLengthEncodingCompression
+4,30,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[1]
+4,30,io.confluent.parallelconsumer.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+4,32,io.confluent.parallelconsumer.state.WorkManagerTest,treeMapOrderingCorrect
+4,34,io.confluent.parallelconsumer.state.ShardKeyTest,nullKey
+4,34,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,fixedByDisagreeingWithRegistryOwnerIsFlagged
+4,38,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[4]
+4,45,io.confluent.parallelconsumer.JStreamParallelEoSStreamProcessorTest,testFlatMapProduce
+4,45,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[8]
+4,46,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,openOwnerWithQuarantineNotOnBaseIsAdvisory
+4,47,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,openOwnerWhosePreviewKeepsTheAnnotationIsAdvisory
+4,51,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,testVoidPollMethod(CommitMode)[1]
+4,54,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,vTwoIntegerOverflow(Version)[1]
+4,56,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[3]
+4,58,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,unownedEntryIsAdvisory
+4,58,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,gapsInOffsetsWork
+4,59,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,optionsProduceMessageFlowRequiresProducer
+4,61,io.confluent.parallelconsumer.state.WorkManagerTest,starvation
+4,62,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,controlFlowException(CommitMode)[2]
+4,64,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,secondUndiagnosedMethodCannotRideAlongOnTheFirstEntry
+4,66,io.confluent.parallelconsumer.state.WorkContainerTest,basics
+4,67,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding)[10]
+4,69,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,multiLineAnnotationArgumentsAreDetected
+4,73,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,committedOffsetLower
+4,73,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,parameterizedEntriesWithAnyFailureCountAsFailed
+4,74,io.confluent.parallelconsumer.offsets.OffsetEncodingBackPressureUnitTest,backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing
+4,74,io.confluent.parallelconsumer.QuarantineRegistryScriptTest,annotatedTestMissingFromRegistryFails
+4,77,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,deterministicPassDemandsActionAndThread
+4,78,io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorConfigurationTest,queueTargetLoad
+4,78,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,compressionCycle
+4,82,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,testSimultaneousWithOverflowErrors(TypeKind)[1]
+4,84,io.confluent.parallelconsumer.QuarantineLaneReportScriptTest,leakSelfCheckPassesWhenOnlyQuarantinedTestsRan
+4,85,io.confluent.csid.utils.TrimListRepresentationTest,customRepresentationFail
+4,88,io.confluent.parallelconsumer.JStreamParallelEoSStreamProcessorTest,testStream
+4,112,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeAfterSingleMessageShouldBeEventBasedFast(CommitMode)[2]
+4,112,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,consumeFlowDoesntRequireProducer(CommitMode)[2]
+4,113,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeAfterSingleMessageShouldBeEventBasedFast(CommitMode)[3]
+4,115,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,consumeFlowDoesntRequireProducer(CommitMode)[3]
+4,116,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closeAfterSingleMessageShouldBeEventBasedFast(CommitMode)[1]
+4,118,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)[3]
+4,118,io.confluent.parallelconsumer.truth.TruthGeneratorTests,generate
+4,118,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)[2]
+4,121,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,testVoidPollMethod(CommitMode)[3]
+4,123,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,produceMessageFlow(CommitMode)[2]
+4,160,io.confluent.parallelconsumer.QuarantinedAnnotationContractTest,quarantinedAnnotationsMustCarryNonBlankDiagnosis
+4,173,io.confluent.parallelconsumer.offsets.OffsetEncodingTests,largeIncompleteOffsetValues(long)[3]
+4,176,io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest,bootstrapPollOffsetHigherDueToRetentionOrCompaction
+4,190,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)[1]
+4,202,io.confluent.parallelconsumer.internal.ProducerManagerTest,testOptions
+4,213,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightSimplest(CommitMode)[1]
+4,214,io.confluent.parallelconsumer.CoreBatchTest,simpleBatchTest(ProcessingOrder)[3]
+4,216,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightSimplest(CommitMode)[2]
+4,217,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightSimplest(CommitMode)[3]
+4,220,io.confluent.parallelconsumer.CoreBatchTest,simpleBatchTest(ProcessingOrder)[1]
+4,220,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[2]
+4,222,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,failingActionNothingCommitted(CommitMode)[3]
+4,223,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,failingActionNothingCommitted(CommitMode)[1]
+4,223,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,failingActionNothingCommitted(CommitMode)[2]
+4,265,io.confluent.parallelconsumer.state.ShardManagerTest,testRetryQueueOrderingMultipleTries
+4,274,io.confluent.parallelconsumer.MockConsumerTest,mockConsumer
+4,274,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,produceMessageFlow(CommitMode)[3]
+4,279,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[1]
+4,316,io.confluent.parallelconsumer.ParallelEoSSStreamProcessorRebalancedTest,pausingAndResumingProcessingShouldWork(CommitMode)[1]
+4,326,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightShort(CommitMode)[3]
+4,331,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightShort(CommitMode)[1]
+4,333,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetsAreNeverCommittedForMessagesStillInFlightShort(CommitMode)[2]
+4,353,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,processInKeyOrderWorkNotReturnedDoesntBreakCommits
+4,405,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[3]
+4,423,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,offsetCommitsAreIsolatedPerPartition(CommitMode)[1]
+4,459,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,optionsGroupIdRequiredAndAutoCommitDisabled
+4,495,io.confluent.csid.utils.TrimListRepresentationTest,customRepresentationPass
+4,496,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,noGapsSerialisation
+4,548,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[20]
+4,809,io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest,differentInputsAndCompressions(String)[19]
+4,926,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,testThatInFlightWorkIsFinishedSuccessfullyAndOffsetsAreCommitted(CommitMode)[1]
+4,969,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,testThatInFlightWorkIsFinishedSuccessfullyAndOffsetsAreCommitted(CommitMode)[2]
+4,1003,io.confluent.parallelconsumer.state.WorkManagerTest,testAvailableWorkerCnt
+4,1103,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,testThatInFlightWorkIsFinishedSuccessfullyAndOffsetsAreCommitted(CommitMode)[3]
+4,1121,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,executorThreadsInterruptedOnShutdownTimeout(CommitMode)[2]
+4,1170,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,executorThreadsInterruptedOnShutdownTimeout(CommitMode)[3]
+4,1173,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,executorThreadsInterruptedOnShutdownTimeout(CommitMode)[1]
+4,1372,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,pausingAndResumingProcessingShouldWork(CommitMode)[2]
+4,1461,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,pausingAndResumingProcessingShouldWork(CommitMode)[1]
+4,1553,io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest,pausingAndResumingProcessingShouldWork(CommitMode)[3]
+4,2216,io.confluent.parallelconsumer.internal.ProducerManagerTest,sendingGetsLockedInTx
+4,2444,io.confluent.parallelconsumer.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+4,3045,io.confluent.parallelconsumer.PCMetricsTest,pcStatusMetricUpdatesOnChange
+4,3880,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,produceMessageFlow(CommitMode)[1]
+4,5109,io.confluent.parallelconsumer.CoreBatchTest,simpleBatchTest(ProcessingOrder)[2]
+4,5110,io.confluent.parallelconsumer.offsets.OffsetEncodingBackPressureTest,backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing
+4,5152,io.confluent.parallelconsumer.ParallelEoSSStreamProcessorRebalancedTest,pausingAndResumingProcessingShouldWork(CommitMode)[2]
+4,5212,io.confluent.parallelconsumer.ParallelEoSSStreamProcessorRebalancedTest,pausingAndResumingProcessingShouldWork(CommitMode)[3]
+4,6058,io.confluent.parallelconsumer.CheckQuarantineOwnersScriptTest,transientGhFailureIsAdvisoryNotError
+4,8081,io.confluent.parallelconsumer.CoreBatchTest,batchFailureTest(ProcessingOrder)[1]
+4,8100,io.confluent.parallelconsumer.CoreBatchTest,batchFailureTest(ProcessingOrder)[3]
+4,8189,io.confluent.parallelconsumer.CoreBatchTest,batchFailureTest(ProcessingOrder)[2]
+4,9786,io.confluent.parallelconsumer.PCMetricsTest,metricsRegisterBinding
+4,11644,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,closePCWhenInvalidPidMappingException
+4,11821,io.confluent.parallelconsumer.CoreBatchTest,averageBatchSizeTest
+4,20379,io.confluent.parallelconsumer.internal.ProducerManagerTest,producedRecordsCantBeInTransactionWithoutItsOffsetDirect
+4,55639,io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest,lessKeysThanThreads
+4,165224,io.confluent.parallelconsumer.offsets.RunLengthEncoderTest,testSimultaneousWithOverflowErrors(TypeKind)[2]
