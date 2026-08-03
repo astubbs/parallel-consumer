@@ -319,6 +319,40 @@ skipping the hosted gate - the gate staying independent is worth more than the m
 
 ## CI reliability / gate issues (follow-up work)
 
+- **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
+  execution and makes blocking findings inline. Four things it did NOT resolve, in rough priority:
+  - **A green `review` check can mean the reviewer never ran.** `claude-code-action` refuses to run
+    when the workflow file differs from the copy on the default branch (*"Workflow validation failed
+    ... must have identical content to the version on the repository's default branch"*) and reports
+    that skip as **success**. So any PR that edits `claude-code-review.yml` - or any workflow the
+    action validates - gets a green review check that verified nothing. It bit #102 and #104, both of
+    which are workflow changes and therefore cannot be reviewed by the bot before merge. This is a
+    deliberate (and correct) control on the action's part - it stops a PR rewriting the reviewer's own
+    grants and having that version execute - but it is invisible unless you read the job log.
+    **Do not read a green `review` check as "reviewed" on a workflow-touching PR.**
+  - **Credential exposure is unresolved, not cleared.** The review job runs PR-authored Maven/test
+    code in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`; if the action does not scrub it
+    before spawning Bash subprocesses, a malicious build plugin could exfiltrate it, and #102 widened
+    the blast radius by moving to `pull-requests: write`. Bounded by fork PRs not receiving secrets
+    (so: same-repo, push-access holders only) and by the grants being an enumerable allowlist rather
+    than blanket shell - **neither of which addresses the actual question**. Needs a one-line
+    confirmation from the `claude-code-action` docs/maintainers about token scrubbing. Until then,
+    treat review-triggered test execution as trusted-authors-only.
+  - **The reviewer cannot lint workflows.** `actionlint` is not granted, so on a workflow PR it can
+    only eyeball YAML - it said so itself on #102 ("trusted, not verified"). Ironic given #102 *is* a
+    workflow change. `actionlint` ships on `ubuntu-latest` and the repo already has
+    `.github/actionlint.yaml`, so this is a cheap grant. Land it in a **later** PR, not a workflow PR,
+    or the validation skip above means it is never exercised.
+  - **`bin/ci-integration-test.sh` may not fit the 30-minute cap.** It is granted, but Testcontainers
+    on a 2-core hosted runner is slow; if it overruns, the grant is nominally present and practically
+    unusable, and the failure looks like a timeout rather than a misconfiguration. Confirm on the first
+    real post-merge run. Also unverified: whether `cache: 'maven'` and Docker behave inside the
+    action's sandbox at all - none of #102's setup has executed yet, for the reason above.
+  - Related: `bin/todo-index.sh`'s grant was removed from #102 (the script lives on unmerged #103) and
+    **belongs in #103**, alongside the script, so it can actually be exercised. Also outstanding:
+    `pull-requests: write` may be droppable back to `read` if the action turns out to post via its own
+    app token - the comment beside the permission says so.
+
 - **Parallel-suite unit flakes - four distinct tests in one session (2026-07-31), watch for
   recurrence:** `ParallelEoSStreamProcessorTest`, `PCMetricsTest`, `ProducerManagerTest`, and
   `WorkManagerOffsetMapCodecManagerTest.largeOffsetMap` each failed once under the parallel unit
