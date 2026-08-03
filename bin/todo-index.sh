@@ -50,9 +50,6 @@ MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
 NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO)'
 
 emit_body() {
-    local total
-    total=0
-
     local current_group=""
     while IFS= read -r file; do
         # group by module (path up to /src/), else by top-level dir
@@ -83,7 +80,6 @@ emit_body() {
             # tidy: strip leading comment punctuation and whitespace, collapse runs of spaces
             text=$(printf '%s' "$text" | sed -E 's/^[[:space:]]*(\/\/|\*|#|<!--)?[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*(-->)?[[:space:]]*$//')
             printf -- '- L%s - %s\n' "$lineno" "$text"
-            total=$((total + 1))
         done <<< "$hits"
         printf '\n'
     done < <(list_files)
@@ -128,12 +124,11 @@ discoverable in aggregate without promoting them to tasks.
 Markers here are *not* a backlog - most are notes-to-self left next to the code they concern, and
 that is the right place for them. This index exists so they are **discoverable in aggregate**: to
 spot clusters (several markers around one class usually means a design that wants revisiting), and
-so that work parked in \`docs/inflight.md\` can point at the code that motivates it instead of
-restating it.
+so that the backlog can point at the code that motivates an item instead of restating it.
 
-The durable rule of thumb: if a marker describes work someone should actually schedule, it belongs
-in \`docs/inflight.md\` (with a link back to the code). If it is context for whoever next edits that
-line, leave it in the code - it will show up here.
+The durable rule of thumb: if a marker describes work someone should actually schedule, write it up
+in \`docs/refactoring.md\` (with a link back to the code). If it is context for whoever next edits
+that line, leave it in the code - it will show up here.
 EOF
 
     emit_body

@@ -22,12 +22,11 @@ discoverable in aggregate without promoting them to tasks.
 Markers here are *not* a backlog - most are notes-to-self left next to the code they concern, and
 that is the right place for them. This index exists so they are **discoverable in aggregate**: to
 spot clusters (several markers around one class usually means a design that wants revisiting), and
-so that work parked in `docs/inflight.md` can point at the code that motivates it instead of
-restating it.
+so that the backlog can point at the code that motivates an item instead of restating it.
 
-The durable rule of thumb: if a marker describes work someone should actually schedule, it belongs
-in `docs/inflight.md` (with a link back to the code). If it is context for whoever next edits that
-line, leave it in the code - it will show up here.
+The durable rule of thumb: if a marker describes work someone should actually schedule, write it up
+in `docs/refactoring.md` (with a link back to the code). If it is context for whoever next edits
+that line, leave it in the code - it will show up here.
 
 ### parallel-consumer-core
 
