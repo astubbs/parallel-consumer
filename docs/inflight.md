@@ -22,67 +22,6 @@
 > existing refactoring backlog, which already owns deferred work and keeps breaking changes in its
 > own release-gated section. Not here, and not in a new list. This file stays for *in-flight* work.
 
-## 🔀 IN REVIEW - PR #101: test-integrity defects found while fixing #100
-
-Branch **`fix/tests-that-never-run-and-codec-static-leak`** (off `master`), worktree
-`.claude/worktrees/test-integrity`, open as
-[#101](https://github.com/astubbs/parallel-consumer/pull/101). Everything here lets **green CI mean
-nothing** - found while fixing the W4 chaos RED, and deliberately kept out of #100 so that fix stayed
-reviewable. **Delete this section when #101 merges**; the durable parts are the ArchUnit rule and the
-`docs/refactoring.md` items it points at, not this entry.
-
-1. **Three tests had never run in CI.** `MockConsumerTestWith{CommitTimeout,SaslAuthentication}Exception`
-   and `MockConsumerTestWithEarlyClose` matched none of surefire's default includes (this repo declares
-   no `<includes>`), so they were never collected - and two of them cover other rungs of the very
-   commit-exception ladder #100 fixes. Renamed to `MockConsumer{CommitTimeout,SaslAuthentication,
-   EarlyClose}Test`; **all three pass** (no hidden failures). Renames registered in
-   `bin/check-copyright-headers.sh`'s provenance list, since they are upstream-derived files.
-   **Durable fix:** new ArchUnit rule `test_classes_must_be_named_so_surefire_collects_them` in the
-   shared `TestConventionRules`, so any future class with `@Test`/`@ParameterizedTest` methods whose
-   name surefire cannot collect fails the build. Verified RED-side with a deliberately misnamed probe,
-   not just assumed. Interfaces, abstract bases and `integrationTest` packages are exempt (failsafe
-   selects ITs by package, not name).
-2. **`largeOffsetMap` flake fixed at source.** `OffsetMapCodecManager.forcedCodec` /
-   `DefaultMaxMetadataSize` are mutable statics whose lock was one-sided - the three writer classes
-   declared `@ResourceLock`, the reader `WorkManagerOffsetMapCodecManagerTest` did not, so under
-   `<parallel>methods</parallel>` it could observe a forced codec (seen: 32 bytes of `BitSetV2` where a
-   compressed ~7 was asserted). The reader now declares both locks in READ mode - excluding the
-   writers while still allowing readers to run concurrently.
-   **Still open (deeper):** the class's own `todo remove static state manipulation from tests`. The
-   lock makes the flake go away; removing the static would make the hazard go away.
-3. **The shutdown-commit flake, fixed after this entry was first written.**
-   `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-   waited on control-loop *cycles* for a commit driven by wall-clock; it now waits for the commit
-   itself (`awaitForCommit`). That single test aborted the entire PIT mutation job whenever it flaked -
-   PIT fails when a test is unstable *without* mutation - so it was reddening
-   `Mutation Tests (PIT, PR-scoped)` on unrelated PRs, including #100. It was also the open
-   "BUG-OR-FLAKE to triage" item asking to be revisited alongside the #857 locking work: that is #100,
-   it was checked from there, and it is **not** that family. Full triage under *CI reliability / gate
-   issues* below.
-
-## ⏭️ NEXT UP — test-integrity defects found during PR #100 (do these next)
-
-Both are **test-infrastructure defects that let green CI mean nothing**, found while fixing the W4
-chaos RED. Neither is fixed in #100 (kept reviewable); both are cheap and should land right after it.
-
-1. **Three tests on master have never run in CI.** `MockConsumerTestWithCommitTimeoutException`,
-   `MockConsumerTestWithSaslAuthenticationException` and `MockConsumerTestWithEarlyClose` all end in
-   something other than `Test`, and this repo declares no surefire `<includes>`, so the defaults
-   (`**/Test*.java`, `**/*Test.java`, `**/*Tests.java`, `**/*TestCase.java`) never match them. They
-   are dead weight today - and two of them cover *other rungs of the very commit-exception ladder*
-   #100 fixes. **Fix:** rename to `*Test`, then actually look at the results - they have not run in a
-   long time, so expect real failures rather than assuming a clean rename. Consider a guard (an
-   ArchUnit rule, or `TestConventionsArchTest`) so a test class that surefire cannot collect fails
-   the build instead of silently disappearing - that guard is the durable fix, the renames are the
-   one-off.
-2. **`largeOffsetMap` flake: confirmed shared-static leakage, one-sided lock.**
-   `OffsetMapCodecManager.forcedCodec` is a mutable `public static`; the three classes that mutate it
-   declare `@ResourceLock`, the reader `WorkManagerOffsetMapCodecManagerTest` does not, so under
-   `<parallel>methods</parallel>` it can observe another test's forced codec (seen: 32 bytes of
-   `BitSetV2` where ~7 compressed was asserted). **Fix:** give the reader the same lock, or do the
-   `todo remove static state manipulation from tests` the class already carries. Details in the CI
-   reliability section below.
-
 ## 0.6.0 — first fork release (off `master`)
 
 The fork's debut is the **rebrand already on `master`** (`bz.stub.parallelconsumer`, Java 8,
