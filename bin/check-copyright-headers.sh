@@ -47,11 +47,16 @@ HEADER_WINDOW=8 # lines from the top of the file searched for copyright notices
 
 # Fork-side RENAMES of upstream files: 'newpath|oldpath-at-fork-point'. They keep the
 # Confluent header; if their content has diverged from the fork-point blob they must
-# also carry the modifications line. (These three were relocated in fface195.)
+# also carry the modifications line. (The first three were relocated in fface195; the
+# MockConsumer* trio was renamed so surefire would actually collect them - their old
+# names matched none of its include patterns, so they had never run in CI.)
 RENAMED_FROM_UPSTREAM="
 parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java|parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/CoreAppMetricsIntegrationTest.java
 parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/PrometheusContainer.java|parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/PrometheusContainer.java
 parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java|parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/StreamsAppTest.java
+parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerCommitTimeoutTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithCommitTimeoutException.java
+parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerSaslAuthenticationTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithSaslAuthenticationException.java
+parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerEarlyCloseTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithEarlyClose.java
 ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 "
 

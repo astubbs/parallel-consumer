@@ -7,6 +7,9 @@
 #   2. Every box present must be resolved - ticked `[x]`, or left `- [ ] ... N/A - <reason>`.
 # Real bot PRs (Dependabot/Renovate etc., GitHub user type "Bot") don't use the template and are
 # exempt entirely. Re-runs on body edits.
+#
+# It then enforces AGENTS.md's changelog reference convention on top. That gate's logic lives in
+# .github/scripts/changelog-ref-gate.js so it can be unit tested; this job runs those tests first.
 
 name: PR Checklist
 
@@ -16,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read # listFiles, to read the CHANGELOG.adoc patch
 
 concurrency:
   group: pr-checklist-${{ github.event.pull_request.number }}
@@ -27,6 +31,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
+      # Needed for the changelog gate's logic module and its unit tests. Only the PR's own tree is
+      # checked out, with no credentials - nothing here consumes secrets.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # The gate's own logic is subtle enough to have shipped two real misjudgements already, so it
+      # is unit tested and the tests run before the gate does.
+      - name: Self-test the changelog gate logic
+        run: node .github/scripts/changelog-ref-gate.test.js
+
       - name: Verify checklist is present and resolved (checked or N/A)
         uses: actions/github-script@v7
         with:
@@ -71,3 +86,67 @@ jobs:
             } else {
               core.info(`PR checklist OK (${boxes} box(es), all checked or marked N/A).`);
             }
+
+      # AGENTS.md's changelog reference convention ("link the PR/issue") was being missed routinely,
+      # for a structural reason rather than carelessness: the entry is written BEFORE the PR exists,
+      # so at authoring time there is no number to cite and nothing later prompts you to return. Four
+      # PRs in a row (#100-#103) shipped an entry with no self-reference until a human spotted each
+      # one. That is exactly the kind of "you must remember" rule worth making mechanical.
+      - name: Verify new changelog entries reference this PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/changelog-ref-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - changelog reference gate skipped.`);
+              return;
+            }
+
+            // Escape hatch, mirroring the checklist's own N/A convention: a PR that touches the
+            // changelog WITHOUT adding an entry of its own (fixing a typo in an older entry, say)
+            // can opt out with `changelog-ref: N/A - <reason>` on its own line in the PR body.
+            const optOut = gate.findOptOut(pr.body);
+            if (optOut) {
+              core.info(`Opted out via PR body: "${optOut}"`);
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+
+            const changelog = files.find(f => f.filename === "CHANGELOG.adoc");
+            // No patch also covers GitHub omitting it for very large diffs - accepted gap: a giant
+            // changelog rewrite would skip the check rather than fail it.
+            if (!changelog || !changelog.patch) {
+              core.info("No CHANGELOG.adoc change in this PR - nothing to check.");
+              return;
+            }
+
+            // Edits to existing entries are exempt; only genuinely new entries must self-cite.
+            const addedEntries = gate.findNewEntries(changelog.patch);
+
+            if (addedEntries.length === 0) {
+              core.info("CHANGELOG.adoc changed but no new entry lines added - nothing to check.");
+              return;
+            }
+
+            const referencing = addedEntries.filter(l => gate.citesPr(l, pr.number));
+
+            if (referencing.length === 0) {
+              core.setFailed(
+                `New CHANGELOG.adoc entr${addedEntries.length === 1 ? "y does" : "ies do"} not reference this PR (#${pr.number}).\n` +
+                `AGENTS.md: "a bare #NN refers to this fork ... and link the PR/issue".\n` +
+                `Add e.g. (https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${pr.number}[#${pr.number}]) to the entry.\n` +
+                `If this PR deliberately adds no entry of its own, put "changelog-ref: N/A - <reason>" in the PR body.\n\n` +
+                `Entr${addedEntries.length === 1 ? "y" : "ies"} added:\n` +
+                addedEntries.map(l => `  ${l.trim().slice(0, 160)}`).join("\n")
+              );
+              return;
+            }
+
+            core.info(`Changelog reference OK (${referencing.length}/${addedEntries.length} new entr(y/ies) cite #${pr.number}).`);

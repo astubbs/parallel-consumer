@@ -2,6 +2,31 @@
 
 Project context for AI coding agents (Claude Code, Copilot, Cursor, etc.).
 
+## Where things live (read this before concluding something isn't tracked)
+
+Documentation is split by *purpose*, and the split is enforced by convention rather than tooling - so
+the commonest mistake is not misreading a doc, it is **never opening it**. Before you conclude that
+some category of work is untracked, check this table. (Real example: a whole triage doc was once
+written because only `docs/inflight.md` was grepped, duplicating `docs/refactoring.md`, which had
+owned that content all along.)
+
+| Document | Owns | Explicitly NOT for |
+|---|---|---|
+| **`AGENTS.md`** (this file) | Conventions, build/test commands, and the rules agents must follow | Work items of any kind |
+| **`docs/inflight.md`** | *Transient* cross-branch state: what is in flight on which branch/worktree, and what is parked right now | A backlog. Entries shrink or vanish when work lands |
+| **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** in their own release-gated section, and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
+| **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
+| **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with frontmatter for searching | Open problems |
+| **`docs/plans/`** | Dated plan and investigation documents for a specific piece of work | Durable reference - a plan goes stale once its work lands |
+| **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
+| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping (branch/PR → upstream issue/PR, status) | Editorial opinion - that is the `.adoc` beside it |
+| **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when they disagree, the manifest wins |
+| **`CHANGELOG.adoc`** | Release notes, the source `README.adoc` is generated from | Anything invisible to users or operators |
+
+Rule of thumb: **is it happening now** → `inflight.md`; **should happen later** → `refactoring.md`;
+**already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
 ## Overview
 
 Parallel Consumer is a Java library that enables concurrent message processing from Apache Kafka with a single consumer, avoiding the need to increase partition counts. It maintains ordering guarantees (by partition or key) while processing messages in parallel.
@@ -164,7 +189,7 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 - **Do add:** behavioural/API changes, new features or modules, user-affecting bug fixes, and *notable or coordinated* dependency refreshes or any change to a user-facing runtime dependency (especially the Kafka client) - for a library these affect the transitive dependencies and compatibility that consumers inherit.
 - **Do add (`=== Build & CI`):** notable build, CI, tooling and test-infrastructure changes. This is a deeply technical library and its own contributors/agents are a primary audience - a new CI capability, a runner/workflow, a mutation/quarantine mechanism, or a build-enforcement change is worth recording, not just buried in git history.
 - **Don't add:** routine/automated single dependency bumps (Dependabot), no-op internal refactors, and pure formatting - genuinely invisible churn. (Everything with a real effect on how the project builds, tests, releases, or behaves is fair game.)
-- **Reference convention:** a bare `#NN` refers to this fork; write `upstream #NN` for upstream references, and link the PR/issue.
+- **Reference convention:** a bare `#NN` refers to this fork; write `upstream #NN` for upstream references, and link the PR/issue. **Enforced:** the `PR Checklist` gate fails a human-authored PR whose newly *added* entries don't cite it (`#NN` or `pull/NN`). Editing an existing entry doesn't count as adding one. Come back and add the link once the PR number exists. A PR that touches the changelog without adding an entry of its own can opt out with `changelog-ref: N/A - <reason>` on its own line in the PR body (the reason is required; mentions of the syntax mid-prose don't count).
 
 Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
 
@@ -218,7 +243,7 @@ Multiple agents/sessions often work in parallel git worktrees (kept under `.clau
 
 ## Refactoring backlog
 
-Deferred internal refactors (too big/risky to fold into the change at hand) live in [`docs/refactoring.md`](docs/refactoring.md) - a versioned markdown list, grouped by file, **not** GitHub issues (overkill for a solo maintainer). When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot (`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry to the doc. Promote an item to a branch/PR only when you actually start it; if it maps to an upstream issue, link it rather than duplicate. The doc also tracks **breaking changes queued for the next major version** in a separate, release-gated section, kept apart from the non-breaking internal refactors (those are batched for a major bump, not folded in ad hoc). This is distinct from `docs/inflight.md` (in-flight), `upstream-map.yaml` (fork↔upstream), and PR review feedback (raise on the PR).
+Deferred internal refactors (too big/risky to fold into the change at hand) live in [`docs/refactoring.md`](docs/refactoring.md) - a versioned markdown list, grouped by file, **not** GitHub issues (overkill for a solo maintainer). When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot (`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry to the doc. **`docs/refactoring.md` also owns the triage of plain `TODO`/`FIXME`/`XXX` markers** - there are ~90 of those versus a handful using the `TODO(refactor):` convention, and they are inventoried in the generated [`docs/TODO_INDEX.md`](docs/TODO_INDEX.md) (`bin/todo-index.sh`, `--check` fails when stale). It already covers the breaking-change queue, static-state removal, offset-encoder cleanups and per-file backlogs - so write triage up here, and **do not start a parallel list** (see *Where things live* at the top). Promote an item to a branch/PR only when you actually start it; if it maps to an upstream issue, link it rather than duplicate. The doc also tracks **breaking changes queued for the next major version** in a separate, release-gated section, kept apart from the non-breaking internal refactors (those are batched for a major bump, not folded in ad hoc). This is distinct from `docs/inflight.md` (in-flight), `upstream-map.yaml` (fork↔upstream), and PR review feedback (raise on the PR).
 
 ## Upstream tracking
 
