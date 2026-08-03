@@ -181,5 +181,39 @@ test("a longer number containing it does not count", () =>
 test("an unrelated citation does not count", () =>
   assert.strictEqual(citesPr("* Entry (#73)", 104), false));
 
+console.log("findNewEntries - content pairing, and where it gives up");
+
+test("a reworded edit still pairs when both sides share a citation", () =>
+  assert.deepStrictEqual(
+    findNewEntries(patch(
+      "@@ -1,2 +1,2 @@",
+      "-* Old wording entirely (https://github.com/o/r/pull/73[#73]).",
+      "+* Completely different prose now (https://github.com/o/r/pull/73[#73]).")),
+    []));
+
+test("distinct bumps pair correctly when the library name breaks the tie", () =>
+  assert.deepStrictEqual(
+    findNewEntries(patch(
+      "@@ -1,3 +1,4 @@",
+      "-* build(deps): Bump Kafka to 3.6.2",
+      "+* build(deps): Bump Testcontainers to 1.21.0",
+      "+* build(deps): Bump Kafka to 3.9.0")),
+    ["* build(deps): Bump Testcontainers to 1.21.0"]));
+
+// KNOWN LIMITATION, pinned deliberately so a future change to EDIT_THRESHOLD or editScore shows up
+// here rather than silently. Neither bullet carries a citation, so pairing falls back to word
+// overlap: the NEW "Bump Kafka" line matches the removed line's boilerplate more closely than the
+// genuine (reworded) edit does, so it is consumed as an edit and escapes the citation check, while
+// the real edit is reported as new. Wrong both ways round. If this test starts failing because the
+// gate got stricter, that is an improvement - update the expectation.
+test("mispairs same-template uncited bullets (accepted limitation, not desired behaviour)", () =>
+  assert.deepStrictEqual(
+    findNewEntries(patch(
+      "@@ -1,3 +1,4 @@",
+      "-* build(deps): Bump Testcontainers to 1.20.0",
+      "+* build(deps): Bump Kafka to 3.9.0",
+      "+* Upgraded the Testcontainers dependency, see release notes")),
+    ["* Upgraded the Testcontainers dependency, see release notes"]));
+
 console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
 process.exit(failures ? 1 : 0);

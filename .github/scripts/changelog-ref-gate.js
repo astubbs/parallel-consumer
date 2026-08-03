@@ -32,6 +32,17 @@ function similarity(a, b) {
 
 // How alike a removed and an added bullet must be before the pair reads as an edit of one entry
 // rather than a deletion plus an unrelated new entry.
+//
+// KNOWN LIMITATION (see the "mispairs same-template uncited bullets" test). When neither bullet
+// carries a citation, pairing falls back to plain word overlap - and this changelog is full of
+// same-template entries ("build(deps): Bump <lib> to <version>"). Two uncited bullets in one diff
+// block can then pair on boilerplate alone: a genuinely new entry gets consumed as an "edit" and
+// escapes the citation check, which is the false negative this gate exists to prevent.
+//
+// Left as-is rather than tuned blind. If it bites, the safer direction is to FAIL CLOSED - raise
+// this threshold so an uncertain pair is treated as a new entry needing a citation. That trades a
+// silent miss for a visible false alarm, which has an escape hatch (`changelog-ref: N/A - ...`)
+// whereas the miss has nothing.
 const EDIT_THRESHOLD = 0.5;
 
 // An entry keeps its (#NN) link even when the prose around it is rewritten wholesale, so a shared
