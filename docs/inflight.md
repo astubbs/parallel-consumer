@@ -571,7 +571,10 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     *without* mutation, so this one test reddened `Mutation Tests (PIT, PR-scoped)` on unrelated PRs -
     it is why #100's mutation check was red. The remaining `awaitForSomeLoopCycles` /
     `verify(after(...)).never()` waits in this class are still cycle- and sleep-based; converting them
-    is filed under *Test infrastructure - timing-based waits* in `docs/refactoring.md`.
+    are not yet written up anywhere - #103 adds a *Test infrastructure - timing-based waits* entry to
+    `docs/refactoring.md`, so file them there once it merges. (Deliberately not claiming they are
+    already filed: that section does not exist on this branch or on master yet, and a reference to
+    nothing is exactly what this PR is about.)
 - **DONE (PR #69): unified Awaitility + Hamcrest onto the real libraries.** Swapped all 11 shaded usages
   (`org.testcontainers.shaded.org.awaitility` in 3 `MockConsumerTest*` + 8 integration tests; also discovered
   `org.testcontainers.shaded.org.hamcrest` in 3 of them) to the real `org.awaitility` / `org.hamcrest` (both

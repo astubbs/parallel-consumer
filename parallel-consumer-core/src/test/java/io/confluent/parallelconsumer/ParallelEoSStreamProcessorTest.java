@@ -212,7 +212,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         consumerSpy.addRecord(ktu.makeRecord("1", "v3"));
         consumerSpy.addRecord(ktu.makeRecord("0", "v4"));
         AtomicBoolean gotK0 = new AtomicBoolean(false);
-        AtomicBoolean gotK1 = new AtomicBoolean(false);
         parallelConsumer.poll((record) -> {
             if (record.getSingleConsumerRecord().value().equals("v1")) {
                 gotK0.set(true);
@@ -223,8 +222,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                     interrupted.set(true);
                     Thread.interrupted(); //reset interrupted flag.
                 }
-            } else if (record.getSingleConsumerRecord().key().equals("1")) {
-                gotK1.set(true);
             }
         });
         // Wait for the blocking record to actually be in flight - only then is v1 latched and v2 queued
