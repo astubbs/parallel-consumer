@@ -242,12 +242,12 @@ class RunLengthEncoderTest {
      *       bitset/bytebuffer encodings are too large to allocate for a ~2.1B span), so the map is empty.</li>
      * </ul>
      * <p>
-     * Unlike {@link #vTwoIntegerOverflow}, this test cannot use the single-large-delta shortcut: the
-     * simultaneous encoder walks <em>every</em> offset in the range ({@link OffsetSimultaneousEncoder#invoke()}
-     * calls the per-offset encode for each one), so provoking an {@code int} overflow genuinely iterates ~2.1
-     * billion offsets - which is why the {@code INT} case is slow (~1.5 min). Making it fast needs a
-     * delta-aware {@code invoke()} (the run-length optimisation TODO on {@link OffsetSimultaneousEncoder}), a
-     * main-code change tracked in {@code docs/inflight.md} - not something to fake at the test level.
+     * Both cases are fast. The {@code SHORT} case has a small range. The {@code INT} case spans ~2.1 billion
+     * offsets, but the range is too large for any {@link BitSetEncoder} to be constructed, so only the
+     * distance-based {@link RunLengthEncoder}s remain active and {@link OffsetSimultaneousEncoder#invoke()}
+     * takes its sparse iteration path - visiting only the offsets at which the completion state changes, rather
+     * than walking all ~2.1 billion. {@code OffsetSimultaneousEncoderSparseIterationTest} guards that the sparse
+     * path is byte-identical to the full walk.
      */
     @ParameterizedTest
     @EnumSource(names = {"SHORT", "INT"}, mode = INCLUDE)

@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.SneakyThrows;
@@ -45,6 +46,25 @@ public abstract class OffsetEncoder {
     abstract byte[] serialise() throws EncodingNotSupportedException;
 
     abstract int getEncodedSize();
+
+    /**
+     * Whether this encoder must be shown <em>every</em> offset in the range being encoded, or whether it can be shown
+     * only the offsets at which the completion state changes (plus the range boundaries).
+     * <p>
+     * Encoders which write one unit of output per call (e.g. {@link BitSetEncoder}, {@link ByteBufferEncoder}) require
+     * every offset. Encoders which derive their output from the <em>distance</em> between the offsets they are shown
+     * (e.g. {@link RunLengthEncoder}) do not - see {@link OffsetSimultaneousEncoder#invoke()} for how that is exploited
+     * to avoid walking enormous offset ranges.
+     * <p>
+     * Defaults to the safe answer ({@code true}): a new encoder gets correct behaviour without having to know anything
+     * about the sparse iteration optimisation. Only override this to {@code false} if the encoder is genuinely
+     * distance-based.
+     *
+     * @return true if every offset in the range must be passed to this encoder, in ascending order
+     */
+    boolean requiresEveryOffset() {
+        return true;
+    }
 
     boolean quiteSmall() {
         return this.getEncodedSize() < OffsetSimultaneousEncoder.LARGE_ENCODED_SIZE_THRESHOLD_BYTES;
