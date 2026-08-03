@@ -383,6 +383,19 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   threads race on. Unblocked by the RunLengthEncoderTest fix (removed the ~85s single-class floor) + the arch
   rule (keeps container tests out of the forked unit suite). Write-up:
   `docs/solutions/test-flakiness/unit-tests-parallelise-by-forking-not-threading-2026-07-29.md`.
+  - **DONE (2026-08-03, branch `optimize/unit-gate`): fork TAIL now packed too — slowest classes run first.**
+    `runOrder=balanced` + `runOrderStatisticsFileChecksum` (surefire 3.5.5+) pins the stats to
+    `<module>/.surefire-pc-unit-times` so they can be **checked in** and work on a cold CI checkout; forks pull
+    from one shared queue, so slow-first stops a fork idling behind `RunLengthEncoderTest`. **Two findings that
+    matter for anyone tuning this next:** (1) `-T` module parallelism **LOSES** on the 2-core gate (~363→~432s)
+    and starves wait-heavy tests into awaitility timeouts — pick ONE parallelism axis per core budget, and here
+    that axis is forked surefire (this also demotes `forkCount=3+` oversubscription); (2) the suite is **hard to
+    benchmark**: `RunLengthEncoderTest` swings 67s↔166s for the same code depending on fork placement, which is
+    ±50-90s of noise on the total, so no hypothesis worth less than ~90s can be resolved by a single run. Fix the
+    dominant slow class before trusting other measurements. Write-up:
+    `docs/solutions/test-flakiness/unit-gate-fork-tail-packing-and-measurement-variance-2026-08-03.md`.
+    **Stats upkeep:** a newly added test class is unranked and sorts last (can displace the slow class from its
+    slot) — refresh the stats files when adding slow tests.
   - **Follow-up (jacoco under forking):** `prepare-agent` writes ONE `jacoco.exec` in append mode; N forks
     appending concurrently can corrupt/undercount coverage. If CI coverage looks wrong, give each fork its own
     exec file (`destFile` with `${surefire.forkNumber}`) + `jacoco:merge` before the report.
