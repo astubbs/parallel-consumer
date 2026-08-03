@@ -13,7 +13,7 @@ watching that PR's CI). **Updated the same day** after the investigation ran to 
 >
 > **Fix:** branch `fix/commit-rebalance-in-progress-kills-poll-thread` (off `master` `192d32bc`) -
 > one `catch` in `ConsumerManager.commitSync()` plus
-> `MockConsumerTestWithRebalanceInProgressException`, a broker-free unit reproducer that fails in
+> `MockConsumerRebalanceInProgressTest`, a broker-free unit reproducer that fails in
 > ~10s on unfixed code.
 >
 > **No open PR fixed this.** PR #80 is the nearest relative (same #857 family, also a close/commit
@@ -57,7 +57,7 @@ starved CI runner) reproduced the failure exactly: `ChaosRevokeUnderWorkCooperat
 132.5s with the same assertion, and the log shows the sequence above with the 10-second gap between
 the poll thread's death (`27:00.187`) and the control thread's timeout (`27:10.190`).
 
-`MockConsumerTestWithRebalanceInProgressException` then reduced it to a **broker-free unit test that
+`MockConsumerRebalanceInProgressTest` then reduced it to a **broker-free unit test that
 fails in ~10s** - a `MockConsumer` whose `commitSync` throws `RebalanceInProgressException`
 reproduces the whole chain, including the misleading timeout.
 

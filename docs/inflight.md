@@ -261,7 +261,7 @@ cooperative arm merely exposed it, because cooperative members keep committing *
 Not caused by any PR, and **not fixed by PR #80** (verified present in a run that still went red).
 
 Fix defers the commit in `ConsumerOffsetCommitter` (offsets stay dirty and really are retried) and
-releases waiters immediately. Reproducer: `MockConsumerTestWithRebalanceInProgressException` - broker
+releases waiters immediately. Reproducer: `MockConsumerRebalanceInProgressTest` - broker
 -free, fails in ~10s unfixed.
 
 **Full write-up:** [`docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md`](plans/2026-08-01-001-investigate-chaos-w4-red-report.md).
