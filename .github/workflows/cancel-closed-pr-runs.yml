@@ -1,0 +1,86 @@
+# Cancel a PR's still-running CI when the PR closes.
+#
+# Merging or closing a PR does NOT stop its in-flight runs - GitHub leaves them to finish. That is
+# mostly harmless on hosted runners, but this repo's heavy suites run on a small self-hosted pool
+# (see docs/SELF_HOSTED_RUNNER.md), where an abandoned run holds an executor that a live PR needs.
+#
+# The existing per-suite `concurrency` in pr-highcpu-fast-feedback.yml only supersedes THE SAME SUITE
+# ON THE SAME BRANCH, so it cannot help here: nothing about a merge looks like a new push. Observed
+# on 2026-08-03 - five branches' runs queued against five online runners, three of those branches
+# already merged.
+#
+# Applies to closed-unmerged too: an abandoned PR's run is just as wasteful as a merged one's.
+
+name: Cancel closed-PR runs
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write # cancel workflow runs
+  contents: read
+
+jobs:
+  cancel:
+    name: "Cancel closed-PR runs"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Cancel this PR's queued and in-progress runs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const headRef = pr.head.ref;
+            const headRepo = pr.head.repo ? pr.head.repo.full_name : null;
+
+            // Never touch the default branch: a merge queues master's own CI under that name, and
+            // cancelling the merge commit's build would be actively harmful.
+            if (headRef === context.payload.repository.default_branch) {
+              core.info(`Head ref is the default branch (${headRef}) - refusing to cancel.`);
+              return;
+            }
+
+            const cancellable = [];
+            for (const status of ["queued", "in_progress", "waiting", "requested", "pending"]) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: headRef,
+                status,
+                per_page: 100,
+              });
+              cancellable.push(...runs);
+            }
+
+            let cancelled = 0;
+            for (const run of cancellable) {
+              // Don't cancel ourselves.
+              if (run.id === context.runId) continue;
+
+              // Branch names are not unique across forks, so confirm the run really belongs to this
+              // PR's head repository before cancelling someone else's identically-named branch.
+              const runRepo = run.head_repository ? run.head_repository.full_name : null;
+              if (headRepo && runRepo && runRepo !== headRepo) {
+                core.info(`Skipping run ${run.id} (${run.name}) - head repo ${runRepo} is not ${headRepo}.`);
+                continue;
+              }
+
+              try {
+                await github.rest.actions.cancelWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                });
+                core.info(`Cancelled ${run.name} (run ${run.id}, ${run.status}).`);
+                cancelled++;
+              } catch (error) {
+                // A run that finished between listing and cancelling returns 409. Not a failure -
+                // the goal (that run is no longer consuming a runner) is already met.
+                core.info(`Could not cancel ${run.name} (run ${run.id}): ${error.message}`);
+              }
+            }
+
+            const verb = pr.merged ? "merged" : "closed unmerged";
+            core.info(`PR #${pr.number} ${verb}: cancelled ${cancelled} run(s) on ${headRef}.`);
