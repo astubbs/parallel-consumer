@@ -354,6 +354,35 @@ skipping the hosted gate - the gate staying independent is worth more than the m
 
 ## CI reliability / gate issues (follow-up work)
 
+- **Mutation testing is pointed at the wrong target — PARKED, not scheduled (2026-08-03).** PR #110
+  fixed the flake that was aborting the PIT lane, so it runs again. Whether it runs anywhere *useful*
+  is a separate question, analysed in `docs/plans/2026-08-03-002-mutation-testing-plan.md`. Summary of
+  what that found, so the reasoning is not lost if the doc goes unread:
+  - **The full `internal.*` sweep has never completed** — the script says so itself. 42+ min on CI,
+    83+ min locally with minions dying on `MEMORY_ERROR`. A sweep that never finishes scores *zero*
+    mutants: not a slow signal, no signal, and it costs highcpu runner time on every PR.
+  - **`internal.*` is close to the worst possible target.** It is the concurrency core, so mutants to
+    locks, loop conditions and timeouts *hang by construction* rather than dying fast, and the
+    timing-based covering tests make a survivor unfalsifiable ("nothing asserts this" is
+    indistinguishable from "the race did not happen this run").
+  - **Do NOT just lower `timeoutConstant`.** PIT counts `TIMED_OUT` as `KILLED`, so shortening it
+    reclassifies slow survivors as kills and *inflates* the score. It can only come down once the
+    targets are not hang-prone.
+  - **A green mutation check often means "nothing to mutate".** The scoped lane prints
+    `no core main-source classes changed ... skipping` and exits green on test-only/CI-only PRs.
+    Read the log, not the tick.
+  - **Our `targetClasses` glob matches test classes by name** (tests share the production package), and
+    only pitest's `mutableCodePaths` default keeps them out. Mutating tests would be actively harmful,
+    not merely wasteful: a mutated assertion fails its own test, so the mutant is recorded KILLED, and
+    the score climbs toward 100% while carrying no information about main code.
+  **Proposed (in payoff order):** move the full sweep to a nightly schedule; enable `withHistory`
+  incremental analysis (verify first whether the free OSS history file suffices or whether the
+  git-aware version needs commercial arcmutate); retarget from `internal.*` to `offsets.*` where a bug
+  means lost/duplicated records and mutants are *decidable*; wire `excludedGroups` explicitly (today
+  quarantined/chaos/perf tests are excluded only coincidentally, via the `integrationTests` glob — a
+  quarantined *unit* test would be run per-mutant); set `mutableCodePaths` explicitly. **Keep**
+  per-PR scoping to changed classes, and keep the lane advisory/non-gating.
+
 - **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
   execution and makes blocking findings inline. Four things it did NOT resolve, in rough priority:
   - **A green `review` check can mean the reviewer never ran.** `claude-code-action` refuses to run
