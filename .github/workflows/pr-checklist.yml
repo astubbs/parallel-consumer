@@ -92,8 +92,10 @@ jobs:
             // Escape hatch, mirroring the checklist's own N/A convention: a PR that touches the
             // changelog WITHOUT adding an entry of its own (fixing a typo in an older entry, say)
             // can opt out by putting `changelog-ref: N/A - <reason>` in the PR body.
+            // Anchored to its own line, and the reason is mandatory - otherwise a body that merely
+            // QUOTES the syntax mid-prose (like this PR's own description) silently disables the gate.
             const body = pr.body || "";
-            const optOut = body.match(/changelog-ref:\s*N\/?A\b[^\n]*/i);
+            const optOut = body.match(/^\s*changelog-ref:\s*N\/?A\b\s*-\s*\S[^\n]*/im);
             if (optOut) {
               core.info(`Opted out via PR body: "${optOut[0].trim()}"`);
               return;
@@ -106,17 +108,33 @@ jobs:
             });
 
             const changelog = files.find(f => f.filename === "CHANGELOG.adoc");
+            // No patch also covers GitHub omitting it for very large diffs - accepted gap: a giant
+            // changelog rewrite would skip the check rather than fail it.
             if (!changelog || !changelog.patch) {
               core.info("No CHANGELOG.adoc change in this PR - nothing to check.");
               return;
             }
 
-            // Only ADDED entry lines matter (asciidoc bullets, "* ..."). A PR that reflows or
-            // reformats without introducing an entry has nothing to reference.
-            const addedEntries = changelog.patch
-              .split(/\r?\n/)
-              .filter(l => /^\+\s*\*\s+\S/.test(l))
-              .map(l => l.replace(/^\+/, ""));
+            // Only genuinely NEW entry lines matter (asciidoc bullets, "* ..."). Git shows an edit
+            // to an existing single-line entry as an adjacent -/+ pair, so each "+" bullet first
+            // consumes an unmatched "-" bullet from the same change block (that's an edit, exempt);
+            // only leftover "+" bullets are new entries. Entries are single-line by convention -
+            // a citation on a wrapped continuation line would not be seen.
+            const isBullet = l => /^\s*\*\s+\S/.test(l);
+            const addedEntries = [];
+            let removedBullets = 0;
+            for (const line of changelog.patch.split(/\r?\n/)) {
+              if (line.startsWith("-")) {
+                if (isBullet(line.slice(1))) removedBullets++;
+              } else if (line.startsWith("+")) {
+                if (isBullet(line.slice(1))) {
+                  if (removedBullets > 0) removedBullets--;
+                  else addedEntries.push(line.slice(1));
+                }
+              } else {
+                removedBullets = 0; // context line or hunk header ends the change block
+              }
+            }
 
             if (addedEntries.length === 0) {
               core.info("CHANGELOG.adoc changed but no new entry lines added - nothing to check.");
