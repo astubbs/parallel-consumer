@@ -10,6 +10,21 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+# One review per PR at a time, newest wins. Without this the workflow had no concurrency group at
+# all (unlike maven.yml / pr-checklist.yml / copyright.yml / the highcpu lane), so a push shortly
+# after opening left BOTH runs alive and posted TWO reviews of the same PR - seen on #107, 23
+# seconds apart.
+#
+# That pattern is not rare, it is what this repo's own rules produce: the changelog gate added in
+# #104 requires the entry to cite the PR number, which does not exist until the PR is opened - so
+# opening a PR is routinely followed within seconds by a push to add the reference.
+#
+# Keyed on the PR number rather than the ref, so it also covers reopened PRs and does not collide
+# with anything else keyed on a branch name.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     if: github.event.sender.type != 'Bot'
