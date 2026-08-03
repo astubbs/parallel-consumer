@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
@@ -21,6 +22,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
@@ -48,6 +51,15 @@ import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 // todo refactor - remove tests which use hard coded state vs dynamic state - #compressionCycle, #selialiseCycle, #runLengthEncoding, #loadCompressedRunLengthRncoding
 @Slf4j
 @ExtendWith(MockitoExtension.class)
+// READ side of the codec's static state. OffsetMapCodecManager.forcedCodec and
+// DefaultMaxMetadataSize are mutable statics that OffsetEncodingBackPressureTest,
+// OffsetEncodingBackPressureUnitTest and OffsetEncodingTests all write under this lock. This class
+// only reads them, but the lock was one-sided: without declaring it here, `<parallel>methods</parallel>`
+// let this class run alongside a writer and observe a forced codec - which is what made
+// #largeOffsetMap flake, asserting a compressed ~7 bytes and getting 32 bytes of BitSetV2.
+// READ mode still lets these tests run concurrently with each other, only excluding the writers.
+@ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
+@ResourceLock(value = OffsetSimultaneousEncoder.COMPRESSION_FORCED_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
 class WorkManagerOffsetMapCodecManagerTest {
 
     PCModuleTestEnv module;
