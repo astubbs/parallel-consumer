@@ -10,6 +10,12 @@
 # already merged.
 #
 # Applies to closed-unmerged too: an abandoned PR's run is just as wasteful as a merged one's.
+#
+# Known limit: GitHub issues a READ-ONLY GITHUB_TOKEN for pull_request runs originating from a fork,
+# whatever the permissions block says - so closing a fork PR gets a 403 here (swallowed by the
+# catch-and-log below) and its runs are left alone. That does not undercut the point of this
+# workflow: pr-highcpu-fast-feedback.yml already restricts the self-hosted heavy jobs - the actually
+# scarce resource - to same-repo PRs. Worth knowing if that ever changes.
 
 name: Cancel closed-PR runs
 
@@ -61,9 +67,16 @@ jobs:
 
               // Branch names are not unique across forks, so confirm the run really belongs to this
               // PR's head repository before cancelling someone else's identically-named branch.
+              //
+              // "Cannot verify" must mean "do not touch", NOT "no filter". pr.head.repo is null once
+              // the source fork is deleted - routine, since contributors often delete a fork straight
+              // after merge - and an earlier version of this check read
+              // `if (headRepo && runRepo && ...)`, which short-circuits to false when headRepo is
+              // null and so cancelled every run matching the branch name, in any repo. That is the
+              // precise scenario the guard exists for.
               const runRepo = run.head_repository ? run.head_repository.full_name : null;
-              if (headRepo && runRepo && runRepo !== headRepo) {
-                core.info(`Skipping run ${run.id} (${run.name}) - head repo ${runRepo} is not ${headRepo}.`);
+              if (runRepo && (!headRepo || runRepo !== headRepo)) {
+                core.info(`Skipping run ${run.id} (${run.name}) - head repo ${runRepo} is not ${headRepo || "(unknown - fork deleted?)"}.`);
                 continue;
               }
 
