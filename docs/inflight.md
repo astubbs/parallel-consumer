@@ -22,6 +22,44 @@
 > existing refactoring backlog, which already owns deferred work and keeps breaking changes in its
 > own release-gated section. Not here, and not in a new list. This file stays for *in-flight* work.
 
+## 🔀 IN REVIEW - PR #101: test-integrity defects found while fixing #100
+
+Branch **`fix/tests-that-never-run-and-codec-static-leak`** (off `master`), worktree
+`.claude/worktrees/test-integrity`, open as
+[#101](https://github.com/astubbs/parallel-consumer/pull/101). Everything here lets **green CI mean
+nothing** - found while fixing the W4 chaos RED, and deliberately kept out of #100 so that fix stayed
+reviewable. **Delete this section when #101 merges**; the durable parts are the ArchUnit rule and the
+`docs/refactoring.md` items it points at, not this entry.
+
+1. **Three tests had never run in CI.** `MockConsumerTestWith{CommitTimeout,SaslAuthentication}Exception`
+   and `MockConsumerTestWithEarlyClose` matched none of surefire's default includes (this repo declares
+   no `<includes>`), so they were never collected - and two of them cover other rungs of the very
+   commit-exception ladder #100 fixes. Renamed to `MockConsumer{CommitTimeout,SaslAuthentication,
+   EarlyClose}Test`; **all three pass** (no hidden failures). Renames registered in
+   `bin/check-copyright-headers.sh`'s provenance list, since they are upstream-derived files.
+   **Durable fix:** new ArchUnit rule `test_classes_must_be_named_so_surefire_collects_them` in the
+   shared `TestConventionRules`, so any future class with `@Test`/`@ParameterizedTest` methods whose
+   name surefire cannot collect fails the build. Verified RED-side with a deliberately misnamed probe,
+   not just assumed. Interfaces, abstract bases and `integrationTest` packages are exempt (failsafe
+   selects ITs by package, not name).
+2. **`largeOffsetMap` flake fixed at source.** `OffsetMapCodecManager.forcedCodec` /
+   `DefaultMaxMetadataSize` are mutable statics whose lock was one-sided - the three writer classes
+   declared `@ResourceLock`, the reader `WorkManagerOffsetMapCodecManagerTest` did not, so under
+   `<parallel>methods</parallel>` it could observe a forced codec (seen: 32 bytes of `BitSetV2` where a
+   compressed ~7 was asserted). The reader now declares both locks in READ mode - excluding the
+   writers while still allowing readers to run concurrently.
+   **Still open (deeper):** the class's own `todo remove static state manipulation from tests`. The
+   lock makes the flake go away; removing the static would make the hazard go away.
+3. **The shutdown-commit flake, fixed after this entry was first written.**
+   `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+   waited on control-loop *cycles* for a commit driven by wall-clock; it now waits for the commit
+   itself (`awaitForCommit`). That single test aborted the entire PIT mutation job whenever it flaked -
+   PIT fails when a test is unstable *without* mutation - so it was reddening
+   `Mutation Tests (PIT, PR-scoped)` on unrelated PRs, including #100. It was also the open
+   "BUG-OR-FLAKE to triage" item asking to be revisited alongside the #857 locking work: that is #100,
+   it was checked from there, and it is **not** that family. Full triage under *CI reliability / gate
+   issues* below.
+
 ## 0.6.0 — first fork release (off `master`)
 
 The fork's debut is the **rebrand already on `master`** (`bz.stub.parallelconsumer`, Java 8,
@@ -518,16 +556,31 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     `OffsetSimultaneousEncoder.invoke()` walks *every* offset in the range (`range(length).forEach(...)`), so
     an int overflow genuinely iterates ~2.1B. Speeding it up needs a delta-aware `invoke()` (the run-length
     optimisation TODO already in `OffsetSimultaneousEncoder`) — a real main-code change, left for later.
-- **BUG-OR-FLAKE to triage: `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-  fails under thread-parallel unit tests.** The full thread-parallel unit run (`-Dparallel-tests=true`, 2:32)
-  went red only on this one — an `AssertionError` in `assertCommits`
-  (`AbstractParallelEoSStreamProcessorTestBase.java:382`); a mock shutdown-timing/commit-assertion test.
-  Per AGENTS.md: establish **static-state/timing artifact vs real concurrency bug** before masking — do NOT
-  just `@Isolated`/serialise it to go green. (Surefire mis-attributed it to `PartitionStateCommittedOffsetTest`
-  in the per-class report — report cross-contamination under parallelism; the real failing class is
-  `ParallelEoSStreamProcessorTest`.) **Revisit alongside the #857 locking work** — it's a shutdown/commit
-  assertion, so it may be the same commit-lock timing family; don't investigate/mask it in isolation, look
-  at it when we're back in the locking code.
+- **FIXED (2026-08-01): `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+  was a test-side timing race - NOT a product bug, and NOT the #857 commit-lock family.** The ledger
+  asked for this to be classified before masking and revisited "alongside the #857 locking work"; PR
+  #100 is that work, so it was checked from there, then fixed.
+  - **Diagnosis:** the assertion is set-wise (`hasSameElementsAs`), so the observed `[2, 2]` vs
+    expected `[1, 2]` meant **offset 1 was never committed at all**. The test needs a commit while
+    `v1` is latched, but waited on loop *cycles* (`awaitForSomeLoopCycles(2)`) while commits are
+    driven by wall-clock, with `commitInterval` at its 5s default. Release the latch first and `v1`
+    completes (100ms sleep), so the next commit covers offset 2 and offset 1 is never seen alone.
+  - **Not #100's mechanism**, on three counts: it needs a `RebalanceInProgressException`, which a
+    `MockConsumer` never raises; an instrumented full-suite run showed the deferral path executing
+    exactly 3 times across all modules, every one inside #100's own test; and #100 fails as a thrown
+    exception plus a dead instance, not a missing commit.
+  - **Fix:** wait on the event instead of on cycles - `awaitUntilTrue(gotK0::get)` then
+    `awaitForCommit(1)` (a primitive the test base already had). Plus a 100ms `commitInterval` for
+    this test only, via a new `getBaseOptionsKeyOrdered` overload, so a periodic commit actually
+    exists to wait for. Verified 6/6 clean runs, all three commit modes.
+  - **Why it mattered more than a red unit run:** PIT aborts outright when a test is unstable
+    *without* mutation, so this one test reddened `Mutation Tests (PIT, PR-scoped)` on unrelated PRs -
+    it is why #100's mutation check was red. The remaining `awaitForSomeLoopCycles` /
+    `verify(after(...)).never()` waits in this class are still cycle- and sleep-based; converting them
+    are not yet written up anywhere - #103 adds a *Test infrastructure - timing-based waits* entry to
+    `docs/refactoring.md`, so file them there once it merges. (Deliberately not claiming they are
+    already filed: that section does not exist on this branch or on master yet, and a reference to
+    nothing is exactly what this PR is about.)
 - **DONE (PR #69): unified Awaitility + Hamcrest onto the real libraries.** Swapped all 11 shaded usages
   (`org.testcontainers.shaded.org.awaitility` in 3 `MockConsumerTest*` + 8 integration tests; also discovered
   `org.testcontainers.shaded.org.hamcrest` in 3 of them) to the real `org.awaitility` / `org.hamcrest` (both

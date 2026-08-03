@@ -223,14 +223,14 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/offsets/WorkManagerOffsetMapCodecManagerTest.java`**
 
-- L48 - todo refactor - remove tests which use hard coded state vs dynamic state - #compressionCycle, #selialiseCycle, #runLengthEncoding, #loadCompressedRunLengthRncoding
+- L51 - todo refactor - remove tests which use hard coded state vs dynamic state - #compressionCycle, #selialiseCycle, #runLengthEncoding, #loadCompressedRunLengthRncoding
 
 **`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/ParallelEoSStreamProcessorTest.java`**
 
-- L474 - awaitForSomeLoopCycles(50); // async commit can be slow - todo change this to event based
-- L496 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
-- L506 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
-- L673 - verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction(); // todo remove all wait nevers in favour of triggers as it slows down test
+- L496 - awaitForSomeLoopCycles(50); // async commit can be slow - todo change this to event based
+- L518 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
+- L528 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
+- L695 - verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction(); // todo remove all wait nevers in favour of triggers as it slows down test
 
 **`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/state/ShardKeyTest.java`**
 

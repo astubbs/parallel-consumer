@@ -42,9 +42,9 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  */
 @Slf4j
 @Timeout(60000L)
-class MockConsumerTestWithSaslAuthenticationException {
+class MockConsumerSaslAuthenticationTest {
 
-    private final String topic = MockConsumerTestWithSaslAuthenticationException.class.getSimpleName();
+    private final String topic = MockConsumerSaslAuthenticationTest.class.getSimpleName();
 
     // Field so @AfterEach can close it. This class doesn't extend
     // AbstractParallelEoSStreamProcessorTestBase, so no base-class cleanup runs.
