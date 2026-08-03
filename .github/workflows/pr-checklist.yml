@@ -7,6 +7,9 @@
 #   2. Every box present must be resolved - ticked `[x]`, or left `- [ ] ... N/A - <reason>`.
 # Real bot PRs (Dependabot/Renovate etc., GitHub user type "Bot") don't use the template and are
 # exempt entirely. Re-runs on body edits.
+#
+# It then enforces AGENTS.md's changelog reference convention on top. That gate's logic lives in
+# .github/scripts/changelog-ref-gate.js so it can be unit tested; this job runs those tests first.
 
 name: PR Checklist
 
@@ -28,6 +31,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
+      # Needed for the changelog gate's logic module and its unit tests. Only the PR's own tree is
+      # checked out, with no credentials - nothing here consumes secrets.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # The gate's own logic is subtle enough to have shipped two real misjudgements already, so it
+      # is unit tested and the tests run before the gate does.
+      - name: Self-test the changelog gate logic
+        run: node .github/scripts/changelog-ref-gate.test.js
+
       - name: Verify checklist is present and resolved (checked or N/A)
         uses: actions/github-script@v7
         with:
@@ -82,6 +96,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/changelog-ref-gate.js`);
             const pr = context.payload.pull_request;
 
             if (pr.user && pr.user.type === "Bot") {
@@ -91,13 +106,10 @@ jobs:
 
             // Escape hatch, mirroring the checklist's own N/A convention: a PR that touches the
             // changelog WITHOUT adding an entry of its own (fixing a typo in an older entry, say)
-            // can opt out by putting `changelog-ref: N/A - <reason>` in the PR body.
-            // Anchored to its own line, and the reason is mandatory - otherwise a body that merely
-            // QUOTES the syntax mid-prose (like this PR's own description) silently disables the gate.
-            const body = pr.body || "";
-            const optOut = body.match(/^\s*changelog-ref:\s*N\/?A\b\s*-\s*\S[^\n]*/im);
+            // can opt out with `changelog-ref: N/A - <reason>` on its own line in the PR body.
+            const optOut = gate.findOptOut(pr.body);
             if (optOut) {
-              core.info(`Opted out via PR body: "${optOut[0].trim()}"`);
+              core.info(`Opted out via PR body: "${optOut}"`);
               return;
             }
 
@@ -115,35 +127,15 @@ jobs:
               return;
             }
 
-            // Only genuinely NEW entry lines matter (asciidoc bullets, "* ..."). Git shows an edit
-            // to an existing single-line entry as an adjacent -/+ pair, so each "+" bullet first
-            // consumes an unmatched "-" bullet from the same change block (that's an edit, exempt);
-            // only leftover "+" bullets are new entries. Entries are single-line by convention -
-            // a citation on a wrapped continuation line would not be seen.
-            const isBullet = l => /^\s*\*\s+\S/.test(l);
-            const addedEntries = [];
-            let removedBullets = 0;
-            for (const line of changelog.patch.split(/\r?\n/)) {
-              if (line.startsWith("-")) {
-                if (isBullet(line.slice(1))) removedBullets++;
-              } else if (line.startsWith("+")) {
-                if (isBullet(line.slice(1))) {
-                  if (removedBullets > 0) removedBullets--;
-                  else addedEntries.push(line.slice(1));
-                }
-              } else {
-                removedBullets = 0; // context line or hunk header ends the change block
-              }
-            }
+            // Edits to existing entries are exempt; only genuinely new entries must self-cite.
+            const addedEntries = gate.findNewEntries(changelog.patch);
 
             if (addedEntries.length === 0) {
               core.info("CHANGELOG.adoc changed but no new entry lines added - nothing to check.");
               return;
             }
 
-            // \b stops #100 matching inside #1000.
-            const ref = new RegExp(`(pull/${pr.number}\\b|#${pr.number}\\b)`);
-            const referencing = addedEntries.filter(l => ref.test(l));
+            const referencing = addedEntries.filter(l => gate.citesPr(l, pr.number));
 
             if (referencing.length === 0) {
               core.setFailed(
