@@ -44,7 +44,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerOffsetCommitter.java`**
 
-- L101 - todo keep work in limbo until async response is received?
+- L103 - todo keep work in limbo until async response is received?
 
 **`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/DynamicLoadFactor.java`**
 
@@ -134,12 +134,12 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkManager.java`**
 
-- L48 - todo make private
-- L52 - todo make private
+- L49 - todo make private
+- L53 - todo make private
 
 **`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerIntegrationTest.java`**
 
-- L99 - todo need to customise this for this test
+- L109 - todo need to customise this for this test
 
 **`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/CloseAndOpenOffsetTest.java`**
 
@@ -183,7 +183,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java`**
 
-- L109 - todo docs
+- L118 - todo docs
 
 **`parallel-consumer-core/src/test/java/io/confluent/csid/utils/KafkaTestUtils.java`**
 
