@@ -5,7 +5,7 @@
 "use strict";
 
 const assert = require("assert");
-const { findOptOut, findNewEntries, citesPr } = require("./changelog-ref-gate.js");
+const { findOptOut, citesIssue, sectionOf, entriesMissingIssue } = require("./changelog-ref-gate.js");
 
 let failures = 0;
 function test(name, fn) {
@@ -18,9 +18,31 @@ function test(name, fn) {
   }
 }
 
-function patch(...lines) {
-  return lines.join("\n");
+function lines(...parts) {
+  return parts.join("\n");
 }
+
+// A changelog shaped like the real one: several long entries per section, so a realistic diff's
+// three lines of context cannot reach back to the heading.
+const CHANGELOG = lines(
+  "== Unreleased",
+  "",
+  "=== Build & CI",
+  "",
+  "* some tooling change with no issue",
+  "* another tooling change",
+  "",
+  "=== Fixes",
+  "",
+  "* fix: an old entry that cites nothing",
+  "* fix: one that cites (https://github.com/confluentinc/parallel-consumer/issues/857[#857])",
+  "* fix: a newly added entry with no issue",
+  "* fix: a newly added entry (https://github.com/astubbs/parallel-consumer/issues/42[#42])",
+  "",
+  "=== Improvements",
+  "",
+  "* an improvement with no issue",
+);
 
 console.log("findOptOut - the escape hatch only fires when deliberately declared");
 
@@ -28,192 +50,98 @@ test("a declaration on its own line opts out", () =>
   assert.strictEqual(findOptOut("Intro\nchangelog-ref: N/A - CI-only change\nmore"),
     "changelog-ref: N/A - CI-only change"));
 
-test("leading whitespace and the NA spelling are both accepted", () =>
-  assert.strictEqual(findOptOut("  changelog-ref: NA - docs only"), "changelog-ref: NA - docs only"));
+test("a body merely quoting the syntax mid-prose does not opt out", () =>
+  assert.strictEqual(findOptOut("You can write `changelog-ref: N/A - reason` to opt out."), null));
 
-test("prose that merely documents the syntax does not opt out", () =>
-  assert.strictEqual(
-    findOptOut("Opt out with `changelog-ref: N/A - <reason>` in the body, mirroring the convention."),
-    null));
-
-test("a quoted line in a review reply does not opt out", () =>
-  assert.strictEqual(findOptOut("> changelog-ref: N/A - something"), null));
-
-test("a declaration with no reason does not opt out", () =>
+test("a declaration without a reason does not opt out", () =>
   assert.strictEqual(findOptOut("changelog-ref: N/A"), null));
 
-test("a declaration with an empty reason does not opt out", () =>
-  assert.strictEqual(findOptOut("changelog-ref: N/A - "), null));
+test("no declaration at all", () =>
+  assert.strictEqual(findOptOut("Just a normal description."), null));
 
-test("an empty body does not opt out", () => assert.strictEqual(findOptOut(""), null));
+console.log("\ncitesIssue - an explicit issue link, fork or upstream");
 
-test("a missing body does not throw", () => assert.strictEqual(findOptOut(null), null));
+test("a fork issue link counts", () =>
+  assert.strictEqual(citesIssue("* Entry (https://github.com/astubbs/parallel-consumer/issues/42[#42])"), true));
 
-console.log("\nfindNewEntries - added bullets, minus those that are edits of removed bullets");
+test("an upstream issue link counts", () =>
+  assert.strictEqual(citesIssue("* Entry (upstream https://github.com/confluentinc/parallel-consumer/issues/857[#857])"), true));
 
-test("a pure addition is a new entry", () =>
+test("a PULL link does not count - a PR is not an issue", () =>
+  assert.strictEqual(citesIssue("* Entry (https://github.com/astubbs/parallel-consumer/pull/104[#104])"), false));
+
+test("a bare #NN does not count - issues and PRs share one number sequence", () =>
+  assert.strictEqual(citesIssue("* Entry (#104)"), false));
+
+console.log("\nsectionOf - read from the changelog, not the diff");
+
+test("finds the enclosing section for an entry deep in a section", () =>
+  assert.strictEqual(sectionOf(CHANGELOG, "* fix: a newly added entry with no issue"), "Fixes"));
+
+test("finds Build & CI for an entry in that section", () =>
+  assert.strictEqual(sectionOf(CHANGELOG, "* some tooling change with no issue"), "Build & CI"));
+
+test("an entry not present in the file has no section", () =>
+  assert.strictEqual(sectionOf(CHANGELOG, "* fix: never written down"), null));
+
+console.log("\nentriesMissingIssue - the gate itself");
+
+// THE regression case. A real GitHub patch for this file gets `endif::[]` as its hunk-header
+// context, because git has no funcname pattern for asciidoc - and the entries are long enough that
+// three lines of context never reach the heading. An earlier version inferred the section from the
+// patch, saw null here, treated unknown as exempt, and passed uncited entries silently.
+test("flags an uncited Fixes entry even when the patch never shows the heading", () =>
   assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -26,6 +26,7 @@",
-      " == Unreleased",
-      "+* New feature entry (#104)",
-      " * Older entry (#73)")),
-    ["* New feature entry (#104)"]));
+    entriesMissingIssue(lines(
+      "@@ -30,6 +30,7 @@ endif::[]",
+      " * fix: an old entry that cites nothing",
+      " * fix: one that cites (https://github.com/confluentinc/parallel-consumer/issues/857[#857])",
+      "+* fix: a newly added entry with no issue"), CHANGELOG),
+    ["* fix: a newly added entry with no issue"]));
 
-test("editing one existing entry is not a new entry", () =>
+test("passes a Fixes entry that cites an issue", () =>
   assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,7 +28,7 @@",
-      " context",
-      "-* Dependencies and build plugins refreshed, JUnit 5.10.2 -> 5.14.4 (#73)",
-      "+* Dependencies and build plugins refreshed, JUnit 5.10.2 -> 5.14.3 (#73)",
-      " context")),
+    entriesMissingIssue(lines(
+      "@@ -30,6 +30,7 @@ endif::[]",
+      "+* fix: a newly added entry (https://github.com/astubbs/parallel-consumer/issues/42[#42])"), CHANGELOG),
     []));
 
-test("an edit and an addition in one block yields only the addition", () =>
+test("Build & CI is exempt - tooling work here has no issue behind it", () =>
   assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,7 +28,8 @@",
-      "-* Old entry version one (#73)",
-      "+* Old entry version two (#73)",
-      "+* Brand new unrelated entry about metrics (#104)",
-      " context")),
-    ["* Brand new unrelated entry about metrics (#104)"]));
-
-test("an addition listed before the edit it accompanies still pairs by content", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,6 +28,7 @@",
-      "+* Brand new unrelated entry about metrics (#104)",
-      "-* Old entry version one (#73)",
-      "+* Old entry version two (#73)",
-      " context")),
-    ["* Brand new unrelated entry about metrics (#104)"]));
-
-// The regression this file exists for: positional pairing consumed the new entry as an edit and
-// flagged the trailing real edit instead, so an uncited new entry sailed through the gate.
-test("a new entry inserted between two edits is the only one reported", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,8 +28,9 @@",
-      " context",
-      "-* Entry A original wording here (#10)",
-      "-* Entry B original wording here (#20)",
-      "+* Entry A revised wording here (#10)",
-      "+* Totally new entry about chaos testing, no citation yet",
-      "+* Entry B revised wording here (#20)",
-      " context")),
-    ["* Totally new entry about chaos testing, no citation yet"]));
-
-test("three edits with two insertions report only the insertions", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,9 +28,11 @@",
-      "-* Entry A original wording here (#10)",
-      "-* Entry B original wording here (#20)",
-      "-* Entry C original wording here (#30)",
-      "+* Entry A revised wording here (#10)",
-      "+* First insertion about broker polling",
-      "+* Entry B revised wording here (#20)",
-      "+* Second insertion about offset encoding",
-      "+* Entry C revised wording here (#30)",
-      " context")),
-    ["* First insertion about broker polling", "* Second insertion about offset encoding"]));
-
-test("a heavily rewritten entry is still an edit when it keeps its citation", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,7 +28,7 @@",
-      "-* Terse original note (#73)",
-      "+* A completely rewritten description with entirely different vocabulary throughout (#73)",
-      " context")),
+    entriesMissingIssue(lines(
+      "@@ -3,4 +3,5 @@ endif::[]",
+      "+* some tooling change with no issue"), CHANGELOG),
     []));
 
-test("an uncited old entry edited in place is still an edit", () =>
+test("an entry the file does not contain is not judged", () =>
   assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,7 +28,7 @@",
-      "-* Legacy entry from before the citation convention",
-      "+* Legacy entry from before the citation convention, typo fixed",
-      " context")),
+    entriesMissingIssue(lines(
+      "@@ -1,1 +1,2 @@",
+      "+* fix: never written down"), CHANGELOG),
     []));
 
-test("a deletion plus an unrelated addition reports the addition", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -28,7 +28,7 @@",
-      "-* Dropped note about vertx module wiring (#50)",
-      "+* Unrelated new entry covering commit-mode defaults (#104)",
-      " context")),
-    ["* Unrelated new entry covering commit-mode defaults (#104)"]));
+test("no changelog change at all is nothing to check", () =>
+  assert.deepStrictEqual(entriesMissingIssue("", CHANGELOG), []));
 
-test("a context line closes the block so distant bullets do not pair", () =>
+test("non-bullet additions are ignored", () =>
   assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -10,3 +10,2 @@",
-      "-* Entry A original wording here (#10)",
-      " context resets the block",
-      "+* Entry A original wording here (#10)")),
-    ["* Entry A original wording here (#10)"]));
-
-test("a pure deletion reports nothing", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch("@@ -10,2 +10,1 @@", "-* Removed entry (#50)", " context")),
+    entriesMissingIssue(lines(
+      "@@ -1,1 +1,2 @@",
+      "+=== Fixes",
+      "+",
+      "+NOTE:: some prose, not an entry"), CHANGELOG),
     []));
 
-test("non-bullet edits such as a heading tweak report nothing", () =>
+// Accepted consequence of dropping edit-detection: reworking an old uncited entry asks for a
+// citation it never had. Pinned so the trade-off is visible rather than surprising, and so that a
+// future change reinstating edit-detection shows up here.
+test("editing an old uncited entry does ask for a citation (accepted trade-off)", () =>
   assert.deepStrictEqual(
-    findNewEntries(patch("@@ -5,2 +5,2 @@", "-== Unreleased", "+== Unreleased (0.6.x)")),
-    []));
-
-test("an absent patch reports nothing", () => assert.deepStrictEqual(findNewEntries(undefined), []));
-
-console.log("\ncitesPr - the citation itself");
-
-test("a bare #NN counts", () => assert.strictEqual(citesPr("* Entry (#104)", 104), true));
-
-test("a full pull URL counts", () =>
-  assert.strictEqual(citesPr("* Entry (https://github.com/o/r/pull/104[#104])", 104), true));
-
-test("a longer number containing it does not count", () =>
-  assert.strictEqual(citesPr("* Entry (#1040)", 104), false));
-
-test("an unrelated citation does not count", () =>
-  assert.strictEqual(citesPr("* Entry (#73)", 104), false));
-
-console.log("findNewEntries - content pairing, and where it gives up");
-
-test("a reworded edit still pairs when both sides share a citation", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -1,2 +1,2 @@",
-      "-* Old wording entirely (https://github.com/o/r/pull/73[#73]).",
-      "+* Completely different prose now (https://github.com/o/r/pull/73[#73]).")),
-    []));
-
-test("distinct bumps pair correctly when the library name breaks the tie", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -1,3 +1,4 @@",
-      "-* build(deps): Bump Kafka to 3.6.2",
-      "+* build(deps): Bump Testcontainers to 1.21.0",
-      "+* build(deps): Bump Kafka to 3.9.0")),
-    ["* build(deps): Bump Testcontainers to 1.21.0"]));
-
-// KNOWN LIMITATION, pinned deliberately so a future change to EDIT_THRESHOLD or editScore shows up
-// here rather than silently. Neither bullet carries a citation, so pairing falls back to word
-// overlap: the NEW "Bump Kafka" line matches the removed line's boilerplate more closely than the
-// genuine (reworded) edit does, so it is consumed as an edit and escapes the citation check, while
-// the real edit is reported as new. Wrong both ways round. If this test starts failing because the
-// gate got stricter, that is an improvement - update the expectation.
-test("mispairs same-template uncited bullets (accepted limitation, not desired behaviour)", () =>
-  assert.deepStrictEqual(
-    findNewEntries(patch(
-      "@@ -1,3 +1,4 @@",
-      "-* build(deps): Bump Testcontainers to 1.20.0",
-      "+* build(deps): Bump Kafka to 3.9.0",
-      "+* Upgraded the Testcontainers dependency, see release notes")),
-    ["* Upgraded the Testcontainers dependency, see release notes"]));
+    entriesMissingIssue(lines(
+      "@@ -30,2 +30,2 @@ endif::[]",
+      "-* fix: an old entry that cited nothing, original wording",
+      "+* fix: an old entry that cites nothing"), CHANGELOG),
+    ["* fix: an old entry that cites nothing"]));
 
 console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
 process.exit(failures ? 1 : 0);
