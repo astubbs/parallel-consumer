@@ -12,9 +12,14 @@ watching that PR's CI). **Updated the same day** after the investigation ran to 
 > where they disagree with section 0, section 0 wins.
 >
 > **Fix:** branch `fix/commit-rebalance-in-progress-kills-poll-thread` (off `master` `192d32bc`) -
-> one `catch` in `ConsumerManager.commitSync()` plus
+> one `catch` in **`ConsumerOffsetCommitter.commitDeferringOnRebalance()`**, plus
 > `MockConsumerRebalanceInProgressTest`, a broker-free unit reproducer that fails in
 > ~10s on unfixed code.
+>
+> **Not** in `ConsumerManager.commitSync()`, which is where it looks like it belongs and where the
+> first attempt put it. That placement is *wrong* and section 0.5 explains why: it lets
+> `retrieveOffsetsAndCommit()` reach `onOffsetCommitSuccess()` and mark offsets clean that never
+> reached the broker. The layer is the whole point of the fix.
 >
 > **No open PR fixed this.** PR #80 is the nearest relative (same #857 family, also a close/commit
 > path bug) and was verified *present* in a CI run that still went red - see section 0.4.
