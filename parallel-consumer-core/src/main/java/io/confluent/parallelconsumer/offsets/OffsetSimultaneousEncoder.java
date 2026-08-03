@@ -2,12 +2,14 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.Range;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.WorkManager;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -96,6 +98,17 @@ public class OffsetSimultaneousEncoder {
      * The encoders to run. Concurrent so we can remove encoders while traversing.
      */
     private final ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> activeEncoders;
+
+    /**
+     * Which iteration strategy {@link #invoke()} actually used - true if the sparse (transition-only) walk was taken,
+     * false if every offset in the range was visited.
+     * <p>
+     * Visible for testing.
+     *
+     * @see #invoke(boolean)
+     */
+    @Getter(AccessLevel.PACKAGE)
+    private boolean sparseIterationUsed = false;
 
     public OffsetSimultaneousEncoder(long baseOffsetToCommit, long highestSucceededOffset, SortedSet<Long> incompleteOffsets) {
         this.lowWaterMark = baseOffsetToCommit;
@@ -214,23 +227,40 @@ public class OffsetSimultaneousEncoder {
      * TODO: optimisation - could double the run-length range from Short.MAX_VALUE (~33,000) to Short.MAX_VALUE * 2
      *  (~66,000) by using unsigned shorts instead (highest representable relative offset is Short.MAX_VALUE because each
      *  run-length entry is a Short)
-     * <p>
-     *  TODO VERY large offset ranges is slow (Integer.MAX_VALUE) - encoding scans could be avoided if passing in map of incompletes which should already be known
+     *
+     * @see #buildSparseRelativeOffsetsToVisit()
      */
     public OffsetSimultaneousEncoder invoke() {
+        /*
+         * Decide the iteration strategy ONCE, up front, from the encoders that are actually active. Encoders which
+         * write one unit of output per call (BitSet, ByteBuffer) must see every offset; if any such encoder is active
+         * we have to walk the whole range anyway, so there is nothing to gain from the sparse walk.
+         */
+        boolean canIterateSparsely = activeEncoders.stream().noneMatch(OffsetEncoder::requiresEveryOffset);
+        return invoke(canIterateSparsely);
+    }
+
+    /**
+     * Visible for testing ONLY - production code must use {@link #invoke()}, which chooses the strategy itself.
+     *
+     * @param useSparseIteration if true, visit only the offsets needed by distance-based encoders (see
+     *                           {@link #buildSparseRelativeOffsetsToVisit()}); if false, visit every offset in the
+     *                           range. Only safe to pass true when no active encoder
+     *                           {@link OffsetEncoder#requiresEveryOffset()}.
+     */
+    OffsetSimultaneousEncoder invoke(boolean useSparseIteration) {
         log.debug("Starting encode of incompletes, base offset is: {}, end offset is: {}", lowWaterMark, getEndOffsetExclusive());
         log.trace("Incompletes are: {}", this.incompleteOffsets);
 
         //
-        log.debug("Encode loop offset start,end: [{},{}] length: {}", this.lowWaterMark, getEndOffsetExclusive(), lengthBetweenBaseAndHighOffset);
-        /*
-         * todo refactor this loop into the encoders (or sequential vs non sequential encoders) as RunLength doesn't need
-         *  to look at every offset in the range, only the ones that change from 0 to 1. BitSet however needs to iterate
-         *  the entire range. So when BitSet can't be used, the encoding would be potentially a lot faster as RunLength
-         *  didn't need the whole loop.
-         */
-        Range relativeOffsetsLongRange = range(lengthBetweenBaseAndHighOffset);
-        relativeOffsetsLongRange.forEach(relativeOffset -> {
+        log.debug("Encode loop offset start,end: [{},{}] length: {} sparse: {}", this.lowWaterMark, getEndOffsetExclusive(), lengthBetweenBaseAndHighOffset, useSparseIteration);
+
+        this.sparseIterationUsed = useSparseIteration;
+        Iterable<Long> relativeOffsetsToVisit = useSparseIteration
+                ? buildSparseRelativeOffsetsToVisit()
+                : range(lengthBetweenBaseAndHighOffset);
+
+        relativeOffsetsToVisit.forEach(relativeOffset -> {
             // range index (relativeOffset) is used as we don't actually encode offsets, we encode the relative offset from the base offset
             final long actualOffset = this.lowWaterMark + relativeOffset;
             final boolean isIncomplete = this.incompleteOffsets.contains(actualOffset);
@@ -254,6 +284,82 @@ public class OffsetSimultaneousEncoder {
         log.debug("In order: {}", this.sortedEncodings);
 
         return this;
+    }
+
+    /**
+     * The (ascending, deduplicated) set of relative offsets that a purely distance-based encoder needs to be shown in
+     * order to produce exactly the same output as walking the entire range.
+     * <p>
+     * <b>Why this is correct - do not "simplify" this away.</b> {@link RunLengthEncoder} accumulates the open run by the
+     * <em>delta</em> to the previously seen offset ({@code currentRunLengthSize += relativeOffset - previousRangeIndex}),
+     * it does not count calls. So for a maximal run of same-state offsets {@code [a,b]}:
+     * <ul>
+     *     <li>the call at {@code a} sees a state change, closes the previous run and opens a new one of size 1;</li>
+     *     <li>the call at {@code b} adds delta {@code b - a}, giving the correct length {@code b - a + 1};</li>
+     *     <li>any additional calls <em>inside</em> {@code (a,b)} are harmless - the deltas simply telescope to the
+     *     same total.</li>
+     * </ul>
+     * Therefore it suffices to visit the first AND last offset of every maximal run. Both are needed: visiting only run
+     * starts would close each run at length 1.
+     * <p>
+     * Because a state change can only happen at an incomplete offset or immediately after one, the run boundaries are
+     * covered by the union of:
+     * <ul>
+     *     <li>{@code 0} (the first run always starts here, and it anchors the initial delta), and {@code length - 1}
+     *     (the last run always ends here),</li>
+     *     <li>for each incomplete offset in range, its relative offset and its two neighbours, clamped to the range.</li>
+     * </ul>
+     * A few redundant offsets are included (per the "harmless inside a run" property above) in exchange for an
+     * obviously-correct construction.
+     * <p>
+     * Note the returned collection is sized by the number of <em>incompletes</em>, never by the range - the whole point
+     * is to not touch a structure proportional to a range that can be ~2.1 billion wide.
+     */
+    private List<Long> buildSparseRelativeOffsetsToVisit() {
+        final long lastRelativeOffset = lengthBetweenBaseAndHighOffset - 1;
+        if (lastRelativeOffset < 0) {
+            // empty range - the full scan would visit nothing either
+            return Collections.emptyList();
+        }
+
+        SortedSet<Long> relativeOffsetsToVisit = new TreeSet<>();
+        relativeOffsetsToVisit.add(0L);
+        relativeOffsetsToVisit.add(lastRelativeOffset);
+
+        // Only incompletes that actually fall inside the encoded range matter - the full scan never looks outside it.
+        // Filtered by hand rather than via subSet(): this set is caller-supplied, and SortedSet#subSet throws
+        // IllegalArgumentException when the bounds fall outside an already-restricted view. That would surface as a
+        // failure to encode a commit, so it is not worth the risk - iteration stops early anyway because the set is
+        // sorted, giving the same cost as a subSet view.
+        final long endOffsetExclusive = getEndOffsetExclusive();
+        for (Long incompleteOffset : this.incompleteOffsets) {
+            if (incompleteOffset < lowWaterMark) {
+                continue; // below the range - later entries may still be inside it
+            }
+            if (incompleteOffset >= endOffsetExclusive) {
+                break; // sorted, so nothing beyond this point is in range either
+            }
+            final long relativeOffset = incompleteOffset - lowWaterMark;
+            relativeOffsetsToVisit.add(Math.max(0, relativeOffset - 1));
+            relativeOffsetsToVisit.add(relativeOffset);
+            relativeOffsetsToVisit.add(Math.min(lastRelativeOffset, relativeOffset + 1));
+        }
+
+        log.debug("Sparse encode: visiting {} relative offsets instead of {}", relativeOffsetsToVisit.size(), lengthBetweenBaseAndHighOffset);
+
+        // ascending order is required - the run-length delta must always be positive
+        return new ArrayList<>(relativeOffsetsToVisit);
+    }
+
+    /**
+     * Visible for testing ONLY. Drops every encoder that {@link OffsetEncoder#requiresEveryOffset()}, reproducing the
+     * production situation in which the sparse path in {@link #invoke()} is actually taken: an offset range so large
+     * that {@link BitSetEncoder} cannot even be constructed, leaving only the {@link RunLengthEncoder}s.
+     * <p>
+     * Lets tests exercise the sparse path over small, fast ranges.
+     */
+    void dropEncodersRequiringEveryOffset() {
+        activeEncoders.removeIf(OffsetEncoder::requiresEveryOffset);
     }
 
     private void registerEncodings(final Set<? extends OffsetEncoder> encoders) {

@@ -420,9 +420,12 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   - **Follow-up (jacoco under forking):** `prepare-agent` writes ONE `jacoco.exec` in append mode; N forks
     appending concurrently can corrupt/undercount coverage. If CI coverage looks wrong, give each fork its own
     exec file (`destFile` with `${surefire.forkNumber}`) + `jacoco:merge` before the report.
-  - **`RunLengthEncoderTest` ~59s floor** (the `testSimultaneousWithOverflowErrors` INT case genuinely walks
-    ~2.1B offsets in `OffsetSimultaneousEncoder.invoke()`) — needs a delta-aware `invoke()` (main-code
-    optimisation), not urgent.
+  - **DONE (branch `perf/sparse-offset-encoding`): the `RunLengthEncoderTest` ~59s floor is gone** —
+    `OffsetSimultaneousEncoder.invoke()` now skips offsets it doesn't need when every active encoder is
+    distance-based. `RunLengthEncoderTest` **62.3s → 0.2s** isolated; it no longer appears in the suite's
+    slowest classes at all. This also removed the biggest *measurement-variance* source (that one class used to
+    swing 67s↔166s depending on fork placement, ±50-90s on the total), so unit-gate experiments can once again
+    be resolved by a single run.
 - **DISABLED (PR #69): the experimental "Kafka Compat (experimental 4.x)" CI job** (`test-kafka-compat` in
   `.github/workflows/maven.yml`) is turned off via `if: false`. It currently fails and adds a red X of noise
   to every PR (it is `continue-on-error`, so it never gated merges). **Re-enable when the Kafka 4.x migration
@@ -507,11 +510,15 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   distance past the previous one overflows in ONE step via the same `Math.toIntExact` path. Replaced the loop
   with a two-call delta jump: the v2 case went **~85s → 0.087s**, overflow assertion untouched. Both overflow
   tests also got proper javadoc explaining the what/why. Class total now ~59s (was ~120s+).
-  - **Follow-up (main-code optimisation, NOT urgent — user: "not our big win"):** the *other* overflow test
-    `testSimultaneousWithOverflowErrors` INT case is still ~59s and **can't** use the delta shortcut —
-    `OffsetSimultaneousEncoder.invoke()` walks *every* offset in the range (`range(length).forEach(...)`), so
-    an int overflow genuinely iterates ~2.1B. Speeding it up needs a delta-aware `invoke()` (the run-length
-    optimisation TODO already in `OffsetSimultaneousEncoder`) — a real main-code change, left for later.
+  - **DONE (branch `perf/sparse-offset-encoding`) — the follow-up landed.** The *other* overflow test
+    `testSimultaneousWithOverflowErrors` (INT case) was still ~59s because `OffsetSimultaneousEncoder.invoke()`
+    walked *every* offset (`range(length).forEach(...)`), so an int overflow genuinely iterated ~2.1B. It now
+    takes the sparse path: `RunLengthEncoder` accumulates run length by **delta**, not by counting calls, so
+    visiting only the first and last offset of each maximal run is byte-identical to walking them all. Guarded
+    by a 130-case fixed-seed differential test (`OffsetSimultaneousEncoderSparseIterationTest`). Full scan is
+    retained whenever a `BitSet`/`ByteBuffer` encoder is active — those genuinely need every offset — via
+    `OffsetEncoder.requiresEveryOffset()`, which defaults to the safe value so future encoders opt in
+    deliberately.
 - **BUG-OR-FLAKE to triage: `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
   fails under thread-parallel unit tests.** The full thread-parallel unit run (`-Dparallel-tests=true`, 2:32)
   went red only on this one — an `AssertionError` in `assertCommits`
