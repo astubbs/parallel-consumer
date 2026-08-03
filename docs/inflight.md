@@ -16,12 +16,14 @@
 > *transient* working notes -- what's parked/in-flight right now. When adding a branch that maps
 > to an upstream issue/PR, record the mapping in `upstream-map.yaml`, not (only) here.
 
-## ✅ DONE (2026-08-01), awaiting PR: test-integrity defects found during PR #100
+## 🔀 IN REVIEW - PR #101: test-integrity defects found while fixing #100
 
 Branch **`fix/tests-that-never-run-and-codec-static-leak`** (off `master`), worktree
-`.claude/worktrees/test-integrity`. Both defects below let **green CI mean nothing**; found while
-fixing the W4 chaos RED, deliberately kept out of #100 to keep that fix reviewable. Expect a trivial
-conflict with #100's copy of this entry if that lands first - keep whichever is newer.
+`.claude/worktrees/test-integrity`, open as
+[#101](https://github.com/astubbs/parallel-consumer/pull/101). Everything here lets **green CI mean
+nothing** - found while fixing the W4 chaos RED, and deliberately kept out of #100 so that fix stayed
+reviewable. **Delete this section when #101 merges**; the durable parts are the ArchUnit rule and the
+`docs/refactoring.md` items it points at, not this entry.
 
 1. **Three tests had never run in CI.** `MockConsumerTestWith{CommitTimeout,SaslAuthentication}Exception`
    and `MockConsumerTestWithEarlyClose` matched none of surefire's default includes (this repo declares
@@ -42,6 +44,15 @@ conflict with #100's copy of this entry if that lands first - keep whichever is 
    writers while still allowing readers to run concurrently.
    **Still open (deeper):** the class's own `todo remove static state manipulation from tests`. The
    lock makes the flake go away; removing the static would make the hazard go away.
+3. **The shutdown-commit flake, fixed after this entry was first written.**
+   `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+   waited on control-loop *cycles* for a commit driven by wall-clock; it now waits for the commit
+   itself (`awaitForCommit`). That single test aborted the entire PIT mutation job whenever it flaked -
+   PIT fails when a test is unstable *without* mutation - so it was reddening
+   `Mutation Tests (PIT, PR-scoped)` on unrelated PRs, including #100. It was also the open
+   "BUG-OR-FLAKE to triage" item asking to be revisited alongside the #857 locking work: that is #100,
+   it was checked from there, and it is **not** that family. Full triage under *CI reliability / gate
+   issues* below.
 
 ## 0.6.0 — first fork release (off `master`)
 
@@ -345,6 +356,40 @@ to fix before ANY revival:
 skipping the hosted gate - the gate staying independent is worth more than the minutes saved.
 
 ## CI reliability / gate issues (follow-up work)
+
+- **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
+  execution and makes blocking findings inline. Four things it did NOT resolve, in rough priority:
+  - **A green `review` check can mean the reviewer never ran.** `claude-code-action` refuses to run
+    when the workflow file differs from the copy on the default branch (*"Workflow validation failed
+    ... must have identical content to the version on the repository's default branch"*) and reports
+    that skip as **success**. So any PR that edits `claude-code-review.yml` - or any workflow the
+    action validates - gets a green review check that verified nothing. It bit #102 and #104, both of
+    which are workflow changes and therefore cannot be reviewed by the bot before merge. This is a
+    deliberate (and correct) control on the action's part - it stops a PR rewriting the reviewer's own
+    grants and having that version execute - but it is invisible unless you read the job log.
+    **Do not read a green `review` check as "reviewed" on a workflow-touching PR.**
+  - **Credential exposure is unresolved, not cleared.** The review job runs PR-authored Maven/test
+    code in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`; if the action does not scrub it
+    before spawning Bash subprocesses, a malicious build plugin could exfiltrate it, and #102 widened
+    the blast radius by moving to `pull-requests: write`. Bounded by fork PRs not receiving secrets
+    (so: same-repo, push-access holders only) and by the grants being an enumerable allowlist rather
+    than blanket shell - **neither of which addresses the actual question**. Needs a one-line
+    confirmation from the `claude-code-action` docs/maintainers about token scrubbing. Until then,
+    treat review-triggered test execution as trusted-authors-only.
+  - **The reviewer cannot lint workflows.** `actionlint` is not granted, so on a workflow PR it can
+    only eyeball YAML - it said so itself on #102 ("trusted, not verified"). Ironic given #102 *is* a
+    workflow change. `actionlint` ships on `ubuntu-latest` and the repo already has
+    `.github/actionlint.yaml`, so this is a cheap grant. Land it in a **later** PR, not a workflow PR,
+    or the validation skip above means it is never exercised.
+  - **`bin/ci-integration-test.sh` may not fit the 30-minute cap.** It is granted, but Testcontainers
+    on a 2-core hosted runner is slow; if it overruns, the grant is nominally present and practically
+    unusable, and the failure looks like a timeout rather than a misconfiguration. Confirm on the first
+    real post-merge run. Also unverified: whether `cache: 'maven'` and Docker behave inside the
+    action's sandbox at all - none of #102's setup has executed yet, for the reason above.
+  - Related: `bin/todo-index.sh`'s grant was removed from #102 (the script lives on unmerged #103) and
+    **belongs in #103**, alongside the script, so it can actually be exercised. Also outstanding:
+    `pull-requests: write` may be droppable back to `read` if the action turns out to post via its own
+    app token - the comment beside the permission says so.
 
 - **Parallel-suite unit flakes - four distinct tests in one session (2026-07-31), watch for
   recurrence:** `ParallelEoSStreamProcessorTest`, `PCMetricsTest`, `ProducerManagerTest`, and
