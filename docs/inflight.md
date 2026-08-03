@@ -375,12 +375,14 @@ skipping the hosted gate - the gate staying independent is worth more than the m
     only pitest's `mutableCodePaths` default keeps them out. Mutating tests would be actively harmful,
     not merely wasteful: a mutated assertion fails its own test, so the mutant is recorded KILLED, and
     the score climbs toward 100% while carrying no information about main code.
-  **Proposed (in payoff order):** move the full sweep to a nightly schedule; enable `withHistory`
-  incremental analysis (verify first whether the free OSS history file suffices or whether the
-  git-aware version needs commercial arcmutate); retarget from `internal.*` to `offsets.*` where a bug
-  means lost/duplicated records and mutants are *decidable*; wire `excludedGroups` explicitly (today
+  **Proposed (in payoff order):** retarget from `internal.*` to `offsets.*` where a bug
+  means lost/duplicated records and mutants are *decidable*; move the full sweep to a nightly schedule;
+  wire `excludedGroups` explicitly (today
   quarantined/chaos/perf tests are excluded only coincidentally, via the `integrationTests` glob — a
-  quarantined *unit* test would be run per-mutant); set `mutableCodePaths` explicitly. **Keep**
+  quarantined *unit* test would be run per-mutant); set `mutableCodePaths` explicitly. `withHistory` incremental analysis is deliberately LAST, not
+  first: a history file only helps a run that *completes*, and none ever has — and for scoped runs the
+  dominant cost is the 332s instrumented coverage pass, which caching mutant verdicts does not touch.
+  **Keep**
   per-PR scoping to changed classes, and keep the lane advisory/non-gating.
 
 - **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify

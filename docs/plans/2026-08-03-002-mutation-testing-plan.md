@@ -103,12 +103,22 @@ Nothing here is scheduled. Listed so the reasoning is not lost.
 It has never completed, produces no signal, and burns runner time on every PR. An unbounded sweep
 belongs on a nightly with a generous timeout — where taking hours is fine.
 
-### 4.2 Turn on incremental analysis (`withHistory`)
+### 4.2 Incremental analysis (`withHistory`) — LATER, and it is not the lever it looks like
 
 PIT's OSS history file (`historyInputFile` / `historyOutputFile`) lets a run re-analyse only what
-changed. Cache it in CI. Biggest single win for anything repeated, and it pairs naturally with 4.1.
+changed. Worth having eventually, but **not** the early win it first appears to be, for two reasons:
 
-**Check before relying on this:** the basic history file is free in OSS pitest; the git-aware,
+1. **A history file only helps a run that completes.** Ours never has — the full sweep aborts or times
+   out, and the scoped lane mostly prints "nothing to mutate". There was never a successful run to
+   cache, and a run that dies in the coverage stage writes nothing useful. This is an optimisation for
+   *"completes, but slowly and repeatedly"*; we are at *"does not complete"*. **4.3 is the enabler, not
+   this.**
+2. **For scoped runs the dominant cost is the coverage pass, not the mutants** — 332s of instrumented
+   full-suite execution, paid whether you mutate two classes or two hundred. Caching mutation results
+   does not touch that. The lever for scoped runs is reducing what must be executed for coverage at
+   all (narrower `targetTests`), not remembering previous mutant verdicts.
+
+**Check before relying on it:** the basic history file is free in OSS pitest; the git-aware,
 change-based incremental analysis is part of **arcmutate** (pitest Pro), which is commercial. Confirm
 which capability we actually want and whether the free tier covers it, rather than assuming.
 
