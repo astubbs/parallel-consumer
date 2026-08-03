@@ -1,18 +1,15 @@
 # Investigation handoff: `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect`
 
-**Status:** open. Failure mechanism CONFIRMED by local reproduction; the remaining question is which
-layer owns the fix. This document is a starting point, not a conclusion.
+**Status:** RESOLVED — root cause confirmed by controlled experiment, fixed test-side, guard added.
+See §11 for the resolution. Sections 1-10 are the investigation as it stood, kept because the
+reasoning is the useful part.
 **Written:** 2026-08-03
 **Branch:** `investigate/producer-transaction-commit-flake`
 **Branched from:** `932a7032` (`master` — "fix(core): a rebalance-time commit no longer kills the broker-poll thread (#857 family) (#100)")
 
-Start here. Two things are established and two are not — keep them apart:
-
-- **Established (§3):** the failure reproduces locally (1 in 4 runs, no PIT needed) and the mechanism
-  is nailed down — the commit takes offsets one behind, *after* both records have been produced.
-- **NOT established (§4):** whether the window that allows this exists in **production** or only in
-  this test's hand-rolled harness. That is the whole question, and §4 is a lead to verify or destroy,
-  not a finding. Say which you did.
+**Resolved — read §11 first.** The §4 hypothesis was confirmed by a controlled experiment: the window
+exists **only in the test harness**, not in production. This is a test bug, not an EOS bug. The rest
+of the document is the investigation that got there.
 
 ---
 
@@ -121,12 +118,12 @@ Two details that matter more than the mismatch itself:
   record derived from offset 1.
 
 The mechanism is now settled: **the commit collected offsets while offset 1's work was produced but
-not yet recorded complete.** What remains open is only §4 — whether that window exists in production
-or only in this test harness.
+not yet recorded complete.** The only remaining question was §4 — whether that window exists in
+production or only in this test harness — and §11 answers it: **test harness only.**
 
 ---
 
-## 4. Leading hypothesis (UNVERIFIED): the test releases the produce lock earlier than production does
+## 4. Hypothesis — CONFIRMED (see §11): the test releases the produce lock earlier than production does
 
 ### The invariant the main code implements
 
@@ -296,3 +293,96 @@ the race needs — which makes PIT a *useful reproducer*, not merely a victim.
   broaden the matcher to make it pass.
 - **PIT is currently a canary.** Until this is fixed, the mutation lane reports suite stability, not
   mutation coverage. Worth restating in any PR that touches it.
+
+
+---
+
+## 11. RESOLUTION (2026-08-03)
+
+### Verdict: test-harness artifact. Production is correct.
+
+The §4 hypothesis was right, and it was confirmed by a **controlled experiment** rather than by the
+fix appearing to work — which matters, because a fix that works is not evidence of the cause.
+
+**The experiment.** Inject an identical 400ms delay on either side of the test's `unlock()`. Same
+added latency; only the position differs:
+
+| Variant | Result |
+|---|---|
+| delay **after** `unlock()` — widens the window between release and `addToMailbox` | **8/8 FAIL** |
+| delay **before** `unlock()` — same latency, but inside the lock, so no window | **8/8 PASS** |
+
+Baseline was ~1 in 6. The control arm rules out "it is just slower under load", which is what every
+previous look at this flake concluded.
+
+**Note on a false negative.** The first run of this experiment showed no effect. That result was void:
+`./mvnw -pl parallel-consumer-core` without `-am` fails the `ReactorModuleConvergence` enforcer rule,
+so the test never recompiled and both arms ran the stale class. Anyone re-running this must confirm
+`BUILD SUCCESS` on the compile step, not just look at the test outcome.
+
+### The causal chain, end to end
+
+1. The test hand-rolled its user function and called `beginProducing(mock(PollContextInternal.class))`
+   — a **mock** context, so the production release machinery had no lock registered against the real
+   one.
+2. It released in its own `finally`, **inside** the user function — before
+   `runUserFunctionInternal` reaches `addToMailBoxOnUserFunctionSuccess`.
+3. That opens a window: produce read lock free, work not yet in the controller's inbound queue.
+4. The controller (`AbstractParallelEoSStreamProcessor#controlLoop`) takes the commit write lock
+   (`maybeAcquireCommitLock`), drains a mailbox that does not yet contain the completion
+   (`processWorkCompleteMailBox`), then collects offsets.
+5. It commits `offset=1, metadata='bgAA'` — after both `send` calls. PC's encoding was *correct*: at
+   that instant offset 1 genuinely was incomplete. It was asked at the wrong moment.
+
+**Production closes this window in two places**, and `WorkContainer#onPostAddToMailBox` states the
+invariant outright:
+
+> *"Only unlock our producing lock, when we've had the WorkContainer state safely returned to the
+> controllers inbound queue, so we know it'll be included properly before the next commit as a
+> succeeded offset. As in order for the controller to perform the transaction commit, it will be
+> blocked from acquiring its commit lock until all produce locks have been returned, inbound queue
+> processed, and thus their representative offsets placed into the commit payload (offset map)."*
+
+`ParallelEoSStreamProcessor#pollAndProduce` puts the lock in the real context via
+`context.setProducingLock(...)`; release happens at `onPostAddToMailBox` (post-mailbox by
+construction) and in `cleanUpContext` in the `finally`. The test was at neither.
+
+### The fix
+
+`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` now acquires against
+the **real** context and hands the lock to it, exactly as production does, with no manual unlock. This
+is what the test's own pre-existing TODO asked for (*"this unlocks the produce lock too early - should
+be after WC returned"*). The dead `producingLockRef` went with it.
+
+**Result: 12/12 green**, against a ~1-in-6 baseline.
+
+### The guard
+
+A fix that only removes today's instance invites tomorrow's. The test now asserts that the produce
+lock is **still owned by the context when the user function returns** — that ownership is precisely
+what defers release to `onPostAddToMailBox`. Reintroduce manual lock management and it fails
+deterministically instead of returning as a 1-in-6 flake.
+
+The guard was verified by negative control: clearing the lock from the context makes the test fail
+(exit 1), so it is a real assertion and not decoration.
+
+### Expected knock-on: the PIT lane
+
+This was the only test failing without mutation, so `Mutation (PIT, scoped)` should now get past
+coverage calculation and actually score mutants — for the first time since this flake appeared.
+**Confirm that** (`bin/ci-mutation-test.sh`) rather than assuming it; a PIT lane that is still red
+means something else is also unstable.
+
+### Open question, deliberately not chased
+
+In transactional poll-and-produce, both `onPostAddToMailBox` (via `finishProducing`) and
+`cleanUpContext` release the same `ProducingLock`, and nothing clears
+`PollContextInternal#producingLock` in between. On a `ReentrantReadWriteLock.ReadLock`, a second
+`unlock()` by a thread holding zero read locks throws `IllegalMonitorStateException`. No such
+exception appeared in any of the 12 runs, so something prevents it — but **I did not establish what**,
+and an attempt to count acquire/release pairs via debug logging was itself invalid (`surefire:test`
+alone does not reprocess test resources, so the logging change never reached `target/test-classes`).
+
+Either both paths do not in fact both fire, or an exception is being swallowed somewhere a test would
+not notice. Worth a look on its own, independently of this fix — it is unrelated to the flake and the
+fix does not depend on the answer.
