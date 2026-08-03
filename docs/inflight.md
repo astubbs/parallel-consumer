@@ -2,7 +2,7 @@
 
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
-> from `git log`. Keep it current when context-switching. Last updated: 2026-07-31.
+> from `git log`. Keep it current when context-switching. Last updated: 2026-08-01.
 >
 > **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
 > No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
@@ -21,44 +21,6 @@
 > stale). **Triage of those markers belongs in [`docs/refactoring.md`](refactoring.md)** - the
 > existing refactoring backlog, which already owns deferred work and keeps breaking changes in its
 > own release-gated section. Not here, and not in a new list. This file stays for *in-flight* work.
-
-## 🔀 IN REVIEW - PR #101: test-integrity defects found while fixing #100
-
-Branch **`fix/tests-that-never-run-and-codec-static-leak`** (off `master`), worktree
-`.claude/worktrees/test-integrity`, open as
-[#101](https://github.com/astubbs/parallel-consumer/pull/101). Everything here lets **green CI mean
-nothing** - found while fixing the W4 chaos RED, and deliberately kept out of #100 so that fix stayed
-reviewable. **Delete this section when #101 merges**; the durable parts are the ArchUnit rule and the
-`docs/refactoring.md` items it points at, not this entry.
-
-1. **Three tests had never run in CI.** `MockConsumerTestWith{CommitTimeout,SaslAuthentication}Exception`
-   and `MockConsumerTestWithEarlyClose` matched none of surefire's default includes (this repo declares
-   no `<includes>`), so they were never collected - and two of them cover other rungs of the very
-   commit-exception ladder #100 fixes. Renamed to `MockConsumer{CommitTimeout,SaslAuthentication,
-   EarlyClose}Test`; **all three pass** (no hidden failures). Renames registered in
-   `bin/check-copyright-headers.sh`'s provenance list, since they are upstream-derived files.
-   **Durable fix:** new ArchUnit rule `test_classes_must_be_named_so_surefire_collects_them` in the
-   shared `TestConventionRules`, so any future class with `@Test`/`@ParameterizedTest` methods whose
-   name surefire cannot collect fails the build. Verified RED-side with a deliberately misnamed probe,
-   not just assumed. Interfaces, abstract bases and `integrationTest` packages are exempt (failsafe
-   selects ITs by package, not name).
-2. **`largeOffsetMap` flake fixed at source.** `OffsetMapCodecManager.forcedCodec` /
-   `DefaultMaxMetadataSize` are mutable statics whose lock was one-sided - the three writer classes
-   declared `@ResourceLock`, the reader `WorkManagerOffsetMapCodecManagerTest` did not, so under
-   `<parallel>methods</parallel>` it could observe a forced codec (seen: 32 bytes of `BitSetV2` where a
-   compressed ~7 was asserted). The reader now declares both locks in READ mode - excluding the
-   writers while still allowing readers to run concurrently.
-   **Still open (deeper):** the class's own `todo remove static state manipulation from tests`. The
-   lock makes the flake go away; removing the static would make the hazard go away.
-3. **The shutdown-commit flake, fixed after this entry was first written.**
-   `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-   waited on control-loop *cycles* for a commit driven by wall-clock; it now waits for the commit
-   itself (`awaitForCommit`). That single test aborted the entire PIT mutation job whenever it flaked -
-   PIT fails when a test is unstable *without* mutation - so it was reddening
-   `Mutation Tests (PIT, PR-scoped)` on unrelated PRs, including #100. It was also the open
-   "BUG-OR-FLAKE to triage" item asking to be revisited alongside the #857 locking work: that is #100,
-   it was checked from there, and it is **not** that family. Full triage under *CI reliability / gate
-   issues* below.
 
 ## 0.6.0 — first fork release (off `master`)
 
@@ -286,6 +248,35 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
     PR #87's two new files fixed in-PR; sweep the rest at their source PRs or in one pass after the
     stack merges.
 
+### ✅ FIXED (2026-08-01), awaiting PR: W4 revoke-under-work RED - unhandled `RebalanceInProgressException`
+
+Branch **`fix/commit-rebalance-in-progress-kills-poll-thread`** (off `master` `192d32bc`), **no PR yet**.
+
+A commit landing mid-rebalance threw `RebalanceInProgressException`, which nothing caught: it escaped
+`BrokerPollSystem.controlLoop()` and permanently killed the broker-poll thread - the only producer of
+commit responses - so every waiting committer hung until `offsetCommitTimeout` and then took the PC
+instance down. That is what turned the Chaos Pain Suite's W4 scenarios RED on every highcpu run since
+2026-07-31 05:24. Long-standing upstream bug (ladder came in with `29795bf5`/upstream #819); the
+cooperative arm merely exposed it, because cooperative members keep committing *during* rebalances.
+Not caused by any PR, and **not fixed by PR #80** (verified present in a run that still went red).
+
+Fix defers the commit in `ConsumerOffsetCommitter` (offsets stay dirty and really are retried) and
+releases waiters immediately. Reproducer: `MockConsumerRebalanceInProgressTest` - broker
+-free, fails in ~10s unfixed.
+
+**Full write-up:** [`docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md`](plans/2026-08-01-001-investigate-chaos-w4-red-report.md).
+
+**Follow-ups this surfaced (not in that branch):**
+- `ConsumerManager.commitSync()`'s pre-existing `CommitFailedException` handler has the same latent
+  flaw - it breaks out and lets `onOffsetCommitSuccess()` mark offsets clean, so a commit that never
+  reached the broker is recorded as done, despite the comment promising a later re-commit.
+- `ConsumerOffsetCommitter.commitAndWait()` waits on `offsetCommitTimeout` but interpolates
+  `DEFAULT_TIMEOUT` into the error, so every such message misstates the wait (reported `PT30S` for an
+  actual 10s). Tiny standalone fix + unit test.
+- The highcpu lane runs six suites (incl. two PIT sweeps) concurrently per branch on one box; three
+  jobs died of runner-lost-communication during this investigation. Independent of the bug above, but
+  it makes chaos timing SLOs noisy - consider a shared concurrency group or moving mutation off-box.
+
 ## Quarantine lane (`@Quarantined`) — active roster
 
 Branch `ci/quarantined-test-lane`. Known-failing-on-master tests leave the *gating* suites (green means
@@ -400,11 +391,19 @@ skipping the hosted gate - the gate staying independent is worth more than the m
 - **Parallel-suite unit flakes - four distinct tests in one session (2026-07-31), watch for
   recurrence:** `ParallelEoSStreamProcessorTest`, `PCMetricsTest`, `ProducerManagerTest`, and
   `WorkManagerOffsetMapCodecManagerTest.largeOffsetMap` each failed once under the parallel unit
-  suite. The first three fit the known tight-timeout-under-contention pattern (solutions doc below),
-  but `largeOffsetMap` smells like a shared-static codec-state race rather than timing - check
-  `OffsetMapCodecManager`'s static state (e.g. forced-codec/compression flags) for cross-test leakage
-  before blaming contention. If any recurs, classify per the AGENTS.md stress-failure discipline
-  (contention-sensitivity vs real bug) before touching bounds.
+  suite. The first three fit the known tight-timeout-under-contention pattern (solutions doc below).
+  **`largeOffsetMap`: hypothesis CONFIRMED (2026-08-01), mechanism found - it is shared-static
+  leakage, not contention.** Reproduced during the PR #100 work: it failed asserting the encoded size
+  is `< 10` but got **32 bytes**, i.e. a `BitSetV2` encoding rather than the expected compressed ~7.
+  `OffsetMapCodecManager.forcedCodec` is a mutable `public static` that
+  `OffsetEncodingBackPressureTest`, `OffsetEncodingBackPressureUnitTest` and `OffsetEncodingTests` all
+  set - and **the lock is one-sided**: those mutators declare `@ResourceLock(...)`, but the *reader*
+  `WorkManagerOffsetMapCodecManagerTest` declares none, so it can run concurrently with a mutator and
+  observe a forced codec. (`OffsetMapCodecManager` even carries a `todo remove static state
+  manipulation from tests`.) **Fix**: give the reader class the same `@ResourceLock` as the mutators -
+  or better, do the todo and remove the static. Deliberately NOT fixed in PR #100 to keep that fix
+  reviewable; anything that changes unit-suite scheduling (such as adding a test class) makes this
+  flake more likely, so it is worth doing soon.
 - **Stacked PRs are ungated - dependency check "required" doesn't apply to them (2026-07-31).**
   Observed: PR #87 (base = #85's branch) FAILS the PR-dependency check yet shows as mergeable.
   Diagnosis: required status checks are configured in the ruleset targeting `master`, so they only
