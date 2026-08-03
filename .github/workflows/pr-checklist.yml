@@ -8,7 +8,7 @@
 # Real bot PRs (Dependabot/Renovate etc., GitHub user type "Bot") don't use the template and are
 # exempt entirely. Re-runs on body edits.
 #
-# It then enforces AGENTS.md's changelog reference convention on top. That gate's logic lives in
+# It then enforces the changelog issue-reference convention on top. That gate's logic lives in
 # .github/scripts/changelog-ref-gate.js so it can be unit tested; this job runs those tests first.
 
 name: PR Checklist
@@ -87,12 +87,16 @@ jobs:
               core.info(`PR checklist OK (${boxes} box(es), all checked or marked N/A).`);
             }
 
-      # AGENTS.md's changelog reference convention ("link the PR/issue") was being missed routinely,
-      # for a structural reason rather than carelessness: the entry is written BEFORE the PR exists,
-      # so at authoring time there is no number to cite and nothing later prompts you to return. Four
-      # PRs in a row (#100-#103) shipped an entry with no self-reference until a human spotted each
-      # one. That is exactly the kind of "you must remember" rule worth making mechanical.
-      - name: Verify new changelog entries reference this PR
+      # A user-visible changelog entry should say WHICH reported problem or request it addresses, so
+      # a reader can follow it back. Fork and upstream issues both count.
+      #
+      # This replaces an earlier rule requiring the entry to cite its own PR. That was a nuisance by
+      # construction: the PR number does not exist until the PR is opened, so every PR needed a
+      # second push purely to add the reference - which in turn double-triggered the review workflow
+      # (#109). An issue number is known before the work starts.
+      #
+      # Build & CI is exempt - see SECTIONS_REQUIRING_AN_ISSUE in the gate module for why.
+      - name: Verify new changelog entries cite an issue
         uses: actions/github-script@v7
         with:
           script: |
@@ -127,26 +131,22 @@ jobs:
               return;
             }
 
-            // Edits to existing entries are exempt; only genuinely new entries must self-cite.
-            const addedEntries = gate.findNewEntries(changelog.patch);
+            // Edits to existing entries are exempt; only genuinely new ones need a citation, and
+            // only in the sections where an issue is meaningful.
+            const missing = gate.entriesMissingIssue(changelog.patch);
 
-            if (addedEntries.length === 0) {
-              core.info("CHANGELOG.adoc changed but no new entry lines added - nothing to check.");
+            if (missing.length === 0) {
+              core.info("Changelog OK - every new entry that needs an issue reference has one.");
               return;
             }
 
-            const referencing = addedEntries.filter(l => gate.citesPr(l, pr.number));
-
-            if (referencing.length === 0) {
-              core.setFailed(
-                `New CHANGELOG.adoc entr${addedEntries.length === 1 ? "y does" : "ies do"} not reference this PR (#${pr.number}).\n` +
-                `AGENTS.md: "a bare #NN refers to this fork ... and link the PR/issue".\n` +
-                `Add e.g. (https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${pr.number}[#${pr.number}]) to the entry.\n` +
-                `If this PR deliberately adds no entry of its own, put "changelog-ref: N/A - <reason>" in the PR body.\n\n` +
-                `Entr${addedEntries.length === 1 ? "y" : "ies"} added:\n` +
-                addedEntries.map(l => `  ${l.trim().slice(0, 160)}`).join("\n")
-              );
-              return;
-            }
-
-            core.info(`Changelog reference OK (${referencing.length}/${addedEntries.length} new entr(y/ies) cite #${pr.number}).`);
+            core.setFailed(
+              `New CHANGELOG.adoc entr${missing.length === 1 ? "y does" : "ies do"} not cite an issue.\n` +
+              `Entries under ${gate.SECTIONS_REQUIRING_AN_ISSUE.join(" / ")} should say which reported problem or request they address.\n` +
+              `Link the issue explicitly - a bare #NN is ambiguous, since issues and PRs share one number sequence:\n` +
+              `  fork:     (https://github.com/${context.repo.owner}/${context.repo.repo}/issues/NN[#NN])\n` +
+              `  upstream: (upstream https://github.com/confluentinc/parallel-consumer/issues/NN[#NN])\n` +
+              `If there genuinely is no issue, put "changelog-ref: N/A - <reason>" on its own line in the PR body.\n\n` +
+              `Entr${missing.length === 1 ? "y" : "ies"} missing one:\n` +
+              missing.map(l => `  ${l.trim().slice(0, 160)}`).join("\n")
+            );

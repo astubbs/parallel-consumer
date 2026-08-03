@@ -1,4 +1,4 @@
-// Pure logic behind the "Verify new changelog entries reference this PR" step in
+// Pure logic behind the "Verify new changelog entries cite an issue" step in
 // .github/workflows/pr-checklist.yml. It lives here rather than inline in the workflow YAML so
 // that it can be unit tested - the same job runs changelog-ref-gate.test.js before the gate, so
 // a regression in this file fails the PR Checklist rather than silently misjudging changelogs.
@@ -86,12 +86,25 @@ function newEntriesInBlock(added, removed) {
  * for a very large diff; that is treated as "nothing to check" rather than a failure.
  */
 function findNewEntries(patch) {
+  return findNewEntriesWithSection(patch).map(entry => entry.line);
+}
+
+/**
+ * As {@link findNewEntries}, but each entry carries the asciidoc section (`=== Fixes`) it sits
+ * under, so the caller can require an issue only where one is meaningful. The section comes from
+ * the nearest preceding heading in the patch - a context line, an added line, or the trailing
+ * context GitHub puts on the `@@` hunk header. Null when the patch does not show one.
+ */
+function findNewEntriesWithSection(patch) {
   const newEntries = [];
   let added = [];
   let removed = [];
+  let section = null;
 
   const endBlock = () => {
-    if (added.length) newEntries.push(...newEntriesInBlock(added, removed));
+    if (added.length) {
+      for (const line of newEntriesInBlock(added, removed)) newEntries.push({ line, section });
+    }
     added = [];
     removed = [];
   };
@@ -101,17 +114,63 @@ function findNewEntries(patch) {
       if (isBullet(line.slice(1))) removed.push(line.slice(1));
     } else if (line.startsWith("+")) {
       if (isBullet(line.slice(1))) added.push(line.slice(1));
+      else {
+        const heading = line.slice(1).match(/^===\s+(.+?)\s*$/);
+        if (heading) { endBlock(); section = heading[1]; }
+      }
     } else {
       endBlock(); // a context line or hunk header closes the change block
+      const hunk = line.match(/^@@[^@]*@@\s*===\s+(.+?)\s*$/);
+      const heading = line.replace(/^ /, "").match(/^===\s+(.+?)\s*$/);
+      if (hunk) section = hunk[1];
+      else if (heading) section = heading[1];
     }
   }
   endBlock();
   return newEntries;
 }
 
-/** Whether an entry links this PR. \b stops #100 matching inside #1000. */
-function citesPr(entry, prNumber) {
-  return new RegExp(`(pull/${prNumber}\\b|#${prNumber}\\b)`).test(entry);
+// What counts as citing an issue. Deliberately NOT a bare `#NN`: GitHub numbers issues and pull
+// requests from one sequence, so `#104` alone cannot be distinguished from a PR reference without
+// an API call - and "cite the issue" is the entire point. An explicit /issues/ URL can be, and the
+// changelog already links that way (`https://github.com/.../issues/857[#857]`).
+//
+// Fork and upstream issues both count; most fixes here trace to an upstream issue, and AGENTS.md's
+// reference convention already spells those `upstream #NN`.
+const ISSUE_LINK = /\/issues\/\d+\b/;
+
+/** Whether an entry cites an issue (fork or upstream) by explicit link. */
+function citesIssue(entry) {
+  return ISSUE_LINK.test(entry);
 }
 
-module.exports = { findOptOut, findNewEntries, citesPr };
+// Sections whose entries describe a user- or operator-visible change, and so should say which
+// reported problem or request they address.
+//
+// Build & CI is deliberately EXEMPT. This project's tooling work is self-directed and has no issue
+// behind it: of the 12 Build & CI entries predating this rule, 7 cite nothing at all and the rest
+// cite a PR. Requiring an issue there would mean inventing issues, or writing `changelog-ref: N/A`
+// on every CI PR - the same paperwork this change set out to remove, pointing the other way.
+const SECTIONS_REQUIRING_AN_ISSUE = ["Breaking", "Improvements", "Fixes", "Examples"];
+
+/**
+ * New entries that ought to cite an issue and don't - what the gate fails on.
+ *
+ * An entry in an unrecognised or unseen section is not required to cite one: the patch may simply
+ * not show the heading, and failing on that would punish a diff's shape rather than its content.
+ */
+function entriesMissingIssue(patch) {
+  return findNewEntriesWithSection(patch)
+    .filter(entry => SECTIONS_REQUIRING_AN_ISSUE.includes(entry.section))
+    .filter(entry => !citesIssue(entry.line))
+    .map(entry => entry.line);
+}
+
+module.exports = {
+  findOptOut,
+  findNewEntries,
+  findNewEntriesWithSection,
+  citesIssue,
+  entriesMissingIssue,
+  SECTIONS_REQUIRING_AN_ISSUE,
+};

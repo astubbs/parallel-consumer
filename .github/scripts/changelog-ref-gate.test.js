@@ -5,7 +5,7 @@
 "use strict";
 
 const assert = require("assert");
-const { findOptOut, findNewEntries, citesPr } = require("./changelog-ref-gate.js");
+const { findOptOut, findNewEntries, citesIssue, entriesMissingIssue } = require("./changelog-ref-gate.js");
 
 let failures = 0;
 function test(name, fn) {
@@ -168,18 +168,68 @@ test("non-bullet edits such as a heading tweak report nothing", () =>
 
 test("an absent patch reports nothing", () => assert.deepStrictEqual(findNewEntries(undefined), []));
 
-console.log("\ncitesPr - the citation itself");
+console.log("\ncitesIssue - an explicit issue link, fork or upstream");
 
-test("a bare #NN counts", () => assert.strictEqual(citesPr("* Entry (#104)", 104), true));
+test("a fork issue link counts", () =>
+  assert.strictEqual(citesIssue("* Entry (https://github.com/astubbs/parallel-consumer/issues/42[#42])"), true));
 
-test("a full pull URL counts", () =>
-  assert.strictEqual(citesPr("* Entry (https://github.com/o/r/pull/104[#104])", 104), true));
+test("an upstream issue link counts", () =>
+  assert.strictEqual(citesIssue("* Entry (upstream https://github.com/confluentinc/parallel-consumer/issues/857[#857])"), true));
 
-test("a longer number containing it does not count", () =>
-  assert.strictEqual(citesPr("* Entry (#1040)", 104), false));
+test("a PULL link does not count - it is not an issue", () =>
+  assert.strictEqual(citesIssue("* Entry (https://github.com/astubbs/parallel-consumer/pull/104[#104])"), false));
 
-test("an unrelated citation does not count", () =>
-  assert.strictEqual(citesPr("* Entry (#73)", 104), false));
+test("a bare #NN does not count - issues and PRs share one number sequence", () =>
+  assert.strictEqual(citesIssue("* Entry (#104)"), false));
+
+console.log("\nentriesMissingIssue - only new entries, only where an issue is meaningful");
+
+test("a new Fixes entry with no issue is flagged", () =>
+  assert.deepStrictEqual(
+    entriesMissingIssue(patch(
+      "@@ -1,2 +1,3 @@ === Fixes",
+      " * existing (https://github.com/o/r/issues/1[#1])",
+      "+* fix: something with no issue")),
+    ["* fix: something with no issue"]));
+
+test("a new Fixes entry citing an issue passes", () =>
+  assert.deepStrictEqual(
+    entriesMissingIssue(patch(
+      "@@ -1,2 +1,3 @@ === Fixes",
+      " * existing (https://github.com/o/r/issues/1[#1])",
+      "+* fix: thing (https://github.com/confluentinc/parallel-consumer/issues/857[#857])")),
+    []));
+
+test("Build & CI is exempt - tooling work has no issue behind it", () =>
+  assert.deepStrictEqual(
+    entriesMissingIssue(patch(
+      "@@ -1,2 +1,3 @@ === Build & CI",
+      " * existing ci entry",
+      "+* some tooling change, no issue")),
+    []));
+
+test("the section is picked up when the heading is itself added", () =>
+  assert.deepStrictEqual(
+    entriesMissingIssue(patch(
+      "@@ -1,1 +1,3 @@",
+      "+=== Fixes",
+      "+* fix: no issue here")),
+    ["* fix: no issue here"]));
+
+test("an edit to an existing entry is not a new entry", () =>
+  assert.deepStrictEqual(
+    entriesMissingIssue(patch(
+      "@@ -1,2 +1,2 @@ === Fixes",
+      "-* fix: old wording (https://github.com/o/r/issues/1[#1])",
+      "+* fix: new wording (https://github.com/o/r/issues/1[#1])")),
+    []));
+
+test("an entry in no recognised section is not required to cite one", () =>
+  assert.deepStrictEqual(
+    entriesMissingIssue(patch(
+      "@@ -1,1 +1,2 @@",
+      "+* a bullet with no visible section heading")),
+    []));
 
 console.log("findNewEntries - content pairing, and where it gives up");
 
