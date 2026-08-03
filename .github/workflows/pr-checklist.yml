@@ -131,9 +131,13 @@ jobs:
               return;
             }
 
-            // Edits to existing entries are exempt; only genuinely new ones need a citation, and
-            // only in the sections where an issue is meaningful.
-            const missing = gate.entriesMissingIssue(changelog.patch);
+            // The section comes from the CHANGELOG itself, not the patch: git has no funcname
+            // pattern for asciidoc, so a hunk header here reads `endif::[]` rather than the
+            // heading, and entries are too long for three lines of context to reach one.
+            const fs = require("fs");
+            const changelogText = fs.readFileSync(
+              `${process.env.GITHUB_WORKSPACE}/CHANGELOG.adoc`, "utf8");
+            const missing = gate.entriesMissingIssue(changelog.patch, changelogText);
 
             if (missing.length === 0) {
               core.info("Changelog OK - every new entry that needs an issue reference has one.");
