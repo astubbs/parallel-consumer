@@ -125,6 +125,26 @@ changed. Worth having eventually, but **not** the early win it first appears to 
 change-based incremental analysis is part of **arcmutate** (pitest Pro), which is commercial. Confirm
 which capability we actually want and whether the free tier covers it, rather than assuming.
 
+#### Where the history file lives, and why CI is the hard part
+
+It is a plain generated file under the module build directory (`target/`, gitignored), or wherever
+`historyInputFile` / `historyOutputFile` point. **It must never be committed:** it changes every run, so
+it would conflict constantly, and its verdicts are valid only for one specific code state — a stale
+committed file yields confidently wrong results, which is worse than no file at all, particularly given
+PIT documents incremental analysis as experimental.
+
+Two facts about our setup:
+
+- **`bin/ci-mutation-test.sh` does not run `clean`** (it runs `test-compile ... mutationCoverage`), so
+  *locally* a history file would survive between runs and start paying off straight away.
+- **In CI every job starts from a fresh checkout with an empty `target/`**, so there is nothing to
+  inherit. Carrying it between runs via `actions/cache` (or an artifact) **is** the work item — the
+  pitest flag is the trivial part.
+
+The non-obvious bit is cache-key design: key it per-SHA and you never get a hit; use a restore-key chain
+so PR runs inherit master's history, and schedule a periodic full invalidation so stale verdicts do not
+accumulate silently.
+
 ### 4.3 Retarget from `internal.*` to `offsets.*`
 
 The substantive change. The high-value target is the offset encoders/decoders: a silent bug there means
