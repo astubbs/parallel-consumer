@@ -94,9 +94,12 @@ tests are excluded only *coincidentally*, via the `integrationTests` source-dir 
 quarantined test happens to be an IT, so it works. The day someone quarantines a **unit** test, PIT
 runs it per-mutant. That is a trap with a note on it rather than a fix.
 
-## 4. Proposed changes, in payoff order
+## 4. Proposed changes
 
 Nothing here is scheduled. Listed so the reasoning is not lost.
+
+Roughly in payoff order, with one deliberate exception: **4.2 is numbered here for continuity but
+belongs last** — see the reasoning in that section. **4.3 is the one that unblocks everything else.**
 
 ### 4.1 Move the full sweep off PRs, onto a schedule
 
