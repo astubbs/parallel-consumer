@@ -115,9 +115,37 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
+  # (GITHUB_BASE_REF), so it's fast enough for the 2-core hosted runner - the full internal.* sweep would
+  # time out here (which is why it used to be self-hosted-only). Advisory / non-gating.
+  mutation:
+    if: github.event_name == 'pull_request'
+    needs: prepare-deps
+    name: "Mutation Tests (PIT, PR-scoped)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true      # advisory - never gates merge
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # ci-mutation-test.sh diffs vs the PR base to scope to changed classes
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+      - name: Mutation testing (changed classes only)
+        run: bin/ci-mutation-test.sh
+
   # Quarantine AUDIT: the seconds-fast enforcement job on every PR - registry drift and broken owner
   # claims are real, actionable errors that turn it red. It does NOT run any tests (that is
-  # test-quarantined, nightly on master + dispatch) so the PR checks list gets its verdict in seconds.
+  # the Quarantine Lane workflow: every PR push + every merge to master + dispatch) so the PR checks list gets its verdict in seconds.
   # Discipline: no quarantine without diagnosis; quarantine is master-state, not PR-state. See the
   # @Quarantined javadoc (parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/Quarantined.java).
   quarantine-audit:
@@ -309,6 +337,9 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: always
+          # github-script is MIT, but the license lookup returns null for
+          # floating major tags (@v7 -> "7.*.*"), so it warns as "unknown"
+          allow-dependencies-licenses: pkg:githubactions/actions/github-script
 
   # ── Push Builds (master) ───────────────────────────────────────────────
 

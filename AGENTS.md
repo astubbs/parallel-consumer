@@ -64,6 +64,12 @@ bin/performance-test.sh
   uncontended/own broker: if it then passes it was contention; if it still fails, investigate the code — do
   not mask it). Loosening deadlines to go green can hide exactly the bugs this library exists to prevent.
   When you do change a test, say in the commit/PR *which* of the two causes you established and how.
+- **Check the ambient probe autopsy first when a broker IT fails.** Every broker integration test failure
+  log includes an `=== AMBIENT PROBE AUTOPSY ===` block (grep for it) with rebalance-dwell / lag-stagnation
+  violations and per-partition frozen-committed detail — it answers exactly the "contention artifact vs
+  genuine bug" question above before you start manual diagnosis. `probe clean` means the fault is likely in
+  the test itself, not consumer-group progress. Disable via `-Dambient.probe=off` or `@NoAmbientProbe` only
+  when the probe itself is the problem (see `AmbientProbeExtension` javadoc).
 - **Unit tests**: `mvn test` / surefire plugin. Source in `src/test/java/`.
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
@@ -87,6 +93,31 @@ bin/performance-test.sh
   while the lane is non-empty (`release.yml` guard; snapshots still publish). Run
   the lane locally with `bin/quarantined-test.sh`.
 - **Reuse test utilities — search before you add (DRY).** Shared client/broker helpers live in `KafkaClientUtils` (topic creation, producers, consumers, PC builders) and `BrokerIntegrationTest` (the base class most integration tests extend). Before writing a new helper or a raw `admin`/producer/consumer call in a test, search these two first and extend them. Duplicating an existing helper is how bugs get reintroduced — e.g. a copy of topic-creation logic drifted to a 1-second timeout and became a flaky-CI source (see `docs/solutions/test-issues/`). When you must add a helper, put it in the shared util, not the test. Also check `docs/solutions/` for prior art before solving a problem that feels familiar.
+
+### Chaos Pain Suite (on-demand bug detector — never gates)
+
+A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
+`ChaosScenarioBase` + scenarios `ChaosChurnStormIT` W1, `ChaosRevokeUnderWorkIT` W4) that hunts the
+"alive but not progressing" bug class: rebalance-dwell zombies, protocol-invisible per-partition lag
+stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Tagged
+`@Tag("chaos")` and excluded from all default/gating suites via `pom.xml`'s `excluded.groups` default.
+
+- **Run locally** (requires Docker; ~5-6 min):
+  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=`
+- **Replay a schedule**: every run logs its seed and the full replay command; add `-Dchaos.seed=<seed>`.
+- **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
+  Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via
+  `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`), e.g.
+  `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. NB unlike the
+  local recipe above, CI runs EXCLUDE `@Quarantined` chaos scenarios (the Quarantine Lane owns those) -
+  while `ChaosChurnStormIT` is quarantined under PR #80 they therefore select zero tests, and the job
+  summary flags that loudly.
+- **Probe a fix PR** (the suite's primary purpose): on the fix PR's branch (merge master in first if
+  the branch predates the suite landing there), run the suite at a commit before the fix (expect RED —
+  the violation names the mechanism) and at the fix (expect GREEN). The local recipe above includes
+  `@Quarantined` scenarios (`-Dexcluded.groups=` is empty), so known-RED detectors still fire locally.
+  See `ChaosChurnStormIT`'s class javadoc for the full recipe.
+- A RED run is investigation food, not flake noise — the probes are calibrated against the real historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in measured gaps). Never loosen a probe to go green; tune the workload/conductor instead.
 
 ## Known Issues
 
@@ -131,10 +162,19 @@ bin/performance-test.sh
 `CHANGELOG.adoc` (repo root) is the source of truth for release notes; `README.adoc` regenerates from it at build/release time (never hand-edit `README.adoc` - see Code Style / the generated-README rule). **When you make a user- or operator-visible change, add a `CHANGELOG.adoc` entry in the same PR**, under `== Unreleased` (create that heading if it's missing, above the latest version), in the right subsection: `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, or `=== Build & CI`.
 
 - **Do add:** behavioural/API changes, new features or modules, user-affecting bug fixes, and *notable or coordinated* dependency refreshes or any change to a user-facing runtime dependency (especially the Kafka client) - for a library these affect the transitive dependencies and compatibility that consumers inherit.
-- **Don't add:** routine/automated single dependency bumps (Dependabot), internal refactors, test-only changes, CI/tooling, docs, or formatting - those are visible in git history and just add noise.
+- **Do add (`=== Build & CI`):** notable build, CI, tooling and test-infrastructure changes. This is a deeply technical library and its own contributors/agents are a primary audience - a new CI capability, a runner/workflow, a mutation/quarantine mechanism, or a build-enforcement change is worth recording, not just buried in git history.
+- **Don't add:** routine/automated single dependency bumps (Dependabot), no-op internal refactors, and pure formatting - genuinely invisible churn. (Everything with a real effect on how the project builds, tests, releases, or behaves is fair game.)
 - **Reference convention:** a bare `#NN` refers to this fork; write `upstream #NN` for upstream references, and link the PR/issue.
 
 Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
+
+## PR Discipline
+
+- **Keep the PR title and body in sync with what the PR actually covers.** As a PR grows, its description drifts - re-check it before requesting review and before merge. Update it only on *material* drift: whole changes/workstreams missing, wrong specifics (core counts, flags, forkCounts, file/label names), or scope that has outgrown the title. Do NOT churn the description for cosmetic wording - if it still accurately reflects the content, leave it.
+- **Open PRs from the template and complete its checklist honestly.** `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively (e.g. `gh pr create --body-file`), so base the PR body on it and resolve every box: check it `[x]`, or mark it `N/A - <reason>`. For human-authored PRs the `PR Checklist` CI gate (`.github/workflows/pr-checklist.yml`) fails when the checklist is missing entirely *or* when any box is left unchecked without an `N/A` - so dropping the template is not a bypass. Only real bot authors (GitHub user type `Bot`, e.g. Dependabot/Renovate) are exempt.
+- **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the specific review comment (its own thread), NOT as a separate top-level PR comment - a summary comment leaves the original conversation unresolved and blocks merge on "unresolved conversations." When a finding is fixed, reply in-thread with the fix + commit SHA and mark the thread resolved (`gh api graphql ... resolveReviewThread`). Leave a thread open only when it genuinely needs the author's decision, and say so in the reply.
+- **After opening a PR, follow up on the duplication reports.** The duplicate-code and file-similarity checks post comments flagging new clones/similarity. Read them, remove duplication introduced by *this* PR before it merges; ignore clones that already existed on the base branch (out of scope for this PR).
+- **Stacked PRs: put `depends on #N` in the description** (one line per parent). The PR-dependency gate blocks the child from merging until the parent does; keep the list current if the chain changes.
 
 ## Releasing
 

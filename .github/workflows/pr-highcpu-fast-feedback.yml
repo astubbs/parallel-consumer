@@ -1,0 +1,130 @@
+# Optional, NON-GATING fast feedback on a self-hosted high-CPU runner (many-core Linux, native Docker).
+#
+# Runs unit + integration + performance + mutation as separate matrix jobs concurrently on real cores - far
+# faster than GitHub's 2-core gate. The runner may be offline at any time, so these jobs are FYI only:
+# continue-on-error + not-required means an offline runner never blocks a merge (the required gate stays
+# GitHub-hosted, see maven.yml).
+#
+# TRIGGER: `pull_request` (same-repo only - see SECURITY below) plus manual `workflow_dispatch`. These
+# jobs are advisory (continue-on-error + not-required), so if the `[self-hosted, highcpu]` runner is
+# offline the checks simply sit pending and NEVER block a merge - the required gate stays GitHub-hosted
+# (maven.yml). Run on demand any time: `gh workflow run highcpu --ref <branch>` or Actions -> highcpu.
+#
+# Tuning (measured on this 16c/32t box): unit forks 1-per-core (1C=32); more (2C) is flat, so 1C is the knee.
+# Integration is capped at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism).
+# Performance runs concurrently too: it's just a correctness gate here, and its *timing* is noisy under load
+# (accurate benchmarking belongs in a separate isolated/on-demand run - highcpu runner solo is ~1m54 vs GitHub ~3m50).
+#
+# SECURITY (public repo + self-hosted runner): guarded to SAME-REPO pull requests only, so a fork PR's
+# untrusted code NEVER runs on the self-hosted machine (RCE). pull_request (no secrets), never pull_request_target.
+#
+# IMPORTANT - this `if:` guard lives IN the PR-head workflow file, so a fork PR could edit it out in the same
+# PR. The real backstop is a GitHub repo setting, NOT this file: Settings -> Actions -> General -> "Fork pull
+# request workflows from outside collaborators" MUST be set to "Require approval for ALL outside collaborators"
+# (the default only gates FIRST-TIME contributors - a fork author with one prior merged PR would otherwise be
+# auto-approved and could reach this self-hosted runner). Keep that setting on, or don't trigger on
+# `pull_request` at all (mirror self-hosted-tests.yml). See docs/SELF_HOSTED_RUNNER.md.
+
+name: highcpu
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# NOTE: concurrency is JOB-level (per suite), not workflow-level - see the job's `concurrency:` block.
+# A single workflow-level group made every new push's fast suites queue ~5 minutes behind the previous
+# run's Mutation (PIT) job: cancel-in-progress signalled it, but the maven/PIT JVM tree rides out the
+# runner's full cancellation grace before force-kill, and the group only frees once the old run fully
+# completes. Per-suite groups mean a push's Unit/Integration/Performance start within seconds (their
+# predecessors finish or die fast); only Mutation queues behind old Mutation - fine for an advisory job.
+
+permissions:
+  contents: read
+
+jobs:
+  highcpu-build-test:
+    # Check name shows as "highcpu / <suite> (optional)" - except entries with optional: "false"
+    # (Chaos Pain Suite), which show bare and are NOT continue-on-error: a chaos RED is a real
+    # finding and must show red, not neutral.
+    name: "${{ matrix.optional == 'false' && matrix.suite-name || format('{0} (optional)', matrix.suite-name) }}"
+    # Same-repo PRs only: fork PRs are untrusted and must NOT execute on the self-hosted machine.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, highcpu]
+    continue-on-error: ${{ matrix.optional != 'false' }}   # optional / FYI - except chaos (see name comment)
+    timeout-minutes: 60
+    # Per-suite superseding: a new push cancels only ITS OWN suite's previous run, so fast suites start
+    # within seconds instead of queueing behind the old run's slow-dying Mutation job (see header note).
+    concurrency:
+      group: highcpu-${{ matrix.suite-name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false           # each suite is independent
+      matrix:
+        include:
+          # Fork-only sweet spot. (fork x threads was measured: SAFE - JUnit thread-parallelism no longer races,
+          # Unit went green - but NOT faster (forking already saturates the cores), so no reason to keep it.
+          # Useful finding for the inflight "Step 2" thread-parallelism question.)
+          # Unit: 1 fork PER CORE (1C = 32). Integration: 8 broker-forks (16 was slower).
+          - suite-name: "Unit"
+            # -Dsurefire.forkCount (NOT bare -DforkCount): the pom pins <forkCount>${surefire.forkCount}</forkCount>,
+            # so surefire only honours the namespaced property; a bare -DforkCount is silently ignored.
+            cmd: "bin/ci-unit-test.sh -Dsurefire.forkCount=1C"
+          - suite-name: "Integration"
+            cmd: "bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true"
+          # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
+          - suite-name: "Performance"
+            cmd: "bin/performance-test.sh"
+          # Mutation (PIT): one minion JVM per thread. threads=16 (~2g heap each ~= RAM ceiling on 48GB).
+          # Two jobs side by side (experimental - see how they compare on cost/signal): SCOPED mutates only
+          # the classes changed vs the PR base (fast); FULL does the whole internal.* sweep (thorough) by
+          # setting PIT_FULL_SWEEP, which makes the script ignore the PR base ref. Both advisory.
+          - suite-name: "Mutation (PIT, scoped)"
+            cmd: "bin/ci-mutation-test.sh -Dverbose=true -Dthreads=16"
+          - suite-name: "Mutation (PIT, full)"
+            cmd: "bin/ci-mutation-test.sh -Dverbose=true -Dthreads=16"
+            full-sweep: "true"
+          # Chaos Pain Suite: the per-PR ambient tripwire (moved here from chaos-pain.yml so all
+          # self-hosted per-PR feedback shares one lane and its per-suite superseding concurrency).
+          # NOT optional: a chaos RED is a real finding. bin/chaos-test.sh excludes @Quarantined
+          # scenarios (the Quarantine Lane owns them) and flags the zero-test window loudly in the
+          # job summary. On-demand seeded hunts stay in chaos-pain.yml (workflow_dispatch).
+          - suite-name: "Chaos Pain Suite"
+            cmd: "bin/chaos-test.sh"
+            optional: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full history: the scoped Mutation job diffs vs the PR base to pick changed classes (repo is tiny).
+          fetch-depth: 0
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: ''
+
+      - name: Show environment
+        run: |
+          java -version
+          echo "cpus: $(nproc)"
+          docker --version
+          docker info | head -20
+
+      - name: ${{ matrix.suite-name }} tests
+        env:
+          # "true" only on the "Mutation (PIT, full)" entry - forces the full internal.* sweep; empty
+          # (all other suites) leaves the script's default PR-scoping in place.
+          PIT_FULL_SWEEP: ${{ matrix.full-sweep }}
+        run: time ${{ matrix.cmd }}
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: highcpu-fast-feedback-reports-${{ matrix.suite-name }}-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 14

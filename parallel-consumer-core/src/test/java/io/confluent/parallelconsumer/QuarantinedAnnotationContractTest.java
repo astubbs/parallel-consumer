@@ -55,7 +55,7 @@ class QuarantinedAnnotationContractTest {
         String pom = read(REPO_ROOT.resolve("pom.xml"));
         assertWithMessage("root pom's default excluded.groups must contain the quarantine tag - " +
                 "otherwise quarantined tests run (and fail) in the gating suites")
-                .that(pom).contains("<excluded.groups>performance," + Quarantined.TAG + "</excluded.groups>");
+                .that(pom).contains("<excluded.groups>performance,chaos," + Quarantined.TAG + "</excluded.groups>");
     }
 
     /**
@@ -89,7 +89,7 @@ class QuarantinedAnnotationContractTest {
             assertWithMessage(script + " hardcodes its group exclusions (it does not inherit the pom " +
                     "default) and must exclude the quarantine tag")
                     .that(read(REPO_ROOT.resolve(script)))
-                    .contains("-Dexcluded.groups=performance," + Quarantined.TAG);
+                    .contains("-Dexcluded.groups=performance,chaos," + Quarantined.TAG);
         }
     }
 
