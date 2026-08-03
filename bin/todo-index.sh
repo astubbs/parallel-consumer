@@ -28,10 +28,25 @@ CHECK_MODE=false
 
 # Files worth scanning: source, scripts, build and workflow config. Deliberately excludes build
 # output, the git dir, and agent scratch dirs.
+#
+# DOCS (.adoc/.md) ARE DELIBERATELY EXCLUDED, and it is worth saying why, because "surely docs could
+# contain a TODO too" is a reasonable first reaction. It was tried: scanning them added 4 hits and
+# not one was a marker. Three were docs/refactoring.md QUOTING markers that the index already lists
+# from their .java source - so the same work appeared twice and the count inflated - and the fourth
+# was prose ("seeded from a code scan (TODO/FIXME + ...)"). That is structural rather than bad luck:
+# docs/refactoring.md is where marker triage lives, and AGENTS.md / docs/inflight.md / CHANGELOG.adoc
+# describe this tool, so scanning them means indexing the index-of-work. The generated index itself
+# is the reductio - it alone accounts for ~95 self-referential hits.
+#
+# If that ever changes (a genuine marker left in prose), prefer moving it into the code it concerns,
+# where it belongs and where this scan will find it.
+#
+# $OUT is excluded belt-and-braces, so a future widening cannot make the index index itself.
 list_files() {
     git ls-files \
         '*.java' '*.sh' '*.xml' '*.yml' '*.yaml' \
         | grep -v "^${SELF}$" \
+        | grep -v "^${OUT}$" \
         | sort
 }
 
@@ -47,7 +62,10 @@ MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
 # NOTE: this filter is applied to `grep -n` output, so line-anchored patterns must allow the
 # leading "<lineno>:" prefix - anchoring on ^[[:space:]] alone silently never matches.
 #   references TO a marker elsewhere, e.g. "the run-length optimisation TODO on {@link X}"
-NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO)'
+#   compound names    todo-index.sh, TODO_INDEX.md   (a filename, not a marker - this one is live:
+#                                                     .github/workflows/claude-code-review.yml names
+#                                                     the script in a comment)
+NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO|[Tt][Oo][Dd][Oo][-_][A-Za-z])'
 
 emit_body() {
     local current_group=""
