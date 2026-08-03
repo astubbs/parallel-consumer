@@ -71,7 +71,7 @@ public class BrokerPollerBackpressureTest extends BrokerIntegrationTest<String, 
      * records arrived: the take-cap and the pause threshold are both {@link #MESSAGE_BUFFER_SIZE}, so "paused with
      * empty shards" is unreachable by design. On loaded machines the vacuous window closed and the test failed
      * deterministically (highcpu run 30603617471; see
-     * docs/plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md).
+     * docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md).
      */
     @Test
     @SneakyThrows

@@ -340,9 +340,8 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PR #98** (branch `fix/brokerpoller-backpressure-vacuous-await`): test-design bug (vacuously-true
   first await masking an unsatisfiable condition), not contention, not a main-code wedge. Root-cause
   write-up:
-  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`;
-  plan: `docs/plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md`. **Delete
-  this entry when #98 merges.**
+  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`.
+  **Delete this entry when #98 merges.**
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):

@@ -72,6 +72,22 @@ proves blocked in-flight records are counted. The exact 150/50 split doubles as 
 the static-buffer take-cap. Await bounds raised to 30s (conditions got stronger; only the
 wall-clock allowance grew - free when green, absorbs busy boxes).
 
+## Classification: what this was NOT
+
+Recorded because the wrong classification was the likely failure mode here - three plausible verdicts
+were checked and rejected before the rewrite:
+
+- **Not the tight-absolute-timeout contention pattern**
+  ([parallel-integration-tests-flaky-under-concurrency-2026-07-28](parallel-integration-tests-flaky-under-concurrency-2026-07-28.md)).
+  Same family (load exposed it) and identical symptom, but hardening the 10s bound would NOT have
+  fixed this test - the condition is unsatisfiable after arrival at any timeout. "Contention
+  sensitivity, loosen the bound" would have masked the real defect.
+- **Not a main-code bug.** The 50-record shard floor is the static buffer cap behaving as designed,
+  and the pause/resume machinery worked (the sibling test passed in the same failing run).
+- **Not already tracked.** No fork or upstream (`confluentinc/parallel-consumer`) issue mentions the
+  test; not in the quarantine lane; not covered by #63, `fix/flaky-ensure-topic-timeout`, or the
+  `PartitionStateCommittedOffsetIT` work.
+
 ## Prevention
 
 - An Awaitility condition of the form `X == 0` (or any emptiness/absence check) where `X` **starts
@@ -89,7 +105,7 @@ wall-clock allowance grew - free when green, absorbs busy boxes).
 
 ## Related
 
-- Diagnosis + plan: [`docs/plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md`](../../plans/2026-07-31-001-fix-brokerpoller-backpressure-vacuous-await-plan.md)
+- Fix + full diagnosis trail: PR #98
 - Failing run: highcpu 30603617471 (Integration job 91071293663); green same-sha run: CI 30603617430
 - Test provenance: upstream confluentinc/parallel-consumer #682 (configurable buffer), #836
   (in-flight counts toward backpressure)
