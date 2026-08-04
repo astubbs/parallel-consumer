@@ -193,6 +193,8 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
 
+**An entry is terse: it highlights the change and points at the detail. It is not the story of the change.** State what changed and what it means for a reader, then link the plan doc, `docs/solutions/` write-up or PR that holds the reasoning. Rationale, evidence, corrections and the route you took to get there belong in those, not here - one entry that reproduces a PR description makes the whole section unscannable, which defeats the point of having it. Rough calibration: entries here run ~90 words; if yours is several times that, you are writing the story. The same applies when *editing* an entry - a correction should replace text, not accrete onto it.
+
 ## PR Discipline
 
 - **Keep the PR title and body in sync with what the PR actually covers.** As a PR grows, its description drifts - re-check it before requesting review and before merge. Update it only on *material* drift: whole changes/workstreams missing, wrong specifics (core counts, flags, forkCounts, file/label names), or scope that has outgrown the title. Do NOT churn the description for cosmetic wording - if it still accurately reflects the content, leave it.

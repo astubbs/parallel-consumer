@@ -344,81 +344,19 @@ skipping the hosted gate - the gate staying independent is worth more than the m
 
 ## CI reliability / gate issues (follow-up work)
 
-- **Mutation testing is pointed at the wrong target — the plumbing is FIXED (#111), the retarget is
-  still PARKED (2026-08-04).** PR #110 fixed the flake that was aborting the PIT lane, so it runs again.
-  Whether it runs anywhere *useful* is a separate question, analysed in
-  `docs/plans/2026-08-03-002-mutation-testing-plan.md`. Summary of what that found, so the reasoning is
-  not lost if the doc goes unread:
-  - **~~Any single flaky test disables the lane entirely~~ — FIXED in #111 via `skipFailingTests`.**
-    PIT refused to run while any test was unstable *without* mutation, so one unrelated flake scored
-    zero mutants everywhere — it did not degrade the signal, it switched it off. Twice: #101 and #110,
-    both unrelated to the mutated code, which meant the lane's green-ness tracked *suite stability*
-    rather than mutation coverage. `skipFailingTests` makes PIT drop the failing test's coverage instead
-    of aborting (verified both directions: off = 0 mutants + abort, on = run completes).
-    **Two traps:** (1) it is **pom-only** — `PitMojo` declares it with no `property`, so
-    `-DskipFailingTests` is *silently ignored*; (2) `parseSurefireConfig` (default true) maps surefire's
-    `<testFailureIgnore>` onto it, so adding one to the surefire config would turn it back off from a
-    distance. **Its cost is silence:** pitest logs nothing when it skips a test this way, so a mutant
-    only that test covered becomes "no coverage" rather than killed — the job summary now carries that
-    caveat next to the no-coverage count. The flake itself still reddens the Unit gate, where it belongs.
-  - **The full `internal.*` sweep has never completed** — the script says so itself. 42+ min on CI,
-    83+ min locally with minions dying on `MEMORY_ERROR`. A sweep that never finishes scores *zero*
-    mutants: not a slow signal, no signal. **#111 removed it from PRs**; it is now manual-only
-    (`mutation-full-sweep.yml`), deliberately **not** nightly — scheduling a job that has never finished
-    just moves the waste to a quieter hour and trains people to ignore the lane.
-  - **PIT was running THREE times per PR** (`maven.yml` + two `pr-highcpu` entries), two of them the
-    same scoped computation — plus a fourth copy in `pr-local`, dormant only because that workflow's
-    `pull_request` trigger is commented out while the laptop runner is offline. **#111 leaves one:**
-    `maven.yml`. The laptop copy also checked out *shallow*, and a shallow checkout makes
-    `bin/ci-mutation-test.sh` fall back from scoped to the full sweep, so re-enabling that trigger would
-    have shipped the hazard with it — keep `fetch-depth: 0` on whichever lane runs it.
-  - **Same pass, same reasoning: Unit + Integration removed from the highcpu matrix (#111).** Measured as
-    not faster there than the GitHub-hosted gate that already runs them, so they were a second copy of an
-    existing verdict — another tick to triage per PR, and a checks list of mostly-duplicates is how a real
-    red gets skimmed past. highcpu now carries only what needs the cores: Performance + Chaos Pain Suite.
-    The measured fork tuning (unit `1C`, integration 8 broker-forks, and the `-Dsurefire.forkCount` vs
-    bare `-DforkCount` trap) is preserved in the workflow comments for whoever re-adds a forked suite.
-  - **`internal.*` is close to the worst possible target.** It is the concurrency core, so mutants to
-    locks, loop conditions and timeouts *hang by construction* rather than dying fast, and the
-    timing-based covering tests make a survivor unfalsifiable ("nothing asserts this" is
-    indistinguishable from "the race did not happen this run").
-  - **Do NOT just lower `timeoutConstant`.** PIT counts `TIMED_OUT` as `KILLED`, so shortening it
-    reclassifies slow survivors as kills and *inflates* the score. It can only come down once the
-    targets are not hang-prone.
-  - **A green mutation check often means "nothing to mutate"** — the lane exits green on
-    test-only/CI-only PRs. **#111:** every exit path now writes a GitHub job summary saying which kind
-    of green (or red) it is, so this no longer depends on knowing to distrust the tick.
-  - **~~`mutableCodePaths` protects us by default~~ — the original analysis was WRONG.** pitest-maven
-    has no such parameter (adding the element fails the build); `MojoToReportOptionsConverter` hard-codes
-    the mutable path to `target/classes`, widened only by `crossModule`. Main-only is *structural* under
-    Maven, not a default anyone can flip. `<crossModule>false</crossModule>` is now pinned in the pom
-    with the reasoning attached. (Why it matters: our `targetClasses` glob does match test classes by
-    name, tests sharing the production package — and a mutated assertion fails its own test, so the
-    mutant records KILLED and the score climbs toward 100% while carrying no information about main code.)
-  - **Retargeted `internal.*` → `offsets.*` (#111)** — the substantive change, where a bug means
-    lost/duplicated records and mutants are *decidable*. Applies to the sweep default only: a PR run
-    targets the classes that PR changed, so a PR touching `internal.*` still mutates `internal.*`.
-  **Still outstanding — the measurement.** The retarget is an argued config change, not a result:
-  **nothing has completed yet**, and `offsets.*` is not obviously cheap (`RunLengthEncoderTest` alone is
-  ~140s, re-run per mutant). Run `gh workflow run mutation-full-sweep` (against master; `--ref` for a
-  branch) — **only once #111 has merged**: `workflow_dispatch` needs the file on the *default branch*
-  before it can be dispatched at all, so a workflow introduced by a PR cannot be exercised by that PR.
-  If it completes, a `schedule:`
-  and a history file both become options and there is finally a score worth quoting; if it doesn't, that
-  is the answer on whether mutation testing can work here. Only if the coverage pass dominates, add
-  `-f target-tests=…offsets.*` — it is the one lever on the 332s instrumented pass, but it reports a
-  mutant killed outside `offsets.*` as no-coverage, so it buys speed with accuracy.
-  **Do not quote a mutation score for this project until a sweep has completed.**
-  **Also outstanding:** `excludedGroups` — but **verify before "fixing"**: `parseSurefireConfig` defaults
-  true and `SurefireConfigConverter` reads surefire's `<excludedGroups>`, which our pom sets, so this may
-  already work. It hinges on whether `${excluded.groups}` interpolates in the raw `Xpp3Dom`; a throwaway
-  `@Quarantined` *unit* test settles it. `withHistory` stays deliberately LAST — and is not
-  available to us at all: re-verified 2026-08-04 that `-DwithHistory=true` on pitest 1.25.8 still errors
-  with *"no history plugin has been installed/activated"*, confirming #69's finding. It needs an
-  arcmutate licence (see the shelved plan below), not a flag. The plan doc's §4.2 had claimed the
-  opposite; corrected there, after the automated reviewer flagged the contradiction five times.
-  **Keep** per-PR scoping to changed classes, and keep the lane advisory/non-gating.
-
+- **Mutation testing: retargeted but UNMEASURED (#111, 2026-08-04).** The lane is now one per-PR job
+  (`maven.yml`, scoped to changed classes); the full sweep is manual-only (`mutation-full-sweep.yml`)
+  and points at `offsets.*` instead of `internal.*`. Analysis, corrections and reasoning:
+  `docs/plans/2026-08-03-002-mutation-testing-plan.md`. Still open:
+  - **Run the sweep and see if it completes** - `gh workflow run mutation-full-sweep`, only after #111
+    merges (`workflow_dispatch` needs the file on the default branch). Nothing has completed under the
+    new target; `RunLengthEncoderTest` alone is ~140s. **Do not quote a mutation score until one does.**
+  - **`excludedGroups`: verify before "fixing".** `parseSurefireConfig` may already import our surefire
+    `<excludedGroups>`; a throwaway `@Quarantined` unit test settles it (plan §3.4).
+  - **`withHistory` is blocked on an arcmutate licence, not a flag** - re-verified 2026-08-04 that
+    pitest 1.25.8 errors with "no history plugin has been installed". Shelved plan below.
+  - **The scoped PR lane still mutates whatever changed**, including `internal.*`. Whether it should
+    refuse the hang-prone packages needs the measurement above first.
 - **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
   execution and makes blocking findings inline. Four things it did NOT resolve, in rough priority:
   - **A green `review` check can mean the reviewer never ran.** `claude-code-action` refuses to run
