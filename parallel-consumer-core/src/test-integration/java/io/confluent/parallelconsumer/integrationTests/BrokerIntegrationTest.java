@@ -10,6 +10,9 @@
 package io.confluent.parallelconsumer.integrationTests;
 
 import io.confluent.csid.testcontainers.FilteredTestContainerSlf4jLogConsumer;
+import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.ParallelConsumerOptions.ParallelConsumerOptionsBuilder;
+import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -17,6 +20,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,8 +28,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import pl.tlinkowski.unij.api.UniSets;
 
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -153,6 +159,43 @@ public abstract class BrokerIntegrationTest<K, V> {
         // Delegates to the canonical blocking helper so topic-creation logic lives in one place
         // (avoids the drift that reintroduced a flaky short timeout here). See KafkaClientUtils#createTopic.
         return kcu.createTopic(topic, numPartitions);
+    }
+
+    /**
+     * <b>Start here when writing a PC integration test.</b> Does the setup nearly every one of them opens with -
+     * a fresh topic, a consumer in a new group, and a {@link ParallelEoSStreamProcessor} subscribed to that topic
+     * - so the test declares only the options it actually cares about, and the interesting configuration is not
+     * buried in boilerplate:
+     * <pre>{@code
+     * @BeforeEach
+     * void setUp() {
+     *     pc = startPcOnNewTopic(options -> options.ordering(KEY).maxConcurrency(10));
+     * }
+     * }</pre>
+     * Then use the siblings here rather than rebuilding them: {@link #produceMessages(int)} /
+     * {@link #produceMessages(int, String)} to feed the topic just created, {@link #getTopic()} for its
+     * generated name, {@link #getKcu()} for raw client access, and {@link #setupTopic(String)} /
+     * {@link #ensureTopic(String, int)} if a test needs a second or multi-partition topic. Every subclass also
+     * inherits the {@link AmbientProbeExtension} flight recorder, so a timeout here arrives pre-diagnosed.
+     * <p>
+     * The consumer is already wired into the builder handed to {@code options}; it and the built
+     * {@link ParallelConsumerOptions} are otherwise scaffolding, so they are deliberately not exposed as fields
+     * (several subclasses declare their own {@code consumer}/{@code pc} fields, which inherited ones would
+     * silently shadow).
+     *
+     * @param options the options this test needs, applied to a builder already holding the consumer
+     * @return the subscribed processor, ready to {@code poll}
+     */
+    protected ParallelEoSStreamProcessor<K, V> startPcOnNewTopic(UnaryOperator<ParallelConsumerOptionsBuilder<K, V>> options) {
+        setupTopic();
+
+        Consumer<K, V> consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
+        ParallelConsumerOptions<K, V> pcOpts = options.apply(ParallelConsumerOptions.<K, V>builder()
+                .consumer(consumer)).build();
+
+        var pc = new ParallelEoSStreamProcessor<K, V>(pcOpts);
+        pc.subscribe(UniSets.of(getTopic()));
+        return pc;
     }
 
     protected List<String> produceMessages(int quantity) {

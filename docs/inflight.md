@@ -413,18 +413,12 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
-- **`BrokerPollerBackpressureTest.brokerPollPausedWithEmptyShardsButHighInFlight` failed under load -
-  diagnose, don't dismiss (2026-07-31, highcpu lane run 30603617471).** 10s Awaitility timeout on the
-  FIRST await (shards-drained condition) while the box concurrently ran two PIT sweeps + Unit +
-  Performance; the gating GitHub-hosted Integration run on the same head was GREEN. The test chains
-  five ABSOLUTE 10s bounds - the exact tight-absolute-timeout-under-contention pattern root-caused in
-  `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md` -
-  but per the AGENTS.md stress-failure discipline it must be CLASSIFIED first: (a) re-run on a quiet
-  box - if it passes, it's contention-sensitivity, then harden the bounds per that solutions doc
-  (operator stance: busy boxes should NOT cause test failures); (b) review the first await's
-  semantics - all 10 workers are latch-blocked while it waits for
-  `getNumberOfWorkQueuedInShardsAwaitingSelection() == 0`, so establish whether a slow path there
-  can mask a real backpressure wedge before touching any timeout.
+- **`BrokerPollerBackpressureTest` highcpu-lane failure (run 30603617471) - DIAGNOSED + FIXED in
+  PR #98** (branch `fix/brokerpoller-backpressure-vacuous-await`): test-design bug (vacuously-true
+  first await masking an unsatisfiable condition), not contention, not a main-code wedge. Root-cause
+  write-up:
+  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`.
+  **Delete this entry when #98 merges.**
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
