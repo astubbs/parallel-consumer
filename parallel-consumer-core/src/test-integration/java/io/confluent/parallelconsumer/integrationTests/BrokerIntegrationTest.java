@@ -3,10 +3,6 @@
  * Copyright (C) 2020-2025 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-
-/*-
- * Copyright (C) 2020-2023 Confluent, Inc.
- */
 package io.confluent.parallelconsumer.integrationTests;
 
 import io.confluent.csid.testcontainers.FilteredTestContainerSlf4jLogConsumer;

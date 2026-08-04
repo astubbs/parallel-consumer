@@ -23,7 +23,6 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
-  actions: read        # concede check reads the self-hosted highcpu run's job status
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -76,12 +75,10 @@ jobs:
         include:
           - suite: unit
             name: "Unit Tests"
-            concede: "Unit"          # highcpu suite name to concede to (see ci-concede-check.sh)
             cmd: "bin/ci-unit-test.sh"
             timeout: 15
           - suite: integration
             name: "Integration Tests"
-            concede: "Integration"
             # Forked (process-parallel) mode: each JVM fork gets its own TestContainers
             # broker, so tests don't contend one shared broker. Reliable AND parallel,
             # without masking anything (each test runs on an uncontended broker). See
@@ -90,7 +87,6 @@ jobs:
             timeout: 60
           - suite: performance
             name: "Performance Tests"
-            concede: "Performance"
             cmd: "bin/performance-test.sh"
             timeout: 60
     name: "${{ matrix.name }}"
@@ -109,20 +105,10 @@ jobs:
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             setup-java-Linux-x64-maven-
-      # Concede: if the self-hosted highcpu runner already passed this suite for this commit, skip the (slow)
-      # hosted run and go green. Never blocks - if grumpy is offline/slow/failed, this runs the tests normally.
-      - name: Concede to self-hosted highcpu if it already passed
-        id: concede
-        continue-on-error: true      # a concede-check failure must never fail the gate - just run the tests
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CONCEDE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: bash bin/ci-concede-check.sh "${{ matrix.concede }}"
       - name: ${{ matrix.name }}
-        if: steps.concede.outputs.skip != 'true'
         run: ${{ matrix.cmd }}
       - name: Upload coverage to Codecov
-        if: ${{ always() && steps.concede.outputs.skip != 'true' }}
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'

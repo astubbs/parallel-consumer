@@ -421,12 +421,6 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
-- **`BrokerPollerBackpressureTest` highcpu-lane failure (run 30603617471) - DIAGNOSED + FIXED in
-  PR #98** (branch `fix/brokerpoller-backpressure-vacuous-await`): test-design bug (vacuously-true
-  first await masking an unsatisfiable condition), not contention, not a main-code wedge. Root-cause
-  write-up:
-  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`.
-  **Delete this entry when #98 merges.**
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
@@ -677,40 +671,17 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.
-- **`PartitionStateCommittedOffsetIT.committedOffsetRemoved` — NOT a benign timeout; it's a real silent
-  stall in the #857 family. DO NOT MASK.** Surfaces as `ConditionTimeoutException` after 10s (`expected not
-  to be empty within 10 seconds`, `runPcUntilOffset` → `committedOffsetRemoved` first poll). Not
-  runner-specific (reproduced locally). **Diagnosis (2026-07-29):** under real contention (`forkCount=16` on
-  ≤12 cores) a PC instance polls **zero** records for the whole window — **still zero with a 120s bound**, no
-  exception, consumer alive — so it's a stall, not slowness. The stall **roams** across timeout-sensitive
-  ITs (`TransactionTimeoutsTest`, `KafkaSanityTests`, `TransactionMarkersTest`). Chasing it **root-caused a
-  drain-path defect**: `drain()` fires `ConsumerManager.signalStop()`, whose `shutdownRequested` flag makes
-  `poll()` short-circuit without ever calling `consumer.poll()` — defeating the intended "paused 2s long
-  poll = drain-loop sleep" (comment in `handlePoll()`). Measured **~10k poll-loop iterations/s** while
-  draining; and with `consumer.poll()` never invoked, the draining consumer can't join rebalances while
-  background heartbeats keep it a live member — a **zombie holding its partitions** (up to
-  `max.poll.interval.ms`, 5 min) that starves same-group siblings and burns a core. Likely a third
-  mechanism behind **#857**'s "paused consumption after rebalance". **Bumping the test await would hide a
-  real product bug.** Full write-up + drain design review:
-  `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`. **FIX LANDED on PR #80
-  (2026-07-30):** the duplicated `ConsumerManager.shutdownRequested` flag is deleted (state collapse —
-  abort now derives from `BrokerPollSystem.runState` via an injected signal), so a draining consumer keeps
-  polling (paused, long-poll cadence) and stays rebalance-responsive; guarded by `BrokerPollSystemDrainTest`
-  (characterisation-first, flipped RED→GREEN). **Verified: neither PR #29 (#857) nor PR #31 (#909) fixed
-  this** — they fix sibling mechanisms (assign-time throttle-pause reset + CME; stale-container
-  replacement) of the same "alive but not progressing" symptom; all three are non-conflicting.
-  **SOLVED (2026-07-30): the `committedOffsetRemoved[latest]` failure itself turned out to be an
-  `auto.offset.reset=latest` NUDGE RACE in the test harness** — under contention the reset resolves
-  *after* `runPcUntilOffset`'s single pre-await bumper, positioning the consumer past all data forever
-  (unwinnable at any timeout; only ever the [latest] param — the unread tell). Captured via kafka-client
-  DEBUG (branch `debug/committedoffset-firstpoll-stall`): `SubscriptionState ... position 201` vs 201
-  records. NOT a product bug; the drain zombie found en route WAS. **Fix on PR #80:** shared
-  `BrokerIntegrationTest#awaitWithTopicNudge` (nudge-inside-the-await + timeout self-diagnosis), both
-  helpers refactored onto it (no copy-paste, no timeout bumped), deterministic `LatestResetTailNudgeIT`
-  guard (RED with old pattern ~23s / GREEN with primitive). Full story + diagnosability lessons:
-  `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`.
-  Remaining singles (`KafkaSanityTests`, `TransactionMarkersTest` — one uber-run sighting each) and
-  `MultiInstanceMetricsTest` stay tracked separately; production #857 remains #29's territory.
+- **`PartitionStateCommittedOffsetIT.committedOffsetRemoved` [latest] flake + the drain-zombie found en
+  route — BOTH FIXED, landing in PR #80.** The `[latest]` failure was an `auto.offset.reset=latest` nudge
+  race in the harness (fixed via `BrokerIntegrationTest#awaitWithTopicNudge` + deterministic
+  `LatestResetTailNudgeIT` guard); chasing it root-caused a real product defect — a draining consumer
+  busy-spun (~10k poll-loops/s) and zombie-held its partitions, fixed by collapsing the duplicated
+  `ConsumerManager.shutdownRequested` flag into `BrokerPollSystem.runState` (guarded by
+  `BrokerPollSystemDrainTest`). Full write-ups:
+  `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md` and
+  `pc-silent-stall-under-contention-2026-07-29.md`. **Still open (not #80's):** residual load-tightness
+  singles `KafkaSanityTests`, `TransactionMarkersTest`, `MultiInstanceMetricsTest`; production #857 stays
+  #29's territory. Delete this entry when #80 merges.
 - **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
   resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
   shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure
