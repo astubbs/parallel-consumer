@@ -249,10 +249,30 @@ waste to a quieter hour, and adds a recurring red-or-cancelled result that every
 which is worse than no lane, because it trains people to ignore this lane specifically. It gets a
 `schedule:` trigger the day a run completes, and §4.3 is what would make that possible.
 
-### 4.2 Incremental analysis (`withHistory`) — LATER, and it is not the lever it looks like
+### 4.2 Incremental analysis (`withHistory`) — NOT AVAILABLE TO US AT ALL, and not the lever it looks like
 
-PIT's OSS history file (`historyInputFile` / `historyOutputFile`) lets a run re-analyse only what
-changed. Worth having eventually, but **not** the early win it first appears to be, for two reasons:
+**Correction (2026-08-04): this section had it wrong twice over**, and the repo already knew. It claimed
+the basic history file is free in OSS pitest and merely asked someone to "confirm which capability we
+want". `docs/inflight.md` records the opposite as an *already-verified* PR #69 finding: pitest 1.25.x
+(we bumped 1.17.4 → 1.25.8 in #73) dropped the built-in file-based history entirely. Re-verified here
+rather than picking between two documents - `-DwithHistory=true` on the current build:
+
+```
+[ERROR] History has been enabled but no history plugin has been installed/activated.
+[ERROR] If you are using https://www.arcmutate.com remember to activate the history plugin with +arcmutate_history
+```
+
+So there is no free tier to check: history now lives entirely in **arcmutate**, and the work item is
+obtaining and wiring a licence, not setting a flag. arcmutate is free for open-source projects, but that
+needs the maintainer to sign up, and the licence is a file at the repo root - which on a *public* repo
+means committing a key or plumbing a CI secret. `docs/inflight.md` has the full shelved plan.
+
+**The automated reviewer flagged this contradiction five times before it was fixed.** Worth recording as
+its own lesson: a repeated review finding that keeps being deferred is usually a real one, and this one
+was cheap to settle - a single local run answered it. The plan doc and the inflight ledger disagreeing
+about a verified fact is exactly the failure the ledger exists to prevent.
+
+Everything below stands regardless, and is the reason this was already ranked last:
 
 1. **A history file only helps a run that completes.** Ours never has — the full sweep aborts or times
    out, and the scoped lane mostly prints "nothing to mutate". There was never a successful run to
@@ -264,13 +284,10 @@ changed. Worth having eventually, but **not** the early win it first appears to 
    does not touch that. The lever for scoped runs is reducing what must be executed for coverage at
    all (narrower `targetTests`), not remembering previous mutant verdicts.
 
-**Check before relying on it:** the basic history file is free in OSS pitest; the git-aware,
-change-based incremental analysis is part of **arcmutate** (pitest Pro), which is commercial. Confirm
-which capability we actually want and whether the free tier covers it, rather than assuming.
+#### Where the history file would live, and why CI is the hard part
 
-#### Where the history file lives, and why CI is the hard part
-
-It is a plain generated file under the module build directory (`target/`, gitignored), or wherever
+Kept for whenever the arcmutate licence question is settled, since none of this changes with the plugin
+that produces the file. It is a plain generated file under the module build directory (`target/`, gitignored), or wherever
 `historyInputFile` / `historyOutputFile` point. **It must never be committed:** it changes every run, so
 it would conflict constantly, and its verdicts are valid only for one specific code state — a stale
 committed file yields confidently wrong results, which is worse than no file at all, particularly given

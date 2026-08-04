@@ -420,8 +420,11 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   **Also outstanding:** `excludedGroups` — but **verify before "fixing"**: `parseSurefireConfig` defaults
   true and `SurefireConfigConverter` reads surefire's `<excludedGroups>`, which our pom sets, so this may
   already work. It hinges on whether `${excluded.groups}` interpolates in the raw `Xpp3Dom`; a throwaway
-  `@Quarantined` *unit* test settles it. `withHistory` stays deliberately LAST: a history file only helps
-  a run that *completes*, and none ever has.
+  `@Quarantined` *unit* test settles it. `withHistory` stays deliberately LAST — and is not
+  available to us at all: re-verified 2026-08-04 that `-DwithHistory=true` on pitest 1.25.8 still errors
+  with *"no history plugin has been installed/activated"*, confirming #69's finding. It needs an
+  arcmutate licence (see the shelved plan below), not a flag. The plan doc's §4.2 had claimed the
+  opposite; corrected there, after the automated reviewer flagged the contradiction five times.
   **Keep** per-PR scoping to changed classes, and keep the lane advisory/non-gating.
 
 - **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
