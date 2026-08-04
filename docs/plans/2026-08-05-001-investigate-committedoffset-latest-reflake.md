@@ -1,6 +1,8 @@
 # `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` - re-flaked after #80 un-quarantined it
 
-**Status:** investigation seeded, nothing fixed yet.
+**Status:** RESOLVED. Hypothesis confirmed by deterministic reproduction, fixed, and verified against
+a harsher trigger than the one that broke it. Kept as the record of the diagnosis - the fix commit
+carries the summary.
 **Opened:** 2026-08-05
 **Test:** `io.confluent.parallelconsumer.integrationTests.state.PartitionStateCommittedOffsetIT#committedOffsetRemoved(OffsetResetStrategy)[1] latest`
 
@@ -101,7 +103,26 @@ hypothesis until the experiment below runs. Note it is *not* a product bug on th
 consistent with `probe clean`. That must be re-checked rather than assumed: #80's own history is a
 reminder that a "known flake" here was previously a real drain-zombie defect.
 
-## Plan
+## Outcome
+
+**The hypothesis was right, and it was arithmetic rather than timing.** Confirmed by prediction, not by
+absence of failure: injecting ONE extra record - simulating `awaitWithTopicNudge` looping twice -
+reproduced the exact signature (`expected: 2, but was: 1`, surviving record being the *original*
+`value-50`) deterministically, on an idle machine, in BOTH parameters.
+
+The second stale assumption turned up during the trace and explains the `[1] latest` bias:
+`producedCount = producedCount + 1; // run sends one` feeds `EXPECTED_RESET_OFFSET`, which is only used
+under LATEST. `git log -L` dates that line to upstream `28ccc1da6`, when `runPcUntilOffset` genuinely
+sent one record up front; #80 later moved nudging inside the await and left the arithmetic behind.
+
+Fixed by removing the assumption rather than correcting it - both call sites now read the partition end
+offset from the broker. After the fix, TWO extra nudges give 3 tests / 0 failures, and a soak of 8 runs
+with 2 cores free passes 8/8. The soak is corroboration only: it can fail to disprove, never prove.
+
+The plan below is kept as written, because the route mattered - step 1 is what turned a plausible story
+into a confirmed one, and step 2's "fix the arithmetic, not the timing" is what the fix did.
+
+## Plan (as written before the work)
 
 1. **Falsify or confirm, deterministically.** Force `n` nudges before the check (or send `n` filler
    records directly) and assert the prediction table above: 0 → pass, ≥1 → fail. If forcing a nudge
