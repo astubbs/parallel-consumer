@@ -265,7 +265,7 @@ master did not move, and blames a date rather than a merge.
 
 **Correction (2026-08-04): this section had it wrong twice over**, and the repo already knew. It claimed
 the basic history file is free in OSS pitest and merely asked someone to "confirm which capability we
-want". `docs/inflight.md` records the opposite as an *already-verified* PR #69 finding: pitest 1.25.x
+want". The in-flight ledger recorded the opposite as an *already-verified* PR #69 finding: pitest 1.25.x
 (we bumped 1.17.4 → 1.25.8 in #73) dropped the built-in file-based history entirely. Re-verified here
 rather than picking between two documents - `-DwithHistory=true` on the current build:
 
@@ -277,7 +277,9 @@ rather than picking between two documents - `-DwithHistory=true` on the current 
 So there is no free tier to check: history now lives entirely in **arcmutate**, and the work item is
 obtaining and wiring a licence, not setting a flag. arcmutate is free for open-source projects, but that
 needs the maintainer to sign up, and the licence is a file at the repo root - which on a *public* repo
-means committing a key or plumbing a CI secret. `docs/inflight.md` has the full shelved plan.
+means committing a key or plumbing a CI secret. Kept short in
+[`docs/inflight/ci-mutation-testing.md`](../inflight/ci-mutation-testing.md); the longer shelved plan
+did not survive the ledger audit in #112, so this section is now the record of it.
 
 **The automated reviewer flagged this contradiction five times before it was fixed.** Worth recording as
 its own lesson: a repeated review finding that keeps being deferred is usually a real one, and this one

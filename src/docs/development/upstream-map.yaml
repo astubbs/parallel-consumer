@@ -81,11 +81,11 @@ entries:
 
   - id: bug-857-stall-after-rebalance
     group: rebalance-stability
-    summary: Silent stall after rebalance (commitCommand synchronized deadlock)
+    summary: Silent stall after rebalance -- the upstream #857 family (commit deadlock, rebalance-time commit, drain zombie)
     fork:
-      branches: [bugs/857-paused-consumption-multi-consumers-bug]
-      prs: []
-      status: ready
+      branches: [bugs/857-paused-consumption-multi-consumers-bug, fix/flaky-partitionstate-committedoffset-it]
+      prs: [29, 80, 100]
+      status: in-progress
     upstream:
       repo: confluentinc/parallel-consumer
       issues: [857]
@@ -98,15 +98,29 @@ entries:
         posted: null
     adoc_anchor: part3-cat1-stability
     todo:
-      - "Open a fork PR for the fix (currently branch-only, no PR)"
-      - "Post the upstream backlink to #857 once PR'd"
+      - "Retarget fork PR #29 to master -- its base is master-confluent, the pinned pre-rebrand mirror, so merging it would land the fix nowhere users can get it"
+      - "Rebase fork PR #29 onto the poll/lifecycle internals #80 reshaped, then land it -- it is the last open piece of the family"
+      - "Post the upstream backlink to #857 once the family is landed"
     notes: >
-      Root cause: synchronized(commitCommand) deadlock between poll thread
-      (onPartitionsRevoked) and control thread (commitOffsetsThatAreReady);
-      fixed with ReentrantLock.tryLock(). Chaos test ~20%->~80%. Upstream PR
-      #548 addressed the same deadlock but is CLOSED (unmerged). Related issue
-      #541 now CLOSED. User weighing a larger poll+control single-thread
-      refactor to kill this bug class. Re-verify branch state before relying.
+      Fork state verified 2026-08-04. This is a FAMILY of distinct defects behind
+      one upstream symptom, not a single fix -- three fork PRs so far:
+      (1) PR #29 [OPEN, draft, base master-confluent, 57 behind]: the original
+      synchronized(commitCommand) deadlock between poll thread
+      (onPartitionsRevoked) and control thread (commitOffsetsThatAreReady),
+      replaced with ReentrantLock.tryLock(); chaos pass rate ~20%->~80%.
+      (2) PR #100 [MERGED 2026-08-03]: an unhandled RebalanceInProgressException
+      from a commit landing mid-rebalance escaped BrokerPollSystem.controlLoop()
+      and permanently killed the broker-poll thread; the commit is now deferred
+      and waiters released.
+      (3) PR #80 [MERGED 2026-08-04, bd717241]: ConsumerManager.shutdownRequested shadowed
+      BrokerPollSystem.runState, so consumer.poll() was never called while
+      draining -- a ~10kHz busy-spin plus a rebalance-unresponsive member holding
+      its whole assignment until eviction. Fixed by deleting the duplicated flag.
+      Verified independent of #29/#31 (uber-branch composition experiment: all
+      guards green, zero conflicts).
+      Upstream PR #548 addressed the same deadlock as (1) but is CLOSED
+      (unmerged); related issue #541 now CLOSED. User still weighing a larger
+      poll+control single-thread refactor to kill the whole bug class.
 
   - id: bug-859-pcmetrics-leak
     group: metrics-observability
@@ -127,7 +141,8 @@ entries:
         posted: null
     adoc_anchor: part3-cat3-observability
     todo:
-      - "Merge fork PR #57 (open) to land the fix on master"
+      - "Rebase fork PR #57 -- 11 commits behind master as of 2026-08-04 (it was clean on 2026-07-31)"
+      - "Merge fork PR #57 (open, draft) to land the fix on master"
       - "Post the upstream backlink to #859 (forwarded still null)"
     reconciliation:
       status: resolved
@@ -222,8 +237,8 @@ entries:
     summary: Replace stale work container on rebalance (regression test + carry)
     fork:
       branches: [fix/909-stale-container-replacement, pr-909-temp]
-      prs: []
-      status: in-progress
+      prs: [31]
+      status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
       issues: []
@@ -235,11 +250,15 @@ entries:
       - url: null
         posted: null
     adoc_anchor: part1-group-a-correctness
+    todo:
+      - "Retarget fork PR #31 to master -- its base is master-confluent, the pinned pre-rebrand mirror"
+      - "Rebase: the branch is 57 commits behind master (verified 2026-08-04)"
     notes: >
       Upstream PR #909 (cserspring) replaces stale containers rather than
       rejecting new ones, preventing record drops on rebalance. Upstream PR had
       no tests; fork work adds a regression test for stale container at the same
-      offset. High priority but wants tests before merge.
+      offset. High priority but wants tests before merge. Fork PR #31 is open
+      (draft) but targets master-confluent, which is why it read as "no PR".
 
   - id: bug-912-vertx-stream-leak
     group: vertx
@@ -247,7 +266,7 @@ entries:
     fork:
       branches: [bugs/912-vertx-stream-memory-leak]
       prs: []
-      status: in-progress
+      status: ready
     upstream:
       repo: confluentinc/parallel-consumer
       issues: [912]
@@ -259,7 +278,14 @@ entries:
       - url: null
         posted: null
     adoc_anchor: part3-cat10-vertx
-    notes: Clear the JStream deque on close.
+    todo:
+      - "Rebase (57 behind master) and open the fork PR -- fix + regression test are done and pushed"
+      - "Post the upstream backlink to #912 once merged"
+    notes: >
+      Clear the JStream deque on close. Fix + JStreamMemoryLeakTest912 are
+      committed and pushed to origin, no PR yet (verified 2026-08-04) -- hence
+      `ready`, not `in-progress`. Vertx-module only, so it collides with nothing
+      else in flight; the cheapest open item to land.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4
@@ -287,14 +313,16 @@ entries:
       Kafka to v4 (NOTE: .adoc previously said v7 -- stale). Upstream PR #920
       (found by the 2026-07-28 sweep) documents the JDK 17 build requirement +
       Jabel Java 8 bytecode -- overlaps our Java-baseline framing; compare before
-      landing our own.
+      landing our own. Branch is stale: 1 ahead, 57 behind master (2026-08-04).
+      Also gates fork PR #38 (JUnit 6 needs Java 17, plus an ArchUnit engine that
+      does not exist yet -- TNG/ArchUnit#1556).
 
   - id: rebrand-0.6.0.0-release
     group: release
     summary: First fork release -- rebrand to bz.stub.parallelconsumer (Java 8)
     fork:
       branches: [master, release/0.6.0.0]
-      prs: []
+      prs: [55, 56, 72]
       status: in-progress
     upstream:
       repo: confluentinc/parallel-consumer
@@ -307,11 +335,15 @@ entries:
       - url: null
         posted: null
     adoc_anchor: null
+    todo:
+      - "Strip -SNAPSHOT -> 0.6.0.0 and merge to master (publish.yml tags and releases). The quarantine guard no longer blocks it: #80 emptied the registry on merge"
     notes: >
-      Fork-only work (no upstream counterpart). Rebrand already on master,
-      Java 8, Jabel intact, snapshot-published. Release = strip -SNAPSHOT ->
-      0.6.0.0. Shipping a maintained release is the concrete answer to upstream
-      #907 ("is the project still maintained?") and #906 (pom version mismatch).
+      Fork-only work (no upstream counterpart). Rebrand and changelog already on
+      master via PRs #55 (groupId), #56 (release prep) and #72 (release notes);
+      Java 8, Jabel intact, snapshot-published. NOT yet released as of
+      2026-08-04: pom is still 0.6.0.0-SNAPSHOT and there is no v0.6.0.0 tag.
+      Shipping a maintained release is the concrete answer to upstream #907 ("is
+      the project still maintained?") and #906 (pom version mismatch).
 
   # ---------------------------------------------------------------------------
   # UPSTREAM BACKLOG -- OPEN PRs we may cherry-pick  (light tracked entries)

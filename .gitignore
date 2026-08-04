@@ -6,6 +6,24 @@ CLAUDE.md
 # Local per-worktree ownership markers (see AGENTS.md "Worktree ownership")
 .worktree-owner
 
+# Agent / assistant tooling state. All of this is local to one checkout - session
+# transcripts, caches, machine-specific config - and none of it is meaningful to
+# another contributor. `.claude` is ignored by CONTENTS (`/*`, not the directory) so
+# that shared config can be un-ignored later with a negation, e.g.
+# `!/.claude/settings.json`; git will not descend into a fully-excluded directory.
+/.claude/*
+/.codebuddy/
+/.context/
+/.compound-engineering/
+
+# Local worktree roots (AGENTS.md "Worktree ownership" puts worktrees under
+# .claude/worktrees; .worktrees is the other root in use). Covered by /.claude/*
+# above, listed separately because it is the one contributors trip over.
+/.worktrees/
+
+# Editor-local settings (personal preference, not project convention)
+/.vscode/
+
 # Compiled class file
 *.class
 
