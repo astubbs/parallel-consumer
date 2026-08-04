@@ -35,7 +35,7 @@ actionable pointers.
   bump, so they need to be picked up as a batch at release time, not folded in ad hoc.
 - **Graduation rule:** an item only becomes a branch/PR when you actually start it.
   If it maps to an upstream issue, link it - don't duplicate it.
-- **Not** for: in-flight work (`docs/inflight.md`), fork↔upstream mapping
+- **Not** for: in-flight work (`docs/inflight/`), fork↔upstream mapping
   (`src/docs/development/upstream-map.yaml`), solved problems (`docs/solutions/`),
   or PR-specific review feedback (raise that on the PR).
 

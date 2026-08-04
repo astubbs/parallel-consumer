@@ -165,7 +165,7 @@ jobs:
   # Experimental Kafka 4.x compatibility check. Non-blocking.
   # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds
   # a red X of noise to every PR (it is continue-on-error, so it never gated merges). Re-enable by restoring
-  # the `if: github.event_name == 'pull_request'` condition below when the Kafka 4 work starts. See docs/inflight.md.
+  # the `if: github.event_name == 'pull_request'` condition below when the Kafka 4 work starts. See docs/inflight/ci-disabled-jobs-and-runner-load.md.
   test-kafka-compat:
     if: false # was: github.event_name == 'pull_request' — re-enable when Kafka 4.x work begins
     needs: prepare-deps
