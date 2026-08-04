@@ -1,12 +1,17 @@
 # MANUAL-ONLY full mutation sweep (PIT). Deliberately has no `pull_request` and no `schedule` trigger.
 #
-# WHY MANUAL, AND WHY NOT NIGHTLY YET: the sweep this replaces - `io.confluent.parallelconsumer.internal.*`
-# - never once completed: 42+ minutes on CI before cancellation, 83+ minutes locally with minions dying on
-# MEMORY_ERROR. A sweep that never finishes scores ZERO mutants: it is not a slow signal, it is no signal.
-# It used to run on every push in the highcpu matrix, holding a 16-core runner for its full 60-minute
-# timeout to produce nothing. The target has since moved (see below), but nothing has completed here YET,
-# and scheduling a job on the strength of a hoped-for runtime is how the last one went unnoticed for so
-# long. This earns a `schedule:` trigger the day a run COMPLETES - not before.
+# WHY MANUAL, FOR NOW: nothing has completed here YET. The sweep this replaces - `internal.*` - never
+# once did (42+ min on CI before cancellation, 83+ locally with minions dying on MEMORY_ERROR), and it
+# used to run on every push, holding a 16-core runner for its whole timeout to produce nothing.
+#
+# That is NOT an argument against ever scheduling this one, and it should not be read as one: the target
+# has moved to `offsets.*`, where mutants are decidable, so the old "it never finishes" reasoning no
+# longer applies. What is missing is simply a measurement - run it once, see the runtime, then wire the
+# trigger. Scheduling on a hoped-for runtime is how the last one went unnoticed for so long.
+#
+# WHEN IT GETS A TRIGGER, prefer `push: branches: [master]` over a cron. A mutation score changes only
+# when the code changes, so a nightly recomputes an identical answer on any night master did not move,
+# and attributes a failure to a date instead of to a merge.
 #
 # THE TARGET IS `offsets.*`, NOT `internal.*`, and that is the point of the whole exercise. `internal.*`
 # is the concurrency core, where mutants to lock acquisition, loop conditions and timeouts HANG by

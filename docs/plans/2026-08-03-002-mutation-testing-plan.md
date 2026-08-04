@@ -248,11 +248,16 @@ and it is the only substantive item still outstanding.
 
 It has never completed, produces no signal, and burns runner time on every PR.
 
-Shipped as `mutation-full-sweep.yml`, `workflow_dispatch` only. **The original "put it on a nightly" was
-wrong**, and worth stating plainly: a nightly for a job that has never once finished just relocates the
-waste to a quieter hour, and adds a recurring red-or-cancelled result that everyone learns to ignore -
-which is worse than no lane, because it trains people to ignore this lane specifically. It gets a
-`schedule:` trigger the day a run completes, and §4.3 is what would make that possible.
+Shipped as `mutation-full-sweep.yml`, `workflow_dispatch` only. The original "put it on a nightly" was
+wrong *for `internal.*`*: scheduling a job that has never once finished relocates the waste to a quieter
+hour and adds a recurring red-or-cancelled result everyone learns to ignore - worse than no lane, since
+it trains people to ignore this one specifically.
+
+**That argument does not survive the retarget, and should not be recycled as though it did.** With
+`offsets.*` the sweep is plausibly minutes, not never. The only thing still missing is a measurement:
+run it once, then wire the trigger. When that happens, prefer `push: branches: [master]` to a cron - a
+mutation score changes only when the code changes, so a nightly recomputes an identical answer whenever
+master did not move, and blames a date rather than a merge.
 
 ### 4.2 Incremental analysis (`withHistory`) — NOT AVAILABLE TO US AT ALL, and not the lever it looks like
 

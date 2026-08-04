@@ -344,19 +344,25 @@ skipping the hosted gate - the gate staying independent is worth more than the m
 
 ## CI reliability / gate issues (follow-up work)
 
-- **Mutation testing: retargeted but UNMEASURED (#111, 2026-08-04).** The lane is now one per-PR job
-  (`maven.yml`, scoped to changed classes); the full sweep is manual-only (`mutation-full-sweep.yml`)
-  and points at `offsets.*` instead of `internal.*`. Analysis, corrections and reasoning:
-  `docs/plans/2026-08-03-002-mutation-testing-plan.md`. Still open:
-  - **Run the sweep and see if it completes** - `gh workflow run mutation-full-sweep`, only after #111
-    merges (`workflow_dispatch` needs the file on the default branch). Nothing has completed under the
-    new target; `RunLengthEncoderTest` alone is ~140s. **Do not quote a mutation score until one does.**
+- **Mutation testing is deliberately NARROW right now - re-widening is tracked here (#111, 2026-08-04).**
+  What runs automatically: one per-PR job (`maven.yml`) that mutates *only changed classes* *only* in
+  `offsets.` (`PIT_DECIDABLE_PACKAGES`). Nothing else is automatic - the full sweep is dispatch-only
+  (`mutation-full-sweep.yml`). So on most PRs mutation testing does nothing, by design: elsewhere the
+  mutants hang and survivors cannot be told from an unobserved race. Reasoning and measurements:
+  `docs/plans/2026-08-03-002-mutation-testing-plan.md`. To re-widen, in order:
+  - **Run the sweep once and record the runtime** - `gh workflow run mutation-full-sweep`, only after
+    #111 merges (`workflow_dispatch` needs the file on the default branch). Nothing has completed under
+    the new target. **Do not quote a mutation score until one has.**
+  - **Then give it a trigger.** Prefer `push: branches: [master]` over a cron: the score changes only
+    when the code does, so a nightly recomputes an identical answer whenever master did not move, and
+    blames a date rather than a merge. Deliberately NOT wired until the runtime is known.
+  - **Then widen `PIT_DECIDABLE_PACKAGES`** - `state.` is the obvious next candidate, but it is
+    bookkeeping around the same concurrency, so it earns inclusion by measurement, not by argument.
   - **`excludedGroups`: verify before "fixing".** `parseSurefireConfig` may already import our surefire
     `<excludedGroups>`; a throwaway `@Quarantined` unit test settles it (plan §3.4).
   - **`withHistory` is blocked on an arcmutate licence, not a flag** - re-verified 2026-08-04 that
     pitest 1.25.8 errors with "no history plugin has been installed". Shelved plan below.
-  - **Widen the decidable allowlist only on evidence.** The PR lane mutates changed classes only within
-    `PIT_DECIDABLE_PACKAGES` (currently `offsets.` alone); `state.` is the obvious next candidate.
+
 - **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
   execution and makes blocking findings inline. Four things it did NOT resolve, in rough priority:
   - **A green `review` check can mean the reviewer never ran.** `claude-code-action` refuses to run
