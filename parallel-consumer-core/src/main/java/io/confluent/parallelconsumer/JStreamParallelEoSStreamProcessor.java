@@ -10,7 +10,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.util.List;
+import io.confluent.parallelconsumer.internal.DrainingCloseable.DrainingMode;
 import io.confluent.parallelconsumer.internal.JStreamResultDeques;
+
+import java.time.Duration;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicLong;
@@ -51,14 +54,22 @@ public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamPr
     }
 
     /**
-     * Clears any unconsumed results from the deque on close to prevent memory leaks.
+     * Clears any unconsumed results from the deque once shutdown completes, so closing actually releases them.
+     * <p>
+     * This overrides {@link DrainingMode}-taking close rather than the no-arg {@code close()}, because that is
+     * the single method every other entry point funnels through - {@code close()},
+     * {@code closeDrainFirst()}, {@code closeDontDrainFirst()} and the {@link Duration} variants all end up
+     * here. Overriding the no-arg version would leave every other shutdown path leaking.
+     * <p>
+     * The clear happens <b>after</b> the shutdown completes, not before: a {@link DrainingMode#DRAIN} close
+     * keeps processing in-flight work, and that work enqueues more results.
      *
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
      */
     @Override
-    public void close() {
+    public void close(DrainingMode drainMode) {
+        super.close(drainMode);
         JStreamResultDeques.clearOnClose(userProcessResultsStream);
-        super.close();
     }
 
 }

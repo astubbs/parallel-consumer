@@ -77,6 +77,32 @@ class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
     }
 
     /**
+     * The leak survived the first fix because only the no-arg {@code close()} was overridden, while
+     * {@code closeDrainFirst()} - the shutdown the shipped Vertx example uses - routes straight to
+     * {@code close(DrainingMode)} and never reached it. Guards the funnel, not one entry point.
+     */
+    @Test
+    void closeDrainFirstShouldAlsoClearResultDeque() {
+        var latch = new CountDownLatch(1);
+        streaming.pollProduceAndStream((record) -> {
+            log.info("Processing record: {}", record);
+            myRecordProcessingAction.apply(record.getSingleConsumerRecord());
+            latch.countDown();
+            return Lists.list(mock(ProducerRecord.class));
+        });
+
+        awaitLatch(latch);
+
+        ConcurrentLinkedDeque<?> deque = getResultDeque();
+        awaitUntilTrue(() -> !deque.isEmpty());
+        assertThat(deque).isNotEmpty();
+
+        streaming.closeDrainFirst();
+
+        assertThat(deque).isEmpty();
+    }
+
+    /**
      * Verify that the deque is empty after close even with no results produced.
      */
     @Test

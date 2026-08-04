@@ -19,6 +19,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Optional;
+import io.confluent.parallelconsumer.internal.DrainingCloseable.DrainingMode;
 import io.confluent.parallelconsumer.internal.JStreamResultDeques;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -162,14 +163,18 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
     }
 
     /**
-     * Clears any unconsumed results from the deque on close to prevent memory leaks.
+     * Clears any unconsumed results from the deque once shutdown completes.
+     * <p>
+     * Overrides the {@link DrainingMode}-taking close, which is the single method every other entry point
+     * funnels through - see the sibling override in {@code JStreamParallelEoSStreamProcessor}. The clear
+     * happens after shutdown, since a draining close keeps enqueueing results while it finishes.
      *
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
      */
     @Override
-    public void close() {
+    public void close(DrainingMode drainMode) {
+        super.close(drainMode);
         JStreamResultDeques.clearOnClose(userProcessResultsStream);
-        super.close();
     }
 
     /**
