@@ -1,11 +1,17 @@
 ---
 title: "fix: Drain-path zombie-spin fix (test-first) + uber-branch stall experiment"
 type: fix
-status: active
+status: done
 date: 2026-07-29
 ---
 
 # fix: Drain-path zombie-spin fix (test-first) + uber-branch stall experiment
+
+> **Done (landed in PR #80).** The drain-path zombie/busy-spin fix shipped, guarded by
+> `BrokerPollSystemDrainTest` (RED→GREEN) and `DrainingMemberRebalanceIT`. Kept as diary history;
+> the durable root-cause write-ups live in `docs/solutions/test-flakiness/`
+> (`pc-silent-stall-under-contention-2026-07-29.md` and
+> `latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`).
 
 ## Context
 

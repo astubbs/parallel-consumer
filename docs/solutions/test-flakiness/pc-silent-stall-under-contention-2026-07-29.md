@@ -1,5 +1,5 @@
 ---
-title: "PartitionStateCommittedOffsetIT 'flake' is a real silent stall under contention (#857 family), not a test-timeout problem"
+title: "Drain-path zombie/busy-spin under contention (#857 family): a real product bug found while chasing the PartitionStateCommittedOffsetIT flake - the flake itself turned out to be a separate test-harness nudge race"
 date: 2026-07-29
 category: test-flakiness
 module: parallel-consumer-core
@@ -14,7 +14,7 @@ symptoms:
 root_cause: drain_path_shutdownRequested_short_circuit_plus_contention
 resolution_type: research_report_plus_diagnostics_committed
 severity: medium
-status: OPEN - do not mask
+status: "drain-path zombie/busy-spin FIXED in PR #80 (guarded by BrokerPollSystemDrainTest); the committedOffsetRemoved flake that led here was a SEPARATE test-harness nudge race, SOLVED in latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md"
 related_prs:
   - "PR #75 (ci/grumpy-runner-workflow) - where the red surfaced (this report stacks on it)"
   - "PR #29 / bugs/857-paused-consumption-multi-consumers-bug - silent stall after rebalance (#857), root cause OPEN"
@@ -30,7 +30,7 @@ tags:
   - contention
 ---
 
-# PartitionStateCommittedOffsetIT: the highcpu runner "flake" is a real silent stall, not a test-timeout bug
+# Drain-path zombie/busy-spin: a real product bug found while chasing the PartitionStateCommittedOffsetIT "flake" (the flake itself was a separate test-harness nudge race)
 
 > **UPDATE 2026-07-30 - the `committedOffsetRemoved` mystery is SOLVED**, with a final twist: it was an
 > `auto.offset.reset=latest` **nudge race in the test harness** - the reset resolving after the test's
