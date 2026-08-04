@@ -14,7 +14,8 @@
 #
 # Usage: bin/ci-mutation-test.sh [extra-maven-args...]   (e.g. -Dverbose=true)
 #
-# Env overrides: PIT_THREADS, PIT_BASE_REF, PIT_FULL_SWEEP, PIT_TARGET_CLASSES, PIT_TARGET_TESTS.
+# Env overrides: PIT_THREADS, PIT_BASE_REF, PIT_FULL_SWEEP, PIT_TARGET_CLASSES, PIT_TARGET_TESTS,
+# PIT_DECIDABLE_PACKAGES (regex: which changed classes a PR run will mutate - see below).
 # Prefer PIT_TARGET_CLASSES / PIT_TARGET_TESTS over passing a second -DtargetClasses in "$@": duplicate
 # -D flags resolve by last-wins, which is implicit and easy to get backwards.
 #
@@ -77,24 +78,56 @@ fi
 # That is why mutation was removed from the `local` lane, whose checkout is shallow. The one PR lane
 # (maven.yml) checks out with fetch-depth: 0 - keep it that way.
 if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}" >/dev/null 2>&1; then
-  # Emit "Foo,Foo$*" per changed FQCN: the class itself PLUS its nested/synthetic members (Lombok
-  # @Builder inner classes, anonymous classes, lambdas). A bare "Foo*" would over-match siblings that
-  # merely share the prefix (PIT globs '*' as unbounded '.*', not '.'/'$'-bounded) - e.g. PartitionState*
-  # sweeps in PartitionStateManager - attributing mutants to code the PR never touched (ce-review finding).
   # --diff-filter=d drops deletions: a deleted class has no target/classes entry, and pitest's
   # failWhenNoMutations (default true) would then fail the goal outright instead of the "nothing to mutate" skip.
-  CHANGED=$(git diff --name-only --diff-filter=d "origin/${BASE_REF}" HEAD -- parallel-consumer-core/src/main/java/ 2>/dev/null \
+  CHANGED_ALL=$(git diff --name-only --diff-filter=d "origin/${BASE_REF}" HEAD -- parallel-consumer-core/src/main/java/ 2>/dev/null \
     | sed -E 's#.*/src/main/java/##; s#/#.#g; s#\.java$##' \
-    | { grep -E '^io\.confluent\.parallelconsumer\.' || true; } | sed 's/.*/&,&$*/' | paste -sd, -)
-  if [ -z "$CHANGED" ]; then
+    | { grep -E '^io\.confluent\.parallelconsumer\.' || true; })
+  if [ -z "$CHANGED_ALL" ]; then
     echo "PIT: no core main-source classes changed vs origin/${BASE_REF} - nothing to mutate, skipping."
     summary "### Mutation (PIT): skipped"
     summary "No core main-source classes changed vs \`origin/${BASE_REF}\`, so there was nothing to mutate."
     summary "**This green tick is not evidence about test quality** - it means no work was done."
     exit 0
   fi
-  TARGET_CLASSES="$CHANGED"
-  echo "PIT: PR-scoped to CHANGED classes -> ${TARGET_CLASSES}"
+
+  # DECIDABLE PACKAGES ONLY. Mutating what changed is the right instinct, but it is not free of the
+  # §3.2 problem: in the concurrency core, mutants to locks, loop conditions and timeouts HANG rather
+  # than dying, and the covering tests are timing-based, so a survivor cannot be told apart from a race
+  # that did not happen. A finding you cannot act on is not worth a runner slot - and the job timeout is
+  # no protection, it just converts "slow" into "cancelled with nothing scored", which is the same zero
+  # signal the full sweep produced for months.
+  #
+  # So the lane mutates changed classes only where a survivor is DECIDABLE. Start narrow, deliberately:
+  # offsets.* alone, the case argued in the plan doc. Widen it (state.* is the obvious candidate) once
+  # this demonstrably works, not before - walk the scope SIDEWAYS, then up, and only on evidence.
+  DECIDABLE="${PIT_DECIDABLE_PACKAGES:-^io\.confluent\.parallelconsumer\.offsets\.}"
+  CHANGED=$(printf '%s\n' "$CHANGED_ALL" | { grep -E "$DECIDABLE" || true; })
+  SKIPPED=$(printf '%s\n' "$CHANGED_ALL" | { grep -Ev "$DECIDABLE" || true; })
+  if [ -z "$CHANGED" ]; then
+    echo "PIT: changed classes are all outside the decidable packages (${DECIDABLE}) - skipping."
+    printf '%s\n' "$SKIPPED" | sed 's/^/PIT:   not mutated: /'
+    summary "### Mutation (PIT): skipped"
+    summary "Every changed class is outside the packages where a mutation survivor is decidable"
+    summary "(currently \`${DECIDABLE}\`), so mutating them would buy hang-prone mutants and survivors"
+    summary "that cannot be told apart from a race that did not happen."
+    summary ""
+    summary "Not mutated:"
+    summary '```'
+    summary "$SKIPPED"
+    summary '```'
+    exit 0
+  fi
+  # Emit "Foo,Foo$*" per FQCN: the class itself PLUS its nested/synthetic members (Lombok @Builder inner
+  # classes, anonymous classes, lambdas). A bare "Foo*" would over-match siblings that merely share the
+  # prefix (PIT globs '*' as unbounded '.*', not '.'/'$'-bounded) - e.g. PartitionState* sweeps in
+  # PartitionStateManager - attributing mutants to code the PR never touched (ce-review finding).
+  TARGET_CLASSES=$(printf '%s\n' "$CHANGED" | sed 's/.*/&,&$*/' | paste -sd, -)
+  echo "PIT: PR-scoped to CHANGED decidable classes -> ${TARGET_CLASSES}"
+  # Never silently cap coverage: say what was dropped, or a partial run reads as a complete one.
+  if [ -n "$SKIPPED" ]; then
+    printf '%s\n' "$SKIPPED" | sed 's/^/PIT:   changed but NOT mutated (not decidable): /'
+  fi
 else
   echo "PIT: no resolvable base ref - full sweep of ${TARGET_CLASSES}"
 fi
@@ -137,6 +170,15 @@ summary "### Mutation (PIT)"
 summary ""
 summary "Mutated: \`${TARGET_CLASSES}\`"
 summary "Coverage run: \`${TARGET_TESTS}\` (minus integrationTests)"
+if [ -n "${SKIPPED:-}" ]; then
+  # State the cap every time. A run that mutated one of five changed classes must not read like a run
+  # that covered the PR.
+  summary ""
+  summary "Changed but **not** mutated (outside the decidable packages):"
+  summary '```'
+  summary "$SKIPPED"
+  summary '```'
+fi
 summary ""
 if [ -n "$STATS" ]; then
   summary '```'

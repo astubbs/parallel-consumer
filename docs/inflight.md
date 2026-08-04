@@ -355,8 +355,8 @@ skipping the hosted gate - the gate staying independent is worth more than the m
     `<excludedGroups>`; a throwaway `@Quarantined` unit test settles it (plan §3.4).
   - **`withHistory` is blocked on an arcmutate licence, not a flag** - re-verified 2026-08-04 that
     pitest 1.25.8 errors with "no history plugin has been installed". Shelved plan below.
-  - **The scoped PR lane still mutates whatever changed**, including `internal.*`. Whether it should
-    refuse the hang-prone packages needs the measurement above first.
+  - **Widen the decidable allowlist only on evidence.** The PR lane mutates changed classes only within
+    `PIT_DECIDABLE_PACKAGES` (currently `offsets.` alone); `state.` is the obvious next candidate.
 - **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
   execution and makes blocking findings inline. Four things it did NOT resolve, in rough priority:
   - **A green `review` check can mean the reviewer never ran.** `claude-code-action` refuses to run

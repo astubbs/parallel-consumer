@@ -324,11 +324,24 @@ The script's own posture — *"walk the scope back up as it proves fast enough"*
 suggestion is that it should walk **sideways**, to where mutants are decidable, rather than up to
 everything.
 
-**Done in #111:** `offsets.*` is the sweep default, in `bin/ci-mutation-test.sh` and as the
-`mutation-full-sweep.yml` input default. Note where it does *not* apply: a PR run derives its target
-from the classes that PR changed, so a PR touching `internal.*` still mutates `internal.*`. Whether the
-scoped lane should also refuse the hang-prone packages is a separate question, and one that needs the
-measurement below before it is worth answering.
+**Done in #111, in both places.** `offsets.*` is the sweep default (`bin/ci-mutation-test.sh` and the
+`mutation-full-sweep.yml` input), *and* the per-PR lane now intersects its changed-class list with the
+same decidable set (`PIT_DECIDABLE_PACKAGES`, default `offsets.`), naming in the log and job summary any
+changed class it declined to mutate.
+
+The lane needed it as much as the sweep, which the first draft of this change missed: the sweep is the
+path that runs least often, so retargeting only that would have left the recurring case exactly as bad
+as before. A PR touching `internal.*` would still get hang-prone mutants and unfalsifiable survivors,
+and the job timeout is no protection - it converts "slow" into "cancelled with nothing scored", which is
+the same zero signal the sweep produced for months.
+
+Measured while deciding it (12 cores, one changed `internal` class - `BrokerPollSystem`): the coverage
+pass alone took **271s**, and mutation analysis of that *single* class had still not reached the
+statistics stage four minutes later, when it was killed. The hosted PR lane has two cores. For contrast,
+the same lane on one changed `offsets` class completes end to end in **430s** and scores 18 mutants.
+
+**Widen the allowlist only on evidence.** `state.*` is the obvious next candidate, but it is bookkeeping
+wrapped around the same concurrency, so it earns inclusion by measurement rather than by argument.
 
 **Still unmeasured, which is the part that matters.** This is a config change made on the strength of
 the argument above, not on a completed run - so it is a better-founded guess, not a result. Run it:
