@@ -53,11 +53,16 @@ BASE_REF="${PIT_BASE_REF:-${GITHUB_BASE_REF:-}}"
 # Explicit full-sweep override: PIT_FULL_SWEEP=true ignores the PR base ref and mutates the whole
 # target glob (the manual mutation-full-sweep.yml job uses this; PR runs are otherwise scoped).
 if [ "${PIT_FULL_SWEEP:-}" = "true" ]; then BASE_REF=""; fi
-# Full-sweep target. Overridable because internal.* is close to the worst possible target - it is the
-# concurrency core, so mutants to locks, loop conditions and timeouts HANG rather than dying, and its
-# timing-based tests make a survivor unfalsifiable. offsets.* is the recommended alternative: decidable
-# mutants, deterministic tests, and a bug there means lost or duplicated records.
-TARGET_CLASSES="${PIT_TARGET_CLASSES:-io.confluent.parallelconsumer.internal.*}"
+# Full-sweep target (manual dispatch only - a PR run derives its target from the changed classes below
+# and never reaches this default).
+#
+# offsets.*, NOT internal.*. internal.* is the concurrency core and close to the worst possible target:
+# mutants to locks, loop conditions and timeouts HANG by construction rather than dying fast, which is
+# why that sweep has never completed - and its timing-based tests make a survivor unfalsifiable anyway
+# ("nothing asserts this" is indistinguishable from "the race didn't happen this run"). The offset
+# encoders/decoders are the opposite on both counts: deterministic tests, so a survivor is a REAL gap,
+# and high stakes, since a silent bug there means lost or duplicated records.
+TARGET_CLASSES="${PIT_TARGET_CLASSES:-io.confluent.parallelconsumer.offsets.*}"
 # What gets RUN to compute coverage - the dominant cost of any run (~332s of instrumented full-suite
 # execution), paid up front whether you mutate two classes or two hundred. Narrowing this is the only
 # lever that touches that cost; caching mutant verdicts does not.

@@ -403,11 +403,17 @@ skipping the hosted gate - the gate staying independent is worth more than the m
     with the reasoning attached. (Why it matters: our `targetClasses` glob does match test classes by
     name, tests sharing the production package — and a mutated assertion fails its own test, so the
     mutant records KILLED and the score climbs toward 100% while carrying no information about main code.)
-  **Still outstanding — the substantive one:** retarget from `internal.*` to `offsets.*`, where a bug
-  means lost/duplicated records and mutants are *decidable*. #111 made this a dispatch input rather than
-  a code change: `gh workflow run mutation-full-sweep -f target-classes=…offsets.* -f target-tests=…offsets.*`
-  — narrow **both**, since `target-tests` is what drives the dominant cost (the 332s instrumented
-  coverage pass). Nothing has been measured yet; `RunLengthEncoderTest` alone is ~140s.
+  - **Retargeted `internal.*` → `offsets.*` (#111)** — the substantive change, where a bug means
+    lost/duplicated records and mutants are *decidable*. Applies to the sweep default only: a PR run
+    targets the classes that PR changed, so a PR touching `internal.*` still mutates `internal.*`.
+  **Still outstanding — the measurement.** The retarget is an argued config change, not a result:
+  **nothing has completed yet**, and `offsets.*` is not obviously cheap (`RunLengthEncoderTest` alone is
+  ~140s, re-run per mutant). Run `gh workflow run mutation-full-sweep`. If it completes, a `schedule:`
+  and a history file both become options and there is finally a score worth quoting; if it doesn't, that
+  is the answer on whether mutation testing can work here. Only if the coverage pass dominates, add
+  `-f target-tests=…offsets.*` — it is the one lever on the 332s instrumented pass, but it reports a
+  mutant killed outside `offsets.*` as no-coverage, so it buys speed with accuracy.
+  **Do not quote a mutation score for this project until a sweep has completed.**
   **Also outstanding:** `excludedGroups` — but **verify before "fixing"**: `parseSurefireConfig` defaults
   true and `SurefireConfigConverter` reads surefire's `<excludedGroups>`, which our pom sets, so this may
   already work. It hinges on whether `${excluded.groups}` interpolates in the raw `Xpp3Dom`; a throwaway

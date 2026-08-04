@@ -1,22 +1,31 @@
 # MANUAL-ONLY full mutation sweep (PIT). Deliberately has no `pull_request` and no `schedule` trigger.
 #
-# WHY MANUAL, AND WHY NOT NIGHTLY YET: the full `io.confluent.parallelconsumer.internal.*` sweep has
-# never once completed - 42+ minutes on CI before cancellation, 83+ minutes locally with minions dying
-# on MEMORY_ERROR. A sweep that never finishes scores ZERO mutants: it is not a slow signal, it is no
-# signal. It used to run on every push in the highcpu matrix, holding a 16-core runner for its full
-# 60-minute timeout to produce nothing. Scheduling something that has never finished only moves that
-# waste to a quieter hour, so this earns a `schedule:` trigger the day a run COMPLETES - not before.
+# WHY MANUAL, AND WHY NOT NIGHTLY YET: the sweep this replaces - `io.confluent.parallelconsumer.internal.*`
+# - never once completed: 42+ minutes on CI before cancellation, 83+ minutes locally with minions dying on
+# MEMORY_ERROR. A sweep that never finishes scores ZERO mutants: it is not a slow signal, it is no signal.
+# It used to run on every push in the highcpu matrix, holding a 16-core runner for its full 60-minute
+# timeout to produce nothing. The target has since moved (see below), but nothing has completed here YET,
+# and scheduling a job on the strength of a hoped-for runtime is how the last one went unnoticed for so
+# long. This earns a `schedule:` trigger the day a run COMPLETES - not before.
 #
-# HOW TO MAKE IT COMPLETE: don't sweep `internal.*`. That package is the concurrency core, where mutants
-# to lock acquisition, loop conditions and timeouts HANG by construction rather than dying fast, and
-# where a survivor is often unfalsifiable anyway ("nothing asserts this" is indistinguishable from "the
-# race didn't happen this run"). Use the `target-classes` input to point it at decidable code instead -
-# `io.confluent.parallelconsumer.offsets.*` is the recommended first target: a bug there means lost or
-# duplicated records, and its tests are deterministic, so a survivor is a real gap.
-#   gh workflow run mutation-full-sweep -f target-classes='io.confluent.parallelconsumer.offsets.*' \
-#                                       -f target-tests='io.confluent.parallelconsumer.offsets.*'
-# Narrowing `target-tests` matters as much as narrowing `target-classes`: the dominant cost of any run is
-# the instrumented full-suite coverage pass (~332s), which is paid up front regardless of mutant count.
+# THE TARGET IS `offsets.*`, NOT `internal.*`, and that is the point of the whole exercise. `internal.*`
+# is the concurrency core, where mutants to lock acquisition, loop conditions and timeouts HANG by
+# construction rather than dying fast - which is why that sweep has never finished - and where a survivor
+# is often unfalsifiable anyway ("nothing asserts this" is indistinguishable from "the race didn't happen
+# this run"). The offset encoders/decoders are the opposite on both counts: deterministic tests, so a
+# survivor is a real gap you can act on, and high stakes, since a silent bug there means lost or
+# duplicated records. The scope walks SIDEWAYS, to where mutants are decidable, not up to everything.
+#
+# UNMEASURED. `offsets.*` is not obviously cheap either - `RunLengthEncoderTest` alone is ~140s, re-run
+# per mutant - so the first real question this workflow answers is whether it completes at all. If it
+# does, a `schedule:` trigger and a history file both become options. If it doesn't, that is the answer
+# to whether mutation testing can work on this codebase.
+#
+# IF THE COVERAGE PASS DOMINATES, narrow `target-tests` too:
+#   gh workflow run mutation-full-sweep -f target-tests='io.confluent.parallelconsumer.offsets.*'
+# That is the only lever on the ~332s instrumented full-suite pass, which is paid up front regardless of
+# mutant count. It is NOT the default, because it costs accuracy: a mutant killed only by a test outside
+# `offsets.*` would then be reported as no-coverage rather than killed. Buy speed with it deliberately.
 #
 # DO NOT "just lower the timeout" to make this finish. PIT counts TIMED_OUT as KILLED, so shortening
 # timeoutConstant reclassifies slow survivors as kills and INFLATES the score. It can only come down
@@ -31,11 +40,11 @@ on:
   workflow_dispatch:
     inputs:
       target-classes:
-        description: 'PIT targetClasses glob (what gets mutated). Default = the internal.* sweep that has never completed; prefer offsets.*'
+        description: 'PIT targetClasses glob (what gets mutated). Default offsets.* = decidable mutants. internal.* is the sweep that has never completed.'
         required: false
-        default: 'io.confluent.parallelconsumer.internal.*'
+        default: 'io.confluent.parallelconsumer.offsets.*'
       target-tests:
-        description: 'PIT targetTests glob (what gets run for coverage). Narrow this to cut the ~332s coverage pass.'
+        description: 'PIT targetTests glob (what runs for coverage). Narrowing cuts the ~332s coverage pass but reports mutants killed elsewhere as no-coverage.'
         required: false
         default: 'io.confluent.parallelconsumer.*'
       threads:

@@ -21,10 +21,12 @@ because a plan that quietly corrects itself teaches nothing.
 | One lane, not four | PIT was running up to **four times per PR** (§3.5). Now exactly one: `maven.yml`. |
 | `skipFailingTests` | §3.0's blast radius, fixed at the source rather than worked around. One flake no longer switches mutation testing off repo-wide. |
 | A summary that explains itself | Every exit path now writes to the job summary, including the "nothing to mutate" one - so a green tick states which kind of green it is (§6). |
-| Retargeting made a one-liner | `PIT_TARGET_CLASSES` / `PIT_TARGET_TESTS`, so trying `offsets.*` is a workflow input rather than a code change. |
+| **Retargeted to `offsets.*`** | §4.3, the substantive one. `internal.*` is no longer the sweep default, and `PIT_TARGET_CLASSES` / `PIT_TARGET_TESTS` make any other target a workflow input rather than a code change. |
 
-**Still just an opinion:** §4.3, the retarget itself. Nothing has been measured yet, and the caveat in
-that section (`RunLengthEncoderTest` alone is ~140s) is the reason to measure before believing it.
+**Applied but NOT yet measured:** the retarget is a config change made on the strength of the argument in
+§4.3, not on a completed run. `offsets.*` is not obviously cheap either - `RunLengthEncoderTest` alone is
+~140s, re-run per mutant - so the first question the manual sweep answers is whether it completes at all.
+Do not quote a mutation score for this project until one has.
 
 ---
 
@@ -158,9 +160,11 @@ to be one.
 
 ### 3.1 The full sweep has never completed
 
-`bin/ci-mutation-test.sh` says so itself: *"The full internal.* sweep is impractically slow (it has
-never completed on CI)."* Observed on PR #110: still running at 42 minutes on CI, and 83+ minutes
-locally with minions dying on `MEMORY_ERROR` and `TIMED_OUT`.
+`bin/ci-mutation-test.sh` said so itself at the time: *"The full internal.* sweep is impractically slow
+(it has never completed on CI)."* Observed on PR #110: still running at 42 minutes on CI, and 83+
+minutes locally with minions dying on `MEMORY_ERROR` and `TIMED_OUT`. (That statement is about
+`internal.*`, which is no longer the target — but nothing has completed under the new one either yet,
+so it stands until a run proves otherwise.)
 
 An unbounded sweep that never finishes scores **zero** mutants. It is not a slow signal, it is no
 signal, and it costs high-CPU runner time on every PR to produce it.
@@ -284,7 +288,7 @@ The non-obvious bit is cache-key design: key it per-SHA and you never get a hit;
 so PR runs inherit master's history, and schedule a periodic full invalidation so stale verdicts do not
 accumulate silently.
 
-### 4.3 Retarget from `internal.*` to `offsets.*`
+### 4.3 Retarget from `internal.*` to `offsets.*` — APPLIED in #111, not yet measured
 
 The substantive change. The high-value target is the offset encoders/decoders: a silent bug there means
 **lost or duplicated records**, and the mutants are *decidable* — pure-ish logic with deterministic
@@ -298,20 +302,28 @@ The script's own posture — *"walk the scope back up as it proves fast enough"*
 suggestion is that it should walk **sideways**, to where mutants are decidable, rather than up to
 everything.
 
-**Still outstanding, and still unmeasured** - this is the item the rest of the work was clearing a path
-for, not a thing #111 did. What #111 changed is the cost of trying it: the target is now a dispatch
-input, so the experiment is
+**Done in #111:** `offsets.*` is the sweep default, in `bin/ci-mutation-test.sh` and as the
+`mutation-full-sweep.yml` input default. Note where it does *not* apply: a PR run derives its target
+from the classes that PR changed, so a PR touching `internal.*` still mutates `internal.*`. Whether the
+scoped lane should also refuse the hang-prone packages is a separate question, and one that needs the
+measurement below before it is worth answering.
+
+**Still unmeasured, which is the part that matters.** This is a config change made on the strength of
+the argument above, not on a completed run - so it is a better-founded guess, not a result. Run it:
 
 ```
-gh workflow run mutation-full-sweep -f target-classes='io.confluent.parallelconsumer.offsets.*' \
-                                    -f target-tests='io.confluent.parallelconsumer.offsets.*'
+gh workflow run mutation-full-sweep
 ```
 
-Narrow **both**. `target-tests` is what controls the coverage pass, which §4.2 identifies as the
-dominant cost; leaving it at `io.confluent.parallelconsumer.*` pays for the whole suite regardless of
-how few classes are mutated. Retarget it and the run either completes - at which point a `schedule:` and
-a history file both become real options - or it doesn't, which is itself the answer to whether mutation
-testing can work here at all.
+Either it completes - at which point a `schedule:` trigger and a history file both become real options,
+and there is finally a mutation score worth quoting - or it doesn't, which is itself the answer to
+whether mutation testing can work here at all.
+
+**If the coverage pass turns out to dominate**, and only then, add
+`-f target-tests='io.confluent.parallelconsumer.offsets.*'`. That is the one lever on the 332s
+instrumented pass (§4.2), but it is deliberately *not* the default, because it trades accuracy for
+speed: a mutant killed only by a test outside `offsets.*` would then be reported as no-coverage rather
+than killed. Buy that trade knowingly rather than inheriting it.
 
 ### 4.4 Wire `excludedGroups` explicitly — VERIFY FIRST, it may be a no-op
 
