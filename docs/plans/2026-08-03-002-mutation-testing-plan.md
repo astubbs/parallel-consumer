@@ -18,7 +18,7 @@ because a plan that quietly corrects itself teaches nothing.
 | Done in #111 | |
 |---|---|
 | Full sweep off PRs | Deleted from the highcpu matrix. Now manual-only in `mutation-full-sweep.yml` - **not** nightly: scheduling a job that has never once completed only moves the waste to a quieter hour. It earns a `schedule:` the day a run finishes. |
-| One lane, not four | PIT was running up to **four times per PR** (§3.5). Now exactly one: `maven.yml`. |
+| One lane, not three-plus-a-spare | PIT ran **three times per PR**, with a fourth copy configured but dormant (§3.5). Now exactly one: `maven.yml`. |
 | `skipFailingTests` | §3.0's blast radius, fixed at the source rather than worked around. One flake no longer switches mutation testing off repo-wide. |
 | A summary that explains itself | Every exit path now writes to the job summary, including the "nothing to mutate" one - so a green tick states which kind of green it is (§6). |
 | **Retargeted to `offsets.*`** | §4.3, the substantive one. `internal.*` is no longer the sweep default, and `PIT_TARGET_CLASSES` / `PIT_TARGET_TESTS` make any other target a workflow input rather than a code change. |
@@ -173,16 +173,21 @@ signal, and it costs high-CPU runner time on every PR to produce it.
 `target-classes` / `target-tests` as dispatch inputs so pointing it at a decidable package (§4.3) is a
 form field rather than a commit.
 
-### 3.5 The same run happened up to four times per PR
+### 3.5 The same run happened three times per PR, with a fourth copy waiting
 
 Not in the original draft, and visible only when the workflows are read side by side. Every PR was
-starting: `maven.yml` (scoped, GitHub-hosted), `pr-local-fast-feedback` (scoped, laptop),
-`pr-highcpu` "Mutation (PIT, scoped)", and `pr-highcpu` "Mutation (PIT, full)". Three of the four were
-the same scoped computation.
+starting three mutation jobs: `maven.yml` (scoped, GitHub-hosted), `pr-highcpu` "Mutation (PIT,
+scoped)", and `pr-highcpu` "Mutation (PIT, full)". Two of those three were the same scoped computation.
 
-The laptop copy carried an extra hazard: that workflow checks out **shallow**, and when the base ref
-fails to resolve `bin/ci-mutation-test.sh` falls back to the *full* sweep. A shallow checkout therefore
-silently promotes a scoped run into the sweep that has never completed - on a laptop.
+A **fourth** was configured in `pr-local-fast-feedback` but dormant: that workflow's `pull_request`
+trigger is commented out while the laptop runner is offline, so it only ran on manual dispatch. Worth
+being precise about rather than rounding up to "four times per PR" - a disabled trigger is a real
+difference, and the copy that isn't running is not the one costing anything.
+
+It was still worth removing, because it carried a hazard the others don't: that workflow checks out
+**shallow**, and when the base ref fails to resolve `bin/ci-mutation-test.sh` falls back to the *full*
+sweep. A shallow checkout therefore silently promotes a scoped run into the sweep that has never
+completed - on a laptop. Re-enabling that trigger would have shipped the hazard with it.
 
 **Done in #111:** one lane, `maven.yml`, which checks out with `fetch-depth: 0`. The fallback is
 documented at the point of the fallback, because it is only dangerous in combination with a checkout

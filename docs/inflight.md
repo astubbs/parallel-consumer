@@ -376,10 +376,12 @@ skipping the hosted gate - the gate staying independent is worth more than the m
     mutants: not a slow signal, no signal. **#111 removed it from PRs**; it is now manual-only
     (`mutation-full-sweep.yml`), deliberately **not** nightly — scheduling a job that has never finished
     just moves the waste to a quieter hour and trains people to ignore the lane.
-  - **PIT was running up to FOUR times per PR** (`maven.yml`, `pr-local`, and two `pr-highcpu` entries),
-    three of them the same scoped computation. **#111 leaves one:** `maven.yml`. The laptop copy also
-    checked out *shallow*, and a shallow checkout makes `bin/ci-mutation-test.sh` fall back from scoped
-    to the full sweep — keep `fetch-depth: 0` on whichever lane runs it.
+  - **PIT was running THREE times per PR** (`maven.yml` + two `pr-highcpu` entries), two of them the
+    same scoped computation — plus a fourth copy in `pr-local`, dormant only because that workflow's
+    `pull_request` trigger is commented out while the laptop runner is offline. **#111 leaves one:**
+    `maven.yml`. The laptop copy also checked out *shallow*, and a shallow checkout makes
+    `bin/ci-mutation-test.sh` fall back from scoped to the full sweep, so re-enabling that trigger would
+    have shipped the hazard with it — keep `fetch-depth: 0` on whichever lane runs it.
   - **Same pass, same reasoning: Unit + Integration removed from the highcpu matrix (#111).** Measured as
     not faster there than the GitHub-hosted gate that already runs them, so they were a second copy of an
     existing verdict — another tick to triage per PR, and a checks list of mostly-duplicates is how a real

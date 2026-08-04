@@ -11,8 +11,9 @@
 #
 #   - Unit + Integration: measured as NOT faster here than the GitHub-hosted gate that already runs them
 #     (maven.yml). Same suites, same verdict, extra noise - so the hosted gate owns them outright.
-#   - Mutation (PIT), both entries: PIT was running up to FOUR times per PR (this matrix twice, plus
-#     maven.yml, plus the `local` lane), three of them the same scoped computation. There is now exactly
+#   - Mutation (PIT), both entries: PIT ran THREE times per PR (this matrix twice, plus maven.yml), two
+#     of them the same scoped computation - and a fourth copy sat in the `local` lane, dormant only
+#     because that workflow's pull_request trigger is commented out. There is now exactly
 #     ONE per-PR mutation lane - maven.yml -> "Mutation Tests (PIT, PR-scoped)". The full internal.*
 #     sweep, which has never once completed, is manual-only in mutation-full-sweep.yml: a sweep that
 #     never finishes scores ZERO mutants, so it was holding a 16-core runner for its whole 60-minute

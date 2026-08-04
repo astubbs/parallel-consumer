@@ -156,8 +156,9 @@ not here.
 
 This lane deliberately carries only work the hosted gate cannot do well. Unit and integration used to run
 here too and were removed: they were not actually faster than the GitHub-hosted gate that already runs
-them, so they only added checks to triage. Mutation (PIT) was removed for a stronger reason - it ran up to
-four times per PR across the lanes, and its full sweep had never once completed. One PR-scoped mutation
+them, so they only added checks to triage. Mutation (PIT) was removed for a stronger reason - it ran three
+times per PR across the lanes (with a fourth copy configured but dormant), and its full sweep had never
+once completed. One PR-scoped mutation
 lane now lives in `maven.yml`, and the full sweep is manual-only in `mutation-full-sweep.yml` (which does
 target this runner, since it wants every core it can get).
 
