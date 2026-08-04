@@ -265,8 +265,8 @@ entries:
     summary: Memory leak in JStreamVertxParallelStreamProcessor
     fork:
       branches: [bugs/912-vertx-stream-memory-leak]
-      prs: []
-      status: ready
+      prs: [116]
+      status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
       issues: [912]
@@ -279,13 +279,15 @@ entries:
         posted: null
     adoc_anchor: part3-cat10-vertx
     todo:
-      - "Rebase (57 behind master) and open the fork PR -- fix + regression test are done and pushed"
+      - "Merge fork PR #116"
       - "Post the upstream backlink to #912 once merged"
     notes: >
-      Clear the JStream deque on close. Fix + JStreamMemoryLeakTest912 are
-      committed and pushed to origin, no PR yet (verified 2026-08-04) -- hence
-      `ready`, not `in-progress`. Vertx-module only, so it collides with nothing
-      else in flight; the cheapest open item to land.
+      Clear the JStream deque on close, in fork PR #116 (rebased onto master
+      2026-08-05, RED->GREEN verified). NOT vertx-only despite the branch name:
+      the same unbounded deque is in core's JStreamParallelEoSStreamProcessor,
+      and both are fixed, plus a 10k-item backlog warning and @Deprecated on both
+      classes pointing at the callback API. The deprecation is a user-visible API
+      change, so decide at release time whether it reads as Breaking or Fixes.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4

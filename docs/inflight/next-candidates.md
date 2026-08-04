@@ -3,8 +3,6 @@
 Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full verdicts live in
 `src/docs/development/upstream-pr-analysis.adoc`; these are the ready picks:
 
-- **`upstream #912` vertx leak** - branch done, needs rebase + PR (`branch-912-vertx-leak.md`). Best
-  immediate pick.
 - **Logging-verbosity cleanup** - batch `upstream #629` / `#631` / `#640` into one PR
   (`ConsumerOffsetCommitter`, `RemovedPartitionState`, `AbstractParallelEoSStreamProcessor`). Low
   effort, high return.
