@@ -35,7 +35,7 @@ actionable pointers.
   bump, so they need to be picked up as a batch at release time, not folded in ad hoc.
 - **Graduation rule:** an item only becomes a branch/PR when you actually start it.
   If it maps to an upstream issue, link it - don't duplicate it.
-- **Not** for: in-flight work (`docs/inflight.md`), fork↔upstream mapping
+- **Not** for: in-flight work (`docs/inflight/`), fork↔upstream mapping
   (`src/docs/development/upstream-map.yaml`), solved problems (`docs/solutions/`),
   or PR-specific review feedback (raise that on the PR).
 
@@ -127,6 +127,23 @@ Do not start one casually.
 - **upstream #186** - "Ensure all PC APIs are thread safe" (labelled *blocker,
   ver:1.0*). Cross-cutting audit; pairs with the thread-model work.
 
+### Thread-visibility findings surfaced by SpotBugs 4.10 (11, pre-existing)
+- The `spotbugs 4.8.6 → 4.10.3` bump (#73) expanded the multithreading (`AT_*`)
+  detectors, which then fired on **existing** `parallel-consumer-core` code (they
+  dropped out of "new" once master regenerated the baseline, so nothing is red -
+  but the observations stand, all verified still present on master 2026-08-04):
+  - `AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE` (8) - non-atomic read-modify-write
+    on a shared field: `AbstractParallelEoSStreamProcessor.numberOfAssignedPartitions`
+    (L420/448/463) and `ConsumerManager`'s `noWakeups`, `erroneousWakups`,
+    `correctPollWakeups` counters.
+  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
+    be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
+    `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+- Fix = `AtomicInteger`/`AtomicLong` for the counters and `volatile` for the flags -
+  **or** let the thread-model rework above absorb them, since several sit in exactly
+  the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
+  While in `ConsumerManager`, fix the `erroneousWakups` typo.
+
 ### Performance
 - **upstream #884** - "Parallel Consumer is 30x slower than normal consumer" - the
   headline perf issue to characterise before/after any hot-path change.
@@ -184,6 +201,24 @@ Do not start one casually.
   Deprecated `commitInterval` options to delete (L87-103) - **breaking**, see
   [Breaking changes queued for next major version](#breaking-changes-queued-for-next-major-version).
 
+### internal/ConsumerOffsetCommitter.java
+- L154: `commitAndWait()` blocks for `commitTimeout` but interpolates
+  `DEFAULT_TIMEOUT` into the timeout message, so every such error misstates the wait
+  (reports `PT30S` for an actual 10s). Tiny standalone fix + unit test.
+
+### Double-release of the produce lock (transactional poll-and-produce) - OPEN QUESTION
+- `WorkContainer#onPostAddToMailBox` (via `finishProducing`) and
+  `AbstractParallelEoSStreamProcessor#cleanUpContext` (L1419) both unconditionally
+  unlock the *same* `PollContextInternal#producingLock`, and nothing resets that
+  `Optional` between them - `cleanUpContext` runs in the enclosing `finally`
+  immediately after the success path already released it. By JDK contract a
+  same-thread second `unlock()` on a `ReentrantReadWriteLock.ReadLock` with zero held
+  read locks throws `IllegalMonitorStateException` - yet no such exception appears in
+  any run, so *something* prevents it and **we do not know what**. Pre-existing, but
+  #110's fix now drives this path for real (the old mock-context test never did), so
+  it is more exposed than before. Establish which release actually fires and why the
+  second is harmless - or, if it is not, what is swallowing it.
+
 ### internal/ProducerManager.java
 - L162: `syncBeginTransaction()` is `private synchronized` (locks on `this`) -
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `upstream #859`
@@ -215,10 +250,17 @@ Do not start one casually.
 - **`ParallelEoSStreamProcessorTest` waits on loop cycles, not events** - four markers:
   `awaitForSomeLoopCycles(50)` / `(3)` with "async commit can be slow - todo change this to event
   based", and "remove all wait nevers in favour of triggers as it slows down test". Not a style
-  point: this class is on the known intermittent-failure list in `docs/inflight.md`, and
-  cycle-counting is the mechanism - a loaded machine changes how much happens per cycle. Converting
+  point: cycle-counting is the mechanism behind this class's flake history (one such wait was the
+  shutdown-commit flake fixed in #101) - a loaded machine changes how much happens per cycle. Converting
   to event/trigger-based waits removes the flake class and speeds the suite up. Related to *Remove
   static state* above, which is the other half of why these tests cannot run cleanly in parallel.
+
+### Build - jacoco coverage under forked surefire
+
+- `prepare-agent` writes ONE `jacoco.exec` in append mode, but the unit suite now runs
+  `forkCount=1C`: N forks appending concurrently can corrupt or undercount coverage. If
+  CI coverage ever looks wrong, this is the first suspect - give each fork its own exec
+  file (`destFile` with `${surefire.forkNumber}`) and add `jacoco:merge` before the report.
 
 ### `MockConsumer.groupMetadata()` workaround, duplicated x4
 
