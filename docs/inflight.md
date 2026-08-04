@@ -358,6 +358,13 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   fixed the flake that was aborting the PIT lane, so it runs again. Whether it runs anywhere *useful*
   is a separate question, analysed in `docs/plans/2026-08-03-002-mutation-testing-plan.md`. Summary of
   what that found, so the reasoning is not lost if the doc goes unread:
+  - **Any single flaky test disables the lane entirely.** PIT refuses to run while any test is unstable
+    *without* mutation, so one unrelated flake scores zero mutants everywhere — it does not degrade the
+    signal, it switches it off. Twice already: #101 and #110, both unrelated to the mutated code. Means
+    the lane's green-ness has been tracking *suite stability*, not mutation coverage — and that
+    `rerunFailingTestsCount` cannot rescue it, since PIT does its own coverage run and sees the raw
+    result. A red mutation lane usually means "something somewhere is flaky"; check for the
+    `did not pass without mutation` line before investigating mutation config.
   - **The full `internal.*` sweep has never completed** — the script says so itself. 42+ min on CI,
     83+ min locally with minions dying on `MEMORY_ERROR`. A sweep that never finishes scores *zero*
     mutants: not a slow signal, no signal, and it costs highcpu runner time on every PR.

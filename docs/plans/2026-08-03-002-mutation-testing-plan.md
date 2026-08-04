@@ -58,6 +58,41 @@ point it is an ordinary subject with an ordinary oracle.
 
 ## 3. Why the current setup under-delivers
 
+### 3.0 Any single flaky test disables mutation testing repo-wide
+
+The property that makes everything else fragile, and the least obvious one.
+
+PIT refuses to run when **any** test is unstable *without* mutation — it needs a green baseline to
+attribute kills to mutants rather than to noise:
+
+```
+1 tests did not pass without mutation when calculating line coverage.
+Mutation testing requires a green suite.
+```
+
+So the lane is not degraded by one flaky test; it is **switched off**. No mutants are scored at all,
+anywhere, regardless of which class flaked or whether it has anything to do with the code being
+mutated.
+
+That has happened twice already, and both times the flake was somewhere unrelated:
+
+| PR | Test | Effect |
+|---|---|---|
+| #101 | `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` | whole lane aborted |
+| #110 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | whole lane aborted |
+
+Three consequences worth holding onto:
+
+- **The lane's green-ness has been tracking suite stability, not mutation coverage.** It reports on the
+  health of the tests as a whole, which is a different — and much weaker — signal than the one we
+  wanted.
+- **`rerunFailingTestsCount` cannot rescue it.** Surefire reruns hide a flake from the *unit gate*, but
+  PIT performs its own coverage run and sees the raw result. A flake papered over for the gate still
+  kills mutation testing. It has to be *fixed*.
+- **The blast radius is disproportionate to the cause**, so it is worth knowing that a red mutation lane
+  most often means "something, somewhere, is flaky" rather than anything about mutants. Check for the
+  `did not pass without mutation` line before investigating mutation config.
+
 ### 3.1 The full sweep has never completed
 
 `bin/ci-mutation-test.sh` says so itself: *"The full internal.* sweep is impractically slow (it has
