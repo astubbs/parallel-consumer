@@ -21,7 +21,8 @@
 #     - the test file is absent from the merge preview (renamed?) -> cannot verify removal
 #     - annotation's fixedBy PR number disagrees with the registry's Owner line
 #
-# Run by the per-PR Quarantine Audit job and the nightly lane; locally via bin/quarantined-test.sh
+# Run by the per-PR Quarantine Audit job and by the Quarantine Lane (every PR push + every merge to
+# master); locally via bin/quarantined-test.sh
 # (skipped there when gh is absent/unauthenticated).
 
 set -euo pipefail
