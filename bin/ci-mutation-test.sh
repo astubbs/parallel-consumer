@@ -151,6 +151,7 @@ set +e
   -DtargetTests="${TARGET_TESTS}" \
   -DexcludedTestClasses="io.confluent.parallelconsumer.integrationTests.*" \
   -DjvmArgs=-Xmx2g \
+  -DoutputFormats=XML,HTML \
   -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
   -Dthreads="${THREADS}" \
   -pl parallel-consumer-core -am \
@@ -191,6 +192,38 @@ if [ -n "$STATS" ]; then
   summary ""
   summary "> Mutations with no coverage can also mean a test failed and was skipped (\`skipFailingTests\`)."
   summary "> Check the Unit gate before treating a no-coverage jump as a real gap."
+
+  # THE SURVIVOR LIST IS THE PRODUCT. A score cannot be acted on - "50% killed" tells nobody which half,
+  # so it reads as a grade rather than a work item. Each line below names a specific behaviour that can
+  # be broken without any test noticing, which is something a person can actually go and fix.
+  #
+  # No XML parser needed: pitest writes one <mutation> element per line, so sed suffices. Anything not
+  # KILLED or TIMED_OUT survived (PIT counts a timeout as a kill - see the timeoutConstant note above).
+  REPORT="parallel-consumer-core/target/pit-reports/mutations.xml"
+  if [ -f "$REPORT" ]; then
+    # Emit file/line as separate fields so the sort is NUMERIC on the line - sorting "File:119" as text
+    # puts line 119 above line 38, which makes the table read as though it were in no order at all.
+    # The description's fully-qualified paths are stripped: file:line already locates the mutant, so
+    # "for io/confluent/parallelconsumer/offsets/Foo::bar" is 60 characters of noise per row.
+    SURVIVORS=$(sed -n "s|.*status='\([A-Z_]*\)'.*<sourceFile>\([^<]*\)</sourceFile>.*<lineNumber>\([0-9]*\)</lineNumber>.*<description>\(.*\)</description>.*|\2\t\3\t\1\t\4|p" "$REPORT" \
+      | awk -F'\t' '$3 != "KILLED" && $3 != "TIMED_OUT"' \
+      | sed 's/&quot;/"/g; s/&apos;/'"'"'/g; s/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' \
+      | sed -E 's#([A-Za-z0-9$_]+/)+([A-Za-z0-9$_]+::)#\2#g' \
+      | sort -t'	' -k1,1 -k2,2n || true)
+    if [ -n "$SURVIVORS" ]; then
+      TOTAL=$(printf '%s\n' "$SURVIVORS" | wc -l | tr -d ' ')
+      summary ""
+      summary "#### Survived (${TOTAL}) - each is a behaviour nothing asserts"
+      summary '```'
+      # Cap the table, but never silently: a truncated list that looks complete is worse than no list.
+      printf '%s\n' "$SURVIVORS" | head -50 \
+        | awk -F'\t' '{ printf "%-12s %-34s %s\n", $3, $1 ":" $2, $4 }' >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+      summary '```'
+      if [ "$TOTAL" -gt 50 ]; then
+        summary "_Showing the first 50 of ${TOTAL}. Full detail in the HTML report under \`${REPORT%/*}\`._"
+      fi
+    fi
+  fi
 else
   summary "**No mutants were scored** - the run did not reach the statistics stage."
   # The green-suite abort should no longer be reachable (skipFailingTests is set in the pom), so if it

@@ -405,3 +405,19 @@ Every exit path now writes to the GitHub job summary instead, so the check state
 Note the deliberate asymmetry: only the final `- Statistics` block is reported. PIT also prints a
 per-class running tally in the identical `>> Generated N Killed M` shape, and pasting those into a
 summary would show a reader several numbers that all look like the score.
+
+**And the survivors are listed, because the score is not the product.** "50% killed" cannot be acted on
+- it does not say which half, so it reads as a grade. Each survivor, by contrast, names a specific
+behaviour that can be broken without any test noticing:
+
+```
+SURVIVED     OffsetSimpleSerialisation.java:38  removed call to ObjectOutputStream::writeObject
+NO_COVERAGE  OffsetSimpleSerialisation.java:55  removed call to SnappyOutputStream::write
+```
+
+That is a work item. Parsed from `mutations.xml` (`-DoutputFormats=XML,HTML`) with `sed`, since pitest
+writes one `<mutation>` element per line and an XML parser would be a dependency for no gain. Two
+details worth keeping: sort the line numbers **numerically** (as text, 119 sorts above 38 and the table
+reads as unordered), and strip the fully-qualified paths from the descriptions, since `file:line`
+already locates the mutant and the package prefix is ~60 characters of noise per row. Capped at 50 rows,
+and the cap is stated when it bites - a truncated list that looks complete is worse than no list.
