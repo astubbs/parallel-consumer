@@ -9,6 +9,11 @@
 > not keep it by rewriting it into a "FIXED/DONE" narrative, because making a stale entry *accurate* is
 > the wrong move. Shrink it to the still-open follow-ups it surfaced, or remove it.
 >
+> **Known problems with the code on this branch belong here**, even when a GitHub issue also exists -
+> link the issue and keep it to a line or two. An agent picking up work will scan this file; it will
+> not read every issue on the tracker. A defect nobody has recorded here is a defect the next session
+> re-discovers the hard way, or ships on top of.
+>
 > **Never write down what a command can answer.** Open PRs are `gh pr list`; branch divergence is
 > `git rev-list --left-right --count`; worktrees are `bin/worktree-status.sh`. Copying those here
 > creates a second tracker that is wrong within a day and that a reader cannot tell is wrong. This
@@ -262,6 +267,11 @@ Collisions are listed at the top of this file. Ranked backlog and full verdicts 
 
 ## Parked ideas
 
+- **Documentation site (planned).** The docs are heading for a proper generated site rather than one
+  enormous `README.adoc`. **Consequence to know about now:** `README_TEMPLATE.adoc` currently does
+  `include::{project_root}/CHANGELOG.adoc[]`, so the whole changelog is published as a README chapter -
+  that embedding goes away with the site. Don't build anything new that depends on it, and don't let
+  the coupling drive changelog decisions; write the changelog for readers, not for the README.
 - **Extract the quarantine lane as its own FOSS project.** The `@Quarantined` lane (annotation +
   enforced registry + owner-claim verification + non-gating CI job + release blocking + self-tests) is
   generic. Differentiator: the closed loop is enforced *in CI* (registry cannot drift, owner PR must
