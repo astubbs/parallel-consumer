@@ -22,7 +22,7 @@ owned that content all along.)
 | **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping (branch/PR → upstream issue/PR, status) | Editorial opinion - that is the `.adoc` beside it |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when they disagree, the manifest wins |
-| **`CHANGELOG.adoc`** | Release notes, the source `README.adoc` is generated from | Anything invisible to users or operators |
+| **`CHANGELOG.adoc`** | Release notes. Frozen up to `== 0.6.0.0`; later sections are generated at release time from the commit log. `README.adoc` links to it and no longer embeds it | Anything invisible to users or operators - and **not** a per-PR chore: do not add entries in a feature PR |
 
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
