@@ -14,10 +14,10 @@
 #   - Mutation (PIT), both entries: PIT ran THREE times per PR (this matrix twice, plus maven.yml), two
 #     of them the same scoped computation - and a fourth copy sat in the `local` lane, dormant only
 #     because that workflow's pull_request trigger is commented out. There is now exactly
-#     ONE per-PR mutation lane - maven.yml -> "Mutation Tests (PIT, PR-scoped)". The full internal.*
-#     sweep, which has never once completed, is manual-only in mutation-full-sweep.yml: a sweep that
-#     never finishes scores ZERO mutants, so it was holding a 16-core runner for its whole 60-minute
-#     timeout on every push in exchange for no signal at all.
+#     ONE per-PR mutation lane - maven.yml -> "Mutation Tests (PIT, PR-scoped)". The full sweep moved to
+#     mutation-full-sweep.yml (manual, and retargeted off internal.* - see there): the internal.* sweep
+#     that used to run here had never once completed, so it scored ZERO mutants while holding a 16-core
+#     runner for its whole 60-minute timeout on every push.
 #     See docs/plans/2026-08-03-002-mutation-testing-plan.md.
 #
 # What remains is what actually needs the cores: Performance (meaningless on 2 cores) and the Chaos Pain

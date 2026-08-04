@@ -1,8 +1,9 @@
 # Mutation testing: what we have, why it under-delivers, and what to change
 
-**Status:** the cheap half is DONE (shipped in PR #111, marked inline below); the substantive retarget
-is still parked and unscheduled.
-**Written:** 2026-08-03
+**Status:** the plumbing and the retarget are DONE (shipped in PR #111, marked inline below). What is
+still parked is the **measurement**: no sweep has completed under the new target, so no mutation score
+should be quoted for this project yet.
+**Written:** 2026-08-03 (status and corrections updated 2026-08-04)
 **Context:** written while fixing the `ProducerManagerTest` flake (PR #110) that had been aborting the
 PIT lane. That fix restores the lane; this document is about whether the lane is pointed anywhere
 useful once it runs.
@@ -11,17 +12,18 @@ useful once it runs.
 
 ## 0. What shipped, and what is still only an opinion
 
-Two things came out of implementing this that the original analysis had wrong, both discovered by
-reading pitest's own source rather than its documentation. They are recorded in place below (§2, §3.4)
-because a plan that quietly corrects itself teaches nothing.
+Three things came out of implementing this that the original analysis had wrong - two by reading
+pitest's own source rather than its documentation, one because the automated reviewer kept insisting.
+They are recorded in place below (§2, §3.4, §4.2) because a plan that quietly corrects itself teaches
+nothing.
 
 | Done in #111 | |
 |---|---|
-| Full sweep off PRs | Deleted from the highcpu matrix. Now manual-only in `mutation-full-sweep.yml` - **not** nightly: scheduling a job that has never once completed only moves the waste to a quieter hour. It earns a `schedule:` the day a run finishes. |
+| **Retargeted to `offsets.*`** | §4.3, the substantive one - in the sweep default *and* in the per-PR lane, which now mutates changed classes only within the decidable packages and names those it declined. |
+| Full sweep off PRs | Deleted from the highcpu matrix, now manual-only in `mutation-full-sweep.yml`. Not yet on a trigger - not because it cannot be (that reasoning was `internal.*`-specific and does not survive the retarget), but because nothing has measured its runtime. |
 | One lane, not three-plus-a-spare | PIT ran **three times per PR**, with a fourth copy configured but dormant (§3.5). Now exactly one: `maven.yml`. |
 | `skipFailingTests` | §3.0's blast radius, fixed at the source rather than worked around. One flake no longer switches mutation testing off repo-wide. |
-| A summary that explains itself | Every exit path now writes to the job summary, including the "nothing to mutate" one - so a green tick states which kind of green it is (§6). |
-| **Retargeted to `offsets.*`** | §4.3, the substantive one. `internal.*` is no longer the sweep default, and `PIT_TARGET_CLASSES` / `PIT_TARGET_TESTS` make any other target a workflow input rather than a code change. |
+| A summary that explains itself | Every exit path writes to the job summary - including "nothing to mutate" - and scoring runs **list the survivors**, since a percentage is a grade and a survivor is a work item (§6). |
 
 **Applied but NOT yet measured:** the retarget is a config change made on the strength of the argument in
 §4.3, not on a completed run. `offsets.*` is not obviously cheap either - `RunLengthEncoderTest` alone is
