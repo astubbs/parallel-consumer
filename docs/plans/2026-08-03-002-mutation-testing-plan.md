@@ -312,8 +312,14 @@ measurement below before it is worth answering.
 the argument above, not on a completed run - so it is a better-founded guess, not a result. Run it:
 
 ```
-gh workflow run mutation-full-sweep
+gh workflow run mutation-full-sweep                  # against master
+gh workflow run mutation-full-sweep --ref <branch>   # against a branch
 ```
+
+**Only once this has merged.** `workflow_dispatch` requires the workflow file to be on the *default
+branch* before it can be dispatched at all - even when dispatching a different ref - so running it from
+the PR branch fails with `could not find any workflows named mutation-full-sweep`. That is a GitHub
+rule, and it means a workflow introduced by a PR cannot be exercised by that PR.
 
 Either it completes - at which point a `schedule:` trigger and a history file both become real options,
 and there is finally a mutation score worth quoting - or it doesn't, which is itself the answer to

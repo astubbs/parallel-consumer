@@ -31,6 +31,13 @@
 # timeoutConstant reclassifies slow survivors as kills and INFLATES the score. It can only come down
 # once the targets are not hang-prone. See docs/plans/2026-08-03-002-mutation-testing-plan.md.
 #
+# HOW TO RUN IT:
+#   gh workflow run mutation-full-sweep                      # against master (what you usually want)
+#   gh workflow run mutation-full-sweep --ref <branch>       # against a branch's code AND its version of this file
+# Note that `workflow_dispatch` requires this file to be on the DEFAULT BRANCH before it can be
+# dispatched at all - even when dispatching a different ref. Until this merges, any invocation fails
+# with "could not find any workflows named mutation-full-sweep"; that is GitHub's rule, not a typo.
+#
 # SECURITY: `workflow_dispatch` only, so this can only be started by someone with write access - a fork
 # PR can never reach the self-hosted runner through this file. See docs/SELF_HOSTED_RUNNER.md.
 

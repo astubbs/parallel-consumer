@@ -408,7 +408,10 @@ skipping the hosted gate - the gate staying independent is worth more than the m
     targets the classes that PR changed, so a PR touching `internal.*` still mutates `internal.*`.
   **Still outstanding — the measurement.** The retarget is an argued config change, not a result:
   **nothing has completed yet**, and `offsets.*` is not obviously cheap (`RunLengthEncoderTest` alone is
-  ~140s, re-run per mutant). Run `gh workflow run mutation-full-sweep`. If it completes, a `schedule:`
+  ~140s, re-run per mutant). Run `gh workflow run mutation-full-sweep` (against master; `--ref` for a
+  branch) — **only once #111 has merged**: `workflow_dispatch` needs the file on the *default branch*
+  before it can be dispatched at all, so a workflow introduced by a PR cannot be exercised by that PR.
+  If it completes, a `schedule:`
   and a history file both become options and there is finally a score worth quoting; if it doesn't, that
   is the answer on whether mutation testing can work here. Only if the coverage pass dominates, add
   `-f target-tests=…offsets.*` — it is the one lever on the 332s instrumented pass, but it reports a
