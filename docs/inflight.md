@@ -2,12 +2,17 @@
 
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
-> from `git log`. Keep it current when context-switching. Last updated: 2026-08-01.
+> from `git log`. Keep it current when context-switching. Last updated: 2026-08-04.
 >
-> **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
-> No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
-> AGENTS.md (policy), PR descriptions/commit messages (history), or `docs/solutions/` (lessons).
-> When work finishes, delete or shrink its entry rather than converting it into a record.
+> **Scope rule: track only what is currently OPEN and not already tracked in an issue** - unresolved
+> work, plus cross-branch/cross-PR context a future branch should inherit (on merge, the next PR picks
+> the note up). This file is NOT a record. When something CLOSES, **delete** its entry: the durable
+> record belongs in the commit log / PR message, `docs/solutions/` (lessons), or AGENTS.md (policy), not
+> here. Do NOT keep a closed item by rewriting it into a "FIXED/DONE" narrative - making a stale entry
+> *accurate* is the wrong move. Remove it, or shrink it to only the still-open follow-ups it surfaced.
+>
+> **If you're given new guidance that changes how this file is written, update this header too** so other
+> agents and sessions inherit the same rule.
 >
 > **The durable fork↔upstream mapping now lives in a machine-readable cache:**
 > [`src/docs/development/upstream-map.yaml`](../src/docs/development/upstream-map.yaml) is the
@@ -248,45 +253,19 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
     PR #87's two new files fixed in-PR; sweep the rest at their source PRs or in one pass after the
     stack merges.
 
-### FIXED by #100 - W4 revoke-under-work RED (unhandled `RebalanceInProgressException`)
+### Open follow-ups from the W4 revoke-under-work investigation
 
-**Status (2026-08-04): FIXED and verified.** #100 (`932a7032`, merged to master) fixes the mechanism,
-and the cooperative arm is green with #100 present: a **5/5-seed local soak** of
-`ChaosRevokeUnderWorkCooperativeIT` on a #100-containing HEAD, plus the one clean post-#100 Chaos Pain
-Suite CI run (the dependabot PR, which contains #100) passing.
-**Correction:** an earlier revision of this entry claimed it "still fails across seeds with #100" - that
-was **wrong**. It was based on a failure (highcpu run `30869635613`, 2026-08-04) on a branch that does
-**not** contain #100, so it said nothing about post-#100 behaviour. Lesson: never attribute a chaos
-outcome to #100 unless the run's branch actually contains `932a7032`. Delete this entry after a few more
-green highcpu runs on #100-containing branches.
+The W4 RED itself is closed - #100 fixed the fatal `RebalanceInProgressException` and `bc9cf32f` its
+silent `CommitFailedException` sibling (write-up:
+[`docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md`](plans/2026-08-01-001-investigate-chaos-w4-red-report.md)).
+Two things it surfaced remain open:
 
-Mechanism (kept because the diagnosis is reusable):
-
-A commit landing mid-rebalance threw `RebalanceInProgressException`, which nothing caught: it escaped
-`BrokerPollSystem.controlLoop()` and permanently killed the broker-poll thread - the only producer of
-commit responses - so every waiting committer hung until `offsetCommitTimeout` and then took the PC
-instance down. That is what turned the Chaos Pain Suite's W4 scenarios RED on every highcpu run since
-2026-07-31 05:24. Long-standing upstream bug (ladder came in with `29795bf5`/upstream #819); the
-cooperative arm merely exposed it, because cooperative members keep committing *during* rebalances.
-Not caused by any PR; **fixed by #100, not by PR #80** (the two are orthogonal - #100 lands in
-`ConsumerOffsetCommitter`, #80 in the drain path).
-
-Fix defers the commit in `ConsumerOffsetCommitter` (offsets stay dirty and really are retried) and
-releases waiters immediately. Reproducer: `MockConsumerRebalanceInProgressTest` - broker
--free, fails in ~10s unfixed.
-
-**Full write-up:** [`docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md`](plans/2026-08-01-001-investigate-chaos-w4-red-report.md).
-
-**Follow-ups this surfaced (not in that branch):**
-- `ConsumerManager.commitSync()`'s pre-existing `CommitFailedException` handler has the same latent
-  flaw - it breaks out and lets `onOffsetCommitSuccess()` mark offsets clean, so a commit that never
-  reached the broker is recorded as done, despite the comment promising a later re-commit.
 - `ConsumerOffsetCommitter.commitAndWait()` waits on `offsetCommitTimeout` but interpolates
-  `DEFAULT_TIMEOUT` into the error, so every such message misstates the wait (reported `PT30S` for an
-  actual 10s). Tiny standalone fix + unit test.
-- The highcpu lane runs six suites (incl. two PIT sweeps) concurrently per branch on one box; three
-  jobs died of runner-lost-communication during this investigation. Independent of the bug above, but
-  it makes chaos timing SLOs noisy - consider a shared concurrency group or moving mutation off-box.
+  `DEFAULT_TIMEOUT` into the timeout error, so every such message misstates the wait (reports `PT30S` for
+  an actual 10s). Tiny standalone fix + unit test.
+- The highcpu lane runs six suites (incl. two PIT sweeps) concurrently per branch on one box; jobs
+  repeatedly die of runner-lost-communication (3+ times on PR #80 alone), making chaos timing SLOs noisy.
+  Consider a shared concurrency group or moving mutation off-box.
 
 ## Quarantine lane (`@Quarantined`) — active roster
 
