@@ -33,12 +33,36 @@
 
     <!-- primary -->
     <logger name="io.confluent.parallelconsumer" level="info"/>
+
+    <!-- #857 silent-stall investigation: uncomment to trace the "asked for work / got none / but work is in
+         the queues" condition and the broker poller pause/resume state under contention. Off by default (these
+         are verbose and perturb stall timing). See
+         docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md -->
+    <!--    <logger name="io.confluent.parallelconsumer.state.ShardManager" level="debug"/>-->
+    <!--    <logger name="io.confluent.parallelconsumer.state.WorkManager" level="debug"/>-->
+    <!--    <logger name="io.confluent.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer" level="trace"/>-->
 
     <!--    <logger name="io.confluent.csid" level="trace"/>-->
 
     <logger name="org.apache.kafka" level="warn"/>
+
+    <!-- ALWAYS ON despite the blanket warn above: offset-reset decisions are rare (one line each) and
+         contain the exact start position - the single number that solved the committedOffsetRemoved[latest]
+         nudge race. See docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md -->
+    <logger name="org.apache.kafka.clients.consumer.internals.SubscriptionState" level="info"/>
+
+    <!-- Standing harness: kafka-client bootstrap diagnostics. Flip to debug when hunting consumer
+         bootstrap / first-poll / group-membership issues - the client narrates its whole state machine;
+         instrument by un-silencing, not by patching. NB kafka-clients 3.5+ logs the fetch path under
+         AbstractFetch (not only Fetcher). See the solution doc above for the method. -->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.SubscriptionState" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.AbstractFetch" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.consumer.internals.Fetcher" level="debug"/>-->
+    <!--    <logger name="org.apache.kafka.clients.Metadata" level="debug"/>-->
 
     <!-- docker logs -->
     <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>

@@ -3,13 +3,10 @@
  * Copyright (C) 2020-2025 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-
-/*-
- * Copyright (C) 2020-2023 Confluent, Inc.
- */
 package io.confluent.parallelconsumer.integrationTests;
 
 import io.confluent.csid.testcontainers.FilteredTestContainerSlf4jLogConsumer;
+import io.confluent.parallelconsumer.ParallelConsumer;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ParallelConsumerOptionsBuilder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
@@ -20,7 +17,12 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
+import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.common.TopicPartition;
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
+import org.awaitility.core.ThrowingRunnable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,9 +30,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.UnaryOperator;
 
 import static org.apache.commons.lang3.RandomUtils.nextInt;
@@ -205,6 +211,75 @@ public abstract class BrokerIntegrationTest<K, V> {
     @SneakyThrows
     protected List<String> produceMessages(int quantity, String prefix) {
         return getKcu().produceMessages(getTopic(), quantity, prefix);
+    }
+
+    /**
+     * Await an assertion about records flowing through a PC whose consumer may currently be positioned AT
+     * THE TAIL of the topic - producing one "nudge" record into the topic before each assertion attempt so
+     * that the awaited condition is actually reachable.
+     * <p>
+     * Why this exists: a consumer with {@code auto.offset.reset=latest} and no committed offset resolves
+     * its start position at whatever the log end offset is <b>when the reset executes</b>. Under load,
+     * consumer-group bootstrap can take seconds - so a single nudge record produced <i>before</i> an await
+     * can be leapfrogged by the reset, leaving the consumer positioned past every record that will ever
+     * exist. Any await for "some record arrives" is then unwinnable regardless of its timeout - the
+     * failure mode behind the long-running {@code committedOffsetRemoved[latest]} CI flake. Producing the
+     * nudge <b>inside</b> the await loop (before the assertion, so it can be observed by the next attempt)
+     * makes the condition reachable at any bootstrap latency. See
+     * {@code docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md}.
+     * <p>
+     * On timeout, logs a self-diagnosis (topic end offset vs group committed offset and nudges sent) so
+     * this class of positioning race names itself instead of presenting as a generic empty-collection
+     * timeout.
+     *
+     * @param nudgeCounter incremented for each nudge record produced (callers use it in log/assert output)
+     */
+    protected void awaitWithTopicNudge(ParallelConsumer<?, ?> pc,
+                                       Duration pollInterval,
+                                       Duration atMost,
+                                       AtomicLong nudgeCounter,
+                                       ThrowingRunnable assertion) {
+        // correlation marker: ties this await to the consumer's own (pcId-tagged) client logs - the line
+        // that let the nudge-race capture be attributed to the right instance among 16 forks
+        log.info("awaitWithTopicNudge START: topic={} groupId={} atMost={}", getTopic(), getKcu().getGroupId(), atMost);
+        try {
+            Awaitility.await()
+                    .pollInterval(pollInterval)
+                    .atMost(atMost)
+                    .failFast(pc::isClosedOrFailed)
+                    .untilAsserted(() -> {
+                        // nudge FIRST: must go before the failing assertion, otherwise it is never reached
+                        getKcu().produceMessages(getTopic(), 1, "nudge-");
+                        nudgeCounter.incrementAndGet();
+                        assertion.run();
+                    });
+        } catch (ConditionTimeoutException timeout) {
+            logTailPositionDiagnosis(nudgeCounter.get());
+            throw timeout;
+        }
+    }
+
+    /**
+     * Best-effort diagnosis for {@link #awaitWithTopicNudge}: compares what the broker holds against what
+     * the group has committed, to make offset-reset positioning races self-identifying in CI logs.
+     */
+    private void logTailPositionDiagnosis(long nudgesSent) {
+        try {
+            var tp = new TopicPartition(getTopic(), 0);
+            long endOffset = getKcu().getAdmin()
+                    .listOffsets(UniMaps.of(tp, OffsetSpec.latest()))
+                    .partitionResult(tp).get(5, TimeUnit.SECONDS).offset();
+            var committed = getKcu().getAdmin()
+                    .listConsumerGroupOffsets(getKcu().getGroupId())
+                    .partitionsToOffsetAndMetadata().get(5, TimeUnit.SECONDS)
+                    .get(tp);
+            log.error("awaitWithTopicNudge timed out. Diagnosis: topic {} end offset={}, group '{}' committed={}, " +
+                            "nudges sent={}. If the consumer saw nothing while the end offset kept advancing, suspect " +
+                            "an offset reset (e.g. LATEST) that resolved PAST the records the test expected it to see.",
+                    getTopic(), endOffset, getKcu().getGroupId(), committed, nudgesSent);
+        } catch (Exception diagnosisProblem) {
+            log.warn("awaitWithTopicNudge timed out and the tail-position diagnosis itself failed", diagnosisProblem);
+        }
     }
 
 }
