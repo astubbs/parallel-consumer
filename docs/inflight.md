@@ -354,20 +354,38 @@ skipping the hosted gate - the gate staying independent is worth more than the m
 
 ## CI reliability / gate issues (follow-up work)
 
-- **Mutation testing is pointed at the wrong target — PARKED, not scheduled (2026-08-03).** PR #110
-  fixed the flake that was aborting the PIT lane, so it runs again. Whether it runs anywhere *useful*
-  is a separate question, analysed in `docs/plans/2026-08-03-002-mutation-testing-plan.md`. Summary of
-  what that found, so the reasoning is not lost if the doc goes unread:
-  - **Any single flaky test disables the lane entirely.** PIT refuses to run while any test is unstable
-    *without* mutation, so one unrelated flake scores zero mutants everywhere — it does not degrade the
-    signal, it switches it off. Twice already: #101 and #110, both unrelated to the mutated code. Means
-    the lane's green-ness has been tracking *suite stability*, not mutation coverage — and that
-    `rerunFailingTestsCount` cannot rescue it, since PIT does its own coverage run and sees the raw
-    result. A red mutation lane usually means "something somewhere is flaky"; check for the
-    `did not pass without mutation` line before investigating mutation config.
+- **Mutation testing is pointed at the wrong target — the plumbing is FIXED (#111), the retarget is
+  still PARKED (2026-08-04).** PR #110 fixed the flake that was aborting the PIT lane, so it runs again.
+  Whether it runs anywhere *useful* is a separate question, analysed in
+  `docs/plans/2026-08-03-002-mutation-testing-plan.md`. Summary of what that found, so the reasoning is
+  not lost if the doc goes unread:
+  - **~~Any single flaky test disables the lane entirely~~ — FIXED in #111 via `skipFailingTests`.**
+    PIT refused to run while any test was unstable *without* mutation, so one unrelated flake scored
+    zero mutants everywhere — it did not degrade the signal, it switched it off. Twice: #101 and #110,
+    both unrelated to the mutated code, which meant the lane's green-ness tracked *suite stability*
+    rather than mutation coverage. `skipFailingTests` makes PIT drop the failing test's coverage instead
+    of aborting (verified both directions: off = 0 mutants + abort, on = run completes).
+    **Two traps:** (1) it is **pom-only** — `PitMojo` declares it with no `property`, so
+    `-DskipFailingTests` is *silently ignored*; (2) `parseSurefireConfig` (default true) maps surefire's
+    `<testFailureIgnore>` onto it, so adding one to the surefire config would turn it back off from a
+    distance. **Its cost is silence:** pitest logs nothing when it skips a test this way, so a mutant
+    only that test covered becomes "no coverage" rather than killed — the job summary now carries that
+    caveat next to the no-coverage count. The flake itself still reddens the Unit gate, where it belongs.
   - **The full `internal.*` sweep has never completed** — the script says so itself. 42+ min on CI,
     83+ min locally with minions dying on `MEMORY_ERROR`. A sweep that never finishes scores *zero*
-    mutants: not a slow signal, no signal, and it costs highcpu runner time on every PR.
+    mutants: not a slow signal, no signal. **#111 removed it from PRs**; it is now manual-only
+    (`mutation-full-sweep.yml`), deliberately **not** nightly — scheduling a job that has never finished
+    just moves the waste to a quieter hour and trains people to ignore the lane.
+  - **PIT was running up to FOUR times per PR** (`maven.yml`, `pr-local`, and two `pr-highcpu` entries),
+    three of them the same scoped computation. **#111 leaves one:** `maven.yml`. The laptop copy also
+    checked out *shallow*, and a shallow checkout makes `bin/ci-mutation-test.sh` fall back from scoped
+    to the full sweep — keep `fetch-depth: 0` on whichever lane runs it.
+  - **Same pass, same reasoning: Unit + Integration removed from the highcpu matrix (#111).** Measured as
+    not faster there than the GitHub-hosted gate that already runs them, so they were a second copy of an
+    existing verdict — another tick to triage per PR, and a checks list of mostly-duplicates is how a real
+    red gets skimmed past. highcpu now carries only what needs the cores: Performance + Chaos Pain Suite.
+    The measured fork tuning (unit `1C`, integration 8 broker-forks, and the `-Dsurefire.forkCount` vs
+    bare `-DforkCount` trap) is preserved in the workflow comments for whoever re-adds a forked suite.
   - **`internal.*` is close to the worst possible target.** It is the concurrency core, so mutants to
     locks, loop conditions and timeouts *hang by construction* rather than dying fast, and the
     timing-based covering tests make a survivor unfalsifiable ("nothing asserts this" is
@@ -375,22 +393,27 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   - **Do NOT just lower `timeoutConstant`.** PIT counts `TIMED_OUT` as `KILLED`, so shortening it
     reclassifies slow survivors as kills and *inflates* the score. It can only come down once the
     targets are not hang-prone.
-  - **A green mutation check often means "nothing to mutate".** The scoped lane prints
-    `no core main-source classes changed ... skipping` and exits green on test-only/CI-only PRs.
-    Read the log, not the tick.
-  - **Our `targetClasses` glob matches test classes by name** (tests share the production package), and
-    only pitest's `mutableCodePaths` default keeps them out. Mutating tests would be actively harmful,
-    not merely wasteful: a mutated assertion fails its own test, so the mutant is recorded KILLED, and
-    the score climbs toward 100% while carrying no information about main code.
-  **Proposed (in payoff order):** retarget from `internal.*` to `offsets.*` where a bug
-  means lost/duplicated records and mutants are *decidable*; move the full sweep to a nightly schedule;
-  wire `excludedGroups` explicitly (today
-  quarantined/chaos/perf tests are excluded only coincidentally, via the `integrationTests` glob — a
-  quarantined *unit* test would be run per-mutant); set `mutableCodePaths` explicitly. `withHistory` incremental analysis is deliberately LAST, not
-  first: a history file only helps a run that *completes*, and none ever has — and for scoped runs the
-  dominant cost is the 332s instrumented coverage pass, which caching mutant verdicts does not touch.
-  **Keep**
-  per-PR scoping to changed classes, and keep the lane advisory/non-gating.
+  - **A green mutation check often means "nothing to mutate"** — the lane exits green on
+    test-only/CI-only PRs. **#111:** every exit path now writes a GitHub job summary saying which kind
+    of green (or red) it is, so this no longer depends on knowing to distrust the tick.
+  - **~~`mutableCodePaths` protects us by default~~ — the original analysis was WRONG.** pitest-maven
+    has no such parameter (adding the element fails the build); `MojoToReportOptionsConverter` hard-codes
+    the mutable path to `target/classes`, widened only by `crossModule`. Main-only is *structural* under
+    Maven, not a default anyone can flip. `<crossModule>false</crossModule>` is now pinned in the pom
+    with the reasoning attached. (Why it matters: our `targetClasses` glob does match test classes by
+    name, tests sharing the production package — and a mutated assertion fails its own test, so the
+    mutant records KILLED and the score climbs toward 100% while carrying no information about main code.)
+  **Still outstanding — the substantive one:** retarget from `internal.*` to `offsets.*`, where a bug
+  means lost/duplicated records and mutants are *decidable*. #111 made this a dispatch input rather than
+  a code change: `gh workflow run mutation-full-sweep -f target-classes=…offsets.* -f target-tests=…offsets.*`
+  — narrow **both**, since `target-tests` is what drives the dominant cost (the 332s instrumented
+  coverage pass). Nothing has been measured yet; `RunLengthEncoderTest` alone is ~140s.
+  **Also outstanding:** `excludedGroups` — but **verify before "fixing"**: `parseSurefireConfig` defaults
+  true and `SurefireConfigConverter` reads surefire's `<excludedGroups>`, which our pom sets, so this may
+  already work. It hinges on whether `${excluded.groups}` interpolates in the raw `Xpp3Dom`; a throwaway
+  `@Quarantined` *unit* test settles it. `withHistory` stays deliberately LAST: a history file only helps
+  a run that *completes*, and none ever has.
+  **Keep** per-PR scoping to changed classes, and keep the lane advisory/non-gating.
 
 - **Review-agent follow-ups from #102 (2026-08-03).** #102 gives the automated reviewer test/verify
   execution and makes blocking findings inline. Four things it did NOT resolve, in rough priority:

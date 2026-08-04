@@ -1,0 +1,88 @@
+# MANUAL-ONLY full mutation sweep (PIT). Deliberately has no `pull_request` and no `schedule` trigger.
+#
+# WHY MANUAL, AND WHY NOT NIGHTLY YET: the full `io.confluent.parallelconsumer.internal.*` sweep has
+# never once completed - 42+ minutes on CI before cancellation, 83+ minutes locally with minions dying
+# on MEMORY_ERROR. A sweep that never finishes scores ZERO mutants: it is not a slow signal, it is no
+# signal. It used to run on every push in the highcpu matrix, holding a 16-core runner for its full
+# 60-minute timeout to produce nothing. Scheduling something that has never finished only moves that
+# waste to a quieter hour, so this earns a `schedule:` trigger the day a run COMPLETES - not before.
+#
+# HOW TO MAKE IT COMPLETE: don't sweep `internal.*`. That package is the concurrency core, where mutants
+# to lock acquisition, loop conditions and timeouts HANG by construction rather than dying fast, and
+# where a survivor is often unfalsifiable anyway ("nothing asserts this" is indistinguishable from "the
+# race didn't happen this run"). Use the `target-classes` input to point it at decidable code instead -
+# `io.confluent.parallelconsumer.offsets.*` is the recommended first target: a bug there means lost or
+# duplicated records, and its tests are deterministic, so a survivor is a real gap.
+#   gh workflow run mutation-full-sweep -f target-classes='io.confluent.parallelconsumer.offsets.*' \
+#                                       -f target-tests='io.confluent.parallelconsumer.offsets.*'
+# Narrowing `target-tests` matters as much as narrowing `target-classes`: the dominant cost of any run is
+# the instrumented full-suite coverage pass (~332s), which is paid up front regardless of mutant count.
+#
+# DO NOT "just lower the timeout" to make this finish. PIT counts TIMED_OUT as KILLED, so shortening
+# timeoutConstant reclassifies slow survivors as kills and INFLATES the score. It can only come down
+# once the targets are not hang-prone. See docs/plans/2026-08-03-002-mutation-testing-plan.md.
+#
+# SECURITY: `workflow_dispatch` only, so this can only be started by someone with write access - a fork
+# PR can never reach the self-hosted runner through this file. See docs/SELF_HOSTED_RUNNER.md.
+
+name: mutation-full-sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      target-classes:
+        description: 'PIT targetClasses glob (what gets mutated). Default = the internal.* sweep that has never completed; prefer offsets.*'
+        required: false
+        default: 'io.confluent.parallelconsumer.internal.*'
+      target-tests:
+        description: 'PIT targetTests glob (what gets run for coverage). Narrow this to cut the ~332s coverage pass.'
+        required: false
+        default: 'io.confluent.parallelconsumer.*'
+      threads:
+        description: 'PIT minion JVMs (one per core is the knee). Each gets -Xmx2g, so RAM ceiling = threads x 2g.'
+        required: false
+        default: '16'
+
+permissions:
+  contents: read
+
+jobs:
+  full-sweep:
+    name: "Mutation (PIT, full sweep - manual)"
+    runs-on: [self-hosted, highcpu]
+    # Advisory, like every other mutation lane: a mutation score is a conversation starter, not a gate.
+    continue-on-error: true
+    # Generously long ON PURPOSE - the whole point of moving off the PR lane is that taking hours here
+    # costs nobody their feedback loop. If it hits this, the target is still too hang-prone (see header).
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: ''
+
+      - name: Show environment
+        run: |
+          java -version
+          echo "cpus: $(nproc)"
+
+      - name: Full mutation sweep
+        env:
+          # Makes bin/ci-mutation-test.sh ignore any base ref and mutate the whole target glob.
+          PIT_FULL_SWEEP: 'true'
+          PIT_TARGET_CLASSES: ${{ inputs.target-classes }}
+          PIT_TARGET_TESTS: ${{ inputs.target-tests }}
+        run: time bin/ci-mutation-test.sh -Dverbose=true -Dthreads=${{ inputs.threads }}
+
+      - name: Upload PIT report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pit-full-sweep-report-${{ github.run_number }}
+          path: '**/target/pit-reports/**'
+          retention-days: 14

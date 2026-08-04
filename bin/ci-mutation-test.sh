@@ -12,9 +12,26 @@
 # -Xmx2g (the coverage minion OOMs at 1g), so peak heap is roughly threads x 2g - make sure the
 # runner has the RAM (e.g. 12 cores => ~24g). Lower PIT_THREADS if the box is RAM-constrained.
 #
-# Usage: bin/ci-mutation-test.sh [extra-maven-args...]   (e.g. -Dverbose=true, -DtargetClasses=...)
+# Usage: bin/ci-mutation-test.sh [extra-maven-args...]   (e.g. -Dverbose=true)
+#
+# Env overrides: PIT_THREADS, PIT_BASE_REF, PIT_FULL_SWEEP, PIT_TARGET_CLASSES, PIT_TARGET_TESTS.
+# Prefer PIT_TARGET_CLASSES / PIT_TARGET_TESTS over passing a second -DtargetClasses in "$@": duplicate
+# -D flags resolve by last-wins, which is implicit and easy to get backwards.
+#
+# WHERE THIS RUNS: exactly one per-PR lane - maven.yml -> "Mutation Tests (PIT, PR-scoped)", advisory.
+# The full sweep is manual-only (.github/workflows/mutation-full-sweep.yml) because it has never
+# completed. See docs/plans/2026-08-03-002-mutation-testing-plan.md.
 
 set -euo pipefail
+
+# Append to the GitHub job summary when running in Actions; no-op locally. A mutation run's output is
+# otherwise a log nobody reads behind a tick that means "nothing to mutate" at least as often as it
+# means "all mutants killed" - so every exit path below says which one it was.
+summary() { printf '%s\n' "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
+
+# Captured run output, read back afterwards for the statistics. Outside the repo by default so it can
+# never be committed or picked up by a report-globbing artifact upload.
+PIT_LOG="${PIT_LOG:-$(mktemp -t pit-run.XXXXXX)}"
 
 # Cross-platform core count (Linux nproc / macOS sysctl), default 2.
 if command -v nproc >/dev/null 2>&1; then
@@ -27,22 +44,33 @@ fi
 THREADS="${PIT_THREADS:-$CORES}"
 echo "PIT: using ${THREADS} thread(s) (cores=${CORES}); minion heap -Xmx2g => ~$((THREADS * 2))g peak"
 
-# Scope: on a PR, mutate ONLY the core main-source classes CHANGED vs the base branch. The full
-# internal.* sweep is impractically slow (it has never completed on CI). Set PIT_BASE_REF to override;
-# GITHUB_BASE_REF is set automatically on pull_request. No base ref => full internal.* sweep (push/nightly).
-# "Knee-cap to changed-only now; walk the scope back up as it proves fast enough."
+# Scope: on a PR, mutate ONLY the core main-source classes CHANGED vs the base branch. The full sweep is
+# impractically slow (it has never completed on CI). Set PIT_BASE_REF to override; GITHUB_BASE_REF is set
+# automatically on pull_request. No base ref => full sweep, which now only happens on a manual dispatch.
+# "Knee-cap to changed-only now; walk the scope back up as it proves fast enough." The scope should walk
+# SIDEWAYS first, to where mutants are decidable (offsets.*), rather than up to everything.
 BASE_REF="${PIT_BASE_REF:-${GITHUB_BASE_REF:-}}"
-# Explicit full-sweep override: PIT_FULL_SWEEP=true ignores the PR base ref and mutates all of
-# internal.* (the "Mutation (PIT, full)" highcpu job uses this; PR runs are otherwise scoped).
+# Explicit full-sweep override: PIT_FULL_SWEEP=true ignores the PR base ref and mutates the whole
+# target glob (the manual mutation-full-sweep.yml job uses this; PR runs are otherwise scoped).
 if [ "${PIT_FULL_SWEEP:-}" = "true" ]; then BASE_REF=""; fi
-TARGET_CLASSES="io.confluent.parallelconsumer.internal.*"
+# Full-sweep target. Overridable because internal.* is close to the worst possible target - it is the
+# concurrency core, so mutants to locks, loop conditions and timeouts HANG rather than dying, and its
+# timing-based tests make a survivor unfalsifiable. offsets.* is the recommended alternative: decidable
+# mutants, deterministic tests, and a bug there means lost or duplicated records.
+TARGET_CLASSES="${PIT_TARGET_CLASSES:-io.confluent.parallelconsumer.internal.*}"
+# What gets RUN to compute coverage - the dominant cost of any run (~332s of instrumented full-suite
+# execution), paid up front whether you mutate two classes or two hundred. Narrowing this is the only
+# lever that touches that cost; caching mutant verdicts does not.
+TARGET_TESTS="${PIT_TARGET_TESTS:-io.confluent.parallelconsumer.*}"
 if [ -n "$BASE_REF" ]; then
   git fetch --no-tags -q origin "$BASE_REF" 2>/dev/null || true
 fi
-# Only PR-scope if the base ref actually resolved. On a failed fetch / shallow checkout without the ref
-# (e.g. the highcpu job, which doesn't fetch-depth:0), the git diff below would hard-crash under
-# `set -euo pipefail` (unknown revision -> exit 128) instead of the intended skip/full-sweep - so fall
-# back to the full internal.* sweep when the ref is missing (review finding).
+# Only PR-scope if the base ref actually resolved. On a failed fetch / shallow checkout without the ref,
+# the git diff below would hard-crash under `set -euo pipefail` (unknown revision -> exit 128) instead of
+# the intended skip/full-sweep - so fall back to the full sweep when the ref is missing (review finding).
+# BEWARE what that fallback means: a shallow checkout silently promotes a scoped run into a full sweep.
+# That is why mutation was removed from the `local` lane, whose checkout is shallow. The one PR lane
+# (maven.yml) checks out with fetch-depth: 0 - keep it that way.
 if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}" >/dev/null 2>&1; then
   # Emit "Foo,Foo$*" per changed FQCN: the class itself PLUS its nested/synthetic members (Lombok
   # @Builder inner classes, anonymous classes, lambdas). A bare "Foo*" would over-match siblings that
@@ -55,25 +83,89 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
     | { grep -E '^io\.confluent\.parallelconsumer\.' || true; } | sed 's/.*/&,&$*/' | paste -sd, -)
   if [ -z "$CHANGED" ]; then
     echo "PIT: no core main-source classes changed vs origin/${BASE_REF} - nothing to mutate, skipping."
+    summary "### Mutation (PIT): skipped"
+    summary "No core main-source classes changed vs \`origin/${BASE_REF}\`, so there was nothing to mutate."
+    summary "**This green tick is not evidence about test quality** - it means no work was done."
     exit 0
   fi
   TARGET_CLASSES="$CHANGED"
   echo "PIT: PR-scoped to CHANGED classes -> ${TARGET_CLASSES}"
 else
-  echo "PIT: no resolvable base ref - full internal.* sweep."
+  echo "PIT: no resolvable base ref - full sweep of ${TARGET_CLASSES}"
 fi
 
 # NB: pitest does not honour excluded.groups - @Quarantined (and chaos/performance) tests are only
 # excluded here coincidentally, via the integrationTests source-dir glob. If a quarantined UNIT test
 # ever exists when this runs, wire excludedGroups into pitest explicitly (ce-review P3 finding).
+# NOTE: pitest-maven's parseSurefireConfig defaults to TRUE and its SurefireConfigConverter DOES read
+# surefire's <excludedGroups>, which our pom sets - so this may already be handled and the comment above
+# may be obsolete. Unverified: it hinges on whether the ${excluded.groups} property is interpolated in
+# the raw Xpp3Dom pitest reads. Verify before either relying on it or "fixing" it.
+#
+# skipFailingTests is set in the POM, not here: its PitMojo @Parameter declares a defaultValue and no
+# `property`, so -DskipFailingTests is SILENTLY IGNORED - no warning, it just doesn't apply. Check for a
+# `property` before concluding that some other pitest setting "doesn't work" from the command line.
+set +e
 ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
   -Dlicense.skip \
   -Djacoco.skip=true \
   -DtargetClasses="${TARGET_CLASSES}" \
-  -DtargetTests="io.confluent.parallelconsumer.*" \
+  -DtargetTests="${TARGET_TESTS}" \
   -DexcludedTestClasses="io.confluent.parallelconsumer.integrationTests.*" \
   -DjvmArgs=-Xmx2g \
   -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
   -Dthreads="${THREADS}" \
   -pl parallel-consumer-core -am \
-  "$@"
+  "$@" 2>&1 | tee "$PIT_LOG"
+STATUS=${PIPESTATUS[0]}
+set -e
+
+# Report what actually happened. PIT prints ">> " lines twice over: a per-class running tally during
+# analysis, then the run totals under a "- Statistics" banner at the end. Take only the final block -
+# the per-class lines look deceptively like totals ("Generated 4 Killed 2") and there are as many of
+# them as there are mutated classes. Empty => the run died before scoring anything, which is the
+# failure mode most worth naming out loud, since it is what "never completes" looks like.
+STATS=$(awk '/^- Statistics$/ {found = 1; out = ""; next}
+             found && /^>> / {out = out $0 "\n"}
+             END {printf "%s", out}' "$PIT_LOG")
+summary "### Mutation (PIT)"
+summary ""
+summary "Mutated: \`${TARGET_CLASSES}\`"
+summary "Coverage run: \`${TARGET_TESTS}\` (minus integrationTests)"
+summary ""
+if [ -n "$STATS" ]; then
+  summary '```'
+  summary "$STATS"
+  summary '```'
+  # skipFailingTests=true (pom) keeps a red test from aborting the whole lane, but it does so by
+  # DISCARDING that test's coverage, and pitest logs nothing when it does. So a mutant that only the
+  # failing test covered silently becomes "no coverage" rather than killed. The flake itself is not
+  # hidden - it still reddens the Unit gate in the same PR run, which is where a flake belongs.
+  summary ""
+  summary "> Mutations with no coverage can also mean a test failed and was skipped (\`skipFailingTests\`)."
+  summary "> Check the Unit gate before treating a no-coverage jump as a real gap."
+else
+  summary "**No mutants were scored** - the run did not reach the statistics stage."
+  # The green-suite abort should no longer be reachable (skipFailingTests is set in the pom), so if it
+  # IS reached, say so precisely rather than leaving someone to hunt through the log: it means something
+  # turned that setting off - most likely a <testFailureIgnore> added to the surefire config, which
+  # parseSurefireConfig imports straight over the top of it.
+  # `testClass=` filters to PIT's per-test SEVERE lines - maven's own [ERROR] summary repeats the same
+  # phrase without naming anything, and would otherwise be listed as if it were a test.
+  # `|| true` because this is the EXPECTED-empty case: we are already on the failure path, and under
+  # `set -euo pipefail` a no-match grep would abort the script here - losing the summary below and
+  # replacing PIT's exit status with grep's.
+  FAILED_TESTS=$(grep 'did not pass without mutation' "$PIT_LOG" 2>/dev/null \
+    | grep 'testClass=' \
+    | sed -E 's/.*testClass=([^,]+).*\[method:([^]]+)\].*/\1.\2/' | sort -u || true)
+  if [ -n "$FAILED_TESTS" ]; then
+    summary "Cause: **the suite was not green**, so PIT refused to attribute kills to mutants."
+    summary "This should be unreachable - check that \`skipFailingTests\` is still set on pitest-maven."
+    summary '```'
+    summary "$FAILED_TESTS"
+    summary '```'
+  else
+    summary "Usual causes: the coverage pass never finished, or minions died (MEMORY_ERROR / TIMED_OUT)."
+  fi
+fi
+exit "$STATUS"

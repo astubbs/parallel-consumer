@@ -1,10 +1,30 @@
 # Mutation testing: what we have, why it under-delivers, and what to change
 
-**Status:** analysis only — parked deliberately, not scheduled. Nothing here is urgent.
+**Status:** the cheap half is DONE (shipped in PR #111, marked inline below); the substantive retarget
+is still parked and unscheduled.
 **Written:** 2026-08-03
 **Context:** written while fixing the `ProducerManagerTest` flake (PR #110) that had been aborting the
 PIT lane. That fix restores the lane; this document is about whether the lane is pointed anywhere
 useful once it runs.
+
+---
+
+## 0. What shipped, and what is still only an opinion
+
+Two things came out of implementing this that the original analysis had wrong, both discovered by
+reading pitest's own source rather than its documentation. They are recorded in place below (§2, §3.4)
+because a plan that quietly corrects itself teaches nothing.
+
+| Done in #111 | |
+|---|---|
+| Full sweep off PRs | Deleted from the highcpu matrix. Now manual-only in `mutation-full-sweep.yml` - **not** nightly: scheduling a job that has never once completed only moves the waste to a quieter hour. It earns a `schedule:` the day a run finishes. |
+| One lane, not four | PIT was running up to **four times per PR** (§3.5). Now exactly one: `maven.yml`. |
+| `skipFailingTests` | §3.0's blast radius, fixed at the source rather than worked around. One flake no longer switches mutation testing off repo-wide. |
+| A summary that explains itself | Every exit path now writes to the job summary, including the "nothing to mutate" one - so a green tick states which kind of green it is (§6). |
+| Retargeting made a one-liner | `PIT_TARGET_CLASSES` / `PIT_TARGET_TESTS`, so trying `offsets.*` is a workflow input rather than a code change. |
+
+**Still just an opinion:** §4.3, the retarget itself. Nothing has been measured yet, and the caveat in
+that section (`RunLengthEncoderTest` alone is ~140s) is the reason to measure before believing it.
 
 ---
 
@@ -25,12 +45,22 @@ Our `targetClasses` glob is `io.confluent.parallelconsumer.internal.*`, and our 
 production package — so `internal.ProducerManagerTest`, `internal.PCModuleTestEnv` and
 `internal.TestParallelEoSStreamProcessor` all match it **by name**.
 
-They are not mutated in practice: pitest-maven defaults `mutableCodePaths` to the module's main output
-(`target/classes`), so test classes are never candidates. Our numbers are not polluted. But note what
-protects us — an unstated default, not our configuration. The glob does not say "main only"; it merely
-fails to matter.
+They are not mutated in practice, and our numbers are not polluted.
 
-**Why mutating tests would be wrong**, if we ever widened `mutableCodePaths`:
+**Correction (2026-08-04, found while implementing §4.5):** the original claim here was that we are saved
+by an *unstated default* we could accidentally widen. That is wrong, and the proposed fix was
+unimplementable. `mutableCodePaths` is a **command-line-tool option that pitest-maven does not expose at
+all** - there is no such `@Parameter` on `PitMojo`, and adding a `<mutableCodePaths>` element fails the
+build outright. `MojoToReportOptionsConverter` hard-codes the mutable code path to
+`${project.build.outputDirectory}`, widening it only when `crossModule=true`.
+
+So main-only is **structural under Maven**, not a default anyone can flip by accident. The real
+correspondent of the original worry is `crossModule`, which is off and now pinned off explicitly in the
+pom with the reasoning attached. The lesson generalises: this was documentation-vs-source drift, and the
+source settled it in one grep. Read the mojo.
+
+**Why mutating tests would be wrong** - still worth knowing, because it explains why `crossModule` is
+pinned rather than merely left at its default:
 
 It removes the oracle and keeps the subject. Mutation testing *is* the test of your tests; mutating the
 tests asks "what tests the test-of-tests", and there is nothing left to answer with.
@@ -44,8 +74,8 @@ set with self-killing mutants drives the score **toward 100% while adding no inf
 code at all**. The score rises as the signal falls — the worst property a metric can have, because it is
 most reassuring exactly when it is least meaningful.
 
-**Action:** set `mutableCodePaths` explicitly, so this is guaranteed by intent rather than by a default
-nobody chose.
+**Action (done):** `<crossModule>false</crossModule>` on pitest-maven, with the above as its comment.
+Not because the default is wrong, but because "why is this off?" is a question the next person will ask.
 
 ### The legitimate adjacent case
 
@@ -93,6 +123,39 @@ Three consequences worth holding onto:
   most often means "something, somewhere, is flaky" rather than anything about mutants. Check for the
   `did not pass without mutation` line before investigating mutation config.
 
+#### FIXED in #111: `skipFailingTests`
+
+This one turned out to have a direct fix in pitest itself, which the original draft missed by reading
+the docs rather than the source: `skipFailingTests` makes PIT **drop a failing test's coverage instead
+of aborting**. `DefaultCoverageGenerator` simply doesn't feed a red result into the coverage data, so
+`allTestsGreen()` never trips and the run continues. One flake costs a few mutants' worth of coverage
+instead of switching mutation testing off repo-wide.
+
+**Verified both directions** (deliberate always-failing test added to `offsets`, then removed):
+
+| `skipFailingTests` | Result |
+|---|---|
+| `false` | exit 1, `1 tests did not pass without mutation ... requires a green suite`, **zero** mutants scored |
+| `true` | exit 0, run completes, 18 mutations scored |
+
+**Two traps found while doing it:**
+
+1. **It is pom-only.** `PitMojo`'s `@Parameter` declares a `defaultValue` and **no `property`**, so
+   `-DskipFailingTests=true` on the command line is *silently ignored* - no warning, no error, it just
+   doesn't apply. Same for anything else declared that way. If a pitest setting seems to have no effect,
+   check whether it has a `property` before concluding it doesn't work.
+2. **Surefire can silently override it.** `parseSurefireConfig` defaults to true, and
+   `SurefireConfigConverter.convertTestFailureIgnore` maps surefire's `<testFailureIgnore>` straight onto
+   this setting. Adding one to the surefire config would turn this back off from a distance.
+
+**And its cost, which is silence.** PIT logs *nothing* when it skips a test this way - the
+`Tests failing without mutation` line only exists on the abort path. A mutant that only the failing test
+covered quietly becomes "no coverage" rather than killed. That is an acceptable trade (degraded signal
+beats no signal) but it must not be invisible, so the job summary now carries the caveat next to the
+no-coverage count. The flake itself is *not* hidden: it still reddens the Unit gate of the same PR run,
+which is where a flake belongs. PIT is not a flake detector, and the fix here is to stop it pretending
+to be one.
+
 ### 3.1 The full sweep has never completed
 
 `bin/ci-mutation-test.sh` says so itself: *"The full internal.* sweep is impractically slow (it has
@@ -101,6 +164,31 @@ locally with minions dying on `MEMORY_ERROR` and `TIMED_OUT`.
 
 An unbounded sweep that never finishes scores **zero** mutants. It is not a slow signal, it is no
 signal, and it costs high-CPU runner time on every PR to produce it.
+
+**Done in #111:** removed from the PR lane; now manual-only in `mutation-full-sweep.yml`, with
+`target-classes` / `target-tests` as dispatch inputs so pointing it at a decidable package (§4.3) is a
+form field rather than a commit.
+
+### 3.5 The same run happened up to four times per PR
+
+Not in the original draft, and visible only when the workflows are read side by side. Every PR was
+starting: `maven.yml` (scoped, GitHub-hosted), `pr-local-fast-feedback` (scoped, laptop),
+`pr-highcpu` "Mutation (PIT, scoped)", and `pr-highcpu` "Mutation (PIT, full)". Three of the four were
+the same scoped computation.
+
+The laptop copy carried an extra hazard: that workflow checks out **shallow**, and when the base ref
+fails to resolve `bin/ci-mutation-test.sh` falls back to the *full* sweep. A shallow checkout therefore
+silently promotes a scoped run into the sweep that has never completed - on a laptop.
+
+**Done in #111:** one lane, `maven.yml`, which checks out with `fetch-depth: 0`. The fallback is
+documented at the point of the fallback, because it is only dangerous in combination with a checkout
+setting in a different file.
+
+The same reasoning removed **Unit and Integration** from the highcpu matrix in the same pass: measured as
+not actually faster there than the GitHub-hosted gate that already runs them, so they were a second copy
+of an existing verdict. A duplicate check is not free - it is another tick to triage on every PR, and a
+checks list that is mostly duplicates teaches people to skim it, which is precisely how a real red gets
+missed. The highcpu lane now carries only what needs the cores: Performance and the Chaos Pain Suite.
 
 ### 3.2 `internal.*` is close to the worst possible target
 
@@ -129,17 +217,33 @@ tests are excluded only *coincidentally*, via the `integrationTests` source-dir 
 quarantined test happens to be an IT, so it works. The day someone quarantines a **unit** test, PIT
 runs it per-mutant. That is a trap with a note on it rather than a fix.
 
+**Possibly already false - do not "fix" this without checking.** `parseSurefireConfig` defaults to
+**true**, and `SurefireConfigConverter.convertGroups` reads surefire's `<excludedGroups>` directly into
+PIT's group config. Our pom sets `<excludedGroups>${excluded.groups}</excludedGroups>`, defaulting to
+`performance,chaos,quarantined`. Whether that works turns on one thing: whether `${excluded.groups}` is
+interpolated in the raw `Xpp3Dom` pitest reads, or arrives as the literal string. If it interpolates,
+group exclusion is already correct and §4.4 is not work but a comment to delete.
+
+The distinction matters beyond tidiness, because the two failure modes look identical from outside: a
+run that correctly skips quarantined tests and a run that "excludes" a tag literally named
+`${excluded.groups}` both simply don't run them today. Only a deliberately-tagged probe test tells them
+apart.
+
 ## 4. Proposed changes
 
-Nothing here is scheduled. Listed so the reasoning is not lost.
-
 Roughly in payoff order, with one deliberate exception: **4.2 is numbered here for continuity but
-belongs last** — see the reasoning in that section. **4.3 is the one that unblocks everything else.**
+belongs last** — see the reasoning in that section. **4.3 is the one that unblocks everything else**,
+and it is the only substantive item still outstanding.
 
-### 4.1 Move the full sweep off PRs, onto a schedule
+### 4.1 Move the full sweep off PRs ~~onto a schedule~~ — DONE in #111, but not onto a schedule
 
-It has never completed, produces no signal, and burns runner time on every PR. An unbounded sweep
-belongs on a nightly with a generous timeout — where taking hours is fine.
+It has never completed, produces no signal, and burns runner time on every PR.
+
+Shipped as `mutation-full-sweep.yml`, `workflow_dispatch` only. **The original "put it on a nightly" was
+wrong**, and worth stating plainly: a nightly for a job that has never once finished just relocates the
+waste to a quieter hour, and adds a recurring red-or-cancelled result that everyone learns to ignore -
+which is worse than no lane, because it trains people to ignore this lane specifically. It gets a
+`schedule:` trigger the day a run completes, and §4.3 is what would make that possible.
 
 ### 4.2 Incremental analysis (`withHistory`) — LATER, and it is not the lever it looks like
 
@@ -194,13 +298,32 @@ The script's own posture — *"walk the scope back up as it proves fast enough"*
 suggestion is that it should walk **sideways**, to where mutants are decidable, rather than up to
 everything.
 
-### 4.4 Wire `excludedGroups` explicitly
+**Still outstanding, and still unmeasured** - this is the item the rest of the work was clearing a path
+for, not a thing #111 did. What #111 changed is the cost of trying it: the target is now a dispatch
+input, so the experiment is
 
-Close §3.4 so the exclusion is intentional.
+```
+gh workflow run mutation-full-sweep -f target-classes='io.confluent.parallelconsumer.offsets.*' \
+                                    -f target-tests='io.confluent.parallelconsumer.offsets.*'
+```
 
-### 4.5 Set `mutableCodePaths` explicitly
+Narrow **both**. `target-tests` is what controls the coverage pass, which §4.2 identifies as the
+dominant cost; leaving it at `io.confluent.parallelconsumer.*` pays for the whole suite regardless of
+how few classes are mutated. Retarget it and the run either completes - at which point a `schedule:` and
+a history file both become real options - or it doesn't, which is itself the answer to whether mutation
+testing can work here at all.
 
-Close §2 so main-only is guaranteed rather than inherited.
+### 4.4 Wire `excludedGroups` explicitly — VERIFY FIRST, it may be a no-op
+
+Close §3.4 so the exclusion is intentional - **but** see the correction in §3.4: pitest may already be
+importing our surefire `<excludedGroups>`. Establish which world we are in before writing config: add a
+throwaway `@Quarantined` *unit* test, run PIT, and see whether it executes. Then either delete the scary
+comment or wire the exclusion, but not both.
+
+### 4.5 ~~Set `mutableCodePaths` explicitly~~ — VOID, not possible and not needed
+
+Withdrawn. pitest-maven has no such parameter, and main-only is structural under Maven. See the
+correction in §2. `<crossModule>false</crossModule>` is pinned in the pom in its place.
 
 ## 5. Keep
 
@@ -209,9 +332,23 @@ Close §2 so main-only is guaranteed rather than inherited.
 - **Non-gating / advisory.** Mutation score is a conversation starter, not a merge gate. Especially so
   while §3.2 stands.
 
-## 6. One caveat when reading the checks
+## 6. One caveat when reading the checks — now self-declaring
 
-`Mutation (PIT, scoped)` passing in ~17s on a test-only or CI-only PR is **not evidence of anything** —
-it prints `no core main-source classes changed vs origin/master - nothing to mutate, skipping` and
-exits green. A green mutation check means "nothing to do" at least as often as it means "all mutants
-killed". Read the log, not the tick.
+`Mutation Tests (PIT, PR-scoped)` passing in ~17s on a test-only or CI-only PR is **not evidence of
+anything** — it prints `no core main-source classes changed vs origin/master - nothing to mutate,
+skipping` and exits green. A green mutation check means "nothing to do" at least as often as it means
+"all mutants killed".
+
+**Done in #111:** the advice used to be "read the log, not the tick", which requires knowing to be
+suspicious of a green tick in the first place - a caveat that only helps the people who already know it.
+Every exit path now writes to the GitHub job summary instead, so the check states its own meaning:
+
+- **skipped** - says outright that a green tick here is not evidence about test quality;
+- **scored** - the run totals (score, no-coverage count, test strength), with the `skipFailingTests`
+  caveat attached to the no-coverage number where it is actually needed;
+- **died before scoring** - says *that* explicitly rather than leaving a red tick to be read as "mutants
+  survived", and names the failing tests if the green-suite abort was somehow reached.
+
+Note the deliberate asymmetry: only the final `- Statistics` block is reported. PIT also prints a
+per-class running tally in the identical `>> Generated N Killed M` shape, and pasting those into a
+summary would show a reader several numbers that all look like the score.
