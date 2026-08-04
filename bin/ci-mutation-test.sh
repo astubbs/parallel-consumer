@@ -205,8 +205,13 @@ if [ -n "$STATS" ]; then
     # puts line 119 above line 38, which makes the table read as though it were in no order at all.
     # The description's fully-qualified paths are stripped: file:line already locates the mutant, so
     # "for io/confluent/parallelconsumer/offsets/Foo::bar" is 60 characters of noise per row.
-    SURVIVORS=$(sed -n "s|.*status='\([A-Z_]*\)'.*<sourceFile>\([^<]*\)</sourceFile>.*<lineNumber>\([0-9]*\)</lineNumber>.*<description>\(.*\)</description>.*|\2\t\3\t\1\t\4|p" "$REPORT" \
-      | awk -F'\t' '$3 != "KILLED" && $3 != "TIMED_OUT"' \
+    PARSED=$(sed -n "s|.*status='\([A-Z_]*\)'.*<sourceFile>\([^<]*\)</sourceFile>.*<lineNumber>\([0-9]*\)</lineNumber>.*<description>\(.*\)</description>.*|\2\t\3\t\1\t\4|p" "$REPORT")
+    # SURVIVED / NO_COVERAGE are findings: something is untested. MEMORY_ERROR / RUN_ERROR / NON_VIABLE
+    # are NOT - they mean the mutant could not be evaluated (minion died, bytecode unloadable), which is
+    # an infrastructure problem, not a test gap. Listing them under "a behaviour nothing asserts" would
+    # be the lane misreporting itself, so they are counted separately (ce-review finding).
+    SURVIVORS=$(printf '%s\n' "$PARSED" \
+      | awk -F'\t' '$3 == "SURVIVED" || $3 == "NO_COVERAGE"' \
       | sed 's/&quot;/"/g; s/&apos;/'"'"'/g; s/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' \
       | sed -E 's#([A-Za-z0-9$_]+/)+([A-Za-z0-9$_]+::)#\2#g' \
       | sort -t'	' -k1,1 -k2,2n || true)
@@ -222,6 +227,19 @@ if [ -n "$STATS" ]; then
       if [ "$TOTAL" -gt 50 ]; then
         summary "_Showing the first 50 of ${TOTAL}. Full detail in the HTML report under \`${REPORT%/*}\`._"
       fi
+    fi
+    # Never fold these into the survivor count: an unevaluated mutant is neither killed nor surviving,
+    # and quietly treating it as either is how a broken run comes to look like a measured one.
+    UNEVALUATED=$(printf '%s\n' "$PARSED" \
+      | awk -F'\t' '$3 != "KILLED" && $3 != "TIMED_OUT" && $3 != "SURVIVED" && $3 != "NO_COVERAGE"' \
+      | awk -F'\t' '{ print $3 }' | sort | uniq -c | sed 's/^ *//' || true)
+    if [ -n "$UNEVALUATED" ]; then
+      summary ""
+      summary "#### Could not be evaluated - infrastructure, not test gaps"
+      summary '```'
+      summary "$UNEVALUATED"
+      summary '```'
+      summary "These mutants were neither killed nor survived; the score above is over a smaller set than it looks."
     fi
   fi
 else
