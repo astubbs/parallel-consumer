@@ -121,7 +121,18 @@ reminder that a "known flake" here was previously a real drain-zombie defect.
 
 ## Prior art
 
-- `debug/committedoffset-firstpoll-stall` - earlier instrumentation branch for this same test's
-  *first-poll stall* symptom, from the #80 era. Different symptom, same test; read before re-deriving.
+**`debug/committedoffset-firstpoll-stall` - a different symptom of this same test, and it has
+instrumentation worth reusing before you write your own.** From the #80 era, it investigated the
+*first-poll stall*: the test hanging in `runPcUntilOffset`'s await. That is not what happened here -
+this run's await completed (it fired its nudges and moved on) and the failure came later, in the
+assertion. So the two are separate faults in one test, and the earlier branch is **not** a duplicate of
+this work.
+
+Where it earns a read anyway: its whole content is `logback-test.xml` DEBUG appenders for the
+kafka-client packages plus a hook in `PartitionStateCommittedOffsetIT` (2 files, 17 lines). Step 1 below
+wants exactly that kind of visibility - which records actually land at which offsets - so start by
+cherry-picking it rather than re-deriving the logging config. Check whether it still applies before
+trusting it; it predates several merges to master.
+
 - `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md` - the drain-zombie
   write-up that landed with #80, and the reason "it's just a flake" gets no benefit of the doubt here.

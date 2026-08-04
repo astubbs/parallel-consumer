@@ -14,5 +14,9 @@ injects nudge records into the same topic, pushing them past the window. Two nud
 log immediately before the failure. It is load-sensitive because nudges only fire when the await has not
 progressed: 3/3 pass locally, fails on the contended 2-core hosted runner.
 
+Note `debug/committedoffset-firstpoll-stall` is a **different** fault in the same test (the #80-era
+first-poll stall, where the await hung; here the await completed and the later assertion failed). Not a
+duplicate - but its kafka-client DEBUG logging config is worth cherry-picking rather than re-deriving.
+
 Until it is fixed, **any PR can go red on this without having caused it** - check whether the diff could
 reach an integration test before investigating your own change.
