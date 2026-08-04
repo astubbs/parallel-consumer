@@ -170,11 +170,6 @@ public class ConsumerManager<K, V> {
                         consumer.commitSync(offsetsToSend);
                         // break when offset commit is okay. Do not throw exception to main threads
                         break;
-                    } catch(CommitFailedException commitFailedException) {
-                        // it is impossible to commit now because the group have rebalanced
-                        // Log an error and let the poller do the rebalance job and seek commit later
-                        log.warn("Failed to commit offset due to group rebalancing. Will ignore the error for now.", commitFailedException);
-                        break;
                     } catch(TimeoutException timeoutException) {
                         // offset commit times out after 1 minute.
                         // We should honor the user configured timeout offsetCommitTimeout here.

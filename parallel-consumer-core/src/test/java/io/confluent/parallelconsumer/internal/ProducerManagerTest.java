@@ -32,11 +32,11 @@ import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
@@ -281,37 +281,43 @@ class ProducerManagerTest {
             assertThat(producerManager).getProducerTransactionLock().isNotWriteLocked();
 
 
-            var producingLockRef = new AtomicReference<ProducerManager.ProducingLock>();
             var offset1Mutex = new CountDownLatch(1);
             var blockedOn1 = new AtomicBoolean(false);
-            // todo refactor to use real user function directly
             Function<PollContextInternal<String, String>, List<Object>> userFunc = context -> {
-                ProducerManager<String, String>.ProducingLock newValue = null;
+                // Acquire against the REAL context and hand the lock to it, exactly as
+                // ParallelEoSStreamProcessor#pollAndProduce does. This is load-bearing, not tidying: the
+                // lock must not be released until the work has reached the controller's inbound queue -
+                // see WorkContainer#onPostAddToMailBox, which states the invariant and is the sanctioned
+                // release point. Releasing it here, inside the user function, opens a window in which the
+                // controller can take the commit lock, drain a mailbox that does not yet contain this
+                // work, and commit an offset one behind - which is what made this test flaky (~1 in 6).
                 try {
-                    newValue = producerManager.beginProducing(mock(PollContextInternal.class));
+                    context.setProducingLock(Optional.of(producerManager.beginProducing(context)));
                 } catch (TimeoutException e) {
                     throw new RuntimeException(e);
                 }
-                try {
-                    producingLockRef.set(
-                            newValue
-                    );
-                    log.info(context.toString());
-                    if (context.offset() == 1) {
-                        log.debug("Blocking on {}", 1);
-                        blockedOn1.set(true);
-                        LatchTestUtils.awaitLatch(offset1Mutex);
-                    }
-
-                    // use real user function wrap
-                    module.producerWrap().send(mock(ProducerRecord.class), (a, b) -> {
-                    });
-                    return UniLists.of();
-                } finally {
-                    // this unlocks the produce lock too early - should be after WC returned. Need a call back? plugin? Should refactor the wrapped user function to can construct it?
-                    // also without using wrapped user function- we're not testing something important
-                    newValue.unlock();
+                log.info(context.toString());
+                if (context.offset() == 1) {
+                    log.debug("Blocking on {}", 1);
+                    blockedOn1.set(true);
+                    LatchTestUtils.awaitLatch(offset1Mutex);
                 }
+
+                // use real user function wrap
+                module.producerWrap().send(mock(ProducerRecord.class), (a, b) -> {
+                });
+
+                // Guard against this test regressing to hand-managing the lock. The lock must still be
+                // owned by the context when the user function returns - that ownership is what defers
+                // release to WorkContainer#onPostAddToMailBox. Reintroduce a manual unlock here and this
+                // fails deterministically, instead of coming back as a ~1-in-6 flake that also takes the
+                // whole PIT mutation lane down with it.
+                Truth.assertWithMessage("produce lock must still be owned by the context when the user "
+                                + "function returns, so release is deferred to onPostAddToMailBox")
+                        .that(context.getProducingLock().isPresent())
+                        .isTrue();
+
+                return UniLists.of();
             };
 
 

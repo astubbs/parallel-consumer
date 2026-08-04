@@ -248,9 +248,17 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
     PR #87's two new files fixed in-PR; sweep the rest at their source PRs or in one pass after the
     stack merges.
 
-### ✅ FIXED (2026-08-01), awaiting PR: W4 revoke-under-work RED - unhandled `RebalanceInProgressException`
+### PARTLY FIXED - one mechanism landed (#100), the cooperative arm is still RED
 
-Branch **`fix/commit-rebalance-in-progress-kills-poll-thread`** (off `master` `192d32bc`), **no PR yet**.
+**Status (2026-08-04): `ChaosRevokeUnderWorkCooperativeIT` still fails across seeds with #100 merged.**
+The `RebalanceInProgressException` mechanism below is genuinely fixed and merged (#100, `932a7032`),
+but it was not the whole story - the cooperative W4 scenario went red again on `master` composition
+after it landed (highcpu run `30869635613`, 2026-08-04,
+`revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor`). **Open, unowned, needs a fresh
+diagnosis** - do not assume #100 closed it. (An earlier read of a single green run on PR #80's branch
+was mistaken for a fix; one green proves nothing on a seeded chaos scenario.)
+
+Mechanism fixed by #100, retained because the diagnosis is reusable:
 
 A commit landing mid-rebalance threw `RebalanceInProgressException`, which nothing caught: it escaped
 `BrokerPollSystem.controlLoop()` and permanently killed the broker-poll thread - the only producer of
@@ -413,18 +421,12 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
-- **`BrokerPollerBackpressureTest.brokerPollPausedWithEmptyShardsButHighInFlight` failed under load -
-  diagnose, don't dismiss (2026-07-31, highcpu lane run 30603617471).** 10s Awaitility timeout on the
-  FIRST await (shards-drained condition) while the box concurrently ran two PIT sweeps + Unit +
-  Performance; the gating GitHub-hosted Integration run on the same head was GREEN. The test chains
-  five ABSOLUTE 10s bounds - the exact tight-absolute-timeout-under-contention pattern root-caused in
-  `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md` -
-  but per the AGENTS.md stress-failure discipline it must be CLASSIFIED first: (a) re-run on a quiet
-  box - if it passes, it's contention-sensitivity, then harden the bounds per that solutions doc
-  (operator stance: busy boxes should NOT cause test failures); (b) review the first await's
-  semantics - all 10 workers are latch-blocked while it waits for
-  `getNumberOfWorkQueuedInShardsAwaitingSelection() == 0`, so establish whether a slow path there
-  can mask a real backpressure wedge before touching any timeout.
+- **`BrokerPollerBackpressureTest` highcpu-lane failure (run 30603617471) - DIAGNOSED + FIXED in
+  PR #98** (branch `fix/brokerpoller-backpressure-vacuous-await`): test-design bug (vacuously-true
+  first await masking an unsatisfiable condition), not contention, not a main-code wedge. Root-cause
+  write-up:
+  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`.
+  **Delete this entry when #98 merges.**
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
@@ -611,16 +613,28 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   **Fix (PR #63):** consolidate onto one blocking `KafkaClientUtils.createTopic` helper (generous 60s
   bound with a clear timeout message, classifies `TopicExistsException`); `ensureTopic` delegates. Not a `rerunFailingTestsCount` band-aid —
   removes the cause. Remove this note once #63 merges.
-- **`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is flaky (unit →
-  hits the *required* Unit Tests gate).** A Mockito `verify()` interaction race: the assertion at
-  `ProducerWrapper.sendOffsetsToTransaction` (via `ProducerManager.initProducer`) intermittently reports
-  the interaction as not-as-expected (`MockitoAssertionError`, ~22s elapsed → looks timing-related).
-  Non-deterministic — failed 1/245 in a local `-pl core test` run, then passed 3/3 on isolated rerun.
-  **Distinct** from the Integration TestContainers flake (this is a pure unit/Mockito test, no broker)
-  and from the `@StandardException` compile flake (this is runtime interaction, not compilation).
-  Uncovered 2026-07-28 while validating the IRE fix. **Fix:** investigate the transaction/offset
-  interaction timing in the test (likely an Awaitility/async ordering assumption); consider
-  `rerunFailingTestsCount` as a stopgap since it's a *required* gate.
+- **`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` was flaky — FIXED
+  (PR #110).** Not the Mockito `verify()` interaction race originally recorded here, and emphatically
+  not something `rerunFailingTestsCount` should have papered over: the test released its produce lock
+  inside its own user function, before the work reached the controller's inbound queue, letting the
+  controller take the commit lock and collect offsets one behind. Production releases post-mailbox
+  (`WorkContainer#onPostAddToMailBox`), so the exactly-once invariant was never actually violated —
+  the harness diverged from production. Diagnosed by controlled experiment (identical delay after the
+  unlock failed 8/8, before it passed 8/8), fixed by acquiring against the real context, plus a guard
+  asserting that ownership. Full write-up:
+  `docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md`. **Remove this note once #110
+  merges.**
+- **Double-release of the produce lock in transactional poll-and-produce — OPEN, follow-up from #110.**
+  `WorkContainer#onPostAddToMailBox` (via `finishProducing`) and
+  `AbstractParallelEoSStreamProcessor#cleanUpContext` both unconditionally unlock the *same*
+  `PollContextInternal#producingLock`, and nothing resets that `Optional` between them; `cleanUpContext`
+  runs in the enclosing `finally` immediately after the success path already released it. A same-thread
+  second `unlock()` on a `ReentrantReadWriteLock.ReadLock` with zero held read locks throws
+  `IllegalMonitorStateException` by JDK contract — yet no such exception appears in any run, so
+  *something* prevents it and **we do not know what**. Pre-existing production code, unrelated to the
+  flake, but #110's fix now drives this path for real (the old mock-context version never did), so it is
+  more exposed than before, not less. **Fix:** establish which release actually fires and why the second
+  is harmless — or if it is not harmless, find what is swallowing it.
 - **`@StandardException` compile flake (intermittent → hits the *required* Unit Tests gate).** A
   main-source annotation-processing race: Lombok's generated exception constructors are sometimes not
   visible when their callers are type-checked, giving `error: constructor ... cannot be applied to given
