@@ -588,16 +588,28 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   **Fix (PR #63):** consolidate onto one blocking `KafkaClientUtils.createTopic` helper (generous 60s
   bound with a clear timeout message, classifies `TopicExistsException`); `ensureTopic` delegates. Not a `rerunFailingTestsCount` band-aid —
   removes the cause. Remove this note once #63 merges.
-- **`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is flaky (unit →
-  hits the *required* Unit Tests gate).** A Mockito `verify()` interaction race: the assertion at
-  `ProducerWrapper.sendOffsetsToTransaction` (via `ProducerManager.initProducer`) intermittently reports
-  the interaction as not-as-expected (`MockitoAssertionError`, ~22s elapsed → looks timing-related).
-  Non-deterministic — failed 1/245 in a local `-pl core test` run, then passed 3/3 on isolated rerun.
-  **Distinct** from the Integration TestContainers flake (this is a pure unit/Mockito test, no broker)
-  and from the `@StandardException` compile flake (this is runtime interaction, not compilation).
-  Uncovered 2026-07-28 while validating the IRE fix. **Fix:** investigate the transaction/offset
-  interaction timing in the test (likely an Awaitility/async ordering assumption); consider
-  `rerunFailingTestsCount` as a stopgap since it's a *required* gate.
+- **`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` was flaky — FIXED
+  (PR #110).** Not the Mockito `verify()` interaction race originally recorded here, and emphatically
+  not something `rerunFailingTestsCount` should have papered over: the test released its produce lock
+  inside its own user function, before the work reached the controller's inbound queue, letting the
+  controller take the commit lock and collect offsets one behind. Production releases post-mailbox
+  (`WorkContainer#onPostAddToMailBox`), so the exactly-once invariant was never actually violated —
+  the harness diverged from production. Diagnosed by controlled experiment (identical delay after the
+  unlock failed 8/8, before it passed 8/8), fixed by acquiring against the real context, plus a guard
+  asserting that ownership. Full write-up:
+  `docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md`. **Remove this note once #110
+  merges.**
+- **Double-release of the produce lock in transactional poll-and-produce — OPEN, follow-up from #110.**
+  `WorkContainer#onPostAddToMailBox` (via `finishProducing`) and
+  `AbstractParallelEoSStreamProcessor#cleanUpContext` both unconditionally unlock the *same*
+  `PollContextInternal#producingLock`, and nothing resets that `Optional` between them; `cleanUpContext`
+  runs in the enclosing `finally` immediately after the success path already released it. A same-thread
+  second `unlock()` on a `ReentrantReadWriteLock.ReadLock` with zero held read locks throws
+  `IllegalMonitorStateException` by JDK contract — yet no such exception appears in any run, so
+  *something* prevents it and **we do not know what**. Pre-existing production code, unrelated to the
+  flake, but #110's fix now drives this path for real (the old mock-context version never did), so it is
+  more exposed than before, not less. **Fix:** establish which release actually fires and why the second
+  is harmless — or if it is not harmless, find what is swallowing it.
 - **`@StandardException` compile flake (intermittent → hits the *required* Unit Tests gate).** A
   main-source annotation-processing race: Lombok's generated exception constructors are sometimes not
   visible when their callers are type-checked, giving `error: constructor ... cannot be applied to given

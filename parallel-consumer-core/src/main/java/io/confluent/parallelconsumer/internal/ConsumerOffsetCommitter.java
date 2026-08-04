@@ -10,6 +10,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.state.WorkManager;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
@@ -187,12 +188,14 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     }
 
     /**
-     * Commit, <b>deferring</b> rather than failing when the group is mid-rebalance.
+     * Commit, <b>deferring</b> rather than failing when the group will not accept it right now.
      * <p>
-     * Kafka throws {@link RebalanceInProgressException} when a commit lands during a rebalance, and
-     * resolves it by completing that rebalance on the next {@code poll()}. It therefore means "not
-     * yet", not "failed". There are three things this code could do about it, and only the third is
-     * correct:
+     * Two exceptions mean "this commit cannot happen", not "this consumer is broken".
+     * {@link RebalanceInProgressException}: a commit landed during a rebalance, which Kafka resolves
+     * by completing that rebalance on the next {@code poll()} - so it means "not yet".
+     * {@link CommitFailedException}: this consumer is no longer a member of the group, so the commit
+     * was rejected outright - "not by you". There are three things this code could do about either,
+     * and only the third is correct:
      * <ol>
      *     <li><b>Throw</b> - let it escape. Fatal: this runs on the broker-poll thread, the only
      *         producer of commit responses, so killing it strands every waiting committer until
@@ -202,7 +205,9 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      *         {@link AbstractOffsetCommitter#retrieveOffsetsAndCommit()} free to call
      *         {@code onOffsetCommitSuccess()}, marking offsets that never reached the broker as
      *         committed. PC's bookkeeping would then disagree with the broker, and nothing would
-     *         ever retry.</li>
+     *         ever retry. Not hypothetical: {@link ConsumerManager} handled
+     *         {@link CommitFailedException} exactly this way, its comment promising the poller would
+     *         "seek commit later" while the success marking guaranteed it never would.</li>
      *     <li><b>Defer</b> - what this does. The commit is <em>postponed, not dropped</em>: the
      *         exception still aborts {@code retrieveOffsetsAndCommit()} before the success marking,
      *         so the offsets stay dirty and the next commit cycle genuinely re-commits them, by
@@ -223,6 +228,11 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
             log.warn("Offset commit deferred (postponed, not dropped) - the group is rebalancing. " +
                     "These offsets are still marked as needing a commit and will be re-committed on " +
                     "the next commit cycle, once poll() has completed the rebalance.", e);
+        } catch (CommitFailedException e) {
+            log.warn("Offset commit deferred (postponed, not dropped) - this consumer is no longer a " +
+                    "member of the group, so the commit was rejected. These offsets stay marked as " +
+                    "needing a commit rather than being recorded as done, so whoever ends up owning " +
+                    "the partitions resumes from where the broker actually is.", e);
         }
     }
 
