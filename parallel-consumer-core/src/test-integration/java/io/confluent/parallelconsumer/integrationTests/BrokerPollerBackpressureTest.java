@@ -6,15 +6,11 @@
 package io.confluent.parallelconsumer.integrationTests;
 
 import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.Consumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -38,26 +34,14 @@ public class BrokerPollerBackpressureTest extends BrokerIntegrationTest<String, 
 
     static final int MESSAGE_COUNT = 200;
 
-    Consumer<String, String> consumer;
-
-    ParallelConsumerOptions<String, String> pcOpts;
     ParallelEoSStreamProcessor<String, String> pc;
 
     @BeforeEach
     void setUp() {
-        setupTopic();
-        consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
-
-        pcOpts = ParallelConsumerOptions.<String, String>builder()
-                .consumer(consumer)
+        pc = startPcOnNewTopic(options -> options
                 .ordering(KEY)
                 .maxConcurrency(MAX_CONCURRENCY)
-                .messageBufferSize(MESSAGE_BUFFER_SIZE)
-                .build();
-
-        pc = new ParallelEoSStreamProcessor<>(pcOpts);
-
-        pc.subscribe(UniSets.of(topic));
+                .messageBufferSize(MESSAGE_BUFFER_SIZE));
     }
 
     /**
