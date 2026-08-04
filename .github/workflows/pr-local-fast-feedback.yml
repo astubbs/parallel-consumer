@@ -57,11 +57,16 @@ jobs:
           # Integration suite forks per-broker (each JVM gets its own Testcontainers Kafka) - reliable + fast.
           - suite-name: "Integration"
             cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
-          # NO MUTATION HERE. It was a third copy of the same scoped run (maven.yml + two highcpu
-          # entries), and this checkout is SHALLOW - so when the PR base ref failed to resolve,
-          # bin/ci-mutation-test.sh fell back to the full internal.* sweep, on a laptop, for a sweep
-          # that has never completed anywhere. The single per-PR lane is maven.yml; the full sweep is
-          # manual-only in mutation-full-sweep.yml.
+          # NO MUTATION HERE. This was a FOURTH configured copy of PIT, and a dormant one: three ran per
+          # PR (maven.yml scoped, plus highcpu's scoped and full-sweep entries, two of them the same
+          # scoped computation), while this one only ran on dispatch, because the `pull_request` trigger
+          # above is commented out while the runner is offline.
+          #
+          # It was removed for a hazard rather than for its cost, precisely because it wasn't costing
+          # anything: this checkout is SHALLOW, so when the PR base ref fails to resolve
+          # bin/ci-mutation-test.sh falls back to the FULL sweep - on a laptop, for a sweep that has
+          # never completed anywhere. Re-enabling the trigger would have shipped that silently.
+          # The single per-PR lane is maven.yml; the full sweep is manual-only in mutation-full-sweep.yml.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
