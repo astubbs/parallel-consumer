@@ -3,7 +3,7 @@
 **Generated file - do not edit by hand.** Regenerate with `bin/todo-index.sh`
 (`bin/todo-index.sh --check` fails if this file is stale).
 
-Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **91 marker(s)** at
+Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **90 marker(s)** at
 the time of generation.
 
 ## Prioritised? See the refactoring backlog
@@ -44,7 +44,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerOffsetCommitter.java`**
 
-- L101 - todo keep work in limbo until async response is received?
+- L103 - todo keep work in limbo until async response is received?
 
 **`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/DynamicLoadFactor.java`**
 
@@ -193,10 +193,6 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java`**
 
 - L57 - todo migrate commit assertion methods in to a Truth Subject
-
-**`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/internal/ProducerManagerTest.java`**
-
-- L287 - todo refactor to use real user function directly
 
 **`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/JStreamParallelEoSStreamProcessorTest.java`**
 
