@@ -9,4 +9,4 @@
 
 set -euo pipefail
 
-./mvnw --batch-mode clean package -Dlicense.skip "$@"
+./mvnw --batch-mode clean package "$@"

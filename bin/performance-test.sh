@@ -18,5 +18,4 @@ set -euo pipefail
   -DskipUTs=true \
   -Dincluded.groups=performance \
   -Dexcluded.groups= \
-  -Dlicense.skip \
   "$@"

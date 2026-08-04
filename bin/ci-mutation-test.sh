@@ -145,7 +145,6 @@ fi
 # `property` before concluding that some other pitest setting "doesn't work" from the command line.
 set +e
 ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
-  -Dlicense.skip \
   -Djacoco.skip=true \
   -DtargetClasses="${TARGET_CLASSES}" \
   -DtargetTests="${TARGET_TESTS}" \

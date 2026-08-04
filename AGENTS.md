@@ -128,7 +128,7 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 `@Tag("chaos")` and excluded from all default/gating suites via `pom.xml`'s `excluded.groups` default.
 
 - **Run locally** (requires Docker; ~5-6 min):
-  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=`
+  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups=`
 - **Replay a schedule**: every run logs its seed and the full replay command; add `-Dchaos.seed=<seed>`.
 - **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
   Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via
@@ -152,12 +152,15 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 - **Lombok**: Used extensively (builders, getters, logging). IntelliJ Lombok plugin required.
 - **EditorConfig**: Enforced via `.editorconfig` - 4-space indent for Java, 120 char line length.
-- **License headers**: Enforced by `bin/check-copyright-headers.sh` (runs in CI via the
-  `Copyright Headers` workflow; run it locally before pushing header-related changes). The mycila
-  `license-maven-plugin` is skipped by default in the root pom - it knows only the Confluent header
-  template, so its `format` goal used to stamp the wrong attribution onto fork-original files and its
-  git-year resolver auto-bumped years and broke in worktrees. `-Dlicense.skip` on the command line is
-  no longer needed (harmless if still passed).
+- **License headers**: Enforced by `bin/check-copyright-headers.sh`, which also runs in the build
+  itself (`validate` phase, via exec-maven-plugin), so a plain `mvn` catches violations - not only the
+  `Copyright Headers` workflow. Skip it with `-Dcopyright.skip=true`.
+  There is **no header-applying tool**: the scanner checks, it does not write. New files get their
+  header written by hand, per the provenance rules below. The mycila `license-maven-plugin` used to
+  fill that role and was removed - it knew only the Confluent header template, so its `format` goal
+  stamped the wrong attribution onto fork-original files, and its git-year resolver auto-bumped years
+  and broke in worktrees. `-Dlicense.skip` no longer exists as a property; drop it from any command
+  you copy from an older doc or script.
 - **Copyright rules for this fork**:
   - Do not change copyright headers on existing files unless the file has substantive code changes in the same commit
   - Do not bump copyright years as an incidental or standalone change
