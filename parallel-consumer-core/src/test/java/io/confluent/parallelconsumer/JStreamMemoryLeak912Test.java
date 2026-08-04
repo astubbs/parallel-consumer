@@ -44,45 +44,43 @@ class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
     }
 
     /**
-     * Core regression test: after producing results and closing, the deque must be empty.
-     * Before the fix, close() did not clear the deque.
+     * Core regression test: after producing a result and closing, the deque must be empty.
+     * Before the fix, close() never cleared it.
      */
     @Test
     void closeShouldClearResultDeque() {
-        var latch = new CountDownLatch(1);
-        // Produce a result but don't consume the stream
-        streaming.pollProduceAndStream((record) -> {
-            log.info("Processing record: {}", record);
-            myRecordProcessingAction.apply(record.getSingleConsumerRecord());
-            latch.countDown();
-            return Lists.list(mock(ProducerRecord.class));
-        });
+        ConcurrentLinkedDeque<?> deque = produceOneResultAndAwaitIt();
 
-        awaitLatch(latch);
-
-        ConcurrentLinkedDeque<?> deque = getResultDeque();
-
-        // Wait for the result to REACH the deque, rather than for a number of control-loop cycles.
-        // The latch fires inside the user function, but the wrapper callback only enqueues the result
-        // after that function returns - so cycle-counting raced the enqueue and went empty under a
-        // loaded parallel suite. Nothing drains the deque here (the stream is deliberately never
-        // consumed), so once non-empty it stays non-empty.
-        awaitUntilTrue(() -> !deque.isEmpty());
-        assertThat(deque).isNotEmpty();
-
-        // Close should clear the deque
         streaming.close();
 
         assertThat(deque).isEmpty();
     }
 
     /**
-     * The leak survived the first fix because only the no-arg {@code close()} was overridden, while
-     * {@code closeDrainFirst()} - the shutdown the shipped Vertx example uses - routes straight to
-     * {@code close(DrainingMode)} and never reached it. Guards the funnel, not one entry point.
+     * The leak survived the first version of this fix because only the no-arg {@code close()} was
+     * overridden, while {@code closeDrainFirst()} - the shutdown the shipped Vertx example app uses -
+     * routes to {@code close(DrainingMode)} and never reached it. This guards the funnel rather than one
+     * entry point, so overriding the wrong method fails here.
      */
     @Test
     void closeDrainFirstShouldAlsoClearResultDeque() {
+        ConcurrentLinkedDeque<?> deque = produceOneResultAndAwaitIt();
+
+        streaming.closeDrainFirst();
+
+        assertThat(deque).isEmpty();
+    }
+
+    /**
+     * Runs one record through the processor without consuming the returned stream, and returns the deque
+     * once the result has actually landed in it.
+     * <p>
+     * The wait is on the deque itself rather than on control-loop cycles: the latch fires <em>inside</em>
+     * the user function, but the wrapper only enqueues the result after that function returns, so
+     * cycle-counting raced the enqueue and saw an empty deque under a loaded parallel suite. Nothing
+     * drains the deque here - the stream is deliberately never consumed - so once non-empty it stays so.
+     */
+    private ConcurrentLinkedDeque<?> produceOneResultAndAwaitIt() {
         var latch = new CountDownLatch(1);
         streaming.pollProduceAndStream((record) -> {
             log.info("Processing record: {}", record);
@@ -96,10 +94,7 @@ class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
         ConcurrentLinkedDeque<?> deque = getResultDeque();
         awaitUntilTrue(() -> !deque.isEmpty());
         assertThat(deque).isNotEmpty();
-
-        streaming.closeDrainFirst();
-
-        assertThat(deque).isEmpty();
+        return deque;
     }
 
     /**
