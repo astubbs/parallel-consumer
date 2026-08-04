@@ -248,17 +248,19 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
     PR #87's two new files fixed in-PR; sweep the rest at their source PRs or in one pass after the
     stack merges.
 
-### PARTLY FIXED - one mechanism landed (#100), the cooperative arm is still RED
+### FIXED by #100 - W4 revoke-under-work RED (unhandled `RebalanceInProgressException`)
 
-**Status (2026-08-04): `ChaosRevokeUnderWorkCooperativeIT` still fails across seeds with #100 merged.**
-The `RebalanceInProgressException` mechanism below is genuinely fixed and merged (#100, `932a7032`),
-but it was not the whole story - the cooperative W4 scenario went red again on `master` composition
-after it landed (highcpu run `30869635613`, 2026-08-04,
-`revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor`). **Open, unowned, needs a fresh
-diagnosis** - do not assume #100 closed it. (An earlier read of a single green run on PR #80's branch
-was mistaken for a fix; one green proves nothing on a seeded chaos scenario.)
+**Status (2026-08-04): FIXED and verified.** #100 (`932a7032`, merged to master) fixes the mechanism,
+and the cooperative arm is green with #100 present: a **5/5-seed local soak** of
+`ChaosRevokeUnderWorkCooperativeIT` on a #100-containing HEAD, plus the one clean post-#100 Chaos Pain
+Suite CI run (the dependabot PR, which contains #100) passing.
+**Correction:** an earlier revision of this entry claimed it "still fails across seeds with #100" - that
+was **wrong**. It was based on a failure (highcpu run `30869635613`, 2026-08-04) on a branch that does
+**not** contain #100, so it said nothing about post-#100 behaviour. Lesson: never attribute a chaos
+outcome to #100 unless the run's branch actually contains `932a7032`. Delete this entry after a few more
+green highcpu runs on #100-containing branches.
 
-Mechanism fixed by #100, retained because the diagnosis is reusable:
+Mechanism (kept because the diagnosis is reusable):
 
 A commit landing mid-rebalance threw `RebalanceInProgressException`, which nothing caught: it escaped
 `BrokerPollSystem.controlLoop()` and permanently killed the broker-poll thread - the only producer of
@@ -266,7 +268,8 @@ commit responses - so every waiting committer hung until `offsetCommitTimeout` a
 instance down. That is what turned the Chaos Pain Suite's W4 scenarios RED on every highcpu run since
 2026-07-31 05:24. Long-standing upstream bug (ladder came in with `29795bf5`/upstream #819); the
 cooperative arm merely exposed it, because cooperative members keep committing *during* rebalances.
-Not caused by any PR, and **not fixed by PR #80** (verified present in a run that still went red).
+Not caused by any PR; **fixed by #100, not by PR #80** (the two are orthogonal - #100 lands in
+`ConsumerOffsetCommitter`, #80 in the drain path).
 
 Fix defers the commit in `ConsumerOffsetCommitter` (offsets stay dirty and really are retried) and
 releases waiters immediately. Reproducer: `MockConsumerRebalanceInProgressTest` - broker
