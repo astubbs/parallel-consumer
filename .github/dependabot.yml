@@ -24,7 +24,7 @@ updates:
     # (version-controlled + self-documenting) is better than `@dependabot ignore` PR
     # comments, whose ignore conditions live invisibly in Dependabot's state and give
     # future maintainers no clue why a dependency silently stopped updating.
-    # Full rationale for each: docs/inflight.md "Deferred dependency upgrades".
+    # Full rationale for each: docs/inflight/deps-deferred-majors.md.
     ignore:
       # Module-local, test-scoped pin coupled to WireMock's Jackson. Bumping it
       # globally forces WireMock onto an incompatible Jackson and breaks VertxTest.

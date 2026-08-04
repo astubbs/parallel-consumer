@@ -34,7 +34,7 @@ CHECK_MODE=false
 # not one was a marker. Three were docs/refactoring.md QUOTING markers that the index already lists
 # from their .java source - so the same work appeared twice and the count inflated - and the fourth
 # was prose ("seeded from a code scan (TODO/FIXME + ...)"). That is structural rather than bad luck:
-# docs/refactoring.md is where marker triage lives, and AGENTS.md / docs/inflight.md / CHANGELOG.adoc
+# docs/refactoring.md is where marker triage lives, and AGENTS.md / docs/inflight/ / CHANGELOG.adoc
 # describe this tool, so scanning them means indexing the index-of-work. The generated index itself
 # is the reductio - it alone accounts for ~95 self-referential hits.
 #
