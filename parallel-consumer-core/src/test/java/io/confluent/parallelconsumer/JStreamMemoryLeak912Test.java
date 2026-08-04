@@ -28,7 +28,7 @@ import static org.mockito.Mockito.mock;
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
  */
 @Slf4j
-class JStreamMemoryLeakTest912 extends ParallelEoSStreamProcessorTestBase {
+class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
 
     JStreamParallelEoSStreamProcessor<String, String> streaming;
 
@@ -59,11 +59,15 @@ class JStreamMemoryLeakTest912 extends ParallelEoSStreamProcessorTestBase {
         });
 
         awaitLatch(latch);
-        awaitForSomeLoopCycles(2);
 
         ConcurrentLinkedDeque<?> deque = getResultDeque();
 
-        // Results should have accumulated
+        // Wait for the result to REACH the deque, rather than for a number of control-loop cycles.
+        // The latch fires inside the user function, but the wrapper callback only enqueues the result
+        // after that function returns - so cycle-counting raced the enqueue and went empty under a
+        // loaded parallel suite. Nothing drains the deque here (the stream is deliberately never
+        // consumed), so once non-empty it stays non-empty.
+        awaitUntilTrue(() -> !deque.isEmpty());
         assertThat(deque).isNotEmpty();
 
         // Close should clear the deque
