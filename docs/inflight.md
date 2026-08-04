@@ -9,6 +9,12 @@
 > not keep it by rewriting it into a "FIXED/DONE" narrative, because making a stale entry *accurate* is
 > the wrong move. Shrink it to the still-open follow-ups it surfaced, or remove it.
 >
+> **Never write down what a command can answer.** Open PRs are `gh pr list`; branch divergence is
+> `git rev-list --left-right --count`; worktrees are `bin/worktree-status.sh`. Copying those here
+> creates a second tracker that is wrong within a day and that a reader cannot tell is wrong. This
+> file is for what no command knows: why something is parked, what blocks it, which decision is
+> pending, and which pieces of work collide.
+>
 > **Work that your current PR resolves is tracked by that PR - so delete its entry in that PR.** Never
 > leave a "delete this when #NN merges" marker behind on `master`: the merge is exactly the moment
 > nobody is looking at this file, so the marker outlives the work and the next reader inherits a stale
@@ -29,22 +35,24 @@
 > **If you are given new guidance that changes how this file is written, update this header too**, so
 > that other agents and sessions inherit the same rule instead of rediscovering it.
 
-## Open fork PRs
+## Open PRs: only what `gh` cannot tell you
 
-| PR | Branch (worktree) | vs master | State |
-|----|-------------------|-----------|-------|
-| [#112](https://github.com/astubbs/parallel-consumer/pull/112) | `docs/audit-inflight-and-upstream-map` | this branch | Audit of this ledger + `upstream-map.yaml` against reality |
-| [#57](https://github.com/astubbs/parallel-consumer/pull/57) | `fix/859-metrics-leak-plus-cherrypicks` (`dev-cc`) | 28 ahead, 11 behind | Draft; **needs a rebase** (was clean on 2026-07-31) |
-| [#111](https://github.com/astubbs/parallel-consumer/pull/111) | `docs/mutation-testing-plan` (`mutation-plan`) | 7 ahead, 0 behind | Draft - why mutation testing under-delivers here |
-| [#106](https://github.com/astubbs/parallel-consumer/pull/106) | `perf/sparse-offset-encoding` (`sparse-encoding`) | 1 ahead, 10 behind | Draft - stop walking every offset for distance-based encoders |
-| [#105](https://github.com/astubbs/parallel-consumer/pull/105) | `optimize/unit-gate` (`optimize-unit-gate`) | 5 ahead, 11 behind | Draft - pack the unit-test fork tail (slowest classes first) |
-| [#53](https://github.com/astubbs/parallel-consumer/pull/53) | `feat/java-17-baseline` | 1 ahead, 57 behind | Draft, stale - Java baseline + Kafka 4, see below |
-| [#51](https://github.com/astubbs/parallel-consumer/pull/51) | `features/enable-virtual-threads` (origin only) | - | Open, untouched since 2026-07-28; edits `PCMetrics.java`, so it collides with #57 |
-| [#31](https://github.com/astubbs/parallel-consumer/pull/31) | `fix/909-stale-container-replacement` | 2 ahead, 57 behind | Draft, **base is `master-confluent`** - retarget to `master` before it can merge |
-| [#29](https://github.com/astubbs/parallel-consumer/pull/29) | `bugs/857-paused-consumption-multi-consumers-bug` | 3 ahead, 57 behind | Draft, **base is `master-confluent`** - same retarget needed |
-| [#38](https://github.com/astubbs/parallel-consumer/pull/38) | dependabot: junit 5.10.2 → 6.1.2 | - | **Blocked** - JUnit 6 needs Java 17 *and* an ArchUnit engine (see deps below) |
-| [#99](https://github.com/astubbs/parallel-consumer/pull/99) | dependabot: exec-maven-plugin | - | Routine |
-| [#1](https://github.com/astubbs/parallel-consumer/pull/1), [#8](https://github.com/astubbs/parallel-consumer/pull/8) | `codeql`, `features/retry-dlq` | - | Ancient drafts (2022/2026-04). Close or finish - #8 is the DLQ skeleton |
+**Do not list open PRs here.** `gh pr list` is always right and this file would be wrong within a day;
+likewise branch ahead/behind counts (`git rev-list --left-right --count`) and worktree locations
+(`git worktree list`, `bin/worktree-status.sh`). Record only the things no command can answer -
+blockers, collisions, and decisions someone is waiting on:
+
+- **#29 and #31 target `master-confluent`**, the pinned pre-rebrand mirror, so merging either would
+  land its fix where no user can reach it. Retarget to `master` - but not mechanically: #29's deadlock
+  fix predates the internals #80 reshaped, so it needs reconciling rather than replaying.
+- **#38 (JUnit 6) is blocked on something other than the version bump**: JUnit 6 needs Java 17, *and*
+  `archunit-junit5` will not run on it with no `archunit-junit6` engine in existence. The ArchUnit
+  tests must be rewired first. See the dependency table below.
+- **#51 (virtual threads) collides with #57** - both edit `PCMetrics.java`. Sequence, don't parallelise.
+- **#57 owns metrics + partition state**, **#106 owns the offset encoders**, and **#29 will want the
+  poll/lifecycle internals**. Pick parallel work accordingly.
+- **#1 (`codeql`, 2026-04) and #8 (`features/retry-dlq`, 2022) are abandoned drafts** kept only because
+  #8 is the sole DLQ code that exists. Close or finish them; they are not in flight.
 
 ### What is still open in the upstream #857 family
 
@@ -76,16 +84,16 @@ faster than fork alone, because forking already saturates the cores.
 
 Fixes duplicate Micrometer meter re-registration on assignment/revocation, and bundles the
 `upstream #893` (offset accuracy on assignment) and `upstream #905` (max-queued-records-per-shard
-metric) cherry-picks into one PR instead of a 3-deep stack. Owns `PCMetrics.java`,
-`PCMetricsDef.java`, `PartitionState.java`, `PartitionStateManager.java`, `ShardManager.java` - so
-#51 and anything touching partition state should sequence after it. Now 11 commits behind master:
-rebase before review.
+metric) cherry-picks into one PR instead of a 3-deep stack, superseding the old closed stack
+(#42 → #43 → #45). Owns `PCMetrics.java`, `PCMetricsDef.java`, `PartitionState.java`,
+`PartitionStateManager.java`, `ShardManager.java` - which is why #51 and anything touching partition
+state sequences after it.
 
 ### #53 - 0.7.x: Java baseline + Kafka 4
 
 **The only reason to move off Java 8 is Kafka 4.** kafka-clients 4.x needs **Java 11**, so that is
 the target baseline ("don't be stricter than Kafka"). Jabel is what lets `javac` accept Java 17
-syntax while emitting Java 8 bytecode; the branch currently holds a provisional state (Jabel removed,
+syntax while emitting Java 8 bytecode; the branch holds a provisional state (Jabel removed,
 `release=17`) plus the Kafka 4 research docs. Approaches, decided when the work actually starts:
 **keep Jabel at `--release 11`** (zero source refactor - currently breaks Lombok `@StandardException`
 generation with 25 errors; unproven whether a Lombok bump fixes it - *try this first*); **remove
@@ -98,24 +106,25 @@ bump `kafka.version` 3.9.1 → 4.2.x + the TestContainers CP image; migrate remo
 `new ConsumerGroupMetadata(String)`); downstream module audit; flip `test-kafka-compat` to a blocking
 3.9.1 regression check; docs. Deferred further: `parallel-consumer-share` (KIP-932).
 
-## Branches with no PR
+## Work sitting on branches with no PR
+
+The part `gh` cannot see. (`git branch -vv` and `bin/worktree-status.sh` give the mechanics.)
 
 - **`bugs/912-vertx-stream-memory-leak`** - clears the JStream deque on close (`upstream #912`,
-  production leak) + `JStreamMemoryLeakTest912`. Committed and pushed, vertx-module only, isolated
-  from core. 57 behind master. **Ready to resume: rebase → open PR.** The best low-risk parallel pick.
-- **`docs/uber-stall-experiment-results`** (worktree `results-doc`, plus the
-  `experiment/stall-uber-fix` / `stall-uber-nofix` arms) - the composition experiment behind #80,
-  which has now merged. Its one still-useful result is that the stall-fix stack composes cleanly with
-  #29 + #31, which matters when #29 is finally rebased. Fold that sentence into #29 and delete all
-  three branches.
+  a production leak) + `JStreamMemoryLeakTest912`. Done and pushed, vertx-module only, so it collides
+  with nothing. **Rebase → open PR.** The cheapest open item to land.
+- **`docs/uber-stall-experiment-results`** (with the `experiment/stall-uber-fix` / `stall-uber-nofix`
+  arms) - the composition experiment behind #80, which has merged. One result still matters: the
+  stall-fix stack composes cleanly with #29 + #31, which is what makes #29's rebase tractable. Fold
+  that sentence into #29 and delete all three branches.
 - **`debug/committedoffset-firstpoll-stall`**, **`debug/chaos-w4-red-commit-response-stall`** -
-  diagnostic-only branches; both investigations landed (#80, #100) with write-ups in
-  `docs/solutions/`. Safe to delete.
-- **`docs/inflight-as-directory`** - parked idea: split this ledger into a directory of files instead
-  of one growing document. 1 ahead. Worth revisiting if this file bloats again.
-- **`astubbs/orca`** (worktree `/Users/astubbs/orca/...`) - 9 ahead, **66 behind**. CI/tooling
-  (Claude review + PR-assistant workflows, PR-dependency check, CI matrix tweaks); master has since
-  grown its own versions of most of it. Rebase and salvage what is still novel, or abandon.
+  diagnostic-only; both investigations landed (#80, #100) with write-ups in `docs/solutions/`.
+  Safe to delete.
+- **`docs/inflight-as-directory`** - parked idea: split this ledger into a directory instead of one
+  growing document. Worth revisiting if this file bloats again.
+- **`astubbs/orca`** - CI/tooling (Claude review + PR-assistant workflows, PR-dependency check, CI
+  matrix tweaks) from before master grew its own versions of most of it. Badly diverged. Salvage
+  whatever is still novel, or abandon it.
 - **Superseded / stale, safe to prune:** `cherry-pick/893-offset-reset`, `cherry-pick/905-max-shard-metric`,
   `upstream-pr-893`, `upstream-pr-905`, `pr-909-temp`, `bugs/859-pcmetrics-leak-v2` (all folded into
   #57); `refactor/test-hardening`, `ci/reenable-parallel-tests`, `backup/*`; `dev-cc` and
@@ -241,9 +250,7 @@ builds - without that filter Kafka "latest" mis-resolves to a Confluent build). 
 
 ## Next candidates (parallel-safe with the open PRs)
 
-File collisions to respect: **#57** owns metrics + partition state, **#106** owns the offset encoders,
-and **#29** will want the poll/lifecycle internals #80 has just reshaped. Ranked backlog and full
-verdicts live in
+Collisions are listed at the top of this file. Ranked backlog and full verdicts live in
 `src/docs/development/upstream-pr-analysis.adoc`; the ready picks:
 
 - **`upstream #912` vertx leak** - branch done, just needs rebase + PR (above). Best immediate pick.
