@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
@@ -42,7 +43,12 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private final ConsumerManager<K, V> consumerManager;
 
-    private State runState = RUNNING;
+    /**
+     * The single source of truth for this subsystem's lifecycle. Volatile: mutated by the control thread
+     * (drain / close transitions) and read by the poll thread's loop and by {@link ConsumerManager}'s
+     * {@link #isCloseInProgress()} signal (potentially from committer threads).
+     */
+    private volatile State runState = RUNNING;
 
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
 
@@ -78,6 +84,13 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         this.pc = pc;
 
         this.consumerManager = consumerMgr;
+
+        // ConsumerManager holds no lifecycle state of its own - it derives "should abort retries/polling"
+        // from this subsystem's runState (single source of truth). A duplicated shutdown flag here
+        // previously desynced from the lifecycle (set at drain instead of close) and caused the
+        // drain-path busy-spin / zombie-member defect.
+        // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
+        consumerMgr.setCloseInProgressSignal(this::isCloseInProgress);
 
         switch (options.getCommitMode()) {
             case PERIODIC_CONSUMER_SYNC, PERIODIC_CONSUMER_ASYNCHRONOUS -> {
@@ -222,7 +235,12 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Will begin the shutdown process, eventually closing itself once drained
      */
     public void drain() {
-        consumerManager.signalStop();
+        // Deliberately does NOT stop the ConsumerManager: while DRAINING, the poller must keep calling
+        // consumer.poll() - the paused long poll is this loop's sleep (see the comment in handlePoll),
+        // and polling is what keeps this member rebalance-responsive. A member that stops polling
+        // busy-spins the loop and zombie-holds its partition assignment (background heartbeats keep it
+        // "alive") until max.poll.interval.ms - starving same-group siblings.
+        // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         // idempotent
         if (runState != State.DRAINING) {
             log.debug("Signaling poll system to drain, waking up consumer...");
@@ -292,10 +310,20 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     private void transitionToClosing() {
-        consumerManager.signalStop();
         log.debug("Poller transitioning to closing, waking up consumer");
+        // setting CLOSING is itself the stop signal - ConsumerManager's closeInProgressSignal reads this
+        // runState; set it before the wakeup so an aborted poll observes it
         runState = State.CLOSING;
         consumerManager.wakeup();
+    }
+
+    /**
+     * True once this poll system has begun its final close ({@link State#CLOSING} / {@link State#CLOSED}).
+     * Wired into {@link ConsumerManager} as its abort signal, so that class needs no lifecycle state of
+     * its own. NOT true while merely {@link State#DRAINING} - a draining consumer must keep polling.
+     */
+    private boolean isCloseInProgress() {
+        return runState == CLOSING || runState == CLOSED;
     }
 
     /**

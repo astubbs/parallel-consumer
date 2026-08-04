@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.LoopingResumingIterator;
@@ -273,6 +274,27 @@ public class ShardManager<K, V> {
         // log
         if (workFromAllShards.size() >= requestedMaxWorkToRetrieve) {
             log.debug("Work taken is now over max (iteration resume point is {})", iterationResumePoint);
+        }
+
+        // Silent-stall diagnostic (#857): the control loop asked for work but we handed back less than
+        // requested even though work is still tracked in the shards. Break down WHY so a stall can be told
+        // apart from normal back-pressure. See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
+        if (log.isDebugEnabled() && workFromAllShards.size() < requestedMaxWorkToRetrieve) {
+            long tracked = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked).sum();
+            if (tracked > 0) {
+                long awaitingSelection = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection).sum();
+                long inFlight = processingShards.values().stream().mapToLong(ProcessingShard::getCountWorkInFlight).sum();
+                var retry = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
+                // Interpretation guide:
+                //  - returned 0 with awaitingSelection > 0  => STALL: selectable work exists but was not handed out (a real bug)
+                //  - tracked all inFlight                   => normal: worker pool is just busy
+                //  - tracked all in retryQueue, none ready  => normal: retry back-off (records failed, waiting to retry)
+                //  - tracked > awaitingSelection+inFlight and none ready to retry => work is "missing"/stuck (candidate leak)
+                log.debug("Work retrieval under-served: requested {}, returned {}, but {} tracked across {} shard(s) " +
+                                "[awaitingSelection={}, inFlight={}, retryQueue.size={}, retryQueue.readyToRetry={}]",
+                        requestedMaxWorkToRetrieve, workFromAllShards.size(), tracked, processingShards.size(),
+                        awaitingSelection, inFlight, retry.getLeft(), retry.getRight());
+            }
         }
 
         //

@@ -5,10 +5,6 @@
  */
 package io.confluent.parallelconsumer.integrationTests;
 
-/*-
- * Copyright (C) 2024 Confluent, Inc.
- */
-
 import io.confluent.csid.utils.ThreadUtils;
 import io.confluent.parallelconsumer.PCRetriableException;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;

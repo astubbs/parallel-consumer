@@ -2,11 +2,13 @@
 
 > Shared, cross-branch working notes kept on `master` so any branch or session can see what is in
 > progress or parked. **Not** an issue tracker and **not** a backlog.
-> Last verified against the repo, GitHub and the working tree: **2026-08-04**, master `6d390813`.
+> Last verified against the repo, GitHub and the working tree: **2026-08-04**, master `bd717241`.
 >
-> **Scope rule: only work that is in flight, plus the context needed to resume it.** No
-> completed-work narratives, root-cause write-ups or policy text - when work lands, **delete** its
-> entry. The durable records live elsewhere: `CHANGELOG.adoc` (what shipped), PR bodies and commit
+> **Scope rule: track only what is currently OPEN**, plus the cross-branch context a future branch
+> should inherit. When something CLOSES, **delete** its entry - do not keep it by rewriting it into a
+> "FIXED/DONE" narrative, because making a stale entry *accurate* is the wrong move. Shrink it to the
+> still-open follow-ups it surfaced, or remove it. The durable records live elsewhere:
+> `CHANGELOG.adoc` (what shipped), PR bodies and commit
 > messages (history), [`docs/solutions/`](solutions/) (lessons), [`docs/refactoring.md`](refactoring.md)
 > (deferred internal work), [`docs/QUARANTINED_TESTS.md`](QUARANTINED_TESTS.md) (quarantine roster),
 > [`docs/TODO_INDEX.md`](TODO_INDEX.md) (code markers), and
@@ -18,12 +20,15 @@
 > (confluentinc/parallel-consumer). Fork branch names encode the *upstream* number
 > (`bugs/857-...`, `fix/909-...`, `upstream-pr-905`), so a number seen in a branch name is upstream,
 > not a fork issue.
+>
+> **If you are given new guidance that changes how this file is written, update this header too**, so
+> that other agents and sessions inherit the same rule instead of rediscovering it.
 
 ## Open fork PRs
 
 | PR | Branch (worktree) | vs master | State |
 |----|-------------------|-----------|-------|
-| [#80](https://github.com/astubbs/parallel-consumer/pull/80) | `fix/flaky-partitionstate-committedoffset-it` (`fix-flaky-partitionstate`) | 38 ahead, 0 behind | **Ready for review** - the big one, see below |
+| [#112](https://github.com/astubbs/parallel-consumer/pull/112) | `docs/audit-inflight-and-upstream-map` | this branch | Audit of this ledger + `upstream-map.yaml` against reality |
 | [#57](https://github.com/astubbs/parallel-consumer/pull/57) | `fix/859-metrics-leak-plus-cherrypicks` (`dev-cc`) | 28 ahead, 11 behind | Draft; **needs a rebase** (was clean on 2026-07-31) |
 | [#111](https://github.com/astubbs/parallel-consumer/pull/111) | `docs/mutation-testing-plan` (`mutation-plan`) | 7 ahead, 0 behind | Draft - why mutation testing under-delivers here |
 | [#106](https://github.com/astubbs/parallel-consumer/pull/106) | `perf/sparse-offset-encoding` (`sparse-encoding`) | 1 ahead, 10 behind | Draft - stop walking every offset for distance-based encoders |
@@ -36,22 +41,21 @@
 | [#99](https://github.com/astubbs/parallel-consumer/pull/99) | dependabot: exec-maven-plugin | - | Routine |
 | [#1](https://github.com/astubbs/parallel-consumer/pull/1), [#8](https://github.com/astubbs/parallel-consumer/pull/8) | `codeql`, `features/retry-dlq` | - | Ancient drafts (2022/2026-04). Close or finish - #8 is the DLQ skeleton |
 
-### #80 - drain-zombie silent stall (upstream #857 family)
+### What is still open in the upstream #857 family
 
-Two independent bugs found under one flaky check. **Product:** `ConsumerManager.shutdownRequested`
-shadowed `BrokerPollSystem.runState`, so `consumer.poll()` was never called during drain - a ~10kHz
-busy-spin plus a rebalance-unresponsive member holding its whole assignment until eviction. Fixed by
-deleting the duplicated flag and deriving "closing" from the poll system's lifecycle. **Test
-harness:** the `auto.offset.reset=latest` nudge race, fixed with a shared `awaitWithTopicNudge`
-(no timeout enlarged, no assertion weakened). Both #80-owned quarantined tests are re-enabled on the
-branch, so merging it empties the quarantine registry - which is what unblocks the 0.6.0.0 release.
-Validation: 20 consecutive fork16 stress runs, 0/20 failures (historical rate ~33%). Write-ups:
-`docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md` and
-`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`.
+Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom. Two
+have landed: **#100** (a mid-rebalance commit threw `RebalanceInProgressException`, which nothing
+caught, permanently killing the broker-poll thread) and **#80** (a draining consumer never called
+`consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
+assignment). Write-ups in `docs/solutions/test-flakiness/`.
 
-**Note:** this makes the older `bugs/857-...` deadlock work (#29, `synchronized(commitCommand)` →
-`ReentrantLock.tryLock()`) a *sibling* fix, not the same one. #29/#31 were verified not to fix the
-drain defect; the uber-branch experiment (below) showed the #80 stack composes cleanly with both.
+**Still open: the original deadlock, in #29** - `synchronized(commitCommand)` between the poll thread
+(`onPartitionsRevoked`) and the control thread (`commitOffsetsThatAreReady`), replaced there with
+`ReentrantLock.tryLock()`. It is a sibling of the two landed fixes, not a duplicate: #29/#31 were
+verified *not* to fix the drain defect, and the uber-branch experiment showed the #80 stack composes
+cleanly with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadlockTest`
+failed once under the 20-run stress hunt (see the load-tightness family below, where it is
+explicitly *not* a member). #29 needs a rebase and a retarget before any of that can land.
 
 ### #57 - PCMetrics leak (upstream #859) + cherry-picks
 
@@ -84,13 +88,14 @@ bump `kafka.version` 3.9.1 → 4.2.x + the TestContainers CP image; migrate remo
 - **`bugs/912-vertx-stream-memory-leak`** - clears the JStream deque on close (`upstream #912`,
   production leak) + `JStreamMemoryLeakTest912`. Committed and pushed, vertx-module only, isolated
   from core. 57 behind master. **Ready to resume: rebase → open PR.** The best low-risk parallel pick.
-- **`experiment/stall-uber-fix` / `experiment/stall-uber-nofix` / `docs/uber-stall-experiment-results`**
-  (worktrees `uber-fix`, `uber-nofix`, `results-doc`) - the composition experiment behind #80: does the
-  full stall-fix stack compose with #29 + #31? Answer recorded on the results branch (yes; all guards
-  green, zero conflicts). 19 ahead / 30 behind, no PR. Either fold the results doc into #80 or drop it.
+- **`docs/uber-stall-experiment-results`** (worktree `results-doc`, plus the
+  `experiment/stall-uber-fix` / `stall-uber-nofix` arms) - the composition experiment behind #80,
+  which has now merged. Its one still-useful result is that the stall-fix stack composes cleanly with
+  #29 + #31, which matters when #29 is finally rebased. Fold that sentence into #29 and delete all
+  three branches.
 - **`debug/committedoffset-firstpoll-stall`**, **`debug/chaos-w4-red-commit-response-stall`** -
-  diagnostic-only branches; both investigations have since landed (#80 and #100). Delete once their
-  findings are confirmed captured in `docs/solutions/`.
+  diagnostic-only branches; both investigations landed (#80, #100) with write-ups in
+  `docs/solutions/`. Safe to delete.
 - **`docs/inflight-as-directory`** - parked idea: split this ledger into a directory of files instead
   of one growing document. 1 ahead. Worth revisiting if this file bloats again.
 - **`astubbs/orca`** (worktree `/Users/astubbs/orca/...`) - 9 ahead, **66 behind**. CI/tooling
@@ -107,16 +112,15 @@ bump `kafka.version` 3.9.1 → 4.2.x + the TestContainers CP image; migrate remo
 Not yet released: pom is `0.6.0.0-SNAPSHOT`, no `v0.6.0.0` tag, changelog section written. Release =
 strip `-SNAPSHOT` and merge to `master`; `publish.yml` runs after CI succeeds, deploys via the
 `maven-central` profile, tags `v<version>` and cuts a GitHub release (AGENTS.md → *Releasing*).
-**Blocker: `release.yml` refuses to release while any test is quarantined** - see below.
+**No longer blocked by the quarantine guard**: #80 emptied the registry when it merged, so
+`release.yml`'s "no release while tests are quarantined" gate now passes.
 
 ## Quarantine lane
 
-Registry: [`docs/QUARANTINED_TESTS.md`](QUARANTINED_TESTS.md), CI-enforced against the `@Quarantined`
-annotations. **Two entries on master, both owned by [#80](https://github.com/astubbs/parallel-consumer/pull/80)**:
-`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` (the drain-zombie the scenario was built to
-detect) and `PartitionStateCommittedOffsetIT.committedOffsetRemoved` (the `[latest]` nudge race).
-Both annotations and entries are already deleted on #80's branch, so merging it empties the registry
-and unblocks the release.
+Registry [`docs/QUARANTINED_TESTS.md`](QUARANTINED_TESTS.md) is **empty** - #80 deleted both its
+annotations and entries when it merged. Nothing to do here; the section stays only so the next
+quarantine is recorded rather than invented. Rules live in AGENTS.md (Testing); the registry is
+CI-enforced against the `@Quarantined` annotations in both directions.
 
 ## Chaos Pain Suite - Phase 2+
 
@@ -172,15 +176,35 @@ and unblocks the release.
 - **The `local` self-hosted PR jobs are disabled** (`pr-local-fast-feedback.yml`, `pull_request` trigger
   commented out). That runner is offline indefinitely and its suites now run on the highcpu runner
   (a strict superset). `workflow_dispatch` still works; restore the trigger if the box comes back.
-- **The highcpu lane runs six suites per branch on one box** (including mutation sweeps); three jobs
-  died of runner-lost-communication during the W4 investigation. Consider a shared concurrency group or
-  moving mutation off-box - it makes chaos timing SLOs noisy. Mutation strategy is being reconsidered
-  wholesale in **#111**.
-- **`MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed` - flaky, undiagnosed.**
-  ~1/104 under the forked-per-broker integration run: `TimeoutException: Timeout while waiting to get
-  produce lock (PT2S)` / commit lock (PT1S); passes on re-run. Hypothesis is test-tightness under CI
-  contention rather than a real lock bug, but that is **not established**. Reproduce under artificial
-  CPU load and classify before touching the timeouts (AGENTS.md rule).
+- **The highcpu lane runs six suites per branch on one box** (including mutation sweeps); jobs
+  repeatedly die of runner-lost-communication (3+ times on #80 alone). Consider a shared concurrency
+  group or moving mutation off-box - it makes chaos timing SLOs noisy. Mutation strategy is being
+  reconsidered wholesale in **#111**.
+
+### Load-tightness flake family (undiagnosed)
+
+Shared signature: a **fast-failing** assertion or timeout under heavy contention, passing in isolation
+or on rerun. Roster and rates from the 20-run fork16 acceptance hunt on #80's branch (2026-07-30);
+baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
+
+| Test | Rate | Symptom |
+|------|------|---------|
+| `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed` | 0/20 hunt, ~1/104 on CI | 1-2s produce/commit lock timeouts |
+| `TransactionTimeoutsTest.produceTimeout` | 1/20 + 1 highcpu | tight produce-timeout assertion |
+| `LoadTest` | 1/20 | 60s throughput awaits |
+| `DbTest` | 2/20 | postgres container start under contention |
+| `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
+
+**Classify before touching any of them** (the #68 lesson): this family is exactly where the upstream
+#857 deadlock and the drain zombie were hiding, and both looked like tightness first. Two members have
+since been *solved* and are no longer in the family, which gives you their signatures to rule out: the
+nudge race is an unwinnable await plus a `SubscriptionState` reset positioned past the data
+(`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`), and the drain zombie is a poll spin
+in `DRAINING` state (`pc-silent-stall-under-contention-2026-07-29.md`).
+
+**Explicitly NOT a member: `RebalanceEoSDeadlockTest.noDeadlockOnRevoke`** (1/20). Per the #68 record
+its contended failure maps to the real upstream #857 deadlock - so that sighting is live confirmation
+the deadlock is still on master, with its fix waiting in #29.
 
 ## Deferred dependency upgrades
 
@@ -202,8 +226,9 @@ builds - without that filter Kafka "latest" mis-resolves to a Confluent build). 
 
 ## Next candidates (parallel-safe with the open PRs)
 
-File collisions to respect: **#80** owns the poll/lifecycle internals, **#57** owns metrics + partition
-state, **#106** owns the offset encoders. Ranked backlog and full verdicts live in
+File collisions to respect: **#57** owns metrics + partition state, **#106** owns the offset encoders,
+and **#29** will want the poll/lifecycle internals #80 has just reshaped. Ranked backlog and full
+verdicts live in
 `src/docs/development/upstream-pr-analysis.adoc`; the ready picks:
 
 - **`upstream #912` vertx leak** - branch done, just needs rebase + PR (above). Best immediate pick.

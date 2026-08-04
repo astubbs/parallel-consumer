@@ -99,7 +99,7 @@ entries:
     adoc_anchor: part3-cat1-stability
     todo:
       - "Retarget fork PR #29 to master -- its base is master-confluent, the pinned pre-rebrand mirror, so merging it would land the fix nowhere users can get it"
-      - "Land fork PR #80 (ready for review); merging it also empties the quarantine registry"
+      - "Rebase fork PR #29 onto the poll/lifecycle internals #80 reshaped, then land it -- it is the last open piece of the family"
       - "Post the upstream backlink to #857 once the family is landed"
     notes: >
       Fork state verified 2026-08-04. This is a FAMILY of distinct defects behind
@@ -112,7 +112,7 @@ entries:
       from a commit landing mid-rebalance escaped BrokerPollSystem.controlLoop()
       and permanently killed the broker-poll thread; the commit is now deferred
       and waiters released.
-      (3) PR #80 [OPEN, ready]: ConsumerManager.shutdownRequested shadowed
+      (3) PR #80 [MERGED 2026-08-04, bd717241]: ConsumerManager.shutdownRequested shadowed
       BrokerPollSystem.runState, so consumer.poll() was never called while
       draining -- a ~10kHz busy-spin plus a rebalance-unresponsive member holding
       its whole assignment until eviction. Fixed by deleting the duplicated flag.
@@ -336,8 +336,7 @@ entries:
         posted: null
     adoc_anchor: null
     todo:
-      - "Land PR #80 -- a release is blocked while any test is quarantined (release.yml guard), and both entries are #80-owned"
-      - "Strip -SNAPSHOT -> 0.6.0.0 and merge to master (publish.yml tags and releases)"
+      - "Strip -SNAPSHOT -> 0.6.0.0 and merge to master (publish.yml tags and releases). The quarantine guard no longer blocks it: #80 emptied the registry on merge"
     notes: >
       Fork-only work (no upstream counterpart). Rebrand and changelog already on
       master via PRs #55 (groupId), #56 (release prep) and #72 (release notes);

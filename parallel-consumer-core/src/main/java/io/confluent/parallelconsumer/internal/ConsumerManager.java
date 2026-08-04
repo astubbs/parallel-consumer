@@ -7,6 +7,7 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.common.TopicPartition;
@@ -22,6 +23,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 
 /**
  * Delegate for {@link KafkaConsumer}
@@ -40,7 +42,21 @@ public class ConsumerManager<K, V> {
 
     private final AtomicBoolean pollingBroker = new AtomicBoolean(false);
 
-    private final AtomicBoolean shutdownRequested = new AtomicBoolean(false);
+    /**
+     * Reports whether the broker poll system has begun its final close ({@code CLOSING}/{@code CLOSED}) -
+     * the point at which in-progress poll and commit retry loops should abort promptly instead of
+     * retrying. Wired by {@link BrokerPollSystem} at construction; defaults to "never" so a standalone
+     * ConsumerManager behaves as running.
+     * <p>
+     * The poll system's {@code runState} is the single source of truth: this class deliberately holds NO
+     * lifecycle state of its own. A duplicated private shutdown flag here previously desynced from the
+     * lifecycle (it was set at <i>drain</i> time instead of close time), which stopped
+     * {@code consumer.poll()} being invoked during {@code DRAINING} - busy-spinning the poll loop and
+     * leaving a rebalance-unresponsive "zombie" group member holding its partitions.
+     * See {@code docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md}.
+     */
+    @Setter
+    private BooleanSupplier closeInProgressSignal = () -> false;
 
     private final AtomicLong pendingRequests = new AtomicLong(0L);
     /**
@@ -75,7 +91,7 @@ public class ConsumerManager<K, V> {
             boolean polledSuccessfully = false;
             try {
                 pendingRequests.addAndGet(1L);
-                while (!shutdownRequested.get()) {
+                while (!closeInProgressSignal.getAsBoolean()) {
                     tryCount++;
                     try {
                         records = consumer.poll(timeoutToUse);
@@ -103,7 +119,7 @@ public class ConsumerManager<K, V> {
                 if (polledSuccessfully) {
                     log.debug("Poll completed normally (after timeout of {} on try {}) and returned {}...", timeoutToUse, tryCount, records.count());
                 } else {
-                    log.debug("Poll did not completed (after timeout of {} and tries {}), shutdownRequested {}", timeoutToUse, tryCount, shutdownRequested.get());
+                    log.debug("Poll did not completed (after timeout of {} and tries {}), closeInProgress {}", timeoutToUse, tryCount, closeInProgressSignal.getAsBoolean());
                 }
                 pendingRequests.addAndGet(-1L);
             }
@@ -146,8 +162,8 @@ public class ConsumerManager<K, V> {
             try {
                 pendingRequests.addAndGet(1L);
                 long tryCount = 0;
-                //allow to try to commit at least once during close / shutdown regardless of the flag.
-                while (tryCount == 0 || !shutdownRequested.get()) {
+                //allow to try to commit at least once during close / shutdown regardless of the signal.
+                while (tryCount == 0 || !closeInProgressSignal.getAsBoolean()) {
                     tryCount++;
                     Instant startedTime = Instant.now();
                     try {
@@ -210,7 +226,7 @@ public class ConsumerManager<K, V> {
         long deadLine = started + backOffTimeMs;
         while(System.currentTimeMillis() < deadLine) {
             Thread.sleep(interval);
-            if(shutdownRequested.get()) {
+            if(closeInProgressSignal.getAsBoolean()) {
                 return false;
             }
         }
@@ -235,17 +251,11 @@ public class ConsumerManager<K, V> {
         return metaCache;
     }
 
-    public void signalStop() {
-        if(!this.shutdownRequested.get()) {
-            log.info("Signaling Consumer Manager to stop");
-            this.shutdownRequested.set(true);
-        }
-    }
-
     public void close(final Duration defaultTimeout) {
         long deadline = System.currentTimeMillis() + defaultTimeout.toMillis();
         log.debug("Consumer Manager Closing...");
-        this.shutdownRequested.set(true);
+        // no stop flag to raise: by the time the poll system calls this, its runState is already
+        // CLOSING/CLOSED, so closeInProgressSignal reports true to any in-flight retry loops
         log.debug("ConsumerManager close waiting for max of {} for pending requests to complete", defaultTimeout);
         while(pendingRequests.get() > 0L && System.currentTimeMillis() < deadline) {
             try {
