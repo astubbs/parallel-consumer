@@ -184,33 +184,50 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 ## Changelog
 
-`CHANGELOG.adoc` (repo root) holds the release notes. **Do not edit it in a feature PR.** Everything up to and including `== 0.6.0.0` is hand-written and now frozen; from the next release on, the section is **generated at release time** from the commits that shipped in it. This removes the file that every PR used to touch (it appeared in 30 of the last 30 master commits, and dragged the generated `README.adoc` with it), and removes the ordering problem that a per-PR entry has to cite a PR number that does not exist yet.
+`CHANGELOG.adoc` holds the release notes. **Nothing about it is a per-PR chore.** Do not add entries
+in a feature PR, and do not maintain an `== Unreleased` section. Everything up to and including
+`== 0.6.0.0` is hand-written and now frozen; from the next release on, each section is **generated at
+release time from the commit log** and then frozen in turn.
 
-### Recording a change: the `Changelog:` trailer
+This removes the file that every PR used to touch - it appeared in 30 of the last 30 master commits,
+dragging the generated `README.adoc` with it - and removes the ordering problem where an entry had to
+cite a PR number that did not exist when the entry was written.
 
-When a commit makes a user- or operator-visible change, put a **`Changelog:`** trailer in its message - one line, in the same trailer block as the upstream `Origin:` / `Forwarded:` trailers (see *Commit trailers*):
+### What this asks of a commit
 
-```
-Changelog: a commit landing during a group rebalance no longer kills the consumer -
-  it died later with a misleading commit timeout. Most likely under cooperative-sticky.
-```
-
-It goes in the commit that makes the change, not necessarily a squash commit - we do not always squash. The trailer is a *proposal*, written when the author knows exactly what changed and why it matters; it is not the final wording.
-
-- **The entry test:** can a *user or operator* observe this without reading our repo - API, behaviour, performance, logs and metrics, or the published artifact? If not, **no trailer**. Most CI, tooling, refactor and docs commits get none, and that is the intended default: silence, not a ritual "no entry needed" declaration.
-- **Length: one sentence, about 25 words.** Name what a reader would have *seen*, and who it hits if it is not everyone - not how the bug worked. An entry that runs to a paragraph is written for its author; an entry too short to tell you whether you are affected (`fix: Paused consumption across multiple consumers`) is no better. The diagnosis, the experiment and the postmortem belong in the commit body, the PR and `docs/solutions/`.
-- **Do record:** behavioural/API changes, new features or modules, user-affecting bug fixes, and *notable or coordinated* dependency refreshes or any change to a user-facing runtime dependency (especially the Kafka client) - for a library these affect the transitive dependencies and compatibility that consumers inherit.
-- **Don't record:** routine dependency bumps (Dependabot), internal refactors, tooling that only changes how we work, formatting, and test or CI work. The last of these is summarised once per release, not per change.
-- **Reference convention:** a bare `#NN` is this fork, `upstream #NN` is confluentinc. Cite the issue the work addresses where there is one; the release-time pass turns these into explicit links (`.../issues/NN[#NN]`), since a bare `#NN` is ambiguous - GitHub numbers issues and PRs from one sequence.
+Nothing extra. The commit log is the raw material, so write it as you already should: a subject that
+says what changed and, where it matters to a user, what it changed *for them*; the diagnosis, the
+experiment and the rejected alternatives in the body. A good commit message is now doing double duty,
+which is a reason to keep writing them properly rather than a new process.
 
 ### At release time
 
-Collect the trailers (`git log <last-tag>..HEAD --grep '^Changelog:'`), then **re-assess them as a set** rather than pasting them in. Trailers are what each author thought mattered at the time; the release view is different - merge related lines, drop what turned out not to matter, rewrite for someone who was not there, and sort into `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, `=== Examples`. Then add **one** `=== Build & CI` entry for the whole release: a short bullet list of the big hitters (quarantine lane, chaos suite, mutation testing) that tells a reader how carefully the library is tested, with the detail left to git history. Once written, the section is frozen like the ones above it.
+An agent reads `git log <last-tag>..HEAD` - full messages, not just subjects - and drafts the release
+section. The judgement it applies, and that a human should re-apply before freezing:
 
-This is a good agent task - the raw material is in the log, and the judgement needed is editorial.
+- **The entry test.** Can a *user or operator* observe this without reading our repo - API, behaviour,
+  performance, logs and metrics, or the published artifact? If not, it gets no entry. Most CI,
+  tooling, refactor and docs commits produce nothing, and that is correct: the changelog answers one
+  question, "should I upgrade, and will anything change for me?"
+- **One sentence, about 25 words, then the link.** Name what a reader would have *seen*, and who it
+  hits when that is not everyone - not how the bug worked. An entry that runs to a paragraph is
+  written for its author; an entry too short to tell you whether you are affected (`fix: Paused
+  consumption across multiple consumers`) is no better.
+- **Assemble as a set, not one commit at a time.** Merge related commits into a single entry, drop
+  what turned out not to matter, and rewrite for someone who was not there. This is the part a per-PR
+  entry could never do.
+- **One `=== Build & CI` entry for the whole release** - a short bullet list of the big hitters
+  (quarantine lane, chaos suite, mutation testing) that tells a reader how carefully the library is
+  tested, with the detail left to the log.
+- **Sections:** `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, `=== Examples`,
+  `=== Build & CI`. **Reference convention:** a bare `#NN` is this fork, `upstream #NN` is
+  confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and PRs
+  from one sequence.
 
-**Still live, and now mostly inert:** the `PR Checklist` gate's changelog rule (`.github/scripts/changelog-ref-gate.js`) fails a human PR that *adds* a `CHANGELOG.adoc` entry citing no issue. Since feature PRs no longer touch the file, it should simply never fire - it stays as a guard for anyone editing the frozen sections by hand. **Open decision:** whether to replace it with a check that a `src/main/**` change carries a `Changelog:` trailer or an explicit opt-out. Worth doing only if user-visible changes start shipping without trailers; a gate that makes every CI PR declare "no entry needed" would recreate the ritual this change removes.
-
+**Still live, and now inert:** the `PR Checklist` gate's changelog rule
+(`.github/scripts/changelog-ref-gate.js`) fails a human PR that *adds* a `CHANGELOG.adoc` entry citing
+no issue. Since PRs no longer touch the file, it should never fire - it remains a guard for anyone
+hand-editing the frozen sections.
 
 ## PR Discipline
 
