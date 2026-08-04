@@ -2,12 +2,17 @@
 
 > Shared, cross-branch working notes (not an issue tracker), kept on `master` so any branch or session
 > can see them. Records work that is parked, in progress on other branches, or otherwise not obvious
-> from `git log`. Keep it current when context-switching. Last updated: 2026-08-01.
+> from `git log`. Keep it current when context-switching. Last updated: 2026-08-04.
 >
-> **Scope rule: this file records ONLY inflight work, or context required for something inflight.**
-> No completed-work narratives, root-cause write-ups, or policy documentation - those belong in
-> AGENTS.md (policy), PR descriptions/commit messages (history), or `docs/solutions/` (lessons).
-> When work finishes, delete or shrink its entry rather than converting it into a record.
+> **Scope rule: track only what is currently OPEN and not already tracked in an issue** - unresolved
+> work, plus cross-branch/cross-PR context a future branch should inherit (on merge, the next PR picks
+> the note up). This file is NOT a record. When something CLOSES, **delete** its entry: the durable
+> record belongs in the commit log / PR message, `docs/solutions/` (lessons), or AGENTS.md (policy), not
+> here. Do NOT keep a closed item by rewriting it into a "FIXED/DONE" narrative - making a stale entry
+> *accurate* is the wrong move. Remove it, or shrink it to only the still-open follow-ups it surfaced.
+>
+> **If you're given new guidance that changes how this file is written, update this header too** so other
+> agents and sessions inherit the same rule.
 >
 > **The durable fork↔upstream mapping now lives in a machine-readable cache:**
 > [`src/docs/development/upstream-map.yaml`](../src/docs/development/upstream-map.yaml) is the
@@ -248,34 +253,19 @@ Long`, mark the flags `volatile`, or fold into the #857 threading rework) as a f
     PR #87's two new files fixed in-PR; sweep the rest at their source PRs or in one pass after the
     stack merges.
 
-### ✅ FIXED (2026-08-01), awaiting PR: W4 revoke-under-work RED - unhandled `RebalanceInProgressException`
+### Open follow-ups from the W4 revoke-under-work investigation
 
-Branch **`fix/commit-rebalance-in-progress-kills-poll-thread`** (off `master` `192d32bc`), **no PR yet**.
+The W4 RED itself is closed - #100 fixed the fatal `RebalanceInProgressException` and `bc9cf32f` its
+silent `CommitFailedException` sibling (write-up:
+[`docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md`](plans/2026-08-01-001-investigate-chaos-w4-red-report.md)).
+Two things it surfaced remain open:
 
-A commit landing mid-rebalance threw `RebalanceInProgressException`, which nothing caught: it escaped
-`BrokerPollSystem.controlLoop()` and permanently killed the broker-poll thread - the only producer of
-commit responses - so every waiting committer hung until `offsetCommitTimeout` and then took the PC
-instance down. That is what turned the Chaos Pain Suite's W4 scenarios RED on every highcpu run since
-2026-07-31 05:24. Long-standing upstream bug (ladder came in with `29795bf5`/upstream #819); the
-cooperative arm merely exposed it, because cooperative members keep committing *during* rebalances.
-Not caused by any PR, and **not fixed by PR #80** (verified present in a run that still went red).
-
-Fix defers the commit in `ConsumerOffsetCommitter` (offsets stay dirty and really are retried) and
-releases waiters immediately. Reproducer: `MockConsumerRebalanceInProgressTest` - broker
--free, fails in ~10s unfixed.
-
-**Full write-up:** [`docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md`](plans/2026-08-01-001-investigate-chaos-w4-red-report.md).
-
-**Follow-ups this surfaced (not in that branch):**
-- `ConsumerManager.commitSync()`'s pre-existing `CommitFailedException` handler has the same latent
-  flaw - it breaks out and lets `onOffsetCommitSuccess()` mark offsets clean, so a commit that never
-  reached the broker is recorded as done, despite the comment promising a later re-commit.
 - `ConsumerOffsetCommitter.commitAndWait()` waits on `offsetCommitTimeout` but interpolates
-  `DEFAULT_TIMEOUT` into the error, so every such message misstates the wait (reported `PT30S` for an
-  actual 10s). Tiny standalone fix + unit test.
-- The highcpu lane runs six suites (incl. two PIT sweeps) concurrently per branch on one box; three
-  jobs died of runner-lost-communication during this investigation. Independent of the bug above, but
-  it makes chaos timing SLOs noisy - consider a shared concurrency group or moving mutation off-box.
+  `DEFAULT_TIMEOUT` into the timeout error, so every such message misstates the wait (reports `PT30S` for
+  an actual 10s). Tiny standalone fix + unit test.
+- The highcpu lane runs six suites (incl. two PIT sweeps) concurrently per branch on one box; jobs
+  repeatedly die of runner-lost-communication (3+ times on PR #80 alone), making chaos timing SLOs noisy.
+  Consider a shared concurrency group or moving mutation off-box.
 
 ## Quarantine lane (`@Quarantined`) — active roster
 
@@ -413,12 +403,6 @@ skipping the hosted gate - the gate staying independent is worth more than the m
   PRs), or (b) accept that stacked PRs are gated socially and only the final retarget-to-master
   needs the gate (the dep check re-runs on base change). Prefer (a); verify the check-run NAME
   matches exactly what the ruleset requires (rulesets match by name).
-- **`BrokerPollerBackpressureTest` highcpu-lane failure (run 30603617471) - DIAGNOSED + FIXED in
-  PR #98** (branch `fix/brokerpoller-backpressure-vacuous-await`): test-design bug (vacuously-true
-  first await masking an unsatisfiable condition), not contention, not a main-code wedge. Root-cause
-  write-up:
-  `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`.
-  **Delete this entry when #98 merges.**
 
 Surfaced while diagnosing PR #56 (docs-only) showing 4 red checks. **None were caused by the docs** —
 all are pre-existing job/gate problems. Only three checks actually gate merge (ruleset on `master`):
@@ -527,6 +511,23 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   check whether it's contention (raise this test's lock-acquisition timeouts / mark heavier) vs a real
   produce/commit-lock stall in the multi-instance-shared-registry path. Do NOT just bump the timeout to go green
   without establishing which (AGENTS.md rule). Not yet reproduced deterministically.
+- **LOAD-TIGHTNESS FLAKE FAMILY (failure group; roster + rates from the 2026-07-30 20-run fork16
+  acceptance hunt on PR #80's branch).** Shared signature: *fast-failing* assertion/timeout under heavy
+  contention, passes isolated/on rerun. Diagnosis rule (from the #68 lesson): classify before touching —
+  this same family is where the #857 deadlock and the drain zombie hid. Distinguish from the two SOLVED
+  classes by their named signatures: nudge race = unwinnable await + `SubscriptionState` reset position
+  past the data (see `latest-reset-nudge-race-...-2026-07-30.md`); drain zombie = `DRAINING`-state poll
+  spin (see `pc-silent-stall-under-contention-2026-07-29.md`). Members:
+  - `MultiInstanceMetricsTest.sameRegistryCanBeReused...` — 1-2s lock timeouts (own entry above; 0/20 in
+    the hunt).
+  - `TransactionTimeoutsTest.produceTimeout` — tight produce-timeout assertion; 1/20 hunt + 1× highcpu runner
+    (2026-07-30).
+  - `LoadTest` — 60s throughput awaits; 1/20.
+  - `DbTest` — postgres container start under contention; 2/20.
+  Baseline for comparison: 15/20 hunt runs fully CLEAN, zero stall-class failures. NOT in this family:
+  `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` (1/20) — per the #68 record its contended failure maps to
+  the REAL **#857** deadlock; the hunt sighting is live confirmation #857 remains present on master-line
+  branches (its fix lives in PR #29 pending rebase — see the uber experiment results doc).
 - **DONE (PR #69): moved the "unit" tests that were actually INTEGRATION tests out of surefire, and now
   ENFORCED so no more can hide.** Two container-based tests were landing in surefire only because they
   weren't in an `integrationTest*` package: `examples…streams.StreamsAppTest` and
@@ -652,12 +653,17 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
   PRs, but Integration / PIT / Kafka-Compat are *not* filtered the same way, so they run and fail on
   changes that touch no code. **Fix:** align the `paths`/`paths-ignore` filters across these jobs so a
   docs-only change runs a consistent (or fully skipped) set.
-- **`PartitionStateCommittedOffsetIT.committedOffsetRemoved` — flaky awaitility timeout.**
-  `ConditionTimeoutException` after 10s (`expected not to be empty within 10 seconds`, `runPcUntilOffset` →
-  `committedOffsetRemoved`). Non-deterministic: within the same PR (#75) it has passed on GitHub-hosted while
-  failing on the self-hosted runner and vice-versa — so it is **not** runner-specific, it's a timing-sensitive
-  integration test. Likely adjacent to the #857 timing work; harden (longer/adaptive await, or fix the
-  underlying timing) rather than mask.
+- **`PartitionStateCommittedOffsetIT.committedOffsetRemoved` [latest] flake + the drain-zombie found en
+  route — BOTH FIXED, landing in PR #80.** The `[latest]` failure was an `auto.offset.reset=latest` nudge
+  race in the harness (fixed via `BrokerIntegrationTest#awaitWithTopicNudge` + deterministic
+  `LatestResetTailNudgeIT` guard); chasing it root-caused a real product defect — a draining consumer
+  busy-spun (~10k poll-loops/s) and zombie-held its partitions, fixed by collapsing the duplicated
+  `ConsumerManager.shutdownRequested` flag into `BrokerPollSystem.runState` (guarded by
+  `BrokerPollSystemDrainTest`). Full write-ups:
+  `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md` and
+  `pc-silent-stall-under-contention-2026-07-29.md`. **Still open (not #80's):** residual load-tightness
+  singles `KafkaSanityTests`, `TransactionMarkersTest`, `MultiInstanceMetricsTest`; production #857 stays
+  #29's territory. Delete this entry when #80 merges.
 - **`VertxTest.failingHttpCall` + `testVertxFunctionFail` — DNS-coupled, brittle on any runner with a local
   resolver. FIXED on #75.** They drove an HTTP call at the *dotless* bogus host `"xxxxxxxxx"` (port 1, via the
   shared `getBadRequest()`) and asserted the failure cause was a **DNS resolution** failure
