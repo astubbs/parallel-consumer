@@ -149,10 +149,18 @@ fallback.
 
 The heavy runner is a many-core Linux box running a Docker LXC with **several runner instances** (one per
 concurrent job), targeted by the [`highcpu`](../.github/workflows/pr-highcpu-fast-feedback.yml)
-workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). Unit, integration,
-performance **and mutation (PIT)** run as separate matrix jobs in parallel. Provisioning it (OpenTofu +
-Ansible) and the on-demand power/boot control are generic infrastructure kept in a separate private
-infra repo, not here.
+workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). **Performance** and the
+**Chaos Pain Suite** run there as separate matrix jobs in parallel. Provisioning it (OpenTofu + Ansible)
+and the on-demand power/boot control are generic infrastructure kept in a separate private infra repo,
+not here.
+
+This lane deliberately carries only work the hosted gate cannot do well. Unit and integration used to run
+here too and were removed: they were not actually faster than the GitHub-hosted gate that already runs
+them, so they only added checks to triage. Mutation (PIT) was removed for a stronger reason - it ran three
+times per PR across the lanes (with a fourth copy configured but dormant), and its full sweep had never
+once completed. One PR-scoped mutation
+lane now lives in `maven.yml`, and the full sweep is manual-only in `mutation-full-sweep.yml` (which does
+target this runner, since it wants every core it can get).
 
 **Trigger:** `pull_request` (same-repo only) plus manual `workflow_dispatch`. The jobs are advisory
 (`continue-on-error`, not required), so when the `[self-hosted, highcpu]` runner is offline the checks

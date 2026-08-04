@@ -19,7 +19,7 @@
 name: local
 
 # PR RUNS DISABLED: the `local` self-hosted runner is offline indefinitely, and its suites
-# (unit / integration / mutation) now run on the always-more-capable high-CPU runner
+# (unit / integration) now run on the always-more-capable high-CPU runner
 # (pr-highcpu-fast-feedback.yml, a strict superset + performance) - so PR-triggered jobs here just
 # queued forever as eternally-pending checks. Disabled at the trigger level so the checks disappear
 # from PRs entirely. Re-enable by restoring `pull_request:` below if the local runner comes back
@@ -57,13 +57,16 @@ jobs:
           # Integration suite forks per-broker (each JVM gets its own Testcontainers Kafka) - reliable + fast.
           - suite-name: "Integration"
             cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
-          # Mutation testing (PIT) is CPU-bound and scales with cores - it runs one minion JVM per core
-          # here (via bin/ci-mutation-test.sh), which is far faster than GitHub's 2-core runner (where a
-          # full internal.* sweep was impractically slow). Advisory only.
-          - suite-name: "Mutation (PIT)"
-            # -Dverbose: temporary, streams per-class/per-mutation progress in the live log. Drop once
-            # we've eyeballed the timing.
-            cmd: "bin/ci-mutation-test.sh -Dverbose=true"
+          # NO MUTATION HERE. This was a FOURTH configured copy of PIT, and a dormant one: three ran per
+          # PR (maven.yml scoped, plus highcpu's scoped and full-sweep entries, two of them the same
+          # scoped computation), while this one only ran on dispatch, because the `pull_request` trigger
+          # above is commented out while the runner is offline.
+          #
+          # It was removed for a hazard rather than for its cost, precisely because it wasn't costing
+          # anything: this checkout is SHALLOW, so when the PR base ref fails to resolve
+          # bin/ci-mutation-test.sh falls back to the FULL sweep - on a laptop, for a sweep that has
+          # never completed anywhere. Re-enabling the trigger would have shipped that silently.
+          # The single per-PR lane is maven.yml; the full sweep is manual-only in mutation-full-sweep.yml.
     steps:
       - name: Checkout
         uses: actions/checkout@v6

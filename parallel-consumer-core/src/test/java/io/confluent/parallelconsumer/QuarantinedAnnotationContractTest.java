@@ -102,7 +102,7 @@ class QuarantinedAnnotationContractTest {
     }
 
     @Test
-    void perPrWorkflowRunsTheAuditAndTheNightlyWorkflowRunsTheLane() throws IOException {
+    void perPrWorkflowRunsTheAuditAndTheLaneWorkflowRunsTheTests() throws IOException {
         String maven = read(REPO_ROOT.resolve(".github/workflows/maven.yml"));
         assertWithMessage("per-PR audit must enforce the registry")
                 .that(maven).contains("bin/check-quarantine-registry.sh");
@@ -110,11 +110,11 @@ class QuarantinedAnnotationContractTest {
         assertWithMessage("the lane RUN must NOT be in maven.yml - it lives in its own workflow " +
                 "with its own trigger set")
                 .that(maven).doesNotContain("bin/quarantined-test.sh");
-        String nightly = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
-        assertThat(nightly).contains("bin/quarantined-test.sh");
-        assertWithMessage("nightly lane fail-fasts on rule violations before spending a test run")
-                .that(nightly).contains("bin/check-quarantine-registry.sh");
-        assertThat(nightly).contains("bin/check-quarantine-owners.sh");
+        String lane = read(REPO_ROOT.resolve(".github/workflows/quarantine-lane.yml"));
+        assertThat(lane).contains("bin/quarantined-test.sh");
+        assertWithMessage("the lane fail-fasts on rule violations before spending a test run")
+                .that(lane).contains("bin/check-quarantine-registry.sh");
+        assertThat(lane).contains("bin/check-quarantine-owners.sh");
     }
 
     /**
