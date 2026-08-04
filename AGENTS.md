@@ -22,7 +22,7 @@ owned that content all along.)
 | **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping (branch/PR → upstream issue/PR, status) | Editorial opinion - that is the `.adoc` beside it |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when they disagree, the manifest wins |
-| **`CHANGELOG.adoc`** | Release notes, the source `README.adoc` is generated from | Anything invisible to users or operators |
+| **`CHANGELOG.adoc`** | Release notes. Frozen up to `== 0.6.0.0`; later sections are generated at release time from the commit log. `README.adoc` links to it and no longer embeds it | Anything invisible to users or operators - and **not** a per-PR chore: do not add entries in a feature PR |
 
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
@@ -184,16 +184,50 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 ## Changelog
 
-`CHANGELOG.adoc` (repo root) is the source of truth for release notes; `README.adoc` regenerates from it at build/release time (never hand-edit `README.adoc` - see Code Style / the generated-README rule). **When you make a user- or operator-visible change, add a `CHANGELOG.adoc` entry in the same PR**, under `== Unreleased` (create that heading if it's missing, above the latest version), in the right subsection: `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, or `=== Build & CI`.
+`CHANGELOG.adoc` holds the release notes. **Nothing about it is a per-PR chore.** Do not add entries
+in a feature PR, and do not maintain an `== Unreleased` section. Everything up to and including
+`== 0.6.0.0` is hand-written and now frozen; from the next release on, each section is **generated at
+release time from the commit log** and then frozen in turn.
 
-- **Do add:** behavioural/API changes, new features or modules, user-affecting bug fixes, and *notable or coordinated* dependency refreshes or any change to a user-facing runtime dependency (especially the Kafka client) - for a library these affect the transitive dependencies and compatibility that consumers inherit.
-- **Do add (`=== Build & CI`):** notable build, CI, tooling and test-infrastructure changes. This is a deeply technical library and its own contributors/agents are a primary audience - a new CI capability, a runner/workflow, a mutation/quarantine mechanism, or a build-enforcement change is worth recording, not just buried in git history.
-- **Don't add:** routine/automated single dependency bumps (Dependabot), no-op internal refactors, and pure formatting - genuinely invisible churn. (Everything with a real effect on how the project builds, tests, releases, or behaves is fair game.)
-- **Reference convention:** a bare `#NN` refers to this fork; write `upstream #NN` for upstream references. **A user-visible entry should cite the issue it addresses** - the reported problem or request, so a reader can follow it back. Fork and upstream issues both count, and the link must be explicit (`.../issues/NN[#NN]`): a bare `#NN` is ambiguous, since GitHub numbers issues and pull requests from one sequence. **Enforced:** the `PR Checklist` gate fails a human-authored PR whose newly *added* entries under `=== Breaking` / `=== Improvements` / `=== Fixes` / `=== Examples` cite no issue. **`=== Build & CI` is exempt** - tooling work here is self-directed and usually has no issue behind it, and we do not create issues just to satisfy a changelog rule. Editing an existing entry doesn't count as adding one. If there genuinely is no issue, opt out with `changelog-ref: N/A - <reason>` on its own line in the PR body (the reason is required, and the declaration must be on its own line - a body merely quoting the syntax mid-prose does not count).
+This removes the file that every PR used to touch - it appeared in 30 of the last 30 master commits,
+dragging the generated `README.adoc` with it - and removes the ordering problem where an entry had to
+cite a PR number that did not exist when the entry was written.
 
-Keep it a changelog people actually read, not a commit log: merge related entries, drop vanity items, and write for a future reader scanning for what changed.
+### What this asks of a commit
 
-**An entry is terse: it highlights the change and points at the detail. It is not the story of the change.** State what changed and what it means for a reader, then link the plan doc, `docs/solutions/` write-up or PR that holds the reasoning. Rationale, evidence, corrections and the route you took to get there belong in those, not here - one entry that reproduces a PR description makes the whole section unscannable, which defeats the point of having it. Rough calibration: entries here run ~90 words; if yours is several times that, you are writing the story. The same applies when *editing* an entry - a correction should replace text, not accrete onto it.
+Nothing extra. The commit log is the raw material, so write it as you already should: a subject that
+says what changed and, where it matters to a user, what it changed *for them*; the diagnosis, the
+experiment and the rejected alternatives in the body. A good commit message is now doing double duty,
+which is a reason to keep writing them properly rather than a new process.
+
+### At release time
+
+An agent reads `git log <last-tag>..HEAD` - full messages, not just subjects - and drafts the release
+section. The judgement it applies, and that a human should re-apply before freezing:
+
+- **The entry test.** Can a *user or operator* observe this without reading our repo - API, behaviour,
+  performance, logs and metrics, or the published artifact? If not, it gets no entry. Most CI,
+  tooling, refactor and docs commits produce nothing, and that is correct: the changelog answers one
+  question, "should I upgrade, and will anything change for me?"
+- **One sentence, about 25 words, then the link.** Name what a reader would have *seen*, and who it
+  hits when that is not everyone - not how the bug worked. An entry that runs to a paragraph is
+  written for its author; an entry too short to tell you whether you are affected (`fix: Paused
+  consumption across multiple consumers`) is no better.
+- **Assemble as a set, not one commit at a time.** Merge related commits into a single entry, drop
+  what turned out not to matter, and rewrite for someone who was not there. This is the part a per-PR
+  entry could never do.
+- **One `=== Build & CI` entry for the whole release** - a short bullet list of the big hitters
+  (quarantine lane, chaos suite, mutation testing) that tells a reader how carefully the library is
+  tested, with the detail left to the log.
+- **Sections:** `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, `=== Examples`,
+  `=== Build & CI`. **Reference convention:** a bare `#NN` is this fork, `upstream #NN` is
+  confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and PRs
+  from one sequence.
+
+**Still live, and now inert:** the `PR Checklist` gate's changelog rule
+(`.github/scripts/changelog-ref-gate.js`) fails a human PR that *adds* a `CHANGELOG.adoc` entry citing
+no issue. Since PRs no longer touch the file, it should never fire - it remains a guard for anyone
+hand-editing the frozen sections.
 
 ## PR Discipline
 

@@ -24,6 +24,6 @@ To re-widen, in order:
   and may already import our surefire `<excludedGroups>`; a throwaway `@Quarantined` *unit* test
   settles it. The warning comment in `bin/ci-mutation-test.sh` may be obsolete.
 - **`withHistory` is blocked on an arcmutate licence, not a flag** - re-verified 2026-08-04 that
-  pitest 1.25.8 errors with *"no history plugin has been installed"*. See
-  [`parked-quarantine-lane-foss.md`](parked-quarantine-lane-foss.md) for the same OSS-licence
-  question in another form.
+  pitest 1.25.8 errors with *"no history plugin has been installed"*. arcmutate is free for
+  open-source projects, but claiming that needs maintainer signup and a licence file at the repo root,
+  which on a public repo means a committed key or a CI secret.
