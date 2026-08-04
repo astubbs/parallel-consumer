@@ -464,18 +464,23 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
             var groupId = clientUtils.getGroupId();
             runPcUntilOffset(offsetResetPolicy, END_OFFSET, END_OFFSET, UniSets.of(), GroupOption.REUSE_GROUP);
 
-            producedCount = producedCount + 1; // run sends one
+            // How many records exist is a question the BROKER can answer, so ask it. This used to be
+            // "+ 1 // run sends one", true when runPcUntilOffset produced a single record up front. It
+            // now nudges from INSIDE the await, one record per poll iteration, so the real count is
+            // 1..10 and load-dependent. Under LATEST, producedCount IS the expected reset offset, so a
+            // wrong count also moved the goalposts for the assertion at the end of the test.
+            producedCount = (int) currentEndOffset();
 
             //
             final String compactedKey = "key-50";
 
             // before compaction
-            checkHowManyRecordsWithKeyPresent(compactedKey, 1, TO_PRODUCE);
+            checkHowManyRecordsWithKeyPresent(compactedKey, 1);
 
             final int triggerRecordsCount = causeCommittedOffsetToBeRemoved(END_OFFSET);
 
             // after compaction
-            checkHowManyRecordsWithKeyPresent(compactedKey, 1, TO_PRODUCE + 2);
+            checkHowManyRecordsWithKeyPresent(compactedKey, 1);
 
             producedCount = producedCount + triggerRecordsCount;
 
@@ -490,11 +495,23 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
         }
     }
 
-    private void checkHowManyRecordsWithKeyPresent(String keyToSearchFor, int expectedQuantityToFind, long searchUpToOffset) {
-        log.debug("Looking for {} records with key {} up to offset {}", expectedQuantityToFind, keyToSearchFor, searchUpToOffset);
-
+    /**
+     * Scans the whole partition and counts the records carrying {@code keyToSearchFor}.
+     *
+     * <p>The search bound is read from the BROKER ({@code endOffsets}) rather than derived from how many
+     * records we think we produced. It used to be a caller-supplied {@code TO_PRODUCE + 2}, which assumed
+     * the partition held exactly the seeded records plus the two compaction records - an assumption
+     * {@code awaitWithTopicNudge} breaks, because it produces one nudge record per poll iteration (1..10
+     * of them, not one). Each extra nudge pushed the compaction records past the window, so the scan
+     * stopped before reaching them and reported them missing. That was this test's CI flake: the records
+     * were always present, the reader just stopped early.
+     */
+    private void checkHowManyRecordsWithKeyPresent(String keyToSearchFor, int expectedQuantityToFind) {
         try (KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(GroupOption.NEW_GROUP);) {
             newConsumer.assign(of(tp));
+            long searchUpToOffset = newConsumer.endOffsets(of(tp)).get(tp);
+            log.debug("Looking for {} records with key {} up to the partition end offset {}",
+                    expectedQuantityToFind, keyToSearchFor, searchUpToOffset);
             newConsumer.seekToBeginning(UniSets.of(tp));
             long positionAfter = newConsumer.position(tp); // trigger eager seek
             assertThat(positionAfter).isEqualTo(0);
@@ -514,12 +531,20 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
         }
     }
 
+    /** The partition's end offset - how many records actually exist, not how many we think we sent. */
+    private long currentEndOffset() {
+        try (KafkaConsumer<String, String> probe = getKcu().createNewConsumer(GroupOption.NEW_GROUP)) {
+            probe.assign(of(tp));
+            return probe.endOffsets(of(tp)).get(tp);
+        }
+    }
+
     @SneakyThrows
     private int causeCommittedOffsetToBeRemoved(long offset) {
         sendCompactionKeyForOffset(offset);
         sendCompactionKeyForOffset(offset + 1);
 
-        checkHowManyRecordsWithKeyPresent("key-" + offset, 2, TO_PRODUCE + 2);
+        checkHowManyRecordsWithKeyPresent("key-" + offset, 2);
 
         List<String> strings = triggerCompactionProcessing();
 
