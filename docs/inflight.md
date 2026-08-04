@@ -4,10 +4,15 @@
 > progress or parked. **Not** an issue tracker and **not** a backlog.
 > Last verified against the repo, GitHub and the working tree: **2026-08-04**, master `bd717241`.
 >
-> **Scope rule: track only what is currently OPEN**, plus the cross-branch context a future branch
-> should inherit. When something CLOSES, **delete** its entry - do not keep it by rewriting it into a
-> "FIXED/DONE" narrative, because making a stale entry *accurate* is the wrong move. Shrink it to the
-> still-open follow-ups it surfaced, or remove it. The durable records live elsewhere:
+> **Scope rule: track only what is currently OPEN** and not already tracked elsewhere, plus the
+> cross-branch context a future branch should inherit. When something CLOSES, **delete** its entry - do
+> not keep it by rewriting it into a "FIXED/DONE" narrative, because making a stale entry *accurate* is
+> the wrong move. Shrink it to the still-open follow-ups it surfaced, or remove it.
+>
+> **Work that your current PR resolves is tracked by that PR - so delete its entry in that PR.** Never
+> leave a "delete this when #NN merges" marker behind on `master`: the merge is exactly the moment
+> nobody is looking at this file, so the marker outlives the work and the next reader inherits a stale
+> entry that reads as live. Deleting it in the PR that fixes it costs nothing and cannot rot. The durable records live elsewhere:
 > `CHANGELOG.adoc` (what shipped), PR bodies and commit
 > messages (history), [`docs/solutions/`](solutions/) (lessons), [`docs/refactoring.md`](refactoring.md)
 > (deferred internal work), [`docs/QUARANTINED_TESTS.md`](QUARANTINED_TESTS.md) (quarantine roster),
@@ -56,6 +61,16 @@ verified *not* to fix the drain defect, and the uber-branch experiment showed th
 cleanly with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadlockTest`
 failed once under the 20-run stress hunt (see the load-tightness family below, where it is
 explicitly *not* a member). #29 needs a rebase and a retarget before any of that can land.
+
+**Gated on #29: validating that thread-parallel integration tests are actually safe again.** #68 made
+the integration suite reliable by *forking* per broker (`forkCount=4`), which sidesteps the deadlock
+rather than proving it gone - the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure it
+was hiding is the real upstream #857 bug. So the deferred "Step 2" is to re-run with
+`-Dparallel-tests=true` on a shared broker **after #29 lands**, and see whether it stays green. One
+probe on the highcpu runner already hinted it might (forked unit suite green with threads enabled;
+the integration red was the separate `PartitionStateCommittedOffsetIT` flake, since fixed by #80), but
+one green run is not proof. Note forking stays the default regardless: fork×threads measured no
+faster than fork alone, because forking already saturates the cores.
 
 ### #57 - PCMetrics leak (upstream #859) + cherry-picks
 
