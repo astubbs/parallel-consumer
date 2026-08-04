@@ -189,11 +189,6 @@ CI-enforced against the `@Quarantined` annotations in both directions.
 - **`bin/ci-integration-test.sh` in the review job is granted but unproven** against the 30-minute cap -
   Testcontainers on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than a
   misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
-- **Stacked PRs are ungated.** The only ruleset targets the default branch + `master-confluent`, so a PR
-  whose base is another feature branch bypasses *every* required check, not just the dependency gate
-  (observed: #87 failed the dep check yet showed mergeable). Fix: add a second ruleset targeting `**`
-  requiring just the dependency check (it passes trivially on non-stacked PRs) - and verify the
-  check-run name matches exactly, since rulesets match by name.
 - **`Kafka Compat (experimental 4.x)` is disabled** (`if: false` in `maven.yml`) - it cannot compile
   under kafka-clients 4.x until the 0.7.x migration. Re-enable with `if: github.event_name ==
   'pull_request'` when that work starts.
@@ -284,16 +279,3 @@ Collisions are listed at the top of this file. Ranked backlog and full verdicts 
   rendered view; **one issue per invocation (no batch mode) and a first-class dry-run** that prints exactly
   what would be created or updated. First candidates once the PR queue drains: `upstream #857`, `#909`,
   `#893`/`#905`, `#912`.
-- **Hardened "concede optimizer"** - letting the required GitHub-hosted gate report green without running
-  its tests when the self-hosted highcpu runner already passed the same suite for the same SHA. Removed
-  from #75 by review, re-introduced and dropped again on #80. **Do not revive without fixing all of:**
-  (1) *gate spoof* - matching on free-text workflow name + job prefix + head SHA lets a PR add its own
-  trivially-passing workflow named `highcpu` and skip the real tests; bind to the workflow's immutable
-  path/ID and verify `event == 'pull_request'`, head repository and actor. (2) *timeout* - a 600s wait
-  against a 15-minute job budget can burn 10 minutes before falling back; only concede to an
-  already-complete run. (3) *non-equivalent contracts* - conceding hosted Integration (`forkCount=4`) to
-  highcpu (`forkCount=8`) is not like-for-like. (4) *silent name drift* - names hand-synced across three
-  files with a `KEEP IN SYNC` comment; needs a drift self-check. (5) *invisibility* - a conceded skip must
-  land in `$GITHUB_STEP_SUMMARY` with a link to the trusted run. **Recommended instead: keep `highcpu`
-  purely advisory.** The win is fast feedback, not skipping the hosted gate; the gate staying independent
-  is worth more than the minutes saved.
