@@ -255,6 +255,8 @@ This is a maintained hard fork of the effectively-archived `confluentinc/paralle
 
 **When you start work that maps to an upstream issue/PR, add or update its entry in `upstream-map.yaml`** (don't just note it in prose). Design follows Debian DEP-3, Yocto `Upstream-Status:`, and OpenShift's `UPSTREAM:` fork conventions.
 
+**Keeping it in sync is the agent's job, and it does not stop at "start work".** Nothing automated checks the *fork* side: `upstream-map.py validate` only checks the schema, and `upstream-sweep.sh` only watches upstream — so a manifest that says `prs: []` while a fork PR is open still passes every check, and the mapping quietly rots (a 2026-08-04 audit found five such entries). Update the entry **at every lifecycle transition of your own work**, in the same commit that causes it: opening a PR (`prs:` + `status: pr-open`), finishing on a branch without a PR (`status: ready`), merging (`merged`), releasing (`released`), abandoning (`superseded`/`wontfix`). Clear a `todo:` line when you do the thing, and add one for anything you leave behind — `upstream-map.py todo` is what a future session reads to find the loose ends. Do not park these transitions in `docs/inflight.md`: that file is transient notes, this manifest is the source of truth.
+
 ### Branch naming
 
 Branches encode the upstream number: `bugs/857-...`, `fix/909-...`, `cherry-pick/893-...`, `upstream-pr-905`. Keep this — it makes the mapping greppable and matches the manifest's `fork.branches`.
