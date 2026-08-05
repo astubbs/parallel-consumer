@@ -155,5 +155,19 @@ wants exactly that kind of visibility - which records actually land at which off
 cherry-picking it rather than re-deriving the logging config. Check whether it still applies before
 trusting it; it predates several merges to master.
 
+**`docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md` - the
+fix that CAUSED this bug, and the first thing to read.** It is the SOLVED write-up for the previous
+`[1] latest` failure on this same test: with `auto.offset.reset=latest`, a single pre-await nudge record
+could be leapfrogged by the offset reset resolving after it, leaving the consumer positioned past every
+record that would ever exist and the await unwinnable at any timeout. The fix was to nudge from *inside*
+the await instead of once up front.
+
+That is precisely where these nudge records come from. **This bug is the second-order cost of that
+fix:** moving the nudge inside the await made its count unbounded (one per poll iteration) while two
+call sites went on assuming exactly one. Neither fix is wrong - the earlier one solved a real
+unwinnable-await race - but the pair is a clean example of a fix changing an invariant that
+arithmetic elsewhere silently depended on. `AGENTS.md` says to check `docs/solutions/` before treating
+a problem as novel; here it would have named the mechanism immediately.
+
 - `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md` - the drain-zombie
   write-up that landed with #80, and the reason "it's just a flake" gets no benefit of the doubt here.
