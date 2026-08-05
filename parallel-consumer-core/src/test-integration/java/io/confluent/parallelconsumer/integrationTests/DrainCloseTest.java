@@ -1,18 +1,15 @@
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 package io.confluent.parallelconsumer.integrationTests;
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.Consumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -21,31 +18,18 @@ import java.util.concurrent.atomic.AtomicLong;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static java.lang.Thread.sleep;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
-import static org.testcontainers.shaded.org.hamcrest.Matchers.equalTo;
-import static org.testcontainers.shaded.org.hamcrest.Matchers.is;
+import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.is;
 
 @Slf4j
 public class DrainCloseTest extends BrokerIntegrationTest<String, String> {
 
-    Consumer<String, String> consumer;
-
-    ParallelConsumerOptions<String, String> pcOpts;
     ParallelEoSStreamProcessor<String, String> pc;
 
     @BeforeEach
     void setUp() {
-        setupTopic();
-        consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
-
-        pcOpts = ParallelConsumerOptions.<String, String>builder()
-                .consumer(consumer)
-                .ordering(PARTITION)
-                .build();
-
-        pc = new ParallelEoSStreamProcessor<>(pcOpts);
-
-        pc.subscribe(UniSets.of(topic));
+        pc = startPcOnNewTopic(options -> options.ordering(PARTITION));
     }
 
     @Test

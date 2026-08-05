@@ -1,0 +1,9 @@
+# Custom labels for self-hosted runners, so actionlint does not flag
+# `runs-on: [self-hosted, <label>]` as an unknown label.
+# See self-hosted-tests.yml (performance), pr-highcpu-fast-feedback.yml (highcpu),
+# pr-local-fast-feedback.yml (local) and docs/SELF_HOSTED_RUNNER.md.
+self-hosted-runner:
+  labels:
+    - performance
+    - highcpu
+    - local

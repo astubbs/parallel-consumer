@@ -1,12 +1,9 @@
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 package io.confluent.parallelconsumer.integrationTests.utils;
-
-/*-
- * Copyright (C) 2020-2022 Confluent, Inc.
- */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
@@ -16,28 +13,34 @@ import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
 import io.confluent.parallelconsumer.state.ModelUtils;
 import lombok.Getter;
 import lombok.Setter;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import one.util.streamex.IntStreamEx;
 import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.IsolationLevel;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.KafkaContainer;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -62,6 +65,14 @@ public class KafkaClientUtils implements AutoCloseable {
     public static final int MAX_POLL_RECORDS = 10_000;
     public static final String GROUP_ID_PREFIX = "group-1-";
 
+    /**
+     * Gives every PC built here a unique id so its threads ({@code pc-control-PCn}, {@code pc-broker-poll-PCn})
+     * and the {@code pcId} MDC are attributable to one instance in the logs. Without it, concurrent PC
+     * instances all log under the same generic thread names and are impossible to tell apart - which made
+     * the #857 silent-stall investigation much harder than it needed to be.
+     */
+    private static final AtomicInteger PC_INSTANCE_COUNTER = new AtomicInteger();
+
     class PCVersion {
         public static final String V051 = "0.5.1";
     }
@@ -78,12 +89,26 @@ public class KafkaClientUtils implements AutoCloseable {
     @Getter
     private KafkaProducer<String, String> producer;
 
+    /**
+     * volatile + nulled on {@link #close()}: the ambient probe's sampler daemon thread reads this via
+     * {@link #adminIfOpen()} before each admin read, so it must see both the open() assignment and the
+     * close() clear - otherwise a still-running sampler can call into a closed client.
+     */
     @Getter
-    private AdminClient admin;
+    private volatile AdminClient admin;
+
+    /**
+     * The admin client only while inside the {@link #open()}..{@link #close()} window, else empty.
+     * The lifecycle-safe accessor for background samplers (the ambient probe): empty means "no usable
+     * admin client right now - skip this sample". Mid-test code can keep using {@link #getAdmin()}.
+     */
+    public Optional<AdminClient> adminIfOpen() {
+        return Optional.ofNullable(admin);
+    }
 
     @Getter
     @Setter
-    private String groupId = GROUP_ID_PREFIX + nextInt();
+    private volatile String groupId = GROUP_ID_PREFIX + nextInt();
 
     /**
      * todo docs
@@ -151,8 +176,13 @@ public class KafkaClientUtils implements AutoCloseable {
             producer.close();
         if (consumer != null)
             consumer.close();
-        if (admin != null)
-            admin.close();
+        if (admin != null) {
+            try {
+                admin.close();
+            } finally {
+                admin = null; // publish "closed" to sampler threads via adminIfOpen(), even if close() throws; open() reassigns per test
+            }
+        }
     }
 
     public enum GroupOption {
@@ -258,16 +288,56 @@ public class KafkaClientUtils implements AutoCloseable {
         }
     }
 
-    @SneakyThrows
+    /**
+     * Create a single named topic and block until the broker confirms it exists, tolerating a
+     * topic that already exists (idempotent).
+     * <p>
+     * Prefer this over calling {@code getAdmin().createTopics(...)} directly: it waits for creation
+     * to actually complete, avoiding the flaky "topic not ready yet" races a bare or short-timeout
+     * call produces on a cold or loaded CI broker.
+     */
+    public CreateTopicsResult createTopic(String name, int numPartitions) {
+        return createTopicsBlocking(UniLists.of(new NewTopic(name, numPartitions, (short) 1)));
+    }
+
     public List<NewTopic> createTopics(int numTopics) {
         List<NewTopic> newTopics = IntStreamEx.range(numTopics)
                 .mapToObj(i
                         -> new NewTopic("in-" + i + "-" + nextInt(), empty(), empty()))
                 .toList();
-        getAdmin().createTopics(newTopics)
-                .all()
-                .get();
+        createTopicsBlocking(newTopics);
         return newTopics;
+    }
+
+    /**
+     * Generous bound for topic creation. Far above the ~sub-second a healthy broker needs (the old
+     * 1s bound here was the flake), but bounded so a genuinely unresponsive broker fails fast with a
+     * clear message instead of hanging the test until the outer CI timeout.
+     */
+    private static final int TOPIC_CREATE_TIMEOUT_SECONDS = 60;
+
+    /**
+     * Shared blocking topic create: submits the topics and waits for the broker to confirm creation.
+     * Tolerates {@link TopicExistsException} so callers can "ensure" a topic idempotently; any other
+     * failure propagates as a {@link RuntimeException} rather than being silently swallowed.
+     */
+    private CreateTopicsResult createTopicsBlocking(List<NewTopic> newTopics) {
+        CreateTopicsResult result = getAdmin().createTopics(newTopics);
+        try {
+            result.all().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (TimeoutException e) {
+            throw new RuntimeException("Timed out after " + TOPIC_CREATE_TIMEOUT_SECONDS
+                    + "s waiting for the broker to create topics " + newTopics, e);
+        } catch (ExecutionException e) {
+            if (!(e.getCause() instanceof TopicExistsException)) {
+                throw new RuntimeException(e);
+            }
+            // topic already exists — idempotent create, fine
+        }
+        return result;
     }
 
     public List<String> produceMessages(String topicName, long numberToSend) throws InterruptedException, ExecutionException {
@@ -375,6 +445,9 @@ public class KafkaClientUtils implements AutoCloseable {
                 .build());
 
         pc.setTimeBetweenCommits(ofSeconds(1));
+
+        // unique per-instance id so concurrent PCs are distinguishable in the logs (see PC_INSTANCE_COUNTER)
+        pc.setMyId(Optional.of("PC" + PC_INSTANCE_COUNTER.incrementAndGet()));
 
         // sanity
         return pc;

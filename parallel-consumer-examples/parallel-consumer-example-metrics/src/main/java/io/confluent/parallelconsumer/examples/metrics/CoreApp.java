@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.examples.metrics;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.sun.net.httpserver.HttpServer;
@@ -12,7 +13,7 @@ import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.binder.kafka.KafkaClientMetrics;
 import io.micrometer.prometheus.PrometheusConfig;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
-import lombok.NoArgsConstructor;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -35,17 +36,36 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * Basic core examples
  */
 @Slf4j
-@NoArgsConstructor
 public class CoreApp {
     public static final String METRICS_ENDPOINT = "/prometheus";
     final PrometheusMeterRegistry meterRegistry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+    @Getter
     String inputTopic = "input-topic";
     String outputTopic = "output-topic-" + RandomUtils.nextInt();
     private final Map<String, String> envVars = System.getenv();
 
     private KafkaClientMetrics kafkaClientMetrics;
 
-    Consumer<String, String> getKafkaConsumer() {
+    /**
+     * A consumer supplied via the constructor (e.g. a mock in tests), or {@code null} to build a real one from
+     * the environment. Constructor injection replaces the old subclass-and-override-{@code getKafkaConsumer()}
+     * test seam, which relied on package-private access and broke once the test moved to a separate
+     * {@code integrationTests} package.
+     */
+    private final Consumer<String, String> injectedConsumer;
+
+    public CoreApp() {
+        this.injectedConsumer = null;
+    }
+
+    protected CoreApp(Consumer<String, String> injectedConsumer) {
+        this.injectedConsumer = injectedConsumer;
+    }
+
+    private Consumer<String, String> getKafkaConsumer() {
+        if (injectedConsumer != null) {
+            return injectedConsumer;
+        }
         final var props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, envVars.getOrDefault("BOOTSTRAP_SERVERS", "kafka:9092"));
         props.put(ConsumerConfig.GROUP_ID_CONFIG, envVars.getOrDefault("GROUP_ID", "pc-instance"));
@@ -77,7 +97,7 @@ public class CoreApp {
     }
 
     @SuppressWarnings("UnqualifiedFieldAccess")
-    void run() {
+    public void run() {
         this.parallelConsumer = setupParallelConsumer();
         postSetup();
 
@@ -115,7 +135,7 @@ public class CoreApp {
     }
     // end::example[]
 
-    void close() {
+    public void close() {
         this.kafkaClientMetrics.close();
         this.parallelConsumer.close();
         this.metricsEndpointExecutor.shutdownNow();

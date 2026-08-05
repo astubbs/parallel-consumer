@@ -7,6 +7,57 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+    # Collapse routine non-major bumps into ONE reviewable PR per run instead of
+    # a swarm of one-PR-per-dependency. This is the "big dep upgrade PR" we thought
+    # we already had - we never actually configured grouping, so every dep came in
+    # separately (that's how jackson-databind arrived as its own PR #76).
+    open-pull-requests-limit: 10
+    groups:
+      maven-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Deps we manage by hand or that are deferred majors. Declaring the ignores HERE
+    # (version-controlled + self-documenting) is better than `@dependabot ignore` PR
+    # comments, whose ignore conditions live invisibly in Dependabot's state and give
+    # future maintainers no clue why a dependency silently stopped updating.
+    # Full rationale for each: docs/inflight/deps-deferred-majors.md.
+    ignore:
+      # Module-local, test-scoped pin coupled to WireMock's Jackson. Bumping it
+      # globally forces WireMock onto an incompatible Jackson and breaks VertxTest.
+      # Managed by hand in the curated versions-maven-plugin sweep instead.
+      # See parallel-consumer-example-metrics/pom.xml.
+      - dependency-name: "com.fasterxml.jackson.core:jackson-databind"
+      # Frozen workaround pin, NOT a dep to track upward: byte-buddy is held at
+      # mockito's version because wiremock-jre8 2.35.2 drags in an ancient byte-buddy
+      # that breaks mockito (MockitoInitializationException). A bump buys nothing and
+      # risks re-breaking it. Remove this pin entirely when wiremock moves to 3.x
+      # (which drops the stale transitive) - do not bump it in the meantime.
+      - dependency-name: "net.bytebuddy:*"
+      # micrometer 1.13+ renamed the Prometheus registry package -> breaks CoreApp.
+      # Allow patches within the pinned line; block minor/major until CoreApp migrates.
+      - dependency-name: "io.micrometer:*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # Deferred majors - each needs a deliberate migration, not a Dependabot PR.
+      - dependency-name: "org.apache.kafka:*"          # Kafka 4 (needs Java 11 baseline)
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.junit.jupiter:*"         # JUnit 6 (needs Java 17 + ArchUnit engine)
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.junit.platform:*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.testcontainers:*"        # Testcontainers 2.x
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "io.vertx:*"                  # Vert.x 5
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "io.smallrye.reactive:mutiny" # Mutiny 3
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "com.github.tomakehurst:wiremock-jre8" # WireMock 3 (artifact renamed)
+        update-types: ["version-update:semver-major"]
 # Don't use any github-actions anymore
 #  - package-ecosystem: "github-actions"
 #    directory: "/"

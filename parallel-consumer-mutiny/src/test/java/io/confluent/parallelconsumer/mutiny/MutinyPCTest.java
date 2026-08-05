@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.mutiny;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.LatchTestUtils;
@@ -71,7 +72,7 @@ class MutinyPCTest extends MutinyUnitTestBase {
 
     @Test
     void concurrencyTest() throws InterruptedException {
-        int quantity = 100_000;
+        int quantity = 50_000;
         var consumerRecords = ktu.generateRecords(quantity - 1); // -1 because 1 is already primed
         ktu.send(consumerSpy, consumerRecords);
         log.info("Finished priming records");

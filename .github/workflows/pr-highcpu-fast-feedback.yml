@@ -1,0 +1,138 @@
+# Optional, NON-GATING fast feedback on a self-hosted high-CPU runner (many-core Linux, native Docker).
+#
+# Runs the two suites that this runner is genuinely better at - performance and chaos - as separate
+# matrix jobs. The runner may be offline at any time, so these jobs are FYI only: continue-on-error +
+# not-required means an offline runner never blocks a merge (the required gate stays GitHub-hosted, see
+# maven.yml).
+#
+# WHAT WAS REMOVED, AND WHY. This lane is for work the hosted gate cannot do well, not for a second copy
+# of it. A duplicate check that says nothing new is not free: it is another red-or-pending tick to triage
+# on every PR, and it trains people to skim the checks list.
+#
+#   - Unit + Integration: measured as NOT faster here than the GitHub-hosted gate that already runs them
+#     (maven.yml). Same suites, same verdict, extra noise - so the hosted gate owns them outright.
+#   - Mutation (PIT), both entries: PIT ran THREE times per PR (this matrix twice, plus maven.yml), two
+#     of them the same scoped computation - and a fourth copy sat in the `local` lane, dormant only
+#     because that workflow's pull_request trigger is commented out. There is now exactly
+#     ONE per-PR mutation lane - maven.yml -> "Mutation Tests (PIT, PR-scoped)". The full sweep moved to
+#     mutation-full-sweep.yml (manual, and retargeted off internal.* - see there): the internal.* sweep
+#     that used to run here had never once completed, so it scored ZERO mutants while holding a 16-core
+#     runner for its whole 60-minute timeout on every push.
+#     See docs/plans/2026-08-03-002-mutation-testing-plan.md.
+#
+# What remains is what actually needs the cores: Performance (meaningless on 2 cores) and the Chaos Pain
+# Suite (concurrency scenarios that need real parallelism to provoke anything).
+#
+# TRIGGER: `pull_request` (same-repo only - see SECURITY below) plus manual `workflow_dispatch`. These
+# jobs are advisory (continue-on-error + not-required), so if the `[self-hosted, highcpu]` runner is
+# offline the checks simply sit pending and NEVER block a merge - the required gate stays GitHub-hosted
+# (maven.yml). Run on demand any time: `gh workflow run highcpu --ref <branch>` or Actions -> highcpu.
+#
+# Performance is a CORRECTNESS gate here, not a benchmark: its timing is noisy when it shares the box with
+# chaos (accurate benchmarking belongs in a separate isolated/on-demand run - highcpu solo is ~1m54 vs
+# GitHub ~3m50).
+#
+# Tuning notes kept for whoever re-adds a forked suite here, since they were measured on this 16c/32t box
+# and are otherwise lost: unit forks 1-per-core (1C=32; 2C is flat, so 1C is the knee), and integration
+# caps at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism). Note that
+# neither made this lane beat the hosted gate, which is why they are not here.
+#
+# SECURITY (public repo + self-hosted runner): guarded to SAME-REPO pull requests only, so a fork PR's
+# untrusted code NEVER runs on the self-hosted machine (RCE). pull_request (no secrets), never pull_request_target.
+#
+# IMPORTANT - this `if:` guard lives IN the PR-head workflow file, so a fork PR could edit it out in the same
+# PR. The real backstop is a GitHub repo setting, NOT this file: Settings -> Actions -> General -> "Fork pull
+# request workflows from outside collaborators" MUST be set to "Require approval for ALL outside collaborators"
+# (the default only gates FIRST-TIME contributors - a fork author with one prior merged PR would otherwise be
+# auto-approved and could reach this self-hosted runner). Keep that setting on, or don't trigger on
+# `pull_request` at all (mirror self-hosted-tests.yml). See docs/SELF_HOSTED_RUNNER.md.
+
+name: highcpu
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# NOTE: concurrency is JOB-level (per suite), not workflow-level - see the job's `concurrency:` block.
+# A single workflow-level group made every new push's fast suites queue ~5 minutes behind the previous
+# run's slowest job: cancel-in-progress signalled it, but a maven JVM tree rides out the runner's full
+# cancellation grace before force-kill, and the group only frees once the old run fully completes.
+# Per-suite groups mean each push's suites start within seconds, queueing only behind their own kind.
+# (The original offender was the Mutation job, which no longer runs here - but the property is general
+# and worth keeping: any slow-dying suite would otherwise stall the fast ones.)
+
+permissions:
+  contents: read
+
+jobs:
+  highcpu-build-test:
+    # Check name shows as "highcpu / <suite> (optional)" - except entries with optional: "false"
+    # (Chaos Pain Suite), which show bare and are NOT continue-on-error: a chaos RED is a real
+    # finding and must show red, not neutral.
+    name: "${{ matrix.optional == 'false' && matrix.suite-name || format('{0} (optional)', matrix.suite-name) }}"
+    # Same-repo PRs only: fork PRs are untrusted and must NOT execute on the self-hosted machine.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, highcpu]
+    continue-on-error: ${{ matrix.optional != 'false' }}   # optional / FYI - except chaos (see name comment)
+    timeout-minutes: 60
+    # Per-suite superseding: a new push cancels only ITS OWN suite's previous run, so fast suites start
+    # within seconds instead of queueing behind the old run's slowest-dying job (see header note).
+    concurrency:
+      group: highcpu-${{ matrix.suite-name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false           # each suite is independent
+      matrix:
+        include:
+          # (Unit, Integration and two Mutation entries used to live here - see WHAT WAS REMOVED in the
+          # header. If you re-add a forked suite, the commands were:
+          #   Unit:        bin/ci-unit-test.sh -Dsurefire.forkCount=1C
+          #   Integration: bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true
+          # and note -Dsurefire.forkCount, NOT a bare -DforkCount: the pom pins
+          # <forkCount>${surefire.forkCount}</forkCount>, so surefire only honours the namespaced
+          # property and a bare -DforkCount is silently ignored.)
+          #
+          # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
+          - suite-name: "Performance"
+            cmd: "bin/performance-test.sh"
+          # Chaos Pain Suite: the per-PR ambient tripwire (moved here from chaos-pain.yml so all
+          # self-hosted per-PR feedback shares one lane and its per-suite superseding concurrency).
+          # NOT optional: a chaos RED is a real finding. bin/chaos-test.sh excludes @Quarantined
+          # scenarios (the Quarantine Lane owns them) and flags the zero-test window loudly in the
+          # job summary. On-demand seeded hunts stay in chaos-pain.yml (workflow_dispatch).
+          - suite-name: "Chaos Pain Suite"
+            cmd: "bin/chaos-test.sh"
+            optional: "false"
+    steps:
+      - name: Checkout
+        # Shallow is fine: the only suite that needed full history was the scoped Mutation job (it diffs
+        # vs the PR base to pick changed classes), and mutation no longer runs here - see header. No other
+        # suite here reads git history, and no build plugin derives version info from it.
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: ''
+
+      - name: Show environment
+        run: |
+          java -version
+          echo "cpus: $(nproc)"
+          docker --version
+          docker info | head -20
+
+      - name: ${{ matrix.suite-name }} tests
+        run: time ${{ matrix.cmd }}
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: highcpu-fast-feedback-reports-${{ matrix.suite-name }}-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 14

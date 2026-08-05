@@ -1,0 +1,142 @@
+# Heavy test suites (integration + performance) run on a self-hosted runner so
+# we can throw real hardware at them and run the tests concurrently.
+#
+# Why this exists:
+#   The integration and performance suites are I/O-bound (Kafka via
+#   TestContainers) and slow. The `ci` Maven profile runs them sequentially
+#   (JUnit concurrency disabled - likely resource contention on GitHub's 2-core
+#   hosted runners). A self-hosted machine has the cores and RAM to parallelise,
+#   so we do - but each suite uses a different, suite-appropriate mechanism (see
+#   the matrix below):
+#     - integration: forked per-broker mode (-DforkCount=4 -DreuseForks=true) -
+#       each JVM fork gets its own broker, so tests never contend one shared
+#       broker. Reliable AND parallel. (Thread-parallel on a shared broker is
+#       flaky - it surfaced a real deadlock, #857.)
+#     - performance: in-JVM thread parallelism (-Dparallel-tests=true).
+#   See docs/SELF_HOSTED_RUNNER.md.
+#
+# Triggers:
+#   - workflow_dispatch (manual)   - primary trigger
+#   - schedule (weekly)            - automated regression check
+#   - NOT on PRs                   - self-hosted runner + untrusted PR code on a
+#                                    home machine = remote code execution. Never.
+#
+# Runner: any self-hosted machine labelled "performance" - e.g. a Proxmox Linux
+# VM or a Mac laptop with Docker. Targeting only the custom "performance" label
+# (not an OS label) means whichever machine is online picks up the job, giving
+# you redundancy across boxes. The steps below are OS-agnostic (bash + the .sh
+# scripts), so a Linux or macOS runner both work. See docs/SELF_HOSTED_RUNNER.md.
+#
+# NOTE: there is no automatic fallback to GitHub-hosted runners. If no
+# "performance" runner is online, a triggered run just queues until one comes
+# online (or the run is cancelled). Your PR gate is unaffected - integration and
+# performance suites always also run on GitHub-hosted runners via maven.yml.
+
+name: Self-Hosted Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      kafka_version:
+        description: 'Kafka version to test against (default: project default)'
+        required: false
+        type: string
+        default: ''
+      suite:
+        description: 'Which suite(s) to run'
+        required: false
+        type: choice
+        default: 'both'
+        options:
+          - both
+          - integration
+          - performance
+  schedule:
+    # Weekly on Sunday at 02:00 UTC
+    - cron: '0 2 * * 0'
+
+concurrency:
+  # One heavy run at a time per branch - they saturate the runner.
+  group: self-hosted-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: "${{ matrix.name }} (self-hosted)"
+    # OS-agnostic: any online runner labelled "performance" (Linux VM or Mac).
+    runs-on: [self-hosted, performance]
+    timeout-minutes: 180
+    strategy:
+      # A single runner processes matrix entries one at a time; that's fine -
+      # integration parallelises across JVM forks (own broker each); performance
+      # uses in-JVM thread parallelism.
+      fail-fast: false
+      matrix:
+        include:
+          - suite: integration
+            name: "Integration Tests"
+            cmd: "bin/ci-integration-test.sh"
+            # Forked (process-parallel) mode: each fork gets its own broker, so tests
+            # don't contend one shared broker. Reliable AND parallel. See
+            # docs/solutions/test-flakiness/. (Thread-parallel -Dparallel-tests=true is
+            # flaky on the shared broker - it surfaced a real deadlock, #857.)
+            args: "-DforkCount=4 -DreuseForks=true"
+          - suite: performance
+            name: "Performance Tests"
+            cmd: "bin/performance-test.sh"
+            args: "-Dparallel-tests=true"
+    steps:
+      - name: Skip if not selected
+        id: gate
+        run: |
+          SEL='${{ github.event.inputs.suite || 'both' }}'
+          if [ "$SEL" = "both" ] || [ "$SEL" = "${{ matrix.suite }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Suite '${{ matrix.suite }}' not selected (input: $SEL) - skipping."
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # Don't cache here - self-hosted runners persist .m2 across runs already.
+          cache: ''
+
+      - name: Show environment
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          java -version
+          docker --version
+          docker info | head -20
+
+      - name: Run ${{ matrix.name }}
+        if: steps.gate.outputs.run == 'true'
+        env:
+          KAFKA_VERSION: ${{ github.event.inputs.kafka_version }}
+        run: |
+          # Per-suite parallelism mode (see matrix `args`): integration uses forked
+          # per-broker mode (reliable); performance uses thread-parallel.
+          args=(${{ matrix.args }})
+          if [ -n "$KAFKA_VERSION" ]; then
+            args+=(-Dkafka.version="$KAFKA_VERSION")
+          fi
+          ${{ matrix.cmd }} "${args[@]}"
+
+      - name: Upload test reports
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.suite }}-reports-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 30

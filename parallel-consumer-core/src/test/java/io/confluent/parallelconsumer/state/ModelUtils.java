@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;

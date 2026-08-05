@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.mutiny;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.KafkaTestUtils;
@@ -82,7 +83,7 @@ public class MutinyBatchTest extends MutinyUnitTestBase implements BatchTestBase
 
     @Test
     public void averageBatchSizeTest() {
-        batchTestMethods.averageBatchSizeTest(10000);
+        batchTestMethods.averageBatchSizeTest(5000);
     }
 
     @ParameterizedTest

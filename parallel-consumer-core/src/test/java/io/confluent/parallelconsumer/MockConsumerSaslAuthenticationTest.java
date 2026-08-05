@@ -2,9 +2,9 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LongPollingMockConsumer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
@@ -15,7 +15,7 @@ import org.apache.kafka.common.errors.SaslAuthenticationException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.testcontainers.shaded.org.awaitility.Awaitility;
+import org.awaitility.Awaitility;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -42,9 +42,9 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  */
 @Slf4j
 @Timeout(60000L)
-class MockConsumerTestWithSaslAuthenticationException {
+class MockConsumerSaslAuthenticationTest {
 
-    private final String topic = MockConsumerTestWithSaslAuthenticationException.class.getSimpleName();
+    private final String topic = MockConsumerSaslAuthenticationTest.class.getSimpleName();
 
     // Field so @AfterEach can close it. This class doesn't extend
     // AbstractParallelEoSStreamProcessorTestBase, so no base-class cleanup runs.

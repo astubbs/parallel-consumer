@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
@@ -44,7 +45,7 @@ import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUt
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.mockito.ArgumentMatchers.any;
-import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
+import static org.awaitility.Awaitility.await;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**

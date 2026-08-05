@@ -2,11 +2,36 @@
 
 Project context for AI coding agents (Claude Code, Copilot, Cursor, etc.).
 
+## Where things live (read this before concluding something isn't tracked)
+
+Documentation is split by *purpose*, and the split is enforced by convention rather than tooling - so
+the commonest mistake is not misreading a doc, it is **never opening it**. Before you conclude that
+some category of work is untracked, check this table. (Real example: a whole triage doc was once
+written because only `docs/inflight/` was grepped, duplicating `docs/refactoring.md`, which had
+owned that content all along.)
+
+| Document | Owns | Explicitly NOT for |
+|---|---|---|
+| **`AGENTS.md`** (this file) | Conventions, build/test commands, and the rules agents must follow | Work items of any kind |
+| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and **never** a committed index file, which every PR would edit |
+| **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** in their own release-gated section, and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
+| **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
+| **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with frontmatter for searching | Open problems |
+| **`docs/plans/`** | Dated plan and investigation documents for a specific piece of work | Durable reference - a plan goes stale once its work lands |
+| **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
+| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping (branch/PR → upstream issue/PR, status) | Editorial opinion - that is the `.adoc` beside it |
+| **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when they disagree, the manifest wins |
+| **`CHANGELOG.adoc`** | Release notes. Frozen up to `== 0.6.0.0`; later sections are generated at release time from the commit log. `README.adoc` links to it and no longer embeds it | Anything invisible to users or operators - and **not** a per-PR chore: do not add entries in a feature PR |
+
+Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
+**already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
 ## Overview
 
 Parallel Consumer is a Java library that enables concurrent message processing from Apache Kafka with a single consumer, avoiding the need to increase partition counts. It maintains ordering guarantees (by partition or key) while processing messages in parallel.
 
-This is a community-maintained fork of `confluentinc/parallel-consumer` (the upstream is no longer actively maintained), published to Maven Central as `io.github.astubbs.parallelconsumer`.
+This is a community-maintained fork of `confluentinc/parallel-consumer` (the upstream is no longer actively maintained), published to Maven Central as `bz.stub.parallelconsumer`.
 
 ## Build Requirements
 
@@ -54,10 +79,70 @@ bin/performance-test.sh
 
 ## Testing
 
+- **⚠️ Be EXTREMELY careful modifying tests to make them pass — especially under parallelism/stress.** We do
+  **not** work from a position of 100% confidence in the main code. A test that fails under concurrent load
+  or when the broker is contended may be exposing a **real main-code bug that only manifests under stress**,
+  not a flaky test. So **never** loosen a timeout, weaken/remove an assertion, add a retry, or serialize a
+  test just to get green until you have first determined *why* it fails: is it a **test-infra contention
+  artifact** (e.g. one shared TestContainers broker overloaded by many parallel tests) or a **genuine
+  concurrency bug** in the library? Prefer diagnostics that *separate* those (e.g. giving a test an
+  uncontended/own broker: if it then passes it was contention; if it still fails, investigate the code — do
+  not mask it). Loosening deadlines to go green can hide exactly the bugs this library exists to prevent.
+  When you do change a test, say in the commit/PR *which* of the two causes you established and how.
+- **Check the ambient probe autopsy first when a broker IT fails.** Every broker integration test failure
+  log includes an `=== AMBIENT PROBE AUTOPSY ===` block (grep for it) with rebalance-dwell / lag-stagnation
+  violations and per-partition frozen-committed detail — it answers exactly the "contention artifact vs
+  genuine bug" question above before you start manual diagnosis. `probe clean` means the fault is likely in
+  the test itself, not consumer-group progress. Disable via `-Dambient.probe=off` or `@NoAmbientProbe` only
+  when the probe itself is the problem (see `AmbientProbeExtension` javadoc).
 - **Unit tests**: `mvn test` / surefire plugin. Source in `src/test/java/`.
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
+- **Quarantine lane for known-failing-on-master tests (`@Quarantined`).** When a test is red on master's
+  *gating* CI and its fix lives in another (open) PR, do NOT leave it red (ambiguous checks, error-prone
+  merge decisions) and do NOT `@Disabled` it (loses the signal — a "known flake" can be a real product
+  bug - see the drain-zombie write-up, `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`, which lands with PR #80). Instead annotate it
+  `@Quarantined(reason, tracking, fixedBy)` (in core's shared test sources): it leaves the gating suites
+  (green means mergeable) but keeps running on every PR push and after every merge to master (workflow_dispatch on
+  demand) in the non-gating "Quarantine Lane / tests" CI job, whose summary carries pass/fail + the audit of every
+  quarantined test and its owner; the seconds-fast "Quarantine Audit" job enforces the rules on every
+  PR (registry drift / broken owner claims fail fast - no tests are run there). The live registry
+  / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
+  the annotations in both directions, so it can't drift; `bin/check-quarantine-owners.sh` additionally
+  verifies each entry's owner claim (owning PR exists + is open + eventually removes the quarantine). Rules: **(1) no
+  quarantine without diagnosis** — undiagnosed red stays red and blocks, on purpose; **(2) quarantine is
+  master-state, not PR-state** — a test red on only one PR is that PR's problem; **(3) the owning fix PR
+  deletes the annotation AND its registry entry in the same commit** after merging master, atomically
+  restoring the test to the gating lane. Releases are blocked
+  while the lane is non-empty (`release.yml` guard; snapshots still publish). Run
+  the lane locally with `bin/quarantined-test.sh`.
+- **Reuse test utilities — search before you add (DRY).** Shared client/broker helpers live in `KafkaClientUtils` (topic creation, producers, consumers, PC builders) and `BrokerIntegrationTest` (the base class most integration tests extend). Before writing a new helper or a raw `admin`/producer/consumer call in a test, search these two first and extend them. Duplicating an existing helper is how bugs get reintroduced — e.g. a copy of topic-creation logic drifted to a 1-second timeout and became a flaky-CI source (see `docs/solutions/test-issues/`). When you must add a helper, put it in the shared util, not the test. Also check `docs/solutions/` for prior art before solving a problem that feels familiar.
+
+### Chaos Pain Suite (on-demand bug detector — never gates)
+
+A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
+`ChaosScenarioBase` + scenarios `ChaosChurnStormIT` W1, `ChaosRevokeUnderWorkIT` W4) that hunts the
+"alive but not progressing" bug class: rebalance-dwell zombies, protocol-invisible per-partition lag
+stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Tagged
+`@Tag("chaos")` and excluded from all default/gating suites via `pom.xml`'s `excluded.groups` default.
+
+- **Run locally** (requires Docker; ~5-6 min):
+  `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups=`
+- **Replay a schedule**: every run logs its seed and the full replay command; add `-Dchaos.seed=<seed>`.
+- **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
+  Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via
+  `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`), e.g.
+  `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. NB unlike the
+  local recipe above, CI runs EXCLUDE `@Quarantined` chaos scenarios (the Quarantine Lane owns those) -
+  while `ChaosChurnStormIT` is quarantined under PR #80 they therefore select zero tests, and the job
+  summary flags that loudly.
+- **Probe a fix PR** (the suite's primary purpose): on the fix PR's branch (merge master in first if
+  the branch predates the suite landing there), run the suite at a commit before the fix (expect RED —
+  the violation names the mechanism) and at the fix (expect GREEN). The local recipe above includes
+  `@Quarantined` scenarios (`-Dexcluded.groups=` is empty), so known-RED detectors still fire locally.
+  See `ChaosChurnStormIT`'s class javadoc for the full recipe.
+- A RED run is investigation food, not flake noise — the probes are calibrated against the real historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in measured gaps). Never loosen a probe to go green; tune the workload/conductor instead.
 
 ## Known Issues
 
@@ -67,36 +152,177 @@ bin/performance-test.sh
 
 - **Lombok**: Used extensively (builders, getters, logging). IntelliJ Lombok plugin required.
 - **EditorConfig**: Enforced via `.editorconfig` - 4-space indent for Java, 120 char line length.
-- **License headers**: Managed by `license-maven-plugin` (Mycila). Use `-Dlicense.skip` locally to skip checks.
+- **License headers**: Enforced by `bin/check-copyright-headers.sh` (runs in CI via the
+  `Copyright Headers` workflow; run it locally before pushing header-related changes). The mycila
+  `license-maven-plugin` is skipped by default in the root pom - it knows only the Confluent header
+  template, so its `format` goal used to stamp the wrong attribution onto fork-original files and its
+  git-year resolver auto-bumped years and broke in worktrees. `-Dlicense.skip` on the command line is
+  no longer needed (harmless if still passed).
 - **Copyright rules for this fork**:
   - Do not change copyright headers on existing files unless the file has substantive code changes in the same commit
   - Do not bump copyright years as an incidental or standalone change
   - The `NOTICE` file at repo root contains the legal attribution structure for the fork
-  - New files written entirely for the fork should not claim Confluent copyright
-  - Always pass `-Dlicense.skip` to Maven to prevent the license plugin from auto-bumping years
+  - New files written entirely for the fork use `Copyright (C) <year> Antony Stubbs and contributors` -
+    never the Confluent header
+  - Upstream-derived files MODIFIED on the fork retain the Confluent notice and ADD
+    `Modifications Copyright (C) <year> Antony Stubbs and contributors` beneath it (Apache 2.0
+    4(b) retain-notices + 4(c) change-notice - the convention used by e.g. Amazon Corretto and
+    MariaDB for derived files). The scanner detects modification against the fork point
+    automatically, so forgetting the line fails CI
+  - Files renamed or extracted from upstream keep the Confluent header - register renames in
+    `RENAMED_FROM_UPSTREAM` (`newpath|oldpath` lines) and extractions in `EXTRACTED_FROM_UPSTREAM`
+    inside `bin/check-copyright-headers.sh`. Renames with content changes, and all extractions,
+    also require the modifications line
 - **Google Truth**: Used for test assertions alongside JUnit 5 and Mockito.
 
 ## CI
 
-- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
+- **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). A seconds-fast "Quarantine Audit" job enforces the quarantine registry on every PR; the `@Quarantined` lane itself runs non-gating on every PR push and every push to master (+ dispatch) in its own workflow (`quarantine-lane.yml`) — see Testing. Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
+- **`.github/workflows/copyright.yml`** — Copyright-header conformance via `bin/check-copyright-headers.sh` (runs its self-test `bin/test-check-copyright-headers.sh` first, then the real scan) on every push/PR. GitHub-hosted; needs `fetch-depth: 0` so the fork-point commit is in history.
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
+
+## Changelog
+
+`CHANGELOG.adoc` holds the release notes. **Nothing about it is a per-PR chore.** Do not add entries
+in a feature PR, and do not maintain an `== Unreleased` section. Everything up to and including
+`== 0.6.0.0` is hand-written and now frozen; from the next release on, each section is **generated at
+release time from the commit log** and then frozen in turn.
+
+This removes the file that every PR used to touch - it appeared in 30 of the last 30 master commits,
+dragging the generated `README.adoc` with it - and removes the ordering problem where an entry had to
+cite a PR number that did not exist when the entry was written.
+
+### What this asks of a commit
+
+Nothing extra. The commit log is the raw material, so write it as you already should: a subject that
+says what changed and, where it matters to a user, what it changed *for them*; the diagnosis, the
+experiment and the rejected alternatives in the body. A good commit message is now doing double duty,
+which is a reason to keep writing them properly rather than a new process.
+
+### At release time
+
+An agent reads `git log <last-tag>..HEAD` - full messages, not just subjects - and drafts the release
+section. The judgement it applies, and that a human should re-apply before freezing:
+
+- **The entry test.** Can a *user or operator* observe this without reading our repo - API, behaviour,
+  performance, logs and metrics, or the published artifact? If not, it gets no entry. Most CI,
+  tooling, refactor and docs commits produce nothing, and that is correct: the changelog answers one
+  question, "should I upgrade, and will anything change for me?"
+- **One sentence, about 25 words, then the link.** Name what a reader would have *seen*, and who it
+  hits when that is not everyone - not how the bug worked. An entry that runs to a paragraph is
+  written for its author; an entry too short to tell you whether you are affected (`fix: Paused
+  consumption across multiple consumers`) is no better.
+- **Assemble as a set, not one commit at a time.** Merge related commits into a single entry, drop
+  what turned out not to matter, and rewrite for someone who was not there. This is the part a per-PR
+  entry could never do.
+- **One `=== Build & CI` entry for the whole release** - a short bullet list of the big hitters
+  (quarantine lane, chaos suite, mutation testing) that tells a reader how carefully the library is
+  tested, with the detail left to the log.
+- **Sections:** `=== Breaking`, `=== Improvements`, `=== Fixes`, `=== Dependencies`, `=== Examples`,
+  `=== Build & CI`. **Reference convention:** a bare `#NN` is this fork, `upstream #NN` is
+  confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and PRs
+  from one sequence.
+
+**Still live, and now inert:** the `PR Checklist` gate's changelog rule
+(`.github/scripts/changelog-ref-gate.js`) fails a human PR that *adds* a `CHANGELOG.adoc` entry citing
+no issue. Since PRs no longer touch the file, it should never fire - it remains a guard for anyone
+hand-editing the frozen sections.
+
+## PR Discipline
+
+- **Keep the PR title and body in sync with what the PR actually covers.** As a PR grows, its description drifts - re-check it before requesting review and before merge. Update it only on *material* drift: whole changes/workstreams missing, wrong specifics (core counts, flags, forkCounts, file/label names), or scope that has outgrown the title. Do NOT churn the description for cosmetic wording - if it still accurately reflects the content, leave it.
+- **Open PRs from the template and complete its checklist honestly.** `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively (e.g. `gh pr create --body-file`), so base the PR body on it and resolve every box: check it `[x]`, or mark it `N/A - <reason>`. For human-authored PRs the `PR Checklist` CI gate (`.github/workflows/pr-checklist.yml`) fails when the checklist is missing entirely *or* when any box is left unchecked without an `N/A` - so dropping the template is not a bypass. Only real bot authors (GitHub user type `Bot`, e.g. Dependabot/Renovate) are exempt.
+- **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the specific review comment (its own thread), NOT as a separate top-level PR comment - a summary comment leaves the original conversation unresolved and blocks merge on "unresolved conversations." When a finding is fixed, reply in-thread with the fix + commit SHA and mark the thread resolved (`gh api graphql ... resolveReviewThread`). Leave a thread open only when it genuinely needs the author's decision, and say so in the reply.
+- **After opening a PR, follow up on the duplication reports.** The duplicate-code and file-similarity checks post comments flagging new clones/similarity. Read them, remove duplication introduced by *this* PR before it merges; ignore clones that already existed on the base branch (out of scope for this PR).
+- **Stacked PRs: put `depends on #N` in the description** (one line per parent). The PR-dependency gate blocks the child from merging until the parent does; keep the list current if the chain changes.
 
 ## Releasing
 
-The pom.xml version drives publishing — there is no `maven-release-plugin` dance.
+**Tag-as-truth, dispatch-triggered.** `master` is **always** a `-SNAPSHOT`. A dispatch runs
+`maven-release-plugin`'s `release:prepare` (which tags the release commit) and then deploys **that exact
+tag** — nothing scans git history (an earlier history-scanning version re-released an ancient upstream
+commit; see `docs/plans/2026-07-28-release-pipeline-hardening.md`).
 
 **Cut a release:**
-1. Open a PR removing `-SNAPSHOT` from `<version>` in the parent pom (e.g. `0.6.0.0-SNAPSHOT` → `0.6.0.0`)
-2. Merge it to master → CI publishes to Maven Central, tags `v0.6.0.0`, creates a GitHub release
-3. Open another PR bumping to the next snapshot (e.g. `0.6.0.1-SNAPSHOT`) and merge
+1. Run the **Release** workflow (Actions → *Release* → *Run workflow*) with the release version (e.g.
+   `0.6.0.0`) and next dev version (e.g. `0.6.0.1-SNAPSHOT`). Tick **Dry run** first to rehearse with no
+   commits/tags/deploy.
+2. It runs `release:prepare` (rewrites poms, makes the two release commits, tags `v<version>`, **pushes
+   to `master`** via `RELEASE_PAT`), refuses if master's latest *CI* workflow run isn't green, then checks
+   out that tag and deploys it to Maven Central, then cuts a GitHub release. `master` ends on the next
+   `-SNAPSHOT`.
 
-**Required GitHub repo secrets** for `publish.yml`:
+Snapshots publish automatically on every push to `master` (`publish.yml`). Workflows: `release.yml`
+(release), `publish.yml` (snapshot-only).
+
+**Required GitHub repo secrets:**
+- `RELEASE_PAT` — fine-grained PAT (repo **Contents: write**) owned by a repo admin, so `release:prepare`
+  can push to `master`; the **"Repository admin" role must be in the master ruleset's bypass list**.
 - `MAVEN_CENTRAL_USERNAME` — Sonatype Central Portal token username
 - `MAVEN_CENTRAL_PASSWORD` — Sonatype Central Portal token password
 - `MAVEN_GPG_PRIVATE_KEY` — Armored GPG private key for signing artifacts
 - `MAVEN_GPG_PASSPHRASE` — Passphrase for the GPG key
 
+## Worktree ownership
+
+Multiple agents/sessions often work in parallel git worktrees (kept under `.claude/worktrees/`). Neither git nor the Claude UI records **which agent is using which worktree**, so this repo uses a convention:
+
+- **`.worktree-owner` marker** — each worktree holds a `.worktree-owner` file at its root describing `owner`, `status`, `branch`, `pr`, and a brief `work:` line. It is **local-only** (git-ignored via `.gitignore`, so it is never committed). When you claim, hand off, or finish a worktree, write/update this file.
+- **`bin/worktree-status.sh`** — prints every worktree with its marker fields plus live process holders (via `lsof`), giving the "who's on what" view the UI lacks. Run it before starting parallel work: `bash bin/worktree-status.sh`.
+- **Before deleting a worktree**, verify it is safe: no live `lsof` holder, no uncommitted changes, and its branch content is merged or preserved. A marker `status: merged — SAFE TO DELETE` records that verification. For stronger protection, `git worktree lock --reason "..."` makes git refuse removal.
+- The higher-level map of what each branch/worktree is for lives in `docs/inflight/` (the `branch-` and `pr-` files).
+
 ## Documented Solutions
 
 `docs/solutions/` - documented solutions to past problems and workflow patterns, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+
+## Refactoring backlog
+
+Deferred internal refactors (too big/risky to fold into the change at hand) live in [`docs/refactoring.md`](docs/refactoring.md) - a versioned markdown list, grouped by file, **not** GitHub issues (overkill for a solo maintainer). When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot (`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry to the doc. **`docs/refactoring.md` also owns the triage of plain `TODO`/`FIXME`/`XXX` markers** - there are ~90 of those versus a handful using the `TODO(refactor):` convention, and they are inventoried in the generated [`docs/TODO_INDEX.md`](docs/TODO_INDEX.md) (`bin/todo-index.sh`, `--check` fails when stale). It already covers the breaking-change queue, static-state removal, offset-encoder cleanups and per-file backlogs - so write triage up here, and **do not start a parallel list** (see *Where things live* at the top). Promote an item to a branch/PR only when you actually start it; if it maps to an upstream issue, link it rather than duplicate. The doc also tracks **breaking changes queued for the next major version** in a separate, release-gated section, kept apart from the non-breaking internal refactors (those are batched for a major bump, not folded in ad hoc). This is distinct from `docs/inflight/` (in-flight), `upstream-map.yaml` (fork↔upstream), and PR review feedback (raise on the PR).
+
+## Upstream tracking
+
+This is a maintained hard fork of the effectively-archived `confluentinc/parallel-consumer`. We keep a durable, machine-readable cache of the fork↔upstream relationship so it never has to be re-derived from scratch:
+
+- **`src/docs/development/upstream-map.yaml`** — the **source of truth** for the *facts*: which fork branch/PR maps to which upstream issue/PR, its work group, and current status. Its header documents the schema. Validate/render with `scripts/upstream-map.py {validate,table,refs}`.
+- **`src/docs/development/upstream-pr-analysis.adoc`** — the *editorial* analysis (rankings, verdicts, recommended merge order). When prose and manifest disagree, **the manifest wins for facts**. Manifest entries link back to `.adoc` section anchors via `adoc_anchor`.
+- **`docs/inflight/`** — *transient* cross-branch working notes only, one file per item.
+
+**When you start work that maps to an upstream issue/PR, add or update its entry in `upstream-map.yaml`** (don't just note it in prose). Design follows Debian DEP-3, Yocto `Upstream-Status:`, and OpenShift's `UPSTREAM:` fork conventions.
+
+**Keeping it in sync is the agent's job, and it does not stop at "start work".** Nothing automated checks the *fork* side: `upstream-map.py validate` only checks the schema, and `upstream-sweep.sh` only watches upstream — so a manifest that says `prs: []` while a fork PR is open still passes every check, and the mapping quietly rots (a 2026-08-04 audit found five such entries). Update the entry **at every lifecycle transition of your own work**, in the same commit that causes it: opening a PR (`prs:` + `status: pr-open`), finishing on a branch without a PR (`status: ready`), merging (`merged`), releasing (`released`), abandoning (`superseded`/`wontfix`). Clear a `todo:` line when you do the thing, and add one for anything you leave behind — `upstream-map.py todo` is what a future session reads to find the loose ends. Do not park these transitions in `docs/inflight/`: those are transient notes, this manifest is the source of truth.
+
+### Branch naming
+
+Branches encode the upstream number: `bugs/857-...`, `fix/909-...`, `cherry-pick/893-...`, `upstream-pr-905`. Keep this — it makes the mapping greppable and matches the manifest's `fork.branches`.
+
+### Commit trailers
+
+Commits that relate to upstream carry DEP-3-style trailers so provenance lives in the commit itself:
+
+```
+Upstream-Issue: confluentinc/parallel-consumer#857
+Upstream-PR: confluentinc/parallel-consumer#548
+Forwarded: <upstream comment URL | no | not-needed>
+Applied-Upstream: <no | commit:SHA | VERSION>
+```
+
+Enable the editor prompt once per checkout: `git config commit.template .gitmessage`. Keep the existing subject convention (`... (#893)`, `cherry-pick Confluent #905`). **Trailers are not enforced** — they only fit upstream-related commits, not fork-only work (rebrand, release, dependabot, formatting). Use judgement.
+
+### Backlinking upstream
+
+When we fix something downstream, we comment on the matching upstream issue/PR so users (who mostly don't know the fork exists) can find the fix. Driven by the manifest:
+
+```
+scripts/upstream-backlink.sh <entry-id>            # DRY-RUN (default): prints target + comment, posts nothing
+scripts/upstream-backlink.sh --post <entry-id>     # actually comment (prompts; needs gh auth)
+```
+
+Two generic templates in `scripts/backlink-templates/`: `fix-backlink` (a fix is available in the fork) and `fork-awareness` (this is now maintained in a fork). For anything needing a tailored explanation, set a per-entry **`backlink`** field in `upstream-map.yaml` (it supports `{{FORK_REPO}}` / `{{FORK_REF}}` / `{{SUMMARY}}` / `{{ID}}`) - it overrides the template so the public wording lives in the source of truth, not a separate file (see the `bug-859-pcmetrics-leak` entry). Use **plain cross-repo references, never `Fixes/Closes`** (they don't auto-close cross-repo and we're not closing anyone's issue) — one respectful comment per item. After posting, paste the printed `forwarded:` snippet back into the entry in `upstream-map.yaml` (this is also what makes future runs skip the target). The helper is anti-spam by design: idempotent skip of already-forwarded targets, per-run cap (`--max`), inter-post delay, and a status guard so unfinished work can't be announced as fixed.
+
+### Checking upstream for new activity
+
+`scripts/upstream-sweep.sh` (read-only) lists upstream issues/PRs updated since the manifest's `last_swept` and flags drift on tracked refs (recorded `open` but now closed/merged). `--since <date>` overrides the window; `--publish` updates a single fork tracking issue (guarded, never spams). Run it periodically to catch new reports from users who don't know the fork exists.
+
+The full per-item backlink plan, anti-spam details, and the sweep design live in [`src/docs/development/upstream-backlink-plan.md`](src/docs/development/upstream-backlink-plan.md).

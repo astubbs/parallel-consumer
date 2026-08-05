@@ -5,9 +5,29 @@
 
 toc::[]
 
+[NOTE]
+====
+*This document holds editorial judgement, not the current facts.* The rankings,
+group verdicts and recommended merge order below are the durable value here.
+
+The *machine-readable source of truth* for the volatile facts -- which fork
+branch/PR maps to which upstream issue/PR, and each item's current
+open/closed/merged status -- lives in
+link:upstream-map.yaml[`upstream-map.yaml`] (kept fresh by a read-only `gh`
+sweep). *When this prose and the manifest disagree, the manifest wins for
+facts.* Entries there link back to the section anchors in this document.
+
+Counts and version pins below are a snapshot from *early-to-mid 2026* and drift;
+treat them as illustrative, not current.
+====
+
 == Part 1: Open Upstream PRs (confluentinc/parallel-consumer)
 
-The upstream repository has accumulated *19 open PRs* (565 closed). The repo appears sparsely maintained -- some PRs from early 2025 remain unreviewed. The local fork (`astubbs/parallel-consumer`) is pinned to Kafka 3.1.0, JUnit 5.8.2, with a Java 17 WIP branch in progress.
+The upstream repository had accumulated *~19 open PRs* (repo effectively archived;
+some PRs from early 2025 remain unreviewed). The local fork
+(`astubbs/parallel-consumer`) tracks Kafka 3.9.1, with a Java baseline + Kafka 4
+effort in progress on `feat/java-17-baseline` (see `upstream-map.yaml` entry
+`java-17-baseline-kafka4`).
 
 === Summary Table (19 PRs, most to least important)
 
@@ -20,7 +40,7 @@ The upstream repository has accumulated *19 open PRs* (565 closed). The repo app
 |3 |#915 |Feature: select batch construction strategy |Feature (closes #266) |Unlocks throughput & ordering flexibility
 |4 |#908 |Feature: Support Virtual Threads (JDK 21+) |Feature (closes #896) |Major platform modernisation
 |5 |#905 |Metric: max queued records per shard |Observability |Diagnose hot-key bottlenecks
-|6 |#866 |Update Kafka to v7 (BREAKING) |Major dep bump |Keeps library on supported Kafka
+|6 |#866 |Update Kafka to v4 (BREAKING) |Major dep bump |Keeps library on supported Kafka
 |7 |#867 |Update vertx to v5 (BREAKING) |Major dep bump |Keeps vertx module alive
 |8 |#901 |Fix failing licence check + gitignore |Build/tooling |Unblocks CI
 |9 |#877 |chore: update repo by service bot |Build/tooling |Bot-maintained config
@@ -36,6 +56,7 @@ The upstream repository has accumulated *19 open PRs* (565 closed). The repo app
 |19 |#854 |renovate minor+patch batch |Dep batch |Routine
 |===
 
+[[part1-group-a-correctness]]
 === Group A -- Correctness fixes (merge first)
 
 These address real bugs observed in production and should be the highest priority to cherry-pick.
@@ -56,6 +77,7 @@ These address real bugs observed in production and should be the highest priorit
 * *Status:* No visible tests yet, no review comments. Needs more scrutiny than #893 but the root-cause analysis is compelling.
 * *Verdict:* High priority, but request tests before merging.
 
+[[part1-group-b-features]]
 === Group B -- Features (real user value)
 
 ==== #915 -- Batch construction strategy (closes #266)
@@ -84,21 +106,23 @@ These address real bugs observed in production and should be the highest priorit
 * Small, self-contained (2 commits). No review comments.
 * *Verdict:* Easy merge, good observability win.
 
+[[part1-group-c-major-deps]]
 === Group C -- Major (breaking) dependency bumps
 
 [cols="1,3,4", options="header"]
 |===
 |PR |Bump |Note
 
-|#866 |Kafka to v7 |Upstream Confluent Kafka major bump. Essential for staying current but will cascade test/API changes.
+|#866 |Kafka to v4 |Apache Kafka major bump (title reads v4; ties into the Java baseline + Kafka 4 effort). Will cascade test/API changes.
 |#867 |vertx to v5 |Breaking for the `parallel-consumer-vertx` module.
 |#897 |vertx 4.5.7 to 5.0.5 |Duplicate of #867; close one.
 |#855 |wiremock-jre8 to v3 |Test-only, blocks other test-dep updates.
 |#899 |junit platform 1.10.2 to *6.0.0* |Dependabot misread -- 6.0.0 likely incorrect. Close or pin.
 |===
 
-*Verdict:* Tackle #866 (Kafka v7) first. Consolidate #867/#897. Close #899.
+*Verdict:* Tackle #866 (Kafka v4) first. Consolidate #867/#897. Close #899.
 
+[[part1-group-d-security]]
 === Group D -- Security CVEs
 
 [cols="1,2,2,2", options="header"]
@@ -112,6 +136,7 @@ These address real bugs observed in production and should be the highest priorit
 
 *Verdict:* All renovate-generated and low-effort. Merge in a single batch once CI is green.
 
+[[part1-group-e-housekeeping]]
 === Group E -- Routine / housekeeping
 
 * *#854* -- renovate minor+patch dependency batch (trivial)
@@ -130,7 +155,7 @@ These address real bugs observed in production and should be the highest priorit
 . *Security batch:* #851, #913, #914
 . *Routine deps batch:* #854, #869, #898, #900, #877
 . *#915* -- batch strategy feature (needs architectural review)
-. *#866* -- Kafka v7 (scheduled breaking upgrade)
+. *#866* -- Kafka v4 (scheduled breaking upgrade)
 . *#908* -- Virtual Threads (after Java 17 branch lands; requires JDK 21+ CI)
 . *#867* (and close duplicate #897) -- vertx v5
 . *#855* -- wiremock v3 (after other test deps stabilise)
@@ -269,7 +294,7 @@ Reviving these pays dividends on every other revival in Groups A-C.
 
 * *#300 (Loom POC)* <-> upstream *#908 (Virtual Threads)* -- astubbs POC may offer earlier-design insight.
 * *#464 (Health check + metrics)* <-> upstream *#905 (max-queued-per-shard metric)* -- merge philosophies.
-* *#91 (Kafka upgrade)* <-> upstream *#866 (Kafka v7)* -- close #91 as obsolete.
+* *#91 (Kafka upgrade)* <-> upstream *#866 (Kafka v4)* -- close #91 as obsolete.
 * *#204 (Vertx vertical)* <-> upstream *#867 (vertx v5)* -- re-scope against v5 APIs.
 * *#237 / #345* <-> upstream *#893 / #909* (rebalance correctness) -- astubbs chaos testing would help validate upstream fixes.
 
@@ -279,6 +304,7 @@ Reviving these pays dividends on every other revival in Groups A-C.
 
 Issue #907 ("Is the project still actively maintained?") filed Jan 2026 summarises the community frustration.
 
+[[part3-cat1-stability]]
 === Category 1: Stability & timeout bugs (work on FIRST)
 
 Production-blocking issues reported by multiple users. Highest urgency.
@@ -298,6 +324,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 
 *Verdict:* #803 is the only "verified bug" in the entire tracker. Start here. #809 and #833 are likely related -- investigate together.
 
+[[part3-cat2-correctness]]
 === Category 2: Rebalance / offset correctness (data loss risk)
 
 [cols="1,4,2,1,2", options="header"]
@@ -311,6 +338,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 
 *Verdict:* Merging PR #893 and PR #909 likely resolves #777 and #843. Verify after cherry-pick.
 
+[[part3-cat3-observability]]
 === Category 3: Observability & health (most requested feature gap)
 
 [cols="1,4,2,1,1,2", options="header"]
@@ -325,6 +353,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 
 *Verdict:* #27 and #71 have been open for 5+ years. PR #464 was the intended fix; redo it. PR #905 adds one metric but doesn't close these.
 
+[[part3-cat4-dlq]]
 === Category 4: Error handling / DLQ / retry (most demanded feature)
 
 [cols="1,4,2,1,2", options="header"]
@@ -339,6 +368,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 
 *Verdict:* DLQ (#310) is the single most impactful missing feature. Revive PR #366 and PR #291 as a pair.
 
+[[part3-cat5-jdk]]
 === Category 5: Thread safety & modern JDK support
 
 [cols="1,4,2,1,1,2", options="header"]
@@ -412,6 +442,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 
 *Verdict:* #171 (Spring Boot example) is highest-impact doc. #642 (close modes) addresses real operational confusion.
 
+[[part3-cat10-vertx]]
 === Category 10: Vertx / Reactor module
 
 [cols="1,4,2,1,2", options="header"]
@@ -427,6 +458,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 
 *Verdict:* #912 (memory leak) is a production bug and highest priority in this group.
 
+[[part3-cat11-build]]
 === Category 11: Build / CI / tooling
 
 [cols="1,4,2,1,2", options="header"]
@@ -459,6 +491,7 @@ Production-blocking issues reported by multiple users. Highest urgency.
 
 *Verdict:* Internal maintainability improvements. Tackle when touching adjacent code.
 
+[[part3-cat13-governance]]
 === Category 13: Meta / project governance
 
 [cols="1,4,2,1,1", options="header"]

@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer.examples.streams;
+package io.confluent.parallelconsumer.examples.streams.integrationTests;
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.examples.streams.StreamsApp;
 import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.assertj.core.api.Assertions;
@@ -23,7 +24,8 @@ public class StreamsAppTest extends BrokerIntegrationTest<String, String> {
         ensureTopic(StreamsApp.inputTopic, 1);
         ensureTopic(StreamsApp.outputTopicName, 1);
 
-        StreamsAppUnderTest coreApp = new StreamsAppUnderTest();
+        // Dependencies injected via the constructor - no subclass/override hooks needed.
+        StreamsApp coreApp = new StreamsApp(BrokerIntegrationTest.kafkaContainer.getBootstrapServers());
 
         coreApp.run();
 
@@ -34,29 +36,11 @@ public class StreamsAppTest extends BrokerIntegrationTest<String, String> {
             kafkaProducer.send(new ProducerRecord<>(StreamsApp.inputTopic, "a key 3", "a value"));
 
             Awaitility.await().untilAsserted(() -> {
-                Assertions.assertThat(coreApp.messageCount.get()).isEqualTo(3);
+                Assertions.assertThat(coreApp.getMessageCount().get()).isEqualTo(3);
             });
 
         } finally {
             coreApp.close();
-        }
-    }
-
-    class StreamsAppUnderTest extends StreamsApp {
-
-        @Override
-        Consumer<String, String> getKafkaConsumer() {
-            return getKcu().getConsumer();
-        }
-
-        @Override
-        Producer<String, String> getKafkaProducer() {
-            return getKcu().createNewProducer(false);
-        }
-
-        @Override
-        String getServerConfig() {
-            return BrokerIntegrationTest.kafkaContainer.getBootstrapServers();
         }
     }
 }

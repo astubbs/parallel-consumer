@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.ThreadUtils;
@@ -26,7 +27,7 @@ import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
-import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Tests around what should happen when rebalancing occurs

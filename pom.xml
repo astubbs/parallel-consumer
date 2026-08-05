@@ -7,7 +7,7 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.github.astubbs.parallelconsumer</groupId>
+    <groupId>bz.stub.parallelconsumer</groupId>
     <artifactId>parallel-consumer-parent</artifactId>
     <name>Kafka Parallel Consumer</name>
     <version>0.6.0.0-SNAPSHOT</version>
@@ -67,6 +67,19 @@
         <jvm.location>${java.home}</jvm.location>
         <jvm8.location>-insert jvm8 location via environment variable-</jvm8.location>
         <jvm9.location>-insert jvm9 location via environment variable-</jvm9.location>
+        <!-- The mycila license plugin is SKIPPED BY DEFAULT for this fork: it knows only one header
+             template (the Confluent one), so its format goal used to rewrite fork-original files with
+             the wrong attribution, and its git-based year resolver auto-bumps years and breaks in git
+             worktrees. Header conformance is enforced by bin/check-copyright-headers.sh instead
+             (provenance-aware: upstream-derived files keep the Confluent header, fork-original files
+             use the fork header - see AGENTS.md "Copyright rules for this fork"). That scanner runs
+             in the `validate` phase via exec-maven-plugin (below), so a local `mvn` build catches
+             header violations too, not only the copyright.yml GitHub Action. Re-enable the mycila
+             plugin deliberately with -Dlicense.skip=false if you ever need its format goal on upstream files. -->
+        <license.skip>true</license.skip>
+        <!-- Skip the in-build copyright-header scanner (exec-maven-plugin, validate phase) with
+             -Dcopyright.skip=true. Runs by default; unlike the mycila plugin it is worktree-safe. -->
+        <copyright.skip>false</copyright.skip>
         <!-- default to format when on developer machines, check when in CI -->
         <license.mode>format</license.mode>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
@@ -81,43 +94,62 @@
         <skipUTs>${skipTests}</skipUTs>
 
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
-             -Dgroups=performance         (run only performance tests)
-             -Dexcluded.groups=           (run everything including performance)
-             -Dexcluded.groups=transactions,performance  (skip multiple groups) -->
+             -Dincluded.groups=performance    (run only performance tests)
+             -Dincluded.groups=chaos          (run only the Chaos Pain Suite - see integrationTests.chaostests)
+             -Dexcluded.groups=               (run everything incl. performance, chaos + quarantined)
+             -Dexcluded.groups=transactions,performance,chaos  (skip multiple groups)
+             NB overrides REPLACE the default list - include performance, chaos AND quarantined when
+             excluding. `quarantined` = known-failing-on-master tests (see @Quarantined): out of the
+             gating suites so green means mergeable, but still run by the non-gating CI lane
+             (bin/quarantined-test.sh). -->
         <included.groups></included.groups>
-        <excluded.groups>performance</excluded.groups>
+        <excluded.groups>performance,chaos,quarantined</excluded.groups>
 
         <!-- version numbers -->
         <!-- plugins -->
-        <mycila.version>5.0.0</mycila.version>
-        <lombok.version>1.18.28</lombok.version>
+        <mycila.version>5.1.1</mycila.version>
+        <lombok.version>1.18.46</lombok.version>
         <auto-service.version>1.1.1</auto-service.version>
-        <surefire.version>3.2.5</surefire.version>
-        <spotbugs.version>4.8.6</spotbugs.version>
-        <spotbugs-maven-plugin.version>4.8.6.6</spotbugs-maven-plugin.version>
-        <pitest.version>1.17.4</pitest.version>
-        <pitest-junit5.version>1.2.2</pitest-junit5.version>
+        <surefire.version>3.5.6</surefire.version>
+        <spotbugs.version>4.10.3</spotbugs.version>
+        <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
+        <pitest.version>1.25.8</pitest.version>
+        <pitest-junit5.version>1.2.3</pitest-junit5.version>
 
         <!-- core -->
-        <slf4j.version>2.0.13</slf4j.version>
-        <kafka.version>3.9.1</kafka.version>
+        <slf4j.version>2.0.18</slf4j.version>
+        <kafka.version>3.9.2</kafka.version>
         <version.unij>0.1.3</version.unij>
 
         <!-- tests -->
         <parallel-tests>true</parallel-tests>
+        <!-- Unit-test (surefire) JVM forks = process-level parallelism. Default 1 (no forking); the `ci`
+             profile raises it to 1C (one fork per CPU core) so CI runs the unit suite in parallel across
+             JVMs. This is reliable because each fork is a separate process (no shared static state between
+             them) and single-threaded, unlike JUnit thread parallelism (`parallel-tests`) which contends on
+             static state. Forks are reused to amortise JVM startup. -->
+        <surefire.forkCount>1</surefire.forkCount>
 
         <!-- tests deps-->
-        <junit.version>5.10.2</junit.version>
-        <junit.platform.version>1.10.2</junit.platform.version>
-        <testcontainers.version>1.19.8</testcontainers.version>
-        <truth.version>1.3.0</truth.version>
-        <flogger.version>0.8</flogger.version>
-        <mockito.version>5.12.0</mockito.version>
-        <archunit.version>1.1.1</archunit.version>
+        <junit.version>5.14.4</junit.version>
+        <junit.platform.version>1.14.4</junit.platform.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
+        <truth.version>1.4.5</truth.version>
+        <flogger.version>0.9</flogger.version>
+        <mockito.version>5.23.0</mockito.version>
+        <!-- Aligns byte-buddy with what mockito 5.23 requires (it ships 1.17.7). The ancient
+             wiremock-jre8 2.35.2 otherwise drags in byte-buddy 1.12.18, which wins the conflict
+             and lacks the JAVA_V21 field mockito 5.23 needs -> MockitoInitializationException.
+             Remove this pin once wiremock 3.x (a deferred major) drops the stale transitive.
+             Test/provided scope only - not in the shipped artifact. See docs/inflight.md. -->
+        <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
-        <logback.version>1.5.19</logback.version>
-        <micrometer-core.version>1.13.0</micrometer-core.version>
+        <logback.version>1.6.1</logback.version>
+        <!-- Held at 1.13.0: keep the micrometer family version-aligned with
+             micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
+             prometheus package rename is migrated). See docs/inflight.md. -->
+        <micrometer-core.version>1.13.15</micrometer-core.version>
     </properties>
 
     <profiles>
@@ -192,6 +224,11 @@
             <properties>
                 <license.mode>check</license.mode>
                 <parallel-tests>false</parallel-tests>
+                <!-- Parallelise the unit suite by FORKING JVMs (one per core) rather than JUnit threads:
+                     ~3x faster on a multi-core box and reliable (no cross-thread static-state contention, so
+                     it does not resurrect the thread-parallel flakes). On GitHub's 2-core runners 1C = 2 forks
+                     (well-matched, no CPU starvation); on the self-hosted box it scales up to the core count. -->
+                <surefire.forkCount>1C</surefire.forkCount>
             </properties>
             <build>
                 <plugins>
@@ -212,7 +249,7 @@
                                             <onlyWhenRelease>false</onlyWhenRelease>
                                             <failWhenParentIsSnapshot>false</failWhenParentIsSnapshot>
                                             <excludes>
-                                                <exclude>io.github.astubbs.parallelconsumer:</exclude>
+                                                <exclude>bz.stub.parallelconsumer:</exclude>
                                             </excludes>
                                         </requireReleaseDeps>
                                     </rules>
@@ -237,7 +274,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
-                        <version>3.1.0</version>
+                        <version>3.2.8</version>
                         <executions>
                             <execution>
                                 <id>sign-artifacts</id>
@@ -258,7 +295,7 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.10.0</version>
+                        <version>0.11.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -336,7 +373,7 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
-            <version>3.24.2</version>
+            <version>3.27.7</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -349,12 +386,6 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <version>${mockito.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.tngtech.archunit</groupId>
-            <artifactId>archunit-junit5</artifactId>
-            <version>${archunit.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -391,13 +422,32 @@
         <dependency>
             <groupId>one.util</groupId>
             <artifactId>streamex</artifactId>
-            <version>0.8.2</version>
+            <version>0.9.0</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Architecture rules (e.g. keep integration tests out of the unit suite) - all modules -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.4.2</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Pin byte-buddy so mockito 5.23 gets the version it needs (see byte-buddy.version
+                 property); overrides the stale 1.12.18 pulled transitively by wiremock-jre8. -->
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-core</artifactId>
@@ -437,7 +487,7 @@
             <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
-                <version>3.18.0</version>
+                <version>3.20.0</version>
             </dependency>
             <dependency>
                 <groupId>com.google.truth</groupId>
@@ -460,12 +510,12 @@
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
-                <version>33.2.0-jre</version>
+                <version>33.6.0-jre</version>
             </dependency>
             <dependency>
                 <groupId>me.tongfei</groupId>
                 <artifactId>progressbar</artifactId>
-                <version>0.10.1</version>
+                <version>0.10.2</version>
                 <scope>test</scope>
             </dependency>
             <dependency>
@@ -534,7 +584,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-help-plugin</artifactId>
-                <version>3.4.0</version>
+                <version>3.5.2</version>
                 <executions>
                     <execution>
                         <id>show-profiles</id>
@@ -598,10 +648,29 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-release-plugin</artifactId>
-                <version>3.0.1</version>
+                <version>3.3.1</version>
                 <configuration>
                     <autoVersionSubmodules>true</autoVersionSubmodules>
-                    <tagNameFormat>@{project.version}</tagNameFormat>
+                    <tagNameFormat>v@{project.version}</tagNameFormat>
+                    <!-- Tag-as-truth release (see .github/workflows/release.yml, dispatch-triggered):
+                         release:prepare rewrites the poms, makes the two release commits
+                         ("prepare release vX" + "prepare for next development iteration"), tags vX,
+                         and PUSHES them to master (pushChanges=true) using a repo-admin PAT that
+                         bypasses the master ruleset's pull_request requirement. release.yml then checks
+                         out the exact tag vX and deploys it. The tag is the single source of truth -
+                         nothing scans history.
+
+                         preparationGoals=clean install (not the "poms only" validate we first tried):
+                         the modules cross-depend on parallel-consumer-core's test-jar
+                         (bz.stub.parallelconsumer:parallel-consumer-core:jar:tests), which does not exist
+                         until core is packaged+installed. A validate-only prepare therefore fails to
+                         resolve it (tries Central, 404). "clean install" builds+installs the reactor so
+                         the test-jars are present, cross-module deps resolve, and the release-versioned
+                         poms are proven to compile before the tag is cut. -DskipTests (passed via
+                         release.yml's -Darguments) keeps prepare fast - the "refuse red master" guard
+                         already gates on a green test run. -->
+                    <preparationGoals>clean install</preparationGoals>
+                    <pushChanges>true</pushChanges>
                 </configuration>
             </plugin>
             <plugin>
@@ -661,10 +730,38 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- Provenance-aware copyright-header conformance IN THE BUILD (fork policy, AGENTS.md).
+                 Runs bin/check-copyright-headers.sh in `validate` so `mvn` catches header violations
+                 locally, not only via the copyright.yml GitHub Action. Once at the root (inherited=false).
+                 The script cd's to the git top-level itself, so ${project.basedir} (the root) is fine.
+                 Skip with -Dcopyright.skip=true. Needs the fork-point commit in history; on a shallow
+                 clone the scanner warns and skips (CI's copyright.yml uses fetch-depth: 0 + strict mode). -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <inherited>false</inherited>
+                <executions>
+                    <execution>
+                        <id>check-copyright-headers</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${copyright.skip}</skip>
+                            <executable>bash</executable>
+                            <arguments>
+                                <argument>${project.basedir}/bin/check-copyright-headers.sh</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.12.1</version>
+                <version>3.15.0</version>
                 <configuration>
                     <annotationProcessorPaths>
                         <path>
@@ -700,6 +797,8 @@
                 <version>${surefire.version}</version>
                 <configuration>
                     <trimStackTrace>false</trimStackTrace>
+                    <forkCount>${surefire.forkCount}</forkCount>
+                    <reuseForks>true</reuseForks>
                     <excludes>
                         <!-- <exclude>**/*integration*/**/*.java</exclude> too aggressive? -->
                         <exclude>**/integrationTest*/**/*.java</exclude>
@@ -707,6 +806,11 @@
                     </excludes>
                     <jvm>${jvm.location}/bin/java</jvm>
                     <skipTests>${skipUTs}</skipTests>
+                    <!-- Same group filtering as failsafe below - without this binding, surefire ignores
+                         the quarantine/performance tags entirely and a @Quarantined UNIT test would
+                         still run (and fail) in the gating Unit Tests lane (ce-review P1 finding). -->
+                    <groups>${included.groups}</groups>
+                    <excludedGroups>${excluded.groups}</excludedGroups>
                 </configuration>
             </plugin>
             <plugin>
@@ -740,7 +844,7 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.11</version>
+                <version>0.8.15</version>
                 <executions>
                     <execution>
                         <goals>
@@ -786,10 +890,49 @@
                     </dependency>
                 </dependencies>
             </plugin>
+            <!-- Mutation testing. Driven by bin/ci-mutation-test.sh (which passes targetClasses,
+                 targetTests, threads and timeouts); the settings BELOW are the ones that cannot be passed
+                 on the command line. Both of these PitMojo @Parameters declare only a defaultValue and no
+                 `property`, so -DskipFailingTests / -DmutableCodePaths are SILENTLY IGNORED - they have to
+                 live here. See docs/plans/2026-08-03-002-mutation-testing-plan.md. -->
             <plugin>
                 <groupId>org.pitest</groupId>
                 <artifactId>pitest-maven</artifactId>
                 <version>${pitest.version}</version>
+                <configuration>
+                    <!-- One flaky test used to switch mutation testing OFF repo-wide. PIT needs a green
+                         baseline to attribute a kill to a mutant rather than to noise, so ANY test that is
+                         unstable WITHOUT mutation aborts the entire run: zero mutants scored anywhere,
+                         regardless of which class flaked. That happened twice, both times somewhere
+                         unrelated to the mutated code (PR #101, PR #110), which meant the lane's
+                         green-ness tracked suite stability rather than mutation coverage.
+
+                         With this set, PIT drops the failing test's coverage instead of aborting: a
+                         degraded signal rather than no signal.
+
+                         THE COST, because it is silent: pitest logs NOTHING when it skips a test this way
+                         (the "Tests failing without mutation" line is on the abort path only). A mutant
+                         that only the failing test covered therefore shows as "no coverage" instead of
+                         killed. The flake itself is NOT hidden - it still reddens the Unit gate of the
+                         same PR run, which is where a flake belongs; PIT is not a flake detector.
+
+                         NB: parseSurefireConfig defaults to true, so a <testFailureIgnore> in the surefire
+                         config would OVERRIDE this. Don't set one. -->
+                    <skipFailingTests>true</skipFailingTests>
+                    <!-- MAIN-ONLY MUTATION IS STRUCTURAL, NOT CONFIGURED. Do not add a <mutableCodePaths>
+                         here: unlike the command-line tool, pitest-maven has no such parameter (Maven would
+                         fail the build on the unknown element). MojoToReportOptionsConverter hard-codes the
+                         mutable code path to ${project.build.outputDirectory}, extended only when
+                         crossModule=true - which we leave off.
+
+                         Worth knowing WHY that matters: our targetClasses glob matches test classes by name,
+                         because our tests share the production package (internal.ProducerManagerTest,
+                         internal.PCModuleTestEnv, ...). Were they ever mutated, a mutated assertion would
+                         fail its own test, so the mutant would be recorded KILLED. Nearly every test mutant
+                         kills itself, driving the score toward 100% while carrying no information about main
+                         code - the score would rise as the signal fell. -->
+                    <crossModule>false</crossModule>
+                </configuration>
                 <dependencies>
                     <dependency>
                         <groupId>org.pitest</groupId>
@@ -801,7 +944,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
-                <version>3.4.1</version>
+                <version>3.6.3</version>
                 <executions>
                     <execution>
                         <id>enforce-versions</id>
@@ -844,7 +987,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.3.0</version>
+                <version>3.5.1</version>
                 <executions>
                     <execution>
                         <goals>
@@ -862,7 +1005,7 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
-                <version>3.4.0</version>
+                <version>3.6.1</version>
                 <executions>
                     <!-- integration test sources -->
                     <execution>
@@ -897,7 +1040,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-site-plugin</artifactId>
-                <version>4.0.0-M15</version>
+                <version>4.0.0-M16</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -925,7 +1068,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.7.0</version>
+                <version>3.12.0</version>
                 <configuration>
                     <sourcepath>${delombok.output}</sourcepath>
                     <sourcepath>${delombok.output}</sourcepath>
@@ -954,7 +1097,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.0</version>
+                <version>3.4.0</version>
                 <executions>
                     <execution>
                         <id>attach-sources</id>
@@ -967,7 +1110,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>
-                <version>3.6.1</version>
+                <version>3.11.0</version>
                 <executions>
                     <execution>
                         <phase>initialize</phase>
@@ -981,7 +1124,15 @@
                 <!-- for use in idea -->
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>versions-maven-plugin</artifactId>
-                <version>2.16.2</version>
+                <version>2.21.0</version>
+                <configuration>
+                    <!-- Risk-averse upgrade policy: ignore pre-releases (alpha/beta/-Mn/RC) and
+                         Confluent -ce/-ccs kafka builds. Combine with -DallowMajorUpdates=false to
+                         cap to newest non-major. Applies to display-*-updates / update-* goals. -->
+                    <!-- multiModuleProjectDirectory = reactor root (bin/ only exists there);
+                         ${project.basedir} would be wrong for child modules. -->
+                    <rulesUri>file://${maven.multiModuleProjectDirectory}/bin/deps-version-rules.xml</rulesUri>
+                </configuration>
             </plugin>
         </plugins>
 
@@ -991,7 +1142,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-site-plugin</artifactId>
-                    <version>4.0.0-M15</version>
+                    <version>4.0.0-M16</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -1001,27 +1152,27 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-clean-plugin</artifactId>
-                    <version>3.3.2</version>
+                    <version>3.5.0</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-install-plugin</artifactId>
-                    <version>3.1.1</version>
+                    <version>3.1.4</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-deploy-plugin</artifactId>
-                    <version>3.1.2</version>
+                    <version>3.1.4</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-resources-plugin</artifactId>
-                    <version>3.3.1</version>
+                    <version>3.5.0</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-dependency-plugin</artifactId>
-                    <version>3.6.1</version>
+                    <version>3.11.0</version>
                 </plugin>
             </plugins>
         </pluginManagement>

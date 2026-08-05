@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.LongPollingMockConsumer;
@@ -36,9 +37,9 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  */
 @Slf4j
 @Timeout(60000L)
-class MockConsumerTestWithEarlyClose {
+class MockConsumerEarlyCloseTest {
 
-    private final String topic = MockConsumerTestWithEarlyClose.class.getSimpleName();
+    private final String topic = MockConsumerEarlyCloseTest.class.getSimpleName();
 
     /**
      * Test that the mock consumer works as expected

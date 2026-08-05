@@ -2,20 +2,19 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LongPollingMockConsumer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.errors.SaslAuthenticationException;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.testcontainers.shaded.org.awaitility.Awaitility;
+import org.awaitility.Awaitility;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -37,9 +36,9 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  */
 @Slf4j
 @Timeout(60000L)
-class MockConsumerTestWithCommitTimeoutException {
+class MockConsumerCommitTimeoutTest {
 
-    private final String topic = MockConsumerTestWithCommitTimeoutException.class.getSimpleName();
+    private final String topic = MockConsumerCommitTimeoutTest.class.getSimpleName();
 
     /**
      * Test that the PC can resume operation after several failures
