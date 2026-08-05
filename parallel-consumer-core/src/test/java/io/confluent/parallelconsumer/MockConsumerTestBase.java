@@ -138,17 +138,14 @@ abstract class MockConsumerTestBase {
 
         // A test may legitimately have closed it itself (that is the subject of the early-close scenario), or
         // PC may have failed - don't re-close, and don't bubble up an expected failure from here.
+        //
+        // close() is the NON-draining close: DrainingCloseable.close() delegates to closeDontDrainFirst(). That
+        // is what teardown wants, because it runs on the failure path too and must not be able to hang waiting
+        // for in-flight work against a consumer that is still being made to misbehave. A scenario that needs
+        // the opposite should call closeDrainFirst() in its own test body, where the wait is visible.
         if (parallelConsumer != null && !parallelConsumer.isClosedOrFailed()) {
-            closeParallelConsumer();
+            parallelConsumer.close();
         }
-    }
-
-    /**
-     * How teardown closes PC when the test has not closed it itself. Override for a scenario where draining
-     * first is wrong - it runs on the failure path too, so it must not be able to hang.
-     */
-    protected void closeParallelConsumer() {
-        parallelConsumer.close();
     }
 
     /**

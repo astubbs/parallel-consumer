@@ -98,13 +98,4 @@ abstract class CommitRejectionTestBase extends MockConsumerTestBase {
         assertThat(parallelConsumer.getFailureCause()).isNull();
         assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
     }
-
-    /**
-     * Nothing is left to drain by the time this test ends, and a drain would only mean another commit cycle
-     * against a mock that has been rejecting them.
-     */
-    @Override
-    protected void closeParallelConsumer() {
-        parallelConsumer.closeDontDrainFirst();
-    }
 }
