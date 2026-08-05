@@ -3,9 +3,8 @@
 # Enforces the fork's two-header policy (AGENTS.md "Copyright rules for this fork"):
 # upstream-derived files keep the Confluent header; fork-original files (added after
 # the pinned fork point) must carry the fork header and must not claim Confluent
-# copyright. The mycila license plugin cannot express this (single header template,
-# git-based year auto-bumping), so it is skipped by default in the root pom and this
-# scanner is the enforcement instead.
+# copyright. The mycila license plugin could not express this (single header template,
+# git-based year auto-bumping), so it was removed and this scanner is the enforcement.
 #
 # fetch-depth: 0 because the scanner classifies provenance via the fork-point commit,
 # which a shallow clone does not contain.

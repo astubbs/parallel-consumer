@@ -129,7 +129,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
      * reproduce (the chaos tag is excluded by default, so the seed alone is not enough). */
     protected static String replayCommand(long seed) {
         return "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
-                + " -Dlicense.skip -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+                + " -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
     }
 
     /**

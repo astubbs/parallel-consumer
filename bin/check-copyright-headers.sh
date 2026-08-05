@@ -22,10 +22,10 @@
 # "Modified" is judged against the WORKING TREE, so local uncommitted edits count.
 #
 # Years are deliberately NOT policed: never bump copyright years as an incidental
-# change (see AGENTS.md). This scanner replaces the mycila license-maven-plugin's
-# check/format for headers - that plugin knows only ONE header template, so running
-# its format goal is exactly what used to stamp Confluent headers onto fork files
-# (it is now skipped by default via <license.skip> in the root pom).
+# change (see AGENTS.md). This scanner IS the header enforcement. It replaced the
+# mycila license-maven-plugin, which knew only ONE header template - running its
+# format goal is what used to stamp Confluent headers onto fork-original files. That
+# plugin was skipped from PR #90 and removed outright once nothing invoked it.
 #
 # Usage: bin/check-copyright-headers.sh
 # Exit codes: 0 = conformant, 1 = violations found, 2 = cannot run (shallow clone).

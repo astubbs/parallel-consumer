@@ -41,5 +41,4 @@ echo "==========================================================================
   clean verify \
   -Dincluded.groups=quarantined \
   -Dexcluded.groups= \
-  -Dlicense.skip \
   "$@"

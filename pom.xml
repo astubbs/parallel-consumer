@@ -67,21 +67,12 @@
         <jvm.location>${java.home}</jvm.location>
         <jvm8.location>-insert jvm8 location via environment variable-</jvm8.location>
         <jvm9.location>-insert jvm9 location via environment variable-</jvm9.location>
-        <!-- The mycila license plugin is SKIPPED BY DEFAULT for this fork: it knows only one header
-             template (the Confluent one), so its format goal used to rewrite fork-original files with
-             the wrong attribution, and its git-based year resolver auto-bumps years and breaks in git
-             worktrees. Header conformance is enforced by bin/check-copyright-headers.sh instead
-             (provenance-aware: upstream-derived files keep the Confluent header, fork-original files
-             use the fork header - see AGENTS.md "Copyright rules for this fork"). That scanner runs
-             in the `validate` phase via exec-maven-plugin (below), so a local `mvn` build catches
-             header violations too, not only the copyright.yml GitHub Action. Re-enable the mycila
-             plugin deliberately with -Dlicense.skip=false if you ever need its format goal on upstream files. -->
-        <license.skip>true</license.skip>
-        <!-- Skip the in-build copyright-header scanner (exec-maven-plugin, validate phase) with
-             -Dcopyright.skip=true. Runs by default; unlike the mycila plugin it is worktree-safe. -->
+        <!-- Copyright-header conformance is enforced by bin/check-copyright-headers.sh, run in the
+             `validate` phase by exec-maven-plugin (below), so a plain `mvn` build catches violations
+             and not only the copyright.yml GitHub Action. It is provenance-aware: upstream-derived
+             files keep the Confluent header, fork-original files use the fork header - see AGENTS.md
+             "Copyright rules for this fork". Skip it with -Dcopyright.skip=true. -->
         <copyright.skip>false</copyright.skip>
-        <!-- default to format when on developer machines, check when in CI -->
-        <license.mode>format</license.mode>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
 
         <!-- standard props -->
@@ -107,7 +98,6 @@
 
         <!-- version numbers -->
         <!-- plugins -->
-        <mycila.version>5.1.1</mycila.version>
         <lombok.version>1.18.46</lombok.version>
         <auto-service.version>1.1.1</auto-service.version>
         <surefire.version>3.5.6</surefire.version>
@@ -197,19 +187,6 @@
             </properties>
         </profile>
         <profile>
-            <id>license-format</id>
-            <activation>
-                <os>
-                    <!-- this doesnt' work? remove -->
-                    <!-- improve to instead be !jenkins && !travis  / !CI -->
-                    <family>mac</family>
-                </os>
-            </activation>
-            <properties>
-                <license.mode>format</license.mode>
-            </properties>
-        </profile>
-        <profile>
             <id>github</id>
             <pluginRepositories>
                 <pluginRepository>
@@ -222,7 +199,6 @@
             <!-- Profile to always run in Continuous Integration (Jenkins, Github Workflows etc) environments -->
             <id>ci</id>
             <properties>
-                <license.mode>check</license.mode>
                 <parallel-tests>false</parallel-tests>
                 <!-- Parallelise the unit suite by FORKING JVMs (one per core) rather than JUnit threads:
                      ~3x faster on a multi-core box and reliable (no cross-thread static-state contention, so
@@ -672,63 +648,6 @@
                     <preparationGoals>clean install</preparationGoals>
                     <pushChanges>true</pushChanges>
                 </configuration>
-            </plugin>
-            <plugin>
-                <groupId>com.mycila</groupId>
-                <artifactId>license-maven-plugin</artifactId>
-                <version>${mycila.version}</version>
-                <inherited>false</inherited>
-                <!-- To apply the license run: -->
-                <!-- ↪ mvn com.mycila:license-maven-plugin:format-->
-                <!-- To skip: -Dlicense.skip -->
-                <configuration>
-                    <aggregate>true</aggregate>
-                    <licenseSets>
-                        <licenseSet>
-                            <inlineHeader>Copyright (C) 2020-${license.git.copyrightYears} Confluent, Inc. and contributors
-                            </inlineHeader>
-                            <excludes>
-                                <exclude>**/release-pom.xml</exclude>
-                                <exclude>**/target/**/*</exclude>
-                                <exclude>**/README*</exclude>
-                                <!-- don't think this is needed, as it's excluded by default. But running really slow on OSx so thought should check -->
-                                <!-- https://github.com/mathieucarbou/license-maven-plugin/issues/298-->
-                                <!-- Ideally the fix would be this issue: https://github.com/mathieucarbou/license-maven-plugin/issues/126  Ignore items from .gitignore #126-->
-                                <exclude>.ci/**/*</exclude>
-                                <exclude>.git/**/*</exclude>
-                                <!-- exclude semaphore yml files -->
-                                <exclude>.semaphore/*</exclude>
-                                <!-- exclude semaphore build time files -->
-                                <exclude>bin/</exclude>
-                                <exclude>.m2/</exclude>
-                                <exclude>mk-include/</exclude>
-                                <!-- Very odd artifact on Jenkins -->
-                                <!--00:01:15.201  [INFO] Checking licenses...-->
-                                <!--00:01:17.095  [WARNING] Unknown file extension: ********-->
-                                <!--00:01:17.096  [WARNING] Missing header in: ********-->
-                                <exclude>********</exclude>
-                            </excludes>
-                        </licenseSet>
-                    </licenseSets>
-                    <mapping>
-                        <java>JAVAPKG_STYLE</java>
-                    </mapping>
-                </configuration>
-                <dependencies>
-                    <dependency>
-                        <groupId>com.mycila</groupId>
-                        <artifactId>license-maven-plugin-git</artifactId>
-                        <version>${mycila.version}</version>
-                    </dependency>
-                </dependencies>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>${license.mode}</goal>
-                        </goals>
-                        <phase>process-sources</phase>
-                    </execution>
-                </executions>
             </plugin>
             <!-- Provenance-aware copyright-header conformance IN THE BUILD (fork policy, AGENTS.md).
                  Runs bin/check-copyright-headers.sh in `validate` so `mvn` catches header violations

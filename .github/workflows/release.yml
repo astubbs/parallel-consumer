@@ -109,7 +109,7 @@ jobs:
             -DreleaseVersion=${{ inputs.releaseVersion }} \
             -DdevelopmentVersion=${{ inputs.developmentVersion }} \
             -DdryRun=${{ inputs.dryRun }} \
-            -Dlicense.skip -Darguments="-Dlicense.skip -DskipTests"
+            -Darguments="-DskipTests"
 
       - name: Deploy the release tag to Maven Central
         if: ${{ !inputs.dryRun }}
@@ -122,7 +122,7 @@ jobs:
           git checkout "v${{ inputs.releaseVersion }}"
           ./mvnw --batch-mode -Pmaven-central -Pci \
             -pl '!:parallel-consumer-examples,!:parallel-consumer-example-core,!:parallel-consumer-example-metrics,!:parallel-consumer-example-streams,!:parallel-consumer-example-vertx,!:parallel-consumer-example-reactor' \
-            clean deploy -DskipTests -Dlicense.skip
+            clean deploy -DskipTests
 
       - name: GitHub release
         if: ${{ !inputs.dryRun }}
@@ -152,4 +152,4 @@ jobs:
 
       - name: Clean release plugin state
         if: always()
-        run: ./mvnw --batch-mode release:clean -Dlicense.skip || true
+        run: ./mvnw --batch-mode release:clean || true
