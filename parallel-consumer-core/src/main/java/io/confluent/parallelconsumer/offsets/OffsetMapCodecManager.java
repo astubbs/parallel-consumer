@@ -2,9 +2,11 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import io.confluent.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
 import io.confluent.parallelconsumer.internal.InternalRuntimeException;
 import io.confluent.parallelconsumer.internal.PCModule;
 import io.confluent.parallelconsumer.metrics.PCMetrics;
@@ -74,7 +76,12 @@ public class OffsetMapCodecManager<K, V> {
 
     private final PCMetrics pcMetrics;
 
-    private static ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy = ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
+    /**
+     * What the decode path does with commit metadata this build cannot read. Read from the module's options (the DI
+     * system) per instance - it used to be a mutable static written by this constructor, which meant the last
+     * {@link OffsetMapCodecManager} constructed in the JVM decided the policy for every other one.
+     */
+    private final InvalidOffsetMetadataHandlingPolicy errorPolicy;
 
     /**
      * Decoding result for encoded offsets
@@ -114,9 +121,7 @@ public class OffsetMapCodecManager<K, V> {
     // todo remove consumer #233
     public OffsetMapCodecManager(PCModule<K, V> module) {
         this.module = module;
-        if (module != null){
-            this.errorPolicy = module.options().getInvalidOffsetMetadataPolicy();
-        }
+        this.errorPolicy = module.options().getInvalidOffsetMetadataPolicy();
         pcMetrics = module.pcMetrics();
         initMeters();
     }
@@ -177,22 +182,38 @@ public class OffsetMapCodecManager<K, V> {
         return partitionStates;
     }
 
-    private HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(OffsetAndMetadata offsetData) throws OffsetDecodingError {
-        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata());
+    private HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata(), errorPolicy, tp);
     }
 
+    /**
+     * Decodes with the strict {@link InvalidOffsetMetadataHandlingPolicy#FAIL} policy - for callers with no configured
+     * consumer to take a policy from.
+     */
     public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition, String base64EncodedOffsetPayload) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload, InvalidOffsetMetadataHandlingPolicy.FAIL, null);
+    }
+
+    /**
+     * @param errorPolicy what to do with metadata this build cannot read - see
+     *                    {@link EncodedOffsetPair#decodeToIncompletes}
+     * @param tp          the partition the metadata was committed against, for diagnosis - may be null when unknown
+     */
+    public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition,
+                                                                                       String base64EncodedOffsetPayload,
+                                                                                       InvalidOffsetMetadataHandlingPolicy errorPolicy,
+                                                                                       TopicPartition tp) throws OffsetDecodingError {
         byte[] decodedBytes;
         try {
             decodedBytes = OffsetSimpleSerialisation.decodeBase64(base64EncodedOffsetPayload);
         } catch (IllegalArgumentException a) {
             throw new OffsetDecodingError(msg("Error decoding offset metadata, input was: {}", base64EncodedOffsetPayload), a);
         }
-        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes);
+        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy, tp);
     }
 
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
-        HighestOffsetAndIncompletes incompletes = deserialiseIncompleteOffsetMapFromBase64(offsetData);
+        HighestOffsetAndIncompletes incompletes = deserialiseIncompleteOffsetMapFromBase64(tp, offsetData);
         log.debug("Loaded incomplete offsets from offset payload {}", incompletes);
         var epoch = module.workManager().getPm().getEpochOfPartition(tp);
         return new PartitionState<>(epoch, module, tp, incompletes);
@@ -270,6 +291,18 @@ public class OffsetMapCodecManager<K, V> {
      * @return Set of offsets which are not complete, and the highest offset encoded.
      */
     static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset, byte[] decodedBytes) {
+        return decodeCompressedOffsets(nextExpectedOffset, decodedBytes, InvalidOffsetMetadataHandlingPolicy.FAIL, null);
+    }
+
+    /**
+     * @param errorPolicy what to do with metadata this build cannot read - see
+     *                    {@link EncodedOffsetPair#decodeToIncompletes}
+     * @param tp          the partition the metadata was committed against, for diagnosis - may be null when unknown
+     */
+    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset,
+                                                               byte[] decodedBytes,
+                                                               InvalidOffsetMetadataHandlingPolicy errorPolicy,
+                                                               TopicPartition tp) {
 
         // if no offset bitmap data
         if (decodedBytes.length == 0) {
@@ -278,8 +311,7 @@ public class OffsetMapCodecManager<K, V> {
             long highestSeenOffsetIsThen = nextExpectedOffset - 1;
             return HighestOffsetAndIncompletes.of(highestSeenOffsetIsThen);
         } else {
-            var result = EncodedOffsetPair.unwrap(decodedBytes);
-            return result.getDecodedIncompletes(nextExpectedOffset, errorPolicy);
+            return EncodedOffsetPair.decodeToIncompletes(decodedBytes, nextExpectedOffset, errorPolicy, tp);
         }
     }
 

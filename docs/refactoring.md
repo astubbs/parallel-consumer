@@ -180,6 +180,17 @@ Do not start one casually.
 ### offsets/OffsetRunLength.java
 - L92: possibly avoid creating offset metadata at all in some cases.
 
+### offsets/OffsetEncoding.java
+- `ByteArray` / `ByteArrayCompressed` are enum constants that claim two magic bytes
+  but have **no live encoder** (`OffsetSimultaneousEncoder` L209: commented out, "no
+  advantage over BitSet encoding") and **no decoder** in
+  `EncodedOffsetPair#getDecodedIncompletes` - they fall to its `default` branch. They
+  now fail as a typed `UnsupportedOffsetEncodingException` routed through
+  `invalidOffsetMetadataPolicy` rather than a bare `UnsupportedOperationException`, so
+  nothing is unsafe - but the constants should either gain decoders or be deleted.
+  Deleting them frees two magic bytes and is a **wire-format** decision, so it belongs
+  with the breaking-change queue, not an ad-hoc cleanup.
+
 ### offsets/OffsetDecodingError.java
 - L13: should it extend `java.lang.Error`? (exception-hierarchy design)
 

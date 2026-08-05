@@ -8,7 +8,9 @@ package io.confluent.parallelconsumer.offsets;
 import io.confluent.parallelconsumer.internal.InternalException;
 
 /**
- * Parent of the exceptions for when the {@link OffsetEncoder} cannot encode the given data.
+ * Parent of the exceptions for when the {@link OffsetEncoder} cannot encode the given data, and of those for when the
+ * decode side cannot read a given payload - see {@link UnknownOffsetMetadataMagicException},
+ * {@link UnsupportedOffsetEncodingException} and {@link KafkaStreamsEncodingNotSupported}.
  *
  * @author Antony Stubbs
  */

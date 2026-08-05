@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.MockConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeAll;
@@ -47,6 +48,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Optional.of;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
+import static org.assertj.core.api.InstanceOfAssertFactories.throwable;
 
 // todo refactor - remove tests which use hard coded state vs dynamic state - #compressionCycle, #selialiseCycle, #runLengthEncoding, #loadCompressedRunLengthRncoding
 @Slf4j
@@ -463,6 +465,114 @@ class WorkManagerOffsetMapCodecManagerTest {
 
         assertThat(longs.getHighestSeenOffset()).isEqualTo(Optional.of(100L));
         assertThat(longs.getIncompleteOffsets()).isEqualTo(Collections.emptySet());
+    }
+
+    /**
+     * The forward-compatibility case: a commit written by a FUTURE version of PC, using an encoding whose magic byte
+     * this version has never heard of.
+     * <p>
+     * Under the strict policy that must fail - but with a typed, explanatory exception, not the bare
+     * {@code RuntimeException("Unexpected magic: ...")} that {@link OffsetEncoding#decode} used to throw from
+     * upstream of anywhere the policy was known.
+     */
+    @Test
+    void unknownMagicByteWithDefaultErrorPolicy() {
+        byte magic = OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet();
+
+        assertThatThrownBy(() -> OffsetMapCodecManager.decodeCompressedOffsets(100L,
+                new byte[]{magic, 0, 0, 0},
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL,
+                tp))
+                .isInstanceOf(UnknownOffsetMetadataMagicException.class)
+                .hasMessageContaining(String.valueOf(magic))
+                .hasMessageContaining(tp.toString())
+                .asInstanceOf(throwable(UnknownOffsetMetadataMagicException.class))
+                .returns(magic, UnknownOffsetMetadataMagicException::getMagicByte);
+    }
+
+    /**
+     * Same payload as {@link #unknownMagicByteWithDefaultErrorPolicy}, but with the policy that exists precisely for
+     * metadata this build cannot read - so the unreadable map is dropped and we resume from the committed offset,
+     * instead of the consumer dying on a partition assignment it can never recover from.
+     */
+    @Test
+    void unknownMagicByteWithIgnoreErrorPolicy() {
+        byte magic = OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet();
+
+        var decoded = OffsetMapCodecManager.decodeCompressedOffsets(100L,
+                new byte[]{magic, 0, 0, 0},
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE,
+                tp);
+
+        assertThat(decoded.getHighestSeenOffset()).isEqualTo(Optional.of(100L));
+        assertThat(decoded.getIncompleteOffsets()).isEmpty();
+    }
+
+    /**
+     * The sibling case: an encoding this build KNOWS (it is in {@link OffsetEncoding}) but has no decoder for, so it
+     * falls to the switch's default branch. {@link OffsetEncoding#ByteArray} is the real example - it has a magic byte
+     * and an encoder, but {@link EncodedOffsetPair#getDecodedIncompletes} does not handle it.
+     */
+    @Test
+    void unsupportedKnownEncodingWithDefaultErrorPolicy() {
+        assertThatThrownBy(() -> OffsetMapCodecManager.decodeCompressedOffsets(100L,
+                new byte[]{ByteArray.getMagicByte(), 0, 0, 0},
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL,
+                tp))
+                .isInstanceOf(UnsupportedOffsetEncodingException.class)
+                .hasMessageContaining(ByteArray.description())
+                .hasMessageContaining(tp.toString())
+                .asInstanceOf(throwable(UnsupportedOffsetEncodingException.class))
+                .returns(ByteArray, UnsupportedOffsetEncodingException::getEncoding);
+    }
+
+    @Test
+    void unsupportedKnownEncodingWithIgnoreErrorPolicy() {
+        var decoded = OffsetMapCodecManager.decodeCompressedOffsets(100L,
+                new byte[]{ByteArray.getMagicByte(), 0, 0, 0},
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE,
+                tp);
+
+        assertThat(decoded.getHighestSeenOffset()).isEqualTo(Optional.of(100L));
+        assertThat(decoded.getIncompleteOffsets()).isEmpty();
+    }
+
+    /**
+     * The plumbing itself: the policy the user configured on {@link ParallelConsumerOptions} has to reach the magic
+     * byte decode, which happens well below where the option was previously read. Exercised through
+     * {@link OffsetMapCodecManager#decodePartitionState} - the real partition-assignment path - rather than by handing
+     * the policy in directly.
+     */
+    @SneakyThrows
+    @Test
+    void unreadableMetadataPolicyIsTakenFromOptions() {
+        byte magic = OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet();
+        String payloadFromAFutureVersion = OffsetSimpleSerialisation.base64(new byte[]{magic, 0, 0, 0});
+        var committed = new OffsetAndMetadata(100L, payloadFromAFutureVersion);
+
+        //
+        assertThatThrownBy(() -> codecManagerConfiguredWith(ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL)
+                .decodePartitionState(tp, committed))
+                .as("strict policy still fails on metadata it cannot read")
+                .isInstanceOf(UnknownOffsetMetadataMagicException.class);
+
+        //
+        var state = codecManagerConfiguredWith(ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE)
+                .decodePartitionState(tp, committed);
+
+        assertWithMessage("IGNORE resumes from the committed offset instead of failing the assignment")
+                .that(state.getOffsetHighestSeen()).isEqualTo(100L);
+        assertThat(state.getIncompleteOffsetsBelowHighestSucceeded()).isEmpty();
+    }
+
+    private OffsetMapCodecManager<String, String> codecManagerConfiguredWith(ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy policy) {
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST))
+                .invalidOffsetMetadataPolicy(policy)
+                .build();
+        var isolatedModule = new PCModuleTestEnv(options);
+        isolatedModule.workManager().onPartitionsAssigned(UniLists.of(tp));
+        return new OffsetMapCodecManager<>(isolatedModule);
     }
 
     @SneakyThrows

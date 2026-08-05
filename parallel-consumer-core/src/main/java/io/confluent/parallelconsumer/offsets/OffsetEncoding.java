@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.Getter;
@@ -10,6 +11,7 @@ import lombok.ToString;
 
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -60,13 +62,32 @@ public enum OffsetEncoding {
 
     private static final Map<Byte, OffsetEncoding> magicMap = Arrays.stream(values()).collect(Collectors.toMap(OffsetEncoding::getMagicByte, Function.identity()));
 
-    public static OffsetEncoding decode(byte magic) {
-        OffsetEncoding encoding = magicMap.get(magic);
-        if (encoding == null) {
-            throw new RuntimeException("Unexpected magic: " + magic);
-        } else {
-            return encoding;
+    /**
+     * Resolves a magic byte to its encoding, without deciding what to do when it resolves to nothing.
+     * <p>
+     * An empty result is the forward-compatibility case: metadata written by a newer version of Parallel Consumer,
+     * using an encoding that did not exist when this version was built. The caller is the one that knows the
+     * configured {@link io.confluent.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy},
+     * so the caller - not this method - decides whether that is fatal.
+     *
+     * @param magic the leading byte of an offset metadata payload
+     * @return the encoding that claims this magic byte, or empty if no encoding known to this build does
+     * @see EncodedOffsetPair#decodeToIncompletes
+     */
+    public static Optional<OffsetEncoding> maybeDecode(byte magic) {
+        return Optional.ofNullable(magicMap.get(magic));
+    }
+
+    /**
+     * @throws UnknownOffsetMetadataMagicException if no encoding known to this build claims this magic byte
+     * @see #maybeDecode for the policy-aware decode path
+     */
+    public static OffsetEncoding decode(byte magic) throws UnknownOffsetMetadataMagicException {
+        Optional<OffsetEncoding> encoding = maybeDecode(magic);
+        if (!encoding.isPresent()) { // Optional#isEmpty is Java 11 - this module compiles against the Java 8 API
+            throw new UnknownOffsetMetadataMagicException(magic);
         }
+        return encoding.get();
     }
 
     public String description() {
