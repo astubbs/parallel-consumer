@@ -497,7 +497,7 @@ entries:
   - id: issue-907-mdc-propagation
     group: logging-ux
     summary: Caller's SLF4J MDC is not propagated into the worker pool or the engine threads
-    fork: {branches: [feat/mdc-context-propagation], prs: [], status: ready}
+    fork: {branches: [feat/mdc-context-propagation], prs: [205], status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [907], prs: [], related: [], status: open, last_checked: 2026-08-05}
     forwarded: [{url: null, posted: null}]
     adoc_anchor: null
@@ -511,8 +511,9 @@ entries:
       Reactor / Mutiny. Fixed by MdcPropagation + ParallelConsumerOptions.propagateMdc
       (default true). Also fixes a pre-existing leak: whatever the user function put
       into the MDC stayed on the pooled thread for the next, unrelated, record.
-      todo: set prs + status pr-open once the fork PR is opened; a backlink comment
-      on upstream #907 is worth posting only once this releases.
+      todo: a backlink comment on upstream #907 is worth posting only once this
+      releases -- and should be a reply about the MDC finding specifically, not a
+      duplicate of the fork-awareness comment issue-907-maintenance-signal owns.
 
   # ---------------------------------------------------------------------------
   # FOUND BY THE 2026-07-28 ACTIVITY SWEEP (new upstream activity)
