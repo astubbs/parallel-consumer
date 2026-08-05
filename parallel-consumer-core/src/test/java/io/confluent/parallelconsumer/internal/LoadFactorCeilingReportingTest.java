@@ -87,6 +87,8 @@ class LoadFactorCeilingReportingTest {
                 .filter(message -> message.contains("loading factor is fixed"))
                 .collect(Collectors.toList());
         assertThat(debug).isNotEmpty();
+
+        assertReportsTheThresholdItActuallyTested(debug.get(0), options, module);
     }
 
     /**
@@ -116,6 +118,30 @@ class LoadFactorCeilingReportingTest {
         assertThat(warnings.get(0)).contains("saturation signal");
         assertThat(warnings.get(0)).contains("maximumLoadFactor");
         assertThat(warnings.get(0)).doesNotContain(OLD_MESSAGE);
+
+        assertReportsTheThresholdItActuallyTested(warnings.get(0), options, module);
+    }
+
+    /**
+     * The numbers in the message have to be the numbers the code actually used, or the message is worse than the noise
+     * it replaced - a reader comparing them against
+     * {@link ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()} would find a mismatch and reasonably suspect
+     * a bug.
+     * <p>
+     * The branch is entered because {@code isPoolQueueLow()} found the pool queue at or below the <em>un-multiplied</em>
+     * in-flight target, so that is the threshold the "queued vs" comparison must name. The loaded target (target x
+     * factor) is the separate number the factor scales, and is reported as such.
+     */
+    private void assertReportsTheThresholdItActuallyTested(String message,
+                                                           ParallelConsumerOptions<String, String> options,
+                                                           PCModule<String, String> module) {
+        int poolLoadTarget = options.getTargetAmountOfRecordsInFlight();
+        int loadedTarget = poolLoadTarget * module.dynamicExtraLoadFactor().getCurrentFactor();
+        // the two must differ, or this assertion cannot tell them apart
+        assertThat(loadedTarget).isNotEqualTo(poolLoadTarget);
+
+        assertThat(message).contains("0 queued vs " + poolLoadTarget);
+        assertThat(message).contains(loadedTarget + " records");
     }
 
     @Test

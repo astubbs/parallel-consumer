@@ -30,6 +30,13 @@ case before the fix.
   which a user may want to act on - but rate limited to once per 30s (`RateLimiter`, as already used by
   `BrokerPollSystem` and `ProcessingShard`), and reworded so it reads as saturation rather than failure.
   Deliberately NOT demoted: weakening a real signal to fix a volume problem would be the wrong trade.
+- **The numbers in the message name what the code actually compared.** Review caught a first cut that
+  printed `getQueueTargetLoaded()` (target x factor) as the threshold the queue was "below", when the
+  branch was entered by `isPoolQueueLow()` comparing against the un-multiplied `getPoolLoadTarget()` -
+  `0 queued vs 1008` where the real test was `0 vs 16`. Both numbers are useful and both are now
+  reported, each labelled: the pool queue target is what the queue was measured against, the loaded
+  target is the in-flight buffer the factor scales. `LoadFactorCeilingReportingTest` now asserts on the
+  values, which is what let the mismatch through in the first place.
 
 ## Left open
 

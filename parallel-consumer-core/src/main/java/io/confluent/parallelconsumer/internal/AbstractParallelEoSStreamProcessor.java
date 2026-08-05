@@ -265,9 +265,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
+     * <p>
+     * {@code volatile} because the setter below widens the write beyond the control thread which owns the field: a
+     * test driving {@link #checkPipelinePressure()} sets it from whichever thread it runs on, and SpotBugs
+     * (AT_STALE_THREAD_WRITE_OF_PRIMITIVE) is right that a plain {@code boolean} gives that write no visibility
+     * guarantee. The field is touched once per control loop pass, so the barrier costs nothing measurable.
      */
     @Setter(PROTECTED) // visible for testing - lets a test put the pressure check into its guarded branch
-    private boolean lastWorkRequestWasFulfilled = false;
+    private volatile boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
@@ -1162,17 +1167,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void reportLoadFactorAtCeiling() {
         if (dynamicExtraLoadFactor.isStaticFactor()) {
-            log.debug("Queue is below its target ({} queued vs {}), and the loading factor is fixed at {} by configuration - not stepping up.",
-                    getNumberOfUserFunctionsQueued(), getQueueTargetLoaded(), dynamicExtraLoadFactor.getCurrentFactor());
+            log.debug("Executor pool queue is below its target ({} queued vs {}), and the loading factor is fixed at {} by configuration - " +
+                            "not stepping up, so the in-flight target stays at {} records.",
+                    getNumberOfUserFunctionsQueued(),
+                    getPoolLoadTarget(),
+                    dynamicExtraLoadFactor.getCurrentFactor(),
+                    getQueueTargetLoaded());
         } else {
             loadFactorAtCeilingLimiter.performIfNotLimited(() ->
-                    log.warn("Loading factor has reached its maximum ({}/{}) and the queue is still below its target ({} queued vs {}), " +
-                                    "so the in-flight target will not grow further. This is a saturation signal, not an error: raise " +
-                                    "ParallelConsumerOptions#maximumLoadFactor or #messageBufferSize to buffer more records. " +
-                                    "Repeats are suppressed for {}s.",
+                    log.warn("Loading factor has reached its maximum ({}/{}) and the executor pool queue is still below its target " +
+                                    "({} queued vs {}), so the in-flight target of {} records will not grow further. This is a saturation " +
+                                    "signal, not an error: raise ParallelConsumerOptions#maximumLoadFactor or #messageBufferSize to buffer " +
+                                    "more records. Repeats are suppressed for {}s.",
                             dynamicExtraLoadFactor.getCurrentFactor(),
                             dynamicExtraLoadFactor.getMaxFactor(),
                             getNumberOfUserFunctionsQueued(),
+                            getPoolLoadTarget(),
                             getQueueTargetLoaded(),
                             LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS));
         }
