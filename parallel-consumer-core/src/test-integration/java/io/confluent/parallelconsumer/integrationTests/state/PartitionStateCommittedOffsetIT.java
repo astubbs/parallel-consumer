@@ -464,6 +464,14 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
             var groupId = clientUtils.getGroupId();
             runPcUntilOffset(offsetResetPolicy, END_OFFSET, END_OFFSET, UniSets.of(), GroupOption.REUSE_GROUP);
 
+            // REGRESSION GUARD - deliberately makes this test exercise the case that used to break it.
+            // awaitWithTopicNudge above produces 1..N nudge records depending on load, and on an idle
+            // machine N is reliably 1, which is exactly why "run sends one" arithmetic passed locally
+            // for months and failed on a contended CI runner. Producing one extra record here forces
+            // N >= 2 on EVERY run, so any future assertion that assumes a fixed record count fails
+            // immediately and everywhere, instead of intermittently and only under load.
+            getKcu().produceMessages(getTopic(), 1, "nudge-count-regression-guard-");
+
             // How many records exist is a question the BROKER can answer, so ask it. This used to be
             // "+ 1 // run sends one", true when runPcUntilOffset produced a single record up front. It
             // now nudges from INSIDE the await, one record per poll iteration, so the real count is
