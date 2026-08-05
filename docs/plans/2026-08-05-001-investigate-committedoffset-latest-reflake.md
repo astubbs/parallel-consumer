@@ -119,6 +119,17 @@ Fixed by removing the assumption rather than correcting it - both call sites now
 offset from the broker. After the fix, TWO extra nudges give 3 tests / 0 failures, and a soak of 8 runs
 with 2 cores free passes 8/8. The soak is corroboration only: it can fail to disprove, never prove.
 
+**The probe is now permanent, not a one-time check.** Verifying by hand and deleting the probe would
+have left nothing to catch a re-introduced count assumption - the next `TO_PRODUCE + 2` would pass on an
+idle machine exactly as this one did. The test therefore produces one extra record on every run, forcing
+`N >= 2` always, and `awaitWithTopicNudge`'s javadoc now states that it produces 1..N records and that
+anything downstream must ask the broker rather than count.
+
+That guard was itself verified by re-introducing the bug: with the guard in place, the old
+`TO_PRODUCE + 2` bound fails **3/3 parameters in 14 seconds** with the original signature, where without
+it the same bug passed locally and failed roughly 1 CI run in 6. A regression test that does not fail
+when the bug returns is worse than none, because it looks like protection.
+
 The plan below is kept as written, because the route mattered - step 1 is what turned a plausible story
 into a confirmed one, and step 2's "fix the arithmetic, not the timing" is what the fix did.
 
