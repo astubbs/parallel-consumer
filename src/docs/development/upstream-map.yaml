@@ -516,8 +516,8 @@ entries:
     summary: "\"Max loading factor steps reached\" WARN spammed every control loop pass"
     fork:
       branches: [fix/155-load-factor-noise]
-      prs: []
-      status: ready
+      prs: [201]
+      status: pr-open
     upstream: {repo: confluentinc/parallel-consumer, issues: [402], prs: [], related: [547, 606, 857], status: open, last_checked: 2026-08-05}
     forwarded: [{url: null, posted: null}]
     adoc_anchor: null
