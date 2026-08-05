@@ -24,6 +24,14 @@ being folded into a later encoding change.
   that still reference the static will not compile - read it from the module instead.
 - The static `decodeCompressedOffsets(long, byte[])` / `deserialiseIncompleteOffsetMapFromBase64(long,
   String)` helpers still exist for tests, and now default explicitly to `FAIL`.
+- **`IGNORE` now resumes from `committedOffset - 1`, not `committedOffset`.** Found while wiring the
+  two new paths through the shared helper: the pre-existing Kafka Streams `IGNORE` branch returned
+  `HighestOffsetAndIncompletes.of(baseOffset)`, but `baseOffset` is the *committed* offset, i.e. the
+  next one to be polled. Claiming to have *seen and succeeded* it makes
+  `PartitionState#isRecordPreviouslyCompleted` skip that record and pushes the next commit to
+  `baseOffset + 1`. The no-metadata-at-all branch of `decodeCompressedOffsets` two lines away always
+  got this right (`nextExpectedOffset - 1`); the `IGNORE` branch did not. All three unreadable-metadata
+  paths now agree with it. Any branch merging its own `IGNORE` handling must use `baseOffset - 1`.
 
 ## Left open
 

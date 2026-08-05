@@ -147,6 +147,13 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      * everything needed to diagnose it, and continue from the committed offset - which replays anything that was
      * completed but not yet committed, and is strictly better than refusing to start.
      *
+     * @param baseOffset the committed offset, which is the <b>next</b> offset expected to be polled - so the highest
+     *                   offset we can claim to have seen is the one BELOW it. Getting this wrong loses a record:
+     *                   {@code of(baseOffset)} would mark the committed offset itself as succeeded, so
+     *                   {@link io.confluent.parallelconsumer.state.PartitionState#isRecordPreviouslyCompleted} would
+     *                   skip that record and the next commit would be {@code baseOffset + 1}. Matches the
+     *                   no-metadata-at-all branch of {@link OffsetMapCodecManager#decodeCompressedOffsets}, which is
+     *                   the same situation - we have a committed offset and no readable map to go with it.
      * @param problem  what is wrong, in log voice
      * @param toThrow  the typed exception for the strict policy, built lazily so its (longer) advice text costs
      *                 nothing on the IGNORE path
@@ -163,7 +170,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                             "will continue from the committed offset - records that were completed but not committed " +
                             "before this point will be replayed.",
                     tp, baseOffset, problem);
-            return HighestOffsetAndIncompletes.of(baseOffset);
+            return HighestOffsetAndIncompletes.of(baseOffset - 1);
         }
         throw toThrow.get();
     }

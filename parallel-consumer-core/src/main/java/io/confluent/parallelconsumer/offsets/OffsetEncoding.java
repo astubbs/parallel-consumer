@@ -7,6 +7,7 @@ package io.confluent.parallelconsumer.offsets;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.ToString;
 
 import java.util.Arrays;
@@ -79,10 +80,20 @@ public enum OffsetEncoding {
     }
 
     /**
+     * Resolves a magic byte to its encoding, or fails.
+     * <p>
+     * Deliberately keeps its original signature - no {@code throws} clause - even though
+     * {@link UnknownOffsetMetadataMagicException} is checked. This method is {@code public}, and before this change it
+     * threw a bare unchecked {@code RuntimeException}, so declaring the checked exception would break source
+     * compatibility for any existing caller. {@code @SneakyThrows} is how the rest of this package already smuggles
+     * these (see {@link EncodedOffsetPair#unwrap} and {@link EncodedOffsetPair#getDecodedIncompletes}); the caller
+     * sees a strictly better exception than before, at the same signature.
+     *
      * @throws UnknownOffsetMetadataMagicException if no encoding known to this build claims this magic byte
-     * @see #maybeDecode for the policy-aware decode path
+     * @see #maybeDecode for the policy-aware decode path, which production decoding uses instead
      */
-    public static OffsetEncoding decode(byte magic) throws UnknownOffsetMetadataMagicException {
+    @SneakyThrows
+    public static OffsetEncoding decode(byte magic) {
         Optional<OffsetEncoding> encoding = maybeDecode(magic);
         if (!encoding.isPresent()) { // Optional#isEmpty is Java 11 - this module compiles against the Java 8 API
             throw new UnknownOffsetMetadataMagicException(magic);

@@ -408,7 +408,9 @@ class WorkManagerOffsetMapCodecManagerTest {
 
         OffsetMapCodecManager.HighestOffsetAndIncompletes longs = encodedOffsetPair.getDecodedIncompletes(100L, ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE);
 
-        assertThat(longs.getHighestSeenOffset()).isEqualTo(Optional.of(100L));
+        // 99, not 100: 100 is the COMMITTED offset, i.e. the next one to be polled, so the highest we can claim to
+        // have seen is the one below it. Marking 100 itself as seen/succeeded would skip that record.
+        assertThat(longs.getHighestSeenOffset()).isEqualTo(Optional.of(99L));
         assertThat(longs.getIncompleteOffsets()).isEqualTo(Collections.emptySet());
 
     }
@@ -463,7 +465,9 @@ class WorkManagerOffsetMapCodecManagerTest {
         EncodedOffsetPair encodedOffsetPair = EncodedOffsetPair.unwrap(input.array());
         OffsetMapCodecManager.HighestOffsetAndIncompletes longs = encodedOffsetPair.getDecodedIncompletes(100L, ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE);
 
-        assertThat(longs.getHighestSeenOffset()).isEqualTo(Optional.of(100L));
+        // 99, not 100: 100 is the COMMITTED offset, i.e. the next one to be polled, so the highest we can claim to
+        // have seen is the one below it. Marking 100 itself as seen/succeeded would skip that record.
+        assertThat(longs.getHighestSeenOffset()).isEqualTo(Optional.of(99L));
         assertThat(longs.getIncompleteOffsets()).isEqualTo(Collections.emptySet());
     }
 
@@ -504,7 +508,9 @@ class WorkManagerOffsetMapCodecManagerTest {
                 ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE,
                 tp);
 
-        assertThat(decoded.getHighestSeenOffset()).isEqualTo(Optional.of(100L));
+        // 99, not 100: the committed offset is the NEXT offset to poll, so the highest offset we can claim to have
+        // seen is the one below it - otherwise the record at the committed offset is skipped as already completed
+        assertThat(decoded.getHighestSeenOffset()).isEqualTo(Optional.of(99L));
         assertThat(decoded.getIncompleteOffsets()).isEmpty();
     }
 
@@ -533,7 +539,9 @@ class WorkManagerOffsetMapCodecManagerTest {
                 ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE,
                 tp);
 
-        assertThat(decoded.getHighestSeenOffset()).isEqualTo(Optional.of(100L));
+        // 99, not 100: the committed offset is the NEXT offset to poll, so the highest offset we can claim to have
+        // seen is the one below it - otherwise the record at the committed offset is skipped as already completed
+        assertThat(decoded.getHighestSeenOffset()).isEqualTo(Optional.of(99L));
         assertThat(decoded.getIncompleteOffsets()).isEmpty();
     }
 
@@ -561,8 +569,13 @@ class WorkManagerOffsetMapCodecManagerTest {
                 .decodePartitionState(tp, committed);
 
         assertWithMessage("IGNORE resumes from the committed offset instead of failing the assignment")
-                .that(state.getOffsetHighestSeen()).isEqualTo(100L);
+                .that(state.getOffsetHighestSeen()).isEqualTo(99L);
         assertThat(state.getIncompleteOffsetsBelowHighestSucceeded()).isEmpty();
+
+        // the point of the whole exercise: discarding metadata we cannot read must not advance the commit point past
+        // the offset that was committed, or the record at that offset is skipped as "previously completed"
+        assertWithMessage("discarding unreadable metadata must not skip the record at the committed offset")
+                .that(state.getOffsetHighestSequentialSucceeded() + 1).isEqualTo(100L);
     }
 
     private OffsetMapCodecManager<String, String> codecManagerConfiguredWith(ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy policy) {
