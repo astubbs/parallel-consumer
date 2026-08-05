@@ -511,6 +511,28 @@ entries:
       RemovedPartitionState to topic-partition + size + epoch. Low-effort log
       cleanup; pairs with upstream issues #629/#631 (adoc Part 3 category 8).
 
+  - id: issue-402-max-load-factor-log-noise
+    group: logging-ux
+    summary: "\"Max loading factor steps reached\" WARN spammed every control loop pass"
+    fork:
+      branches: [fix/155-load-factor-noise]
+      prs: []
+      status: ready
+    upstream: {repo: confluentinc/parallel-consumer, issues: [402], prs: [], related: [547, 606, 857], status: open, last_checked: 2026-08-05}
+    forwarded: [{url: null, posted: null}]
+    adoc_anchor: null
+    notes: >
+      Mirrored as fork #155. Two halves to the original report: the STALL was fixed
+      upstream (#547/#606) and further in the #857 family on the fork, and is not
+      touched here. This is the LOG NOISE half only - checkPipelinePressure() ran
+      the WARN on every control loop pass with no rate limiting, and a configured
+      messageBufferSize pins the load factor to its own ceiling so it fired from
+      startup. Fix: DynamicLoadFactor#isStaticFactor() -> debug for a fixed factor,
+      RateLimiter(30s) + reworded WARN for a dynamic factor at its cap. No change to
+      buffering behaviour.
+    todo:
+      - "Post the fix backlink on upstream #402 once the fork PR merges - answering the original question too: the line is a saturation signal, not a stall cause"
+
   - id: issue-902-freshest-record-key-order
     group: features
     summary: Always process the freshest record when ordered by key

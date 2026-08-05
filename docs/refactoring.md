@@ -227,6 +227,11 @@ Do not start one casually.
 ### internal/DynamicLoadFactor.java
 - L90: `doStep()` is `private synchronized` (locks on `this`) - same lock-hygiene
   note as ProducerManager; low priority.
+- The warm-up and cool-down `Duration`s are hard-coded fields with no seam, so
+  stepping to the ceiling for real costs one cool-down per step (minutes for the
+  default 2 -> 100). `LoadFactorCeilingReportingTest` has to assert the terminal
+  state via a subclass because of it. Injecting them (through `PCModule`, with the
+  module's `Clock`) would make the stepping schedule itself testable.
 
 ### internal/ExternalEngine.java
 - L52: avoid the extra thread (go straight from the control thread). L91: method may

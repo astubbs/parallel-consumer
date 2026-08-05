@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.Getter;
@@ -70,9 +71,32 @@ public class DynamicLoadFactor {
     private long lastSteppedFactor = currentFactor;
     private Instant lastStepTime = Instant.MIN;
 
+    /**
+     * True when this factor is fixed - it starts at its ceiling, so there is nothing for the stepping machinery to do
+     * and being "at max" carries no information.
+     * <p>
+     * This is the shape produced by {@link io.confluent.parallelconsumer.ParallelConsumerOptions#messageBufferSize},
+     * which pins both bounds to the factor that yields the requested buffer size, and by explicitly configuring
+     * {@link io.confluent.parallelconsumer.ParallelConsumerOptions#initialLoadFactor} equal to
+     * {@link io.confluent.parallelconsumer.ParallelConsumerOptions#maximumLoadFactor}. In both cases the user asked for
+     * a fixed buffer, so saturation is the configuration working as requested - not a condition to report.
+     */
+    @Getter
+    private final boolean staticFactor;
+
     public DynamicLoadFactor(int initial, int maximum) {
         this.currentFactor = initial;
         this.maxFactor = maximum;
+        this.staticFactor = initial >= maximum;
+    }
+
+    /**
+     * A load factor pinned to a single value - it can never step, because it starts at its own ceiling.
+     *
+     * @param factor the fixed factor to use for the lifetime of the instance
+     */
+    public static DynamicLoadFactor fixedAt(int factor) {
+        return new DynamicLoadFactor(factor, factor);
     }
 
     /**
@@ -81,6 +105,10 @@ public class DynamicLoadFactor {
      * @return true if could step up
      */
     public boolean maybeStepUp() {
+        if (staticFactor) {
+            // nothing to step to - don't engage the stepping machinery at all
+            return false;
+        }
         if (couldStep()) {
             return doStep();
         }

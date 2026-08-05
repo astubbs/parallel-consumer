@@ -11,5 +11,10 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 - **#51 (virtual threads) collides with #57** - both edit `PCMetrics.java`. Sequence, don't parallelise.
 - **File ownership right now:** #57 owns metrics + partition state, #106 owns the offset encoders, and
   #29 will want the poll/lifecycle internals #80 reshaped. Pick parallel work accordingly.
+- **Two branches grew a log-capture test helper at the same time.** `fix/log-verbosity-batch` adds
+  `io.confluent.csid.utils.LogCapture` (a reusable `AutoCloseable` appender + level override);
+  `fix/155-load-factor-noise` has the same logic inline in `LoadFactorCeilingReportingTest` because
+  neither was on `master` when the other was written. **Whichever merges second must delete its copy
+  and use `LogCapture`** - do not leave two ways to capture a log line.
 - **#1 (`codeql`, 2026-04) and #8 (`features/retry-dlq`, 2022) are abandoned drafts**, kept only
   because #8 is the sole DLQ code that exists. Close or finish them; they are not in flight.
