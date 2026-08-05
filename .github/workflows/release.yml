@@ -39,6 +39,17 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # The dispatch inputs are bound to environment variables ONCE, here, so that no `run:` block
+    # interpolates `${{ inputs.* }}` into its own shell source. `${{ }}` is substituted textually
+    # into the script before bash ever parses it, so an input containing shell metacharacters is
+    # injected as code, not passed as data - env binding is GitHub's documented mitigation, and it
+    # is what makes "the version reaches the tools as an argument" actually true rather than
+    # merely look true. `if:`/`with:` expressions below are evaluated by Actions itself, never by
+    # a shell, so those legitimately keep using `${{ }}`.
+    env:
+      RELEASE_VERSION: ${{ inputs.releaseVersion }}
+      DEVELOPMENT_VERSION: ${{ inputs.developmentVersion }}
+      DRY_RUN: ${{ inputs.dryRun }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -81,7 +92,7 @@ jobs:
           if [ -n "$(quarantined_files)" ]; then
             echo "Quarantined tests present (registry: docs/quarantined-tests.md):"
             grep -rnE --include='*.java' --exclude-dir=target "$QUARANTINE_ANNOTATION_ERE" . || true
-            if [ "${{ inputs.dryRun }}" = "true" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
               echo "::warning::Dry run: a REAL release would be BLOCKED - known-failing tests are quarantined out of the gating suites. Land the owning fix PRs and re-enable before releasing."
             else
               echo "::error::Refusing to release: known-failing tests are quarantined out of the gating suites (docs/quarantined-tests.md). Land the owning fix PRs and re-enable them first."
@@ -93,8 +104,8 @@ jobs:
 
       - name: Guard - tag must not already exist
         run: |
-          if git rev-parse "refs/tags/v${{ inputs.releaseVersion }}" >/dev/null 2>&1; then
-            echo "::error::Tag v${{ inputs.releaseVersion }} already exists."; exit 1
+          if git rev-parse "refs/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag v$RELEASE_VERSION already exists."; exit 1
           fi
 
       # Rendered BEFORE anything is committed, tagged, deployed or published: a release whose
@@ -107,9 +118,9 @@ jobs:
       - name: Render release notes from CHANGELOG.adoc
         run: |
           bash bin/test-release-notes.sh
-          python3 bin/release-notes.py "${{ inputs.releaseVersion }}" > "$RUNNER_TEMP/release-notes.md"
+          python3 bin/release-notes.py "$RELEASE_VERSION" > "$RUNNER_TEMP/release-notes.md"
           {
-            echo "## Release notes for v${{ inputs.releaseVersion }}"
+            echo "## Release notes for v$RELEASE_VERSION"
             echo
             cat "$RUNNER_TEMP/release-notes.md"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -125,9 +136,9 @@ jobs:
         # resolve it. -DskipTests keeps it fast; the "refuse red master" guard already gated on tests.
         run: |
           ./mvnw --batch-mode release:prepare \
-            -DreleaseVersion=${{ inputs.releaseVersion }} \
-            -DdevelopmentVersion=${{ inputs.developmentVersion }} \
-            -DdryRun=${{ inputs.dryRun }} \
+            -DreleaseVersion="$RELEASE_VERSION" \
+            -DdevelopmentVersion="$DEVELOPMENT_VERSION" \
+            -DdryRun="$DRY_RUN" \
             -Darguments="-DskipTests"
 
       - name: Deploy the release tag to Maven Central
@@ -138,7 +149,7 @@ jobs:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
           # Tag = source of truth: deploy exactly what prepare tagged. Examples are excluded (sample code).
-          git checkout "v${{ inputs.releaseVersion }}"
+          git checkout "v$RELEASE_VERSION"
           ./mvnw --batch-mode -Pmaven-central -Pci \
             -pl '!:parallel-consumer-examples,!:parallel-consumer-example-core,!:parallel-consumer-example-metrics,!:parallel-consumer-example-streams,!:parallel-consumer-example-vertx,!:parallel-consumer-example-reactor' \
             clean deploy -DskipTests
@@ -152,8 +163,8 @@ jobs:
           # validated by the step above. Deliberately NOT --generate-notes: a commit-list body is
           # what a reader gets when the curated notes silently go missing, which is the failure
           # this pipeline had (astubbs#197). If there are no notes we do not reach this step at all.
-          gh release create "v${{ inputs.releaseVersion }}" \
-            --title "v${{ inputs.releaseVersion }}" \
+          gh release create "v$RELEASE_VERSION" \
+            --title "v$RELEASE_VERSION" \
             --notes-file "$RUNNER_TEMP/release-notes.md"
 
       - name: Clean release plugin state

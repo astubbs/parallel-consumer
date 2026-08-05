@@ -179,6 +179,18 @@ assert "bold and code spans" \
 - Package names (`bz.stub.parallelconsumer.*`) keep their asterisk.' \
     "$(render "$BOLD" 0.6.0.0)"
 
+# AsciiDoc bold is *constrained*: bare asterisks surrounded by whitespace are literal text, not
+# emphasis delimiters. A regex that ignores those boundaries silently rewrites `1 * cores` into
+# broken emphasis - a mangled body, which is exactly what this renderer promises never to ship.
+BARE_ASTERISK=$(changelog '== 0.6.0.0
+
+* Budget roughly 3 * 4 * 5 records.
+* Pass --forkCount 1 * cores, then *really* measure it.')
+assert "bare asterisks in prose are not emphasis" \
+    '- Budget roughly 3 * 4 * 5 records.
+- Pass --forkCount 1 * cores, then **really** measure it.' \
+    "$(render "$BARE_ASTERISK" 0.6.0.0)"
+
 LINKS=$(changelog '== 0.6.0.0
 
 * An https://github.com/astubbs/parallel-consumer/pull/55[#55] link.

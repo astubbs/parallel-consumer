@@ -78,7 +78,12 @@ RE_OLIST = re.compile(r"^(\.+)\s+(.*)$")
 RE_ADMONITION = re.compile(r"^(%s):{1,2}\s+(.*)$" % "|".join(ADMONITIONS))
 RE_URL_MACRO = re.compile(r"(https?://[^\s\[\]]+)\[([^\]]*)\]")
 RE_LINK_MACRO = re.compile(r"link:([^\s\[\]]+)\[([^\]]*)\]")
-RE_BOLD = re.compile(r"\*{1,2}([^*\n]+)\*{1,2}")
+# AsciiDoc *constrained* bold: the opening `*` must not follow a word character and must not be
+# followed by whitespace; the closing `*` must not follow whitespace nor precede a word character.
+# Honouring those boundaries is what stops ordinary prose containing two bare asterisks (`3 * 4 * 5`)
+# from being read as an emphasis span - a naive `\*{1,2}(...)\*{1,2}` mangles it into `3 ** 4 ** 5`.
+# The backreference keeps `*x*` and `**x**` symmetric instead of pairing one delimiter with two.
+RE_BOLD = re.compile(r"(?<![\w*])(\*{1,2})(?![\s*])(.+?)(?<![\s*])\1(?![\w*])")
 
 
 class NoSection(Exception):
@@ -152,7 +157,7 @@ def convert_prose(text, repo_url, ref):
     text = RE_LINK_MACRO.sub(link_macro, text)
     # AsciiDoc bold is *one* asterisk (**two** unconstrained); Markdown bold is two. One
     # asterisk in Markdown is italics, so leaving it alone would quietly change emphasis.
-    text = RE_BOLD.sub(lambda m: "**%s**" % m.group(1), text)
+    text = RE_BOLD.sub(lambda m: "**%s**" % m.group(2), text)
     return text
 
 

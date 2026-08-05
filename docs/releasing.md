@@ -35,6 +35,13 @@ the curated notes having silently vanished, which is how a release ended up with
 (astubbs#197). A dry run rehearses the render and prints the result to the job summary. The AsciiDoc
 subset a section may use is under *At release time* below.
 
+**Dispatch inputs are env-bound, never interpolated into a `run:` block.** `release.yml` binds
+`releaseVersion`/`developmentVersion`/`dryRun` to `RELEASE_VERSION`/`DEVELOPMENT_VERSION`/`DRY_RUN`
+once at job level, and every shell step reads `"$RELEASE_VERSION"`. `${{ }}` is substituted textually
+into the script *before* bash parses it, so an input containing shell metacharacters would be injected
+as code; env binding passes it as data. Keep new steps to this pattern - `if:`/`with:` expressions are
+evaluated by Actions rather than a shell, so those correctly keep using `${{ }}`.
+
 **Required GitHub repo secrets:**
 
 - `RELEASE_PAT` - fine-grained PAT (repo **Contents: write**) owned by a repo admin, so
