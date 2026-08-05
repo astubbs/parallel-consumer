@@ -20,15 +20,17 @@ nothing.
 | Done in #111 | |
 |---|---|
 | **Retargeted to `offsets.*`** | §4.3, the substantive one - in the sweep default *and* in the per-PR lane, which now mutates changed classes only within the decidable packages and names those it declined. |
-| Full sweep off PRs | Deleted from the highcpu matrix, now manual-only in `mutation-full-sweep.yml`. Not yet on a trigger - not because it cannot be (that reasoning was `internal.*`-specific and does not survive the retarget), but because nothing has measured its runtime. |
+| Full sweep off PRs | Deleted from the highcpu matrix, now manual-only in `mutation-full-sweep.yml`. Not yet on a trigger - not because it cannot be (that reasoning was `internal.*`-specific and does not survive the retarget), but because at the time nothing had measured its runtime. Since measured at 22 minutes; wiring the trigger is now a cost decision. |
 | One lane, not three-plus-a-spare | PIT ran **three times per PR**, with a fourth copy configured but dormant (§3.5). Now exactly one: `maven.yml`. |
 | `skipFailingTests` | §3.0's blast radius, fixed at the source rather than worked around. One flake no longer switches mutation testing off repo-wide. |
 | A summary that explains itself | Every exit path writes to the job summary - including "nothing to mutate" - and scoring runs **list the survivors**, since a percentage is a grade and a survivor is a work item (§6). |
 
-**Applied but NOT yet measured:** the retarget is a config change made on the strength of the argument in
-§4.3, not on a completed run. `offsets.*` is not obviously cheap either - `RunLengthEncoderTest` alone is
-~140s, re-run per mutant - so the first question the manual sweep answers is whether it completes at all.
-Do not quote a mutation score for this project until one has.
+**Measured since:** the retarget was a config change made on the strength of the argument in §4.3, not on
+a completed run, and `offsets.*` was not obviously cheap either - `RunLengthEncoderTest` alone is ~140s,
+re-run per mutant. The first manual sweep answered it: **it completes, in 21m55s, scoring 83%.** The
+numbers and what follows from them are in
+[`docs/inflight/ci-mutation-testing.md`](../inflight/ci-mutation-testing.md) - quote that baseline, not
+this section.
 
 ---
 
