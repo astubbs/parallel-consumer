@@ -36,10 +36,11 @@ worth acting on.
 To re-widen, in order:
 
 - ~~Run the sweep once and record the runtime~~ **DONE** - see the baseline above.
-- **Then give it a trigger** - now unblocked, at a known 22 minutes per run. Prefer `push: branches: [master]` over a cron: the score changes only
-  when the code does, so a nightly recomputes an identical answer whenever master did not move, and
-  blames a date rather than a merge. Add a `concurrency` group with `cancel-in-progress` - only the
-  latest master state is worth scoring. Deliberately NOT wired until the runtime is known.
+- **Then give it a trigger** - now unblocked, at a known 22 minutes per run. Prefer
+  `push: branches: [master]` over a cron: the score changes only when the code does, so a nightly
+  recomputes an identical answer whenever master did not move, and blames a date rather than a merge.
+  Add a `concurrency` group with `cancel-in-progress` - only the latest master state is worth scoring.
+  Still unwired - that is the next PR, and now a cost decision rather than a blocked one.
 - **Then widen `PIT_DECIDABLE_PACKAGES`** - `state.` is the obvious next candidate, but it is
   bookkeeping around the same concurrency, so it earns inclusion by measurement, not by argument. The
   marginal cost is smaller than it looks: the 311s coverage pass is paid whatever the target, so adding a
