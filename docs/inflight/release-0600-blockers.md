@@ -16,6 +16,12 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   curated changelog never reaches the release page.
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; #186, #188 and #195 close with a pointer to the release.
+- **Two stale `3.9.1` references survive outside the published artefacts**, left alone here to keep
+  this PR scoped to what 0.6.0.0 publishes. `AGENTS.md:183` says PRs run "split suites on default
+  Kafka 3.9.1" - genuinely wrong, CI's default comes from `pom.xml`, which is `3.9.2`; it is a
+  one-word fix in a file this PR does not otherwise touch. `AGENTS.md:58` and the
+  `bin/ci-build.sh 3.9.1` line in `src/docs/README_TEMPLATE.adoc` are illustrative command examples
+  where the argument is the point, not the version, so they are arguably fine either way.
 
 ## Context worth inheriting
 
