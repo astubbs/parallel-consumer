@@ -270,6 +270,30 @@ Do not start one casually.
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
 
+### Cross-module test clones (the file-similarity backlog behind #40)
+
+Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the
+`MockConsumer*` family - is done: they now share `MockConsumerTestBase`. The audit of the rest of the
+tree found the remaining high-similarity pairs are overwhelmingly **cross-module clones**, which is a
+different and much larger job, because deduplicating them means a generified test base in core's
+test-jar that each module parameterises with its own processor type. Ranked, with a verdict, so the
+next reader does not re-derive the list:
+
+- **`Mutiny*Test` ↔ `Reactor*Test`** (`MutinyBatchTest`/`ReactorBatchTest` ~94%,
+  `MutinyPCTest`/`ReactorPCTest` ~86%, `MutinyUnitTestBase`/`ReactorUnitTestBase` ~80%). The real
+  prize: two reactive integrations tested by the same script with the publisher type swapped. Wants a
+  shared generified base, not a copy. Vertx is a third, looser member of the family.
+- **`TransactionAndCommitModeTest` ↔ `VeryLargeMessageVolumeTest`** (~88%, both core
+  `test-integration`). The only *within-module* pair above the check's `fail_above: 80`. Structural
+  and worth doing - but they are broker ITs, so it needs Docker to verify, not a desk refactor.
+- **`TestConventionsArchTest` x4** (~98%). **Leave alone.** Documented as irreducible in
+  `TestConventionRules`' javadoc: a module can only point ArchUnit at its own classes, so the shared
+  part is already extracted and what remains is the four-line pointer.
+- **`CommitRejectionTestBase` ↔ `MockConsumerTestBase`** (~71%). **Leave alone**, and do not read it
+  as a regression: two small abstract harnesses in one package share imports and a package
+  declaration, which is most of what a whole-file token measure sees. Extracting further would put
+  the scenario and its assertions in different files for no gain.
+
 ## Abandoned draft branches (idea bank)
 
 Never-merged fork branches - **design references only** (bitrotted). These are the

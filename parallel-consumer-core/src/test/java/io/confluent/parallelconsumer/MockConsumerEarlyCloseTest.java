@@ -5,7 +5,7 @@ package io.confluent.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LongPollingMockConsumer;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
@@ -14,17 +14,11 @@ import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.SaslAuthenticationException;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.truth.Truth.assertThat;
-import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
  * Tests that PC can be closed ahead of time. Make sure PC can shut down cleanly.
@@ -33,104 +27,80 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *
  * The offsetCommitTimeout as well as the saslAuthenticationRetryTimeout had been set to infinity as well.
  *
- * After 5 seconds PC will be requested to close. The expected behavior is that the PC can be shutdown cleanly.
+ * After 5 seconds PC will be requested to close. The expected behavior is that the PC can be shutdown cleanly -
+ * i.e. {@link ParallelEoSStreamProcessor#close()} returns rather than blocking on a retry budget that will
+ * never be exhausted.
+ *
+ * @see MockConsumerTestBase
  */
 @Slf4j
-@Timeout(60000L)
-class MockConsumerEarlyCloseTest {
+class MockConsumerEarlyCloseTest extends MockConsumerTestBase {
 
-    private final String topic = MockConsumerEarlyCloseTest.class.getSimpleName();
+    /** How long the consumer behaves before it starts failing, and keeps failing. */
+    private static final Duration HEALTHY_PERIOD = Duration.ofSeconds(2);
+
+    /** How long PC is left running in the outage before close is requested. */
+    private static final Duration RUN_BEFORE_CLOSE = Duration.ofSeconds(5);
 
     /**
-     * Test that the mock consumer works as expected
+     * Enough records that the feed outlives the test - close must succeed with work still arriving.
      */
-    @Test
-    void mockConsumer() {
-        final AtomicLong startFail = new AtomicLong(System.currentTimeMillis() + 2000L); // start failing after 2 seconds
-        final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 200000000L); // never recover
-        var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
+    private static final int RECORDS = 100_000;
+
+    @Override
+    protected MockConsumer<String, String> createMockConsumer() {
+        // captured, not a field: final-field semantics publish it safely to PC's threads, which are
+        // started after this returns
+        final long startFailing = System.currentTimeMillis() + HEALTHY_PERIOD.toMillis();
+        return new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized ConsumerRecords<String, String> poll(Duration timeout) {
-                long now = System.currentTimeMillis();
-                if(now > startFail.get() && now < failUntil.get()) {
-                    log.info("Mocking failure before 20 seconds");
-                    throw new SaslAuthenticationException("Invalid username or password");
-                }
+                failOnceOutageStarts();
                 return super.poll(timeout);
             }
 
             @Override
             public synchronized void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
-                long now = System.currentTimeMillis();
-                if(now > startFail.get() && now < failUntil.get()) {
-                    throw new SaslAuthenticationException("Invalid username or password");
-                }
+                failOnceOutageStarts();
                 super.commitSync(offsets);
             }
-        };
-        HashMap<TopicPartition, Long> startOffsets = new HashMap<>();
-        TopicPartition tp = new TopicPartition(topic, 0);
-        startOffsets.put(tp, 0L);
 
-        //
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)
-                .offsetCommitTimeout(Duration.ofSeconds(10000000L))
-                .saslAuthenticationRetryTimeout(Duration.ofSeconds(250000000L))
-                .build();
-        var parallelConsumer = new ParallelEoSStreamProcessor<String, String>(options);
-        parallelConsumer.subscribe(of(topic));
-
-        // MockConsumer is not a correct implementation of the Consumer contract - must manually rebalance++ - or use LongPollingMockConsumer
-        mockConsumer.rebalance(Collections.singletonList(tp));
-        parallelConsumer.onPartitionsAssigned(of(tp));
-        mockConsumer.updateBeginningOffsets(startOffsets);
-
-        // Daemon thread: must NOT survive past this test method, or when it wakes
-        // from sleep it'll addRecord() on a closed mockConsumer and throw an
-        // uncaught exception that PIT attributes to whatever test is running next
-        // in the same minion JVM. We also interrupt it explicitly in the finally
-        // block to stop the loop promptly.
-        Thread recordAdder = new Thread(() -> addRecords(mockConsumer), "early-close-record-adder");
-        recordAdder.setDaemon(true);
-        recordAdder.start();
-
-        try {
-            //
-            ConcurrentLinkedQueue<RecordContext<String, String>> records = new ConcurrentLinkedQueue<>();
-            parallelConsumer.poll(recordContexts -> {
-                recordContexts.forEach(recordContext -> {
-                    log.warn("Processing: {}", recordContext);
-                    records.add(recordContext);
-                });
-            });
-            try {
-                Thread.sleep(5000L);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+            /** Never recovers - the point is that close does not wait for a recovery that will not come. */
+            private void failOnceOutageStarts() {
+                if (System.currentTimeMillis() > startFailing) {
+                    throw new SaslAuthenticationException("Invalid username or password");
+                }
             }
-
-            log.info("Trying to close...");
-            parallelConsumer.close(); // request close after 5 seconds
-            log.info("Close successful!");
-        } finally {
-            recordAdder.interrupt();
-        }
+        };
     }
 
-    private void addRecords(MockConsumer<String, String> mockConsumer) {
-        for (int i = 0; i < 100000; i++) {
-            try {
-                mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, i, "key", "value"));
-                Thread.sleep(1000L);
-            } catch (IllegalStateException e) {
-                // mockConsumer was closed - test has ended, stop quietly
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
+    @Override
+    protected void customiseOptions(ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> builder) {
+        // effectively infinite: close must not depend on either budget running out
+        builder.offsetCommitTimeout(Duration.ofSeconds(10000000L))
+                .saslAuthenticationRetryTimeout(Duration.ofSeconds(250000000L));
+    }
+
+    /**
+     * Test that the mock consumer works as expected
+     */
+    @Test
+    @SneakyThrows
+    void mockConsumer() {
+        addRecordsInBackground(RECORDS, Duration.ofSeconds(1));
+
+        startProcessing();
+
+        Thread.sleep(RUN_BEFORE_CLOSE.toMillis());
+
+        log.info("Trying to close...");
+        parallelConsumer.close(); // request close while the consumer is still failing
+        log.info("Close successful!");
+
+        // "cleanly": actually closed, and not merely because the SASL storm killed it - a PC that had died
+        // would also report closed-or-failed, so the cause has to be checked too
+        assertThat(parallelConsumer.isClosedOrFailed()).isTrue();
+        assertThat(parallelConsumer.getFailureCause()).isNull();
     }
 
 }
