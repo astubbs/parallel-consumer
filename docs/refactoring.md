@@ -289,10 +289,13 @@ next reader does not re-derive the list:
 - **`TestConventionsArchTest` x4** (~98%). **Leave alone.** Documented as irreducible in
   `TestConventionRules`' javadoc: a module can only point ArchUnit at its own classes, so the shared
   part is already extracted and what remains is the four-line pointer.
-- **`CommitRejectionTestBase` ↔ `MockConsumerTestBase`** (~71%). **Leave alone**, and do not read it
-  as a regression: two small abstract harnesses in one package share imports and a package
-  declaration, which is most of what a whole-file token measure sees. Extracting further would put
-  the scenario and its assertions in different files for no gain.
+- **`CommitRejectionTestBase` ↔ `MockConsumerTestBase`** - **nothing to do, and nothing reported.**
+  Worth recording because the prediction was wrong: extracting the harness was expected to put these
+  two small abstract classes around 70% on the check, on the reasoning that a whole-file token
+  measure mostly sees their shared package declaration and imports. It did not - neither file reaches
+  the check's 30% reporting floor against anything (PR #206). The `MockConsumer*Test` scenarios
+  themselves came out at 34-37%, down from the 70.7% that #34 flagged. Estimate similarity from the
+  tool, not from a reading of the source.
 
 ## Abandoned draft branches (idea bank)
 

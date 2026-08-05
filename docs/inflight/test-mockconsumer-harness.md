@@ -27,7 +27,20 @@ clear that scenario's simulated outage window. Do not hoist them.
 
 ## Reading a file-similarity comment about these files
 
-`CommitRejectionTestBase` and `MockConsumerTestBase` sit around 70% on the check. That is two small
-abstract harnesses in one package sharing imports, not duplication to chase - see the verdict table
-in [`docs/refactoring.md`](../refactoring.md) (*Cross-module test clones*), which also ranks the
-genuinely-deferred pairs so the next PR does not re-derive the audit.
+Measured on PR #206, after the extraction:
+
+- The `MockConsumer*Test` scenarios now pair at **34-37%** (`CommitTimeout`↔`EarlyClose` 37.5%,
+  `CommitTimeout`↔`Sasl` 37.2%, `EarlyClose`↔`Sasl` 34.5%), down from the 70.7% that #34 flagged and
+  that motivated #40. What is left at that level is the copyright header, the import block and the
+  anonymous-`MockConsumer` shape - not wiring.
+- `CommitRejectionTestBase` and `MockConsumerTestBase` **do not appear in the report at all**. The
+  harness extraction was predicted to push them to ~70%; it did not, and neither file reaches the
+  check's 30% reporting floor against anything. Do not re-introduce that prediction.
+
+PMD CPD reports no new clones. jscpd reports one 8-line "clone" between `MockConsumerEarlyCloseTest`
+and `MockConsumerSaslAuthenticationTest` at line ~8 - that is the package declaration, copyright
+header and import list, every line of which is used by both. It is not actionable in Java; overall
+duplication fell 0.42% on both engines.
+
+See the verdict table in [`docs/refactoring.md`](../refactoring.md) (*Cross-module test clones*),
+which ranks the genuinely-deferred pairs so the next PR does not re-derive the audit.
