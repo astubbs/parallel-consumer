@@ -9,12 +9,20 @@ comments. This file is the detail behind it. Keep them in step: if a blocker is 
 there.
 
 Not yet released: the pom is `0.6.0.0-SNAPSHOT`, there is no `v0.6.0.0` tag, and the changelog section
-is written. Release = strip `-SNAPSHOT` and merge to `master`; `publish.yml` runs after CI succeeds,
-deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub release
-([`docs/releasing.md`](../releasing.md)).
+is written. Cutting it = dispatch the **Release** workflow with `releaseVersion=0.6.0.0` and the next
+dev version; `release:prepare` rewrites the poms, tags `v0.6.0.0` and pushes to `master`, then that tag
+is deployed to Maven Central and a GitHub release is cut
+([`docs/releasing.md`](../releasing.md)). `publish.yml` publishes snapshots only - it does not tag or
+release.
 
 **No longer blocked by the quarantine guard** - astubbs#80 emptied the registry when it merged, so
 `release.yml`'s "no release while tests are quarantined" gate now passes.
+
+**Before dispatching, drop the `(unreleased)` suffix from the `== 0.6.0.0 (unreleased)` changelog
+heading.** The release body is that section rendered by `bin/release-notes.py`; it matches a suffixed
+heading deliberately (so a rehearsal is not blocked by it) but warns, because the frozen section should
+name the version alone. Rehearse with `bin/release-notes.py 0.6.0.0` - that prints the exact body the
+release page will show, and a **Dry run** of the workflow puts it in the job summary.
 
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 

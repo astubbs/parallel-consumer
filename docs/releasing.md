@@ -26,6 +26,15 @@ while the quarantine lane is non-empty (`release.yml` guard; snapshots still pub
 
 Workflows: `release.yml` (release), `publish.yml` (snapshot-only).
 
+**The release body is the version's `CHANGELOG.adoc` section**, converted to Markdown by
+`bin/release-notes.py` (`bin/release-notes.py 0.6.0.0` prints exactly what will be published).
+`release.yml` renders it **before** it commits, tags, deploys or publishes anything, and **fails the
+release** if the section is missing, empty, or written in AsciiDoc the renderer will not convert - it
+never substitutes `--generate-notes`, because an auto-generated commit list is indistinguishable from
+the curated notes having silently vanished, which is how a release ended up with no readable body
+(astubbs#197). A dry run rehearses the render and prints the result to the job summary. The AsciiDoc
+subset a section may use is under *At release time* below.
+
 **Required GitHub repo secrets:**
 
 - `RELEASE_PAT` - fine-grained PAT (repo **Contents: write**) owned by a repo admin, so
@@ -142,6 +151,12 @@ it - and a human should re-apply it before freezing:
   is confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and
   PRs from one sequence. The file is in the issue-reference gate's `EXEMPT_PATHS` for this reason -
   everywhere else, [`docs/issue-references.md`](issue-references.md) applies.
+- **The section IS the GitHub Release body** (see *Cutting a release* above), so write it in the
+  AsciiDoc `bin/release-notes.py` converts: headings, `*`/`**` bullets, `. ` ordered lists,
+  `link:`/URL macros, `*bold*`, `` `mono` ``, `NOTE::`, `+` continuations, `//` comments. Source
+  blocks, tables, anchors, block attributes, includes and xrefs are **rejected** - the renderer fails
+  rather than ship mangled markup, and `bin/test-release-notes.sh` runs it over every section of the
+  file on each PR, via `bin/check-all.sh --with-tests` in `repo-hygiene.yml`.
 
 ## The `PR Checklist` changelog gate is a different, narrower check
 
