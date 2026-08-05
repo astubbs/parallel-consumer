@@ -64,6 +64,7 @@ trap emit_summaries EXIT
 for i in $(seq 1 "$REPS"); do
     echo "=== chaos rep $i/$REPS ==="
     time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
-        -DskipUTs=true        -Dincluded.groups=chaos -Dexcluded.groups=quarantined \
+        -DskipUTs=true \
+        -Dincluded.groups=chaos -Dexcluded.groups=quarantined \
         ${SEED_ARG:+"$SEED_ARG"}
 done

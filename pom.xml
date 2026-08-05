@@ -187,19 +187,6 @@
             </properties>
         </profile>
         <profile>
-            <id>license-format</id>
-            <activation>
-                <os>
-                    <!-- this doesnt' work? remove -->
-                    <!-- improve to instead be !jenkins && !travis  / !CI -->
-                    <family>mac</family>
-                </os>
-            </activation>
-            <properties>
-                <!-- retained: this profile exists for the OS-based activation below -->
-            </properties>
-        </profile>
-        <profile>
             <id>github</id>
             <pluginRepositories>
                 <pluginRepository>

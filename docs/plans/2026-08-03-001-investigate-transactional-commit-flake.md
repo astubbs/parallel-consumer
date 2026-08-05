@@ -262,7 +262,7 @@ the race needs — which makes PIT a *useful reproducer*, not merely a victim.
 
 ## 8. Verifying a fix
 
-- The scoped run: `./mvnw -o -pl parallel-consumer-core -Dlicense.skip -Dtest=ProducerManagerTest surefire:test`
+- The scoped run: `./mvnw -o -pl parallel-consumer-core -Dtest=ProducerManagerTest surefire:test`
 - Loop it enough times to beat the observed rate. Note the base rate is **much worse than the ~1/245
   in the original ledger entry** — it reproduced 1 in 4 on an idle machine here (see §3), so a few
   dozen green runs is meaningful, but still pair it with the deterministic reproducer from step 2.
