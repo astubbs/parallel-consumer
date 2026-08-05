@@ -4,13 +4,11 @@ package io.confluent.parallelconsumer.mutiny;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.MdcBoundaryProbe;
 import io.smallrye.mutiny.Uni;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.slf4j.MDC;
-
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.awaitility.Awaitility.await;
@@ -25,15 +23,11 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 class MutinyMdcPropagationTest extends MutinyUnitTestBase {
 
-    private static final String CALLER_KEY = "trace_id";
-    private static final String CALLER_VALUE = "caller-trace-abc";
-
-    private final ConcurrentLinkedQueue<String> threadsUsed = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<String> contextSeen = new ConcurrentLinkedQueue<>();
+    private final MdcBoundaryProbe probe = new MdcBoundaryProbe();
 
     @AfterEach
     void clearCallersContext() {
-        MDC.clear();
+        probe.clearCallersContext();
     }
 
     @Test
@@ -42,25 +36,21 @@ class MutinyMdcPropagationTest extends MutinyUnitTestBase {
         primeFirstRecord();
         primeFirstRecord();
 
-        MDC.put(CALLER_KEY, CALLER_VALUE);
+        probe.establishCallersContext();
 
         mutinyPC.onRecord(ctx -> {
-            threadsUsed.add(Thread.currentThread().getName());
-            contextSeen.add(String.valueOf(MDC.get(CALLER_KEY)));
+            probe.observeCurrentThread();
             return Uni.createFrom().item("done: " + ctx.getSingleConsumerRecord().offset());
         });
 
         await().atMost(defaultTimeout).untilAsserted(() -> {
-            assertWithMessage("records processed").that(contextSeen).hasSize(3);
+            assertWithMessage("records processed").that(probe.observations()).hasSize(3);
 
-            // if this ever stops being true, the test has stopped covering the boundary it exists to cover
-            assertWithMessage("the user function must run on the Mutiny executor, not the PC worker thread")
-                    .that(threadsUsed.stream().noneMatch(thread -> thread.startsWith("pc-")))
-                    .isTrue();
+            // the executor is supplied by the caller, so there is no fixed name to assert positively - what must hold
+            // is that it is not a PC worker thread, or the test has stopped covering the boundary it exists for
+            probe.assertObservedOnlyOn("Mutiny executor", thread -> !thread.startsWith("pc-"));
 
-            assertWithMessage("the caller's diagnostic context must be visible on the Mutiny executor thread")
-                    .that(contextSeen.stream().allMatch(CALLER_VALUE::equals))
-                    .isTrue();
+            probe.assertCallersContextWasVisible("Mutiny executor thread");
         });
     }
 

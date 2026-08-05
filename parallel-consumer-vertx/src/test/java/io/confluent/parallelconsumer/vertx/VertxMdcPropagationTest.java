@@ -4,19 +4,17 @@ package io.confluent.parallelconsumer.vertx;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import com.github.tomakehurst.wiremock.WireMockServer;
 import io.confluent.csid.utils.WireMockUtils;
+import io.confluent.parallelconsumer.MdcBoundaryProbe;
 import io.confluent.parallelconsumer.PollContext;
 import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
-import com.github.tomakehurst.wiremock.WireMockServer;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
-import org.slf4j.MDC;
 import pl.tlinkowski.unij.api.UniMaps;
-
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.awaitility.Awaitility.await;
@@ -32,13 +30,9 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 class VertxMdcPropagationTest extends VertxBaseUnitTest {
 
-    private static final String CALLER_KEY = "trace_id";
-    private static final String CALLER_VALUE = "caller-trace-abc";
+    private final MdcBoundaryProbe probe = new MdcBoundaryProbe();
 
     private WireMockServer stubServer;
-
-    private final ConcurrentLinkedQueue<String> threadsUsed = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<String> contextSeen = new ConcurrentLinkedQueue<>();
 
     @BeforeEach
     void setupWireMock() {
@@ -48,33 +42,28 @@ class VertxMdcPropagationTest extends VertxBaseUnitTest {
     @AfterEach
     void tearDown() {
         stubServer.stop();
-        MDC.clear();
+        probe.clearCallersContext();
     }
 
     @Test
     void callersContextReachesTheVertxEventLoop() {
-        MDC.put(CALLER_KEY, CALLER_VALUE);
+        probe.establishCallersContext();
 
         // the completion hook runs on the vert.x event loop, inside the handler PC attaches to the vert.x Future
-        vertxAsync.addVertxOnCompleteHook(() -> {
-            threadsUsed.add(Thread.currentThread().getName());
-            contextSeen.add(String.valueOf(MDC.get(CALLER_KEY)));
-        });
+        vertxAsync.addVertxOnCompleteHook(probe::observeCurrentThread);
 
         vertxAsync.vertxHttpReqInfoStream((PollContext<String, String> rec) ->
                 new RequestInfo("localhost", stubServer.port(), "/", UniMaps.of()));
 
         await().atMost(defaultTimeout).untilAsserted(() -> {
-            assertWithMessage("completion hooks fired").that(contextSeen).isNotEmpty();
+            // the base class primes the records, so the count is not fixed here - at least one hook must have fired
+            assertWithMessage("completion hooks fired").that(probe.observations()).isNotEmpty();
 
-            // if this ever stops being true, the test has stopped covering the boundary it exists to cover
-            assertWithMessage("the hook must run on the vert.x event loop, not the PC worker thread")
-                    .that(threadsUsed.stream().noneMatch(thread -> thread.startsWith("pc-")))
-                    .isTrue();
+            // vert.x names its event loop threads, but the hook could also be invoked inline on the caller - what must
+            // hold is that it is not a PC worker thread, or the test has stopped covering the boundary it exists for
+            probe.assertObservedOnlyOn("vert.x event loop", thread -> !thread.startsWith("pc-"));
 
-            assertWithMessage("the caller's diagnostic context must be visible on the event loop")
-                    .that(contextSeen.stream().allMatch(CALLER_VALUE::equals))
-                    .isTrue();
+            probe.assertCallersContextWasVisible("vert.x event loop");
         });
     }
 

@@ -20,6 +20,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
+import static io.confluent.parallelconsumer.MdcBoundaryProbe.CALLER_KEY;
+import static io.confluent.parallelconsumer.MdcBoundaryProbe.CALLER_VALUE;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static org.awaitility.Awaitility.await;
@@ -42,9 +44,6 @@ import static org.awaitility.Awaitility.await;
  */
 @Slf4j
 class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
-
-    private static final String CALLER_KEY = "trace_id";
-    private static final String CALLER_VALUE = "caller-trace-abc";
 
     /**
      * What a user function saw when it started, plus which thread it ran on - the pair is what makes the leak assertion
@@ -213,7 +212,9 @@ class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
     }
 
     /**
-     * The escape hatch restores the old behaviour exactly - including the leak, which is why it is off by default.
+     * The escape hatch. Propagation is ON by default; setting {@code propagateMdc=false} restores the old behaviour
+     * exactly - including the pre-existing leak of the user function's own {@code MDC.put} calls onto the pooled
+     * thread. That is deliberate, so the flag is a true kill switch rather than half a revert.
      */
     @Test
     void propagationCanBeTurnedOff() {
