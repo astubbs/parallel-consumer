@@ -494,6 +494,26 @@ entries:
       maintenance notice) and #922 (add link to fork) merged 2026-05. Check the
       existing upstream text before posting again so we don't duplicate it.
 
+  - id: issue-907-mdc-propagation
+    group: logging-ux
+    summary: Caller's SLF4J MDC is not propagated into the worker pool or the engine threads
+    fork: {branches: [feat/mdc-context-propagation], prs: [], status: ready}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [907], prs: [], related: [], status: open, last_checked: 2026-08-05}
+    forwarded: [{url: null, posted: null}]
+    adoc_anchor: null
+    notes: >
+      Separate, concrete finding raised by a user inside the upstream #907 thread
+      (mirrored on the fork as #195, tracked on #197) -- distinct from
+      issue-907-maintenance-signal, which is the "is this maintained?" question.
+      PC set only its own pcId/offset keys and never called
+      MDC.getCopyOfContextMap()/setContextMap(), so a caller's trace_id/request_id
+      was lost crossing into the worker pool, and again crossing into vert.x /
+      Reactor / Mutiny. Fixed by MdcPropagation + ParallelConsumerOptions.propagateMdc
+      (default true). Also fixes a pre-existing leak: whatever the user function put
+      into the MDC stayed on the pooled thread for the next, unrelated, record.
+      todo: set prs + status pr-open once the fork PR is opened; a backlink comment
+      on upstream #907 is worth posting only once this releases.
+
   # ---------------------------------------------------------------------------
   # FOUND BY THE 2026-07-28 ACTIVITY SWEEP (new upstream activity)
   # ---------------------------------------------------------------------------

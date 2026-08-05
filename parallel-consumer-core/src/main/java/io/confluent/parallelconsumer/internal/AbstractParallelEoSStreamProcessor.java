@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.SupplierUtils;
@@ -252,6 +253,26 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     PCModule<K, V> module;
 
     /**
+     * Carries the caller's SLF4J diagnostic context across into the threads that run the user function.
+     *
+     * @see MdcPropagation
+     */
+    @Getter(PROTECTED)
+    private final MdcPropagation mdcPropagation;
+
+    /**
+     * Snapshot of the diagnostic context of the thread that called {@code poll*}, taken in
+     * {@link #supervisorLoop(Function, Consumer)}. {@code null} when that thread had no context, or when propagation is
+     * disabled.
+     * <p>
+     * Volatile because it is written by the caller's thread and read by the controller and broker-poller threads it
+     * then starts.
+     *
+     * @see MdcPropagation
+     */
+    volatile Map<String, String> callersDiagnosticContext;
+
+    /**
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
@@ -281,6 +302,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     protected AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions, PCModule<K, V> module) {
         requireNonNull(newOptions, "Options must be supplied");
         this.module = module;
+        this.mdcPropagation = module.mdcPropagation();
         options = newOptions;
         this.shutdownTimeout = options.getShutdownTimeout();
         this.drainTimeout = options.getDrainTimeout();
@@ -818,6 +840,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             state = RUNNING;
         }
 
+        // snapshot the caller's diagnostic context before starting any thread, so every thread we go on to create -
+        // controller, broker poller, and through them the worker pool - inherits it
+        captureCallersDiagnosticContext();
+
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
@@ -832,6 +858,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // run main pool loop in thread
         Callable<Boolean> controlTask = () -> {
+            mdcPropagation.adopt(callersDiagnosticContext);
             addInstanceMDC();
             log.info("Control loop starting up...");
             Thread controlThread = Thread.currentThread();
@@ -868,6 +895,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void addInstanceMDC() {
         this.myId.ifPresent(id -> MDC.put(MDC_INSTANCE_ID, id));
+    }
+
+    /**
+     * Takes the snapshot of the caller's diagnostic context that all of PC's threads will run under.
+     * <p>
+     * Called from {@code poll*} (i.e. on the user's own thread) before any PC thread exists, because that is the only
+     * moment at which the user's context is reachable - none of PC's threads inherit it, the SLF4J MDC is not
+     * inheritable.
+     *
+     * @see MdcPropagation
+     */
+    private void captureCallersDiagnosticContext() {
+        this.callersDiagnosticContext = mdcPropagation.capture();
+        if (callersDiagnosticContext != null && !callersDiagnosticContext.isEmpty()) {
+            // keys only - the values are the user's data, and may be large or sensitive. Logged so that a context
+            // accidentally pinned for the life of the consumer (e.g. a request-scoped trace id) is discoverable.
+            log.info("Propagating caller's diagnostic context (MDC) keys {} into the processing threads", callersDiagnosticContext.keySet());
+        }
     }
 
     /**
@@ -1031,9 +1076,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                            final List<WorkContainer<K, V>> batch) {
         // for each record, construct dispatch to the executor and capture a Future
         log.trace("Sending work ({}) to pool", batch);
+        // snapshot at submit time, on the controller thread - which is already running under the caller's context
+        final Map<String, String> submittersDiagnosticContext = mdcPropagation.capture();
         Future outputRecordFuture = workerThreadPool.get().submit(() -> {
-            addInstanceMDC();
-            return runUserFunction(usersFunction, callback, batch);
+            // scoped, so the context is torn off the pooled thread when the batch finishes - both what we put on it
+            // and anything the user function added - rather than being inherited by the next, unrelated, batch
+            try (var mdcScope = mdcPropagation.enter(submittersDiagnosticContext)) {
+                addInstanceMDC();
+                return runUserFunction(usersFunction, callback, batch);
+            }
         });
         // for a batch, each message in the batch shares the same result
         for (final WorkContainer<K, V> workContainer : batch) {

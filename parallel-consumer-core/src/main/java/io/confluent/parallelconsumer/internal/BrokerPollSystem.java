@@ -138,6 +138,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private boolean controlLoop() throws TimeoutException, InterruptedException {
         Thread.currentThread().setName("pc-broker-poll");
+        // this thread serves exactly one PC instance for its whole life, so adopt the caller's context outright
+        pc.getMdcPropagation().adopt(pc.callersDiagnosticContext);
         pc.getMyId().ifPresent(id -> {
             Thread.currentThread().setName("pc-broker-poll-" + id);
             MDC.put(MDC_INSTANCE_ID, id);

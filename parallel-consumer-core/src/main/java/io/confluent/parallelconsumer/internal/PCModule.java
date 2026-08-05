@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.TimeUtils;
@@ -112,6 +113,18 @@ public class PCModule<K, V> {
 
     public Clock clock() {
         return TimeUtils.getClock();
+    }
+
+    private MdcPropagation mdcPropagation;
+
+    /**
+     * @see ParallelConsumerOptions#isPropagateMdc()
+     */
+    public MdcPropagation mdcPropagation() {
+        if (mdcPropagation == null) {
+            mdcPropagation = new MdcPropagation(options().isPropagateMdc());
+        }
+        return mdcPropagation;
     }
 
     private PCMetrics pcMetrics;

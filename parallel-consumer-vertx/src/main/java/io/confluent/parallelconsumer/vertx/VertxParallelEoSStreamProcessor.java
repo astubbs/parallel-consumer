@@ -2,12 +2,14 @@ package io.confluent.parallelconsumer.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.PollContext;
 import io.confluent.parallelconsumer.PollContextInternal;
 import io.confluent.parallelconsumer.internal.ExternalEngine;
+import io.confluent.parallelconsumer.internal.MdcPropagation;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -150,10 +152,16 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
 
             Future<HttpResponse<Buffer>> send = call.send(); // dispatches the work to vertx
 
+            // the user's callback runs on the vert.x event loop, which is a second thread boundary - carry the
+            // diagnostic context of this (worker) thread over it
+            var eventLoopContext = getMdcPropagation().capture();
+
             // hook in the users' call back for when the web request gets a response
-            send.onComplete(ar ->
-                    onWebRequestComplete.accept(ar)
-            );
+            send.onComplete(ar -> {
+                try (var mdcScope = getMdcPropagation().enter(eventLoopContext)) {
+                    onWebRequestComplete.accept(ar);
+                }
+            });
 
             return send;
         }, onSend);
@@ -184,25 +192,36 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     }
 
     private void addVertxHooks(final PollContextInternal<K, V> context, final Future<?> send) {
+        // called on the worker thread, where the caller's context is established - these handlers however run on the
+        // vert.x event loop, so the context has to be carried explicitly
+        final MdcPropagation mdc = getMdcPropagation();
+        final Map<String, String> eventLoopContext = mdc.capture();
+
         context.streamWorkContainers().forEach(wc -> {
             // attach internal handler
             wc.setWorkType(VERTX_TYPE);
 
             send.onSuccess(h -> {
-                log.debug("Vert.x Vertical success");
-                wc.onUserFunctionSuccess();
-                addToMailbox(context, wc);
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    log.debug("Vert.x Vertical success");
+                    wc.onUserFunctionSuccess();
+                    addToMailbox(context, wc);
+                }
             });
             send.onFailure(h -> {
-                log.error("Vert.x Vertical fail: {}", h.getMessage());
-                wc.onUserFunctionFailure(h);
-                addToMailbox(context, wc);
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    log.error("Vert.x Vertical fail: {}", h.getMessage());
+                    wc.onUserFunctionFailure(h);
+                    addToMailbox(context, wc);
+                }
             });
 
             // add plugin callback hook
             send.onComplete(ar -> {
-                log.trace("Running plugin hook");
-                this.onVertxCompleteHook.ifPresent(Runnable::run);
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    log.trace("Running plugin hook");
+                    this.onVertxCompleteHook.ifPresent(Runnable::run);
+                }
             });
         });
     }

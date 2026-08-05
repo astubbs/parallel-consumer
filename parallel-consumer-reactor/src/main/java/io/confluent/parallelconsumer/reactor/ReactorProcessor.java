@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.reactor;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.PCRetriableException;
@@ -9,6 +10,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.PollContext;
 import io.confluent.parallelconsumer.PollContextInternal;
 import io.confluent.parallelconsumer.internal.ExternalEngine;
+import io.confluent.parallelconsumer.internal.MdcPropagation;
 import io.confluent.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +24,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -81,7 +84,15 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
      */
     public void react(Function<PollContext<K, V>, Publisher<?>> reactorFunction) {
 
+        final MdcPropagation mdc = getMdcPropagation();
+
         Function<PollContextInternal<K, V>, List<Object>> wrappedUserFunc = pollContext -> {
+
+            // this wrapper runs on the worker thread, where the caller's context is established; the user's function
+            // and the terminal signals below run on the Reactor scheduler, so the context is carried explicitly.
+            // Note: this covers the invocation of the user's function and our own completion handling - propagation
+            // through the operators of the Publisher they return is Reactor's own concern (io.micrometer:context-propagation)
+            final Map<String, String> schedulerContext = mdc.capture();
 
             if (log.isTraceEnabled()) {
                 log.trace("Record list ({}), executing void function...",
@@ -95,11 +106,25 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
             pollContext.streamWorkContainers()
                     .forEach(x -> x.setWorkType(REACTOR_TYPE));
 
-            Disposable flux = Mono.fromCallable(() -> carefullyRun(reactorFunction, pollContext.getPollContext()))
+            Disposable flux = Mono.fromCallable(() -> {
+                        try (var mdcScope = mdc.enter(schedulerContext)) {
+                            return carefullyRun(reactorFunction, pollContext.getPollContext());
+                        }
+                    })
                     .flatMapMany(it -> it)
                     .doOnNext(signal -> log.trace("doOnNext {}", signal))
                     .subscribeOn(getScheduler())
-                    .subscribe(ignore -> onComplete(pollContext), throwable -> onError(pollContext, throwable));
+                    .subscribe(
+                            ignore -> {
+                                try (var mdcScope = mdc.enter(schedulerContext)) {
+                                    onComplete(pollContext);
+                                }
+                            },
+                            throwable -> {
+                                try (var mdcScope = mdc.enter(schedulerContext)) {
+                                    onError(pollContext, throwable);
+                                }
+                            });
 
             log.trace("asyncPoll - user function finished ok.");
             return UniLists.of(flux);
