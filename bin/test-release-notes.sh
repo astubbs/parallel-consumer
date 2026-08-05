@@ -191,6 +191,20 @@ assert "bare asterisks in prose are not emphasis" \
 - Pass --forkCount 1 * cores, then **really** measure it.' \
     "$(render "$BARE_ASTERISK" 0.6.0.0)"
 
+# AsciiDoc `**bold**` is UNCONSTRAINED - unlike `*bold*` it may sit against word characters. The
+# converter applies constrained boundaries to both, so an intraword `**` span is not matched. That
+# is deliberately harmless: `**x**` is already the Markdown spelling, so converting it is the
+# identity, and CommonMark renders intraword `**` as strong anyway. Asserted so the pass-through
+# is a locked-in guarantee rather than an accident of the regex.
+UNCONSTRAINED=$(changelog '== 0.6.0.0
+
+* Reads un**bel**ievable and re**start** correctly.
+* Kafka **3.9.1** is the default.')
+assert "unconstrained intraword bold passes through as valid Markdown" \
+    '- Reads un**bel**ievable and re**start** correctly.
+- Kafka **3.9.1** is the default.' \
+    "$(render "$UNCONSTRAINED" 0.6.0.0)"
+
 LINKS=$(changelog '== 0.6.0.0
 
 * An https://github.com/astubbs/parallel-consumer/pull/55[#55] link.
