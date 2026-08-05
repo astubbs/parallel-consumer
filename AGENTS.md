@@ -183,6 +183,15 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 - **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). A seconds-fast "Quarantine Audit" job enforces the quarantine registry on every PR; the `@Quarantined` lane itself runs non-gating on every PR push and every push to master (+ dispatch) in its own workflow (`quarantine-lane.yml`) — see Testing. Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
 - **`.github/workflows/copyright.yml`** — Copyright-header conformance via `bin/check-copyright-headers.sh` (runs its self-test `bin/test-check-copyright-headers.sh` first, then the real scan) on every push/PR. GitHub-hosted; needs `fetch-depth: 0` so the fork-point commit is in history.
+- **`.github/workflows/claude-code-review.yml`** — Automated PR review. The job ends with a gate,
+  `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first),
+  asserting that a review from *this* run actually landed on the PR. Without it the check reports
+  success when the action reviews nothing, which is indistinguishable from "reviewed, no findings" -
+  it has happened twice here. **The gate fails on any PR that edits `claude-code-review.yml` itself**:
+  the action refuses to run unless that file matches the default branch, so a PR cannot rewrite its
+  own reviewer. That is the guard working. Get a real review with a `@claude review this` PR comment
+  (which runs from `claude.yml`, unmodified, so it validates), or split the workflow edit into its
+  own PR. Do not disable the gate to get a green check.
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
 
 ## Changelog
