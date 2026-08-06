@@ -45,6 +45,12 @@ jobs:
       - name: Self-test the issue-reference gate logic
         run: node .github/scripts/issue-ref-gate.test.js
 
+      # docs/TODO_INDEX.md is generated from the markers in the tree, so it can silently stop
+      # matching them. Entries are keyed by marker TEXT, not line number, so this only fires when a
+      # marker is actually added, removed or reworded - editing above one no longer churns the file.
+      - name: Verify the marker index matches the tree
+        run: bin/todo-index.sh --check
+
       - name: Verify checklist is present and resolved (checked or N/A)
         uses: actions/github-script@v7
         with:
