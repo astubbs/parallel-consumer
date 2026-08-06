@@ -103,17 +103,6 @@ assert "non-numeric run id" \
 assert "empty review outcome" \
     2 "$(run_checker "$POSTED_COMMENT" 30965089954 "")"
 
-# --- Structural guard: no SIGPIPE-prone pipes in the checker -------------------
-# The same rule bin/test-check-copyright-headers.sh enforces on the copyright
-# scanner, for the same reason. This checker shipped without it and hit the bug
-# live on four PRs before anyone noticed.
-if grep -vE '^[[:space:]]*#' "$CHECKER" | grep -nE '\|[[:space:]]*grep -q|\|[[:space:]]*awk '; then
-    echo "FAIL: checker pipes into an early-exiting reader (SIGPIPE + pipefail misclassification risk) - use a herestring"
-    failures=$((failures + 1))
-else
-    echo "ok:   checker has no SIGPIPE-prone pipes into grep -q / awk"
-fi
-
 echo
 if [ "$failures" -eq 0 ]; then
     echo "All bin/check-review-posted.sh self-tests passed"

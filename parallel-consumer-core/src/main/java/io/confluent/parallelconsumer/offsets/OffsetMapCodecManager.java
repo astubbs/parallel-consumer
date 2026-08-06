@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
@@ -111,7 +112,7 @@ public class OffsetMapCodecManager<K, V> {
      */
     public static Optional<OffsetEncoding> forcedCodec = Optional.empty();
 
-    // todo remove consumer #233
+    // todo remove consumer - confluentinc#233
     public OffsetMapCodecManager(PCModule<K, V> module) {
         this.module = module;
         if (module != null){
@@ -128,7 +129,7 @@ public class OffsetMapCodecManager<K, V> {
     /**
      * Load all the previously completed offsets that were not committed
      */
-    // todo this is the only method that needs the consumer - offset encoding is being conflated with decoding upon assignment #233
+    // todo this is the only method that needs the consumer - offset encoding is being conflated with decoding upon assignment - confluentinc#233
     // todo make package private?
     // todo rename
     public Map<TopicPartition, PartitionState<K, V>> loadPartitionStateForAssignment(final Collection<TopicPartition> assignment) {
