@@ -59,9 +59,9 @@ class CheckQuarantineOwnersScriptTest extends AbstractQuarantineScriptTest {
         Files.createDirectories(src);
         Files.write(src.resolve("SomeQuarantinedIT.java"),
                 ("class SomeQuarantinedIT {\n" +
-                        "    @Quarantined(reason = \"d\", tracking = \"t\", fixedBy = \"PR #80\")\n" +
+                        "    @Quarantined(reason = \"d\", tracking = \"t\", fixedBy = \"PR #999999\")\n" +
                         "    void someMethod() {}\n}\n").getBytes(StandardCharsets.UTF_8));
-        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #80**\n");
+        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #999999**\n");
     }
 
     @Test
@@ -133,11 +133,11 @@ class CheckQuarantineOwnersScriptTest extends AbstractQuarantineScriptTest {
 
     @Test
     void fixedByDisagreeingWithRegistryOwnerIsFlagged() throws Exception {
-        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #123**\n");
+        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #999998**\n");
         Result r = run("GIT_STUB_BASE_ANNOTATED", "0");
         assertThat(r.exitCode).isEqualTo(0);
-        assertThat(r.output).contains("fixedBy PR #80");
-        assertThat(r.output).contains("Owner line says PR #123");
+        assertThat(r.output).contains("fixedBy PR #999999");
+        assertThat(r.output).contains("Owner line says PR #999998");
     }
 
     // ---- helpers ----

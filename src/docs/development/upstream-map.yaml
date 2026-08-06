@@ -20,7 +20,7 @@
 #   PRs and comments still arrive from users unaware a maintained fork exists.
 #   - `last_swept` = the date we last checked upstream for *new* activity.
 #   - Per-entry `upstream.last_checked` = when that entry's state was verified.
-#   Refresh with a read-only `gh` sweep (see scripts/ and upstream-backlink-plan.md).
+#   Refresh with a read-only `gh` sweep (see scripts/upstream-sweep.sh).
 #   Design inspired by Debian DEP-3, Yocto `Upstream-Status:`, and OpenShift's
 #   `UPSTREAM:` fork convention.
 #
@@ -49,27 +49,10 @@
 #     related     other upstream issues/PRs that are linked but not primary
 #     status      last-known upstream state (open | closed | merged | mixed)
 #     last_checked  ISO date the above was verified
-#   forwarded     backlink comments we've posted upstream (see backlink plan);
-#                 list of {url, posted} -- null until we actually post
-#   adoc_anchor   anchor id in upstream-pr-analysis.adoc for the verdict/prose
-#   reconciliation  OPTIONAL {status, last_checked, note} -- open questions about
-#                 how our work relates to an upstream change (e.g. an upstream PR
-#                 that merged a partial/alternative fix). Keeps the open thread
-#                 tracked instead of lost. `status: open` = still to resolve.
-#   notes         free text (internal; may be scratch/TODO phrasing)
-#   backlink      OPTIONAL public-facing comment body for upstream-backlink.sh.
-#                 When set it overrides the generic template, so a tailored public
-#                 explanation lives HERE (the source of truth), not in a separate
-#                 file. Supports {{FORK_REPO}} {{FORK_REF}} {{SUMMARY}} {{ID}}.
-#   todo          OPTIONAL list of outstanding actions (e.g. merge the open PR,
-#                 post the backlink). Present only while work remains; clear it
-#                 (and advance `status`) once done. `upstream-map.py todo` lists them.
 #
-# STATE NOTE (verified in the 2026-07-28 sweep): upstream #541 is now CLOSED,
-# PR #548 is CLOSED, and PR #866 is "Kafka to v4" (the .adoc's "v7" was stale).
 # =============================================================================
 
-last_swept: 2026-07-28
+last_swept: 2026-08-06
 upstream_repo: confluentinc/parallel-consumer
 fork_repo: astubbs/parallel-consumer
 
@@ -81,27 +64,23 @@ entries:
 
   - id: bug-857-stall-after-rebalance
     group: rebalance-stability
-    summary: Silent stall after rebalance -- the upstream #857 family (commit deadlock, rebalance-time commit, drain zombie)
+    summary: Silent stall after rebalance -- the confluentinc#857 family (commit deadlock, rebalance-time commit, drain zombie)
     fork:
       branches: [bugs/857-paused-consumption-multi-consumers-bug, fix/flaky-partitionstate-committedoffset-it]
       prs: [29, 80, 100]
+      fork_issue: 119
       status: in-progress
     upstream:
       repo: confluentinc/parallel-consumer
-      issues: [857]
       prs: [548]
-      related: [326, 541, 546, 777, 843, 803, 809, 833]
-      status: open
-      last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
+      status: merged
+      last_checked: 2026-08-06
     adoc_anchor: part3-cat1-stability
-    todo:
-      - "Retarget fork PR #29 to master -- its base is master-confluent, the pinned pre-rebrand mirror, so merging it would land the fix nowhere users can get it"
-      - "Rebase fork PR #29 onto the poll/lifecycle internals #80 reshaped, then land it -- it is the last open piece of the family"
-      - "Post the upstream backlink to #857 once the family is landed"
     notes: >
+      confluentinc PR #548 (deadlock between pc-control and pc-broker-poll) is ALREADY
+      IN this fork: it merged upstream 2023-04-03, its merge commit is an ancestor
+      of master, and RebalanceEoSDeadlockTest ships with it. Nothing to cherry-pick
+      -- it is listed here as the upstream half of the same symptom.
       Fork state verified 2026-08-04. This is a FAMILY of distinct defects behind
       one upstream symptom, not a single fix -- three fork PRs so far:
       (1) PR #29 [OPEN, draft, base master-confluent, 57 behind]: the original
@@ -118,7 +97,7 @@ entries:
       its whole assignment until eviction. Fixed by deleting the duplicated flag.
       Verified independent of #29/#31 (uber-branch composition experiment: all
       guards green, zero conflicts).
-      Upstream PR #548 addressed the same deadlock as (1) but is CLOSED
+      confluentinc PR #548 addressed the same deadlock as (1) but is CLOSED
       (unmerged); related issue #541 now CLOSED. User still weighing a larger
       poll+control single-thread refactor to kill the whole bug class.
 
@@ -128,22 +107,14 @@ entries:
     fork:
       branches: [fix/859-metrics-leak-plus-cherrypicks, bugs/859-pcmetrics-leak-v2]
       prs: [57]
+      fork_issue: 120
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
-      issues: [859]
       prs: [892]
-      related: [27, 71, 905]
       status: mixed
       last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
     adoc_anchor: part3-cat3-observability
-    todo:
-      - "Rebase fork PR #57 -- 11 commits behind master as of 2026-08-04 (it was clean on 2026-07-31)"
-      - "Merge fork PR #57 (open, draft) to land the fix on master"
-      - "Post the upstream backlink to #859 (forwarded still null)"
     reconciliation:
       status: resolved
       last_checked: 2026-07-28
@@ -162,7 +133,7 @@ entries:
         #892, so the author's 2025-10-28 "broke master build" was the
         io.stubbs.truth dependency-availability issue (astubbs, 2026-04-14), not a
         code regression. Remaining gap is UPSTREAM-ONLY: upstream merged just #892,
-        not our tracking-collection fix, so upstream #859 stays open (status
+        not our tracking-collection fix, so confluentinc#859 stays open (status
         mixed); downstream it is fixed by #892 + PR #57 together.
     notes: >
       Commit-driven leak: registeredMeters (an ArrayList) accumulated a duplicate
@@ -174,16 +145,8 @@ entries:
       PartitionStateManager.java; regression test PCMetricsTest859.java + P1
       hardening. PR #57 also bundles cherry-picks #893 (PartitionState offset
       accuracy) and #905 (max-shard metric) -- those are NOT part of the leak fix.
-      Supersedes closed fork PR #45. Upstream #892 already fixed the per-commit
+      Supersedes closed fork PR #45. confluentinc#892 already fixed the per-commit
       OffsetMapCodecManager churn (see reconciliation).
-    backlink: |
-      Cross-posting for anyone tracking this leak. The root cause is that `PCMetrics.registeredMeters` was a `List` that accumulated a duplicate `Meter.Id` on every registration (frequent - e.g. every offset commit), even for identical tags, so it grew without bound.
-
-      #892 (merged here) reduced one source of that churn - it stopped `OffsetMapCodecManager` being re-instantiated every commit - but the tracking `List` itself still grew.
-
-      A maintained community fork fixes the root cause (`List` -> `LinkedHashSet`, plus a synchronized removal that prunes the set) and also caches the `OffsetMapCodecManager` on the partition-assignment path: {{FORK_REF}} at https://github.com/{{FORK_REPO}}.
-
-      Posting for discoverability - a reference, not a request to close anything.
 
   - id: cherry-pick-893-offset-reset
     group: rebalance-stability
@@ -194,14 +157,9 @@ entries:
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
-      issues: []
       prs: [893]
-      related: [777, 809, 833]
       status: open
       last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
     adoc_anchor: part1-group-a-correctness
     notes: >
       Cherry-pick of upstream contributor PR #893 (Martyn Ye) -- fixes offset
@@ -218,14 +176,9 @@ entries:
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
-      issues: []
       prs: [905]
-      related: [71, 859]
       status: open
       last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
     adoc_anchor: part1-group-b-features
     notes: >
       Cherry-pick of upstream contributor PR #905 (flashmouse). Small,
@@ -241,51 +194,16 @@ entries:
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
-      issues: []
       prs: [909]
-      related: [843, 777]
       status: open
       last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
     adoc_anchor: part1-group-a-correctness
-    todo:
-      - "Retarget fork PR #31 to master -- its base is master-confluent, the pinned pre-rebrand mirror"
-      - "Rebase: the branch is 57 commits behind master (verified 2026-08-04)"
     notes: >
-      Upstream PR #909 (cserspring) replaces stale containers rather than
+      confluentinc PR #909 (cserspring) replaces stale containers rather than
       rejecting new ones, preventing record drops on rebalance. Upstream PR had
       no tests; fork work adds a regression test for stale container at the same
       offset. High priority but wants tests before merge. Fork PR #31 is open
       (draft) but targets master-confluent, which is why it read as "no PR".
-
-  - id: bug-912-vertx-stream-leak
-    group: vertx
-    summary: Memory leak in JStreamVertxParallelStreamProcessor
-    fork:
-      branches: [bugs/912-vertx-stream-memory-leak]
-      prs: []
-      status: ready
-    upstream:
-      repo: confluentinc/parallel-consumer
-      issues: [912]
-      prs: []
-      related: []
-      status: open
-      last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
-    adoc_anchor: part3-cat10-vertx
-    todo:
-      - "Rebase (57 behind master) and open the fork PR -- fix + regression test are done and pushed"
-      - "Post the upstream backlink to #912 once merged"
-    notes: >
-      Clear the JStream deque on close. Fix + JStreamMemoryLeakTest912 are
-      committed and pushed to origin, no PR yet (verified 2026-08-04) -- hence
-      `ready`, not `in-progress`. Vertx-module only, so it collides with nothing
-      else in flight; the cheapest open item to land.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4
@@ -293,69 +211,31 @@ entries:
     fork:
       branches: [feat/java-17-baseline]
       prs: [53]
+      fork_issue: 181
       status: in-progress
     upstream:
       repo: confluentinc/parallel-consumer
-      issues: [862]
       prs: [866, 920]
-      related: [907, 906]
       status: open
       last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
     adoc_anchor: part3-cat5-jdk
     notes: >
       0.7.x line. The only reason to move off Java 8 is Kafka 4 (kafka-clients
       4.x require Java 11 -- target baseline Java 11). PR #53 is a DRAFT holding
       a provisional Jabel-removed / release=17 state plus Kafka 4 research docs.
-      Addresses upstream #862 (cannot run on Java 24). Upstream PR #866 bumps
-      Kafka to v4 (NOTE: .adoc previously said v7 -- stale). Upstream PR #920
+      Addresses confluentinc#862 (cannot run on Java 24). confluentinc PR #866 bumps
+      Kafka to v4 (NOTE: .adoc previously said v7 -- stale). confluentinc PR #920
       (found by the 2026-07-28 sweep) documents the JDK 17 build requirement +
       Jabel Java 8 bytecode -- overlaps our Java-baseline framing; compare before
       landing our own. Branch is stale: 1 ahead, 57 behind master (2026-08-04).
       Also gates fork PR #38 (JUnit 6 needs Java 17, plus an ArchUnit engine that
       does not exist yet -- TNG/ArchUnit#1556).
 
-  - id: rebrand-0.6.0.0-release
-    group: release
-    summary: First fork release -- rebrand to bz.stub.parallelconsumer (Java 8)
-    fork:
-      branches: [master, release/0.6.0.0]
-      prs: [55, 56, 72]
-      status: in-progress
-    upstream:
-      repo: confluentinc/parallel-consumer
-      issues: []
-      prs: []
-      related: [907, 906]
-      status: open
-      last_checked: 2026-07-28
-    forwarded:
-      - url: null
-        posted: null
-    adoc_anchor: null
-    todo:
-      - "Strip -SNAPSHOT -> 0.6.0.0 and merge to master (publish.yml tags and releases). The quarantine guard no longer blocks it: #80 emptied the registry on merge"
-    notes: >
-      Fork-only work (no upstream counterpart). Rebrand and changelog already on
-      master via PRs #55 (groupId), #56 (release prep) and #72 (release notes);
-      Java 8, Jabel intact, snapshot-published. NOT yet released as of
-      2026-08-04: pom is still 0.6.0.0-SNAPSHOT and there is no v0.6.0.0 tag.
-      Shipping a maintained release is the concrete answer to upstream #907 ("is
-      the project still maintained?") and #906 (pom version mismatch).
-
-  # ---------------------------------------------------------------------------
-  # UPSTREAM BACKLOG -- OPEN PRs we may cherry-pick  (light tracked entries)
-  # (893 / 905 / 909 already have full entries above)
-  # ---------------------------------------------------------------------------
-
   - id: upstream-pr-915-batch-strategy
     group: features
-    summary: Select batch construction strategy (closes upstream #266)
+    summary: Select batch construction strategy (closes confluentinc#266)
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [266], prs: [915], related: [551, 560], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: part1-group-b-features
     notes: Most valuable user-facing feature in the queue; needs architectural review.
 
@@ -364,7 +244,6 @@ entries:
     summary: Support Virtual Threads (JDK 21+); synchronized -> ReentrantLock
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [896, 862, 78], prs: [908], related: [299], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: part1-group-b-features
     notes: Sequence behind the Java baseline branch; ReentrantLock migration may also help #862.
 
@@ -373,7 +252,6 @@ entries:
     summary: "BREAKING: update Kafka to v4"
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [], prs: [866], related: [], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: part1-group-c-major-deps
     notes: Ties into java-17-baseline-kafka4. Title is v4 (the .adoc's "v7" was stale).
 
@@ -382,7 +260,6 @@ entries:
     summary: "BREAKING: update vertx to v5"
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [], prs: [867], related: [897], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: part1-group-c-major-deps
     notes: Duplicate PR #897 (vertx 4.5.7->5.0.5) should be closed in favour of this.
 
@@ -391,7 +268,6 @@ entries:
     summary: Fix failing licence check + gitignore (unblocks CI)
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [861], prs: [901], related: [], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: part1-group-e-housekeeping
     notes: Prerequisite/unblocker -- promote to Group A priority.
 
@@ -400,7 +276,6 @@ entries:
     summary: Security CVE dependency bumps (kafka-clients, postgresql, assertj, logback)
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [], prs: [917, 851, 913, 914], related: [], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: part1-group-d-security
     notes: >
       #917 kafka-clients 3.9.2 (runtime, SECURITY -- found by the 2026-07-28 sweep),
@@ -412,7 +287,6 @@ entries:
     summary: Routine / test dependency bumps
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [], prs: [855, 899, 900, 897, 869, 898, 854, 877], related: [], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: part1-group-e-housekeeping
     notes: >
       #855 wiremock v3 (test), #899 junit-platform 6.0.0 (likely-wrong target,
@@ -424,86 +298,11 @@ entries:
   # (light tracked entries; long tail deferred -- see note at end)
   # ---------------------------------------------------------------------------
 
-  - id: issue-803-txn-commit-lock-timeout
-    group: rebalance-stability
-    summary: Transactional Producer timeout getting commit lock (only verified bug)
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [803], prs: [], related: [809, 833], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: part3-cat1-stability
-    notes: The only issue labelled "verified bug" in the tracker. #809/#833 likely related.
-
-  - id: issue-777-843-rebalance-duplicates
-    group: rebalance-stability
-    summary: Partition revocation / multi-thread pickup causing duplicate processing
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [777, 843], prs: [], related: [893, 909], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: part3-cat2-correctness
-    notes: Merging/carrying PR #893 + #909 likely resolves these; verify after cherry-pick.
-
-  - id: issue-71-27-observability
-    group: metrics-observability
-    summary: Health-checks (#71) + Micrometer metrics (#27), open 5+ years
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [71, 27], prs: [], related: [905, 464], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: part3-cat3-observability
-    notes: astubbs closed PR #464 was the intended full fix; #905 adds one metric only.
-
-  - id: issue-310-dlq
-    group: features
-    summary: Dead letter queue implementation (most demanded feature)
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [310, 196], prs: [], related: [366, 291], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: part3-cat4-dlq
-    notes: Revive astubbs closed PR #366 (DLQ) + #291 (terminal/retry exceptions) as a pair.
-
-  - id: issue-186-thread-safe-apis
-    group: features
-    summary: Ensure all PC APIs are thread safe (blocker for 1.0)
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [186, 520], prs: [], related: [346], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: part3-cat5-jdk
-    notes: Labelled blocker/ver:1.0. astubbs closed PR #346 was the intended fix.
-
-  - id: issue-162-861-906-build-friction
-    group: build-tooling
-    summary: Contributor-friction build/CI issues
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [162, 861, 906], prs: [], related: [901], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: part3-cat11-build
-    notes: >
-      #162 mvn compile needs test-jar, #861 ManagedTruth.assertThat not found
-      (PR #901), #906 pom version mismatch. Fix early to unblock contributors.
-
-  - id: issue-907-maintenance-signal
-    group: governance
-    summary: "Is the project still actively maintained?"
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [907], prs: [], related: [906, 921, 922], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: part3-cat13-governance
-    notes: >
-      Community distress signal (filed Jan 2026). Prime target for a
-      fork-awareness backlink comment: point users to the maintained fork.
-      NOTE: fork-awareness is already PARTLY upstream -- PRs #921 (README
-      maintenance notice) and #922 (add link to fork) merged 2026-05. Check the
-      existing upstream text before posting again so we don't duplicate it.
-
-  # ---------------------------------------------------------------------------
-  # FOUND BY THE 2026-07-28 ACTIVITY SWEEP (new upstream activity)
-  # ---------------------------------------------------------------------------
-
   - id: upstream-pr-log-noise
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
     fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [640], prs: [918, 919], related: [629, 631], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
     adoc_anchor: null
     notes: >
       Found by the 2026-07-28 sweep. #919 trims the user-function error log / moves
@@ -511,23 +310,3 @@ entries:
       RemovedPartitionState to topic-partition + size + epoch. Low-effort log
       cleanup; pairs with upstream issues #629/#631 (adoc Part 3 category 8).
 
-  - id: issue-902-freshest-record-key-order
-    group: features
-    summary: Always process the freshest record when ordered by key
-    fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [902], prs: [], related: [], status: open, last_checked: 2026-07-28}
-    forwarded: [{url: null, posted: null}]
-    adoc_anchor: null
-    notes: New issue found by the 2026-07-28 sweep (filed Jan 2026). KEY-ordering enhancement request.
-
-# =============================================================================
-# DEFERRED / NOT YET CACHED (logged deliberately -- not silently dropped):
-#   - The long tail of upstream issues from `upstream-pr-analysis.adoc` Part 3
-#     not represented above (categories 6-12 detail: e.g. #551 #560 #304 #391
-#     #192 #299 #314 #321 #322 #394 #718 #782 #622 #115 #171
-#     #178 #642 #170 #180 #480 #860 #103 #130 #259 #290 #526 #200 #233 #241
-#     #109 and the 8 "Not Planned" issues). These live in the .adoc with full
-#     verdicts; promote to entries here when work actually starts on them.
-#   - astubbs's 53 closed revival-candidate PRs (Part 2 of the .adoc) -- kept as
-#     an idea bank in the .adoc; add entries here only when revived.
-# =============================================================================
