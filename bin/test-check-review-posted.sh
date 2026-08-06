@@ -19,6 +19,7 @@
 #   10. wrong argument count                                         -> usage (2)
 #   11. non-numeric run id                                           -> usage (2)
 #   12. empty review outcome                                         -> usage (2)
+#   13. match found, then >64 KiB of further comments                -> pass (0)
 #
 # Case 4 is the one worth keeping honest: a plain substring search for "actions/runs/3096"
 # matches run 30965089954, which would pass this run's check on a different run's review.
@@ -77,6 +78,16 @@ $POSTED_COMMENT" 30965089954 success)"
 assert "run url at the very end of the stream" \
     0 "$(run_checker "see https://github.com/astubbs/parallel-consumer/actions/runs/30965089954" 30965089954 success)"
 
+# The live failure this script shipped with: the match is found, but >64 KiB of
+# comments follow it, so `printf | grep -q` + pipefail turned success into exit 1.
+# Cases 5 and 6 missed it - case 6 puts the match LAST, so nothing follows to
+# fill the pipe buffer. Observed on #198, #199, #204 and #210; on #210 a 4.7 KB
+# review comment was followed by a 127 KB similarity report.
+LARGE_TRAILER="$(yes 'padding to exceed the 64 KiB pipe buffer, as a similarity report does' | head -n 2000)"
+assert "match found, then >64 KiB of further comments (SIGPIPE regression)" \
+    0 "$(run_checker "$POSTED_COMMENT
+$LARGE_TRAILER" 30965089954 success)"
+
 for outcome in failure skipped cancelled; do
     assert "review step '$outcome' is never a review, matching comment or not" \
         1 "$(run_checker "$POSTED_COMMENT" 30965089954 "$outcome")"
@@ -91,6 +102,17 @@ assert "non-numeric run id" \
 
 assert "empty review outcome" \
     2 "$(run_checker "$POSTED_COMMENT" 30965089954 "")"
+
+# --- Structural guard: no SIGPIPE-prone pipes in the checker -------------------
+# The same rule bin/test-check-copyright-headers.sh enforces on the copyright
+# scanner, for the same reason. This checker shipped without it and hit the bug
+# live on four PRs before anyone noticed.
+if grep -vE '^[[:space:]]*#' "$CHECKER" | grep -nE '\|[[:space:]]*grep -q|\|[[:space:]]*awk '; then
+    echo "FAIL: checker pipes into an early-exiting reader (SIGPIPE + pipefail misclassification risk) - use a herestring"
+    failures=$((failures + 1))
+else
+    echo "ok:   checker has no SIGPIPE-prone pipes into grep -q / awk"
+fi
 
 echo
 if [ "$failures" -eq 0 ]; then

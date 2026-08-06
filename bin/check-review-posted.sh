@@ -91,7 +91,11 @@ if [ "$review_outcome" != "success" ]; then
     exit 1
 fi
 
-if printf '%s\n' "$comment_bodies" | grep -qE "actions/runs/${run_id}([^0-9]|$)"; then
+# Herestring, not `printf | grep -q`: under `set -o pipefail` (above) grep's early
+# exit on a match kills printf with EPIPE, and pipefail promotes 141 to the
+# pipeline status - so FINDING the review would fail the check. Only bites when
+# more than one pipe buffer (64 KiB) of comments follows the match.
+if grep -qE "actions/runs/${run_id}([^0-9]|$)" <<<"$comment_bodies"; then
     echo "Review posted by run ${run_id}."
     exit 0
 fi
