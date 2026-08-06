@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.PollContextInternal;
@@ -57,7 +58,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     @Getter
     @Setter
-    // todo change to enum, remove setter - #241
+    // todo change to enum, remove setter - confluentinc#241
     private String workType;
 
     @Getter
