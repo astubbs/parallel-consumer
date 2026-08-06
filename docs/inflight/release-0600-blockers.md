@@ -5,24 +5,14 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 
 ## Still open
 
-- **The rest of #197's triage list.** Four non-blocking defects were found while checking the two
-  blocking ones; **one is now fixed** (the `OffsetEncoding` magic-byte hazard - see below), three
-  remain: `PCModule` builds `DynamicLoadFactor(static, static)` when
+- **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
+  two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
+  fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when
   `messageBufferSize` is set, so "Max loading factor steps reached" WARNs on every control-loop pass
-  for anyone following the README's own tuning advice (#155); MDC context is not captured at submit
-  time, so a caller's `trace_id` is lost into the worker pool and the vert.x event loop;
+  for anyone following the README's own tuning advice (astubbs#155); MDC context is not captured at
+  submit time, so a caller's `trace_id` is lost into the worker pool and the vert.x event loop;
   and `release.yml` publishes an empty GitHub Release body, so the
   curated changelog never reaches the release page.
-- ~~`OffsetEncoding` throws on an unknown magic byte before `invalidOffsetMetadataPolicy` is
-  consulted.~~ **Fixed** while debugging astubbs#118 (confluentinc#326): `OffsetEncoding.decode` now
-  throws `OffsetDecodingError`, which routes an unreadable magic byte into the recovery path
-  `loadPartitionStateForAssignment` already had - log, drop the offset map, resume from the committed
-  offset - instead of escaping the rebalance listener and shutting PC down. This closes the
-  forward-compatibility hazard *and* the originally reported bug, which was the same defect reached
-  from the other direction (metadata written by a previous, non-PC owner of the consumer group rather
-  than by a future PC). The policy now governs only recognisably-Kafka-Streams metadata, which is what
-  it was actually added for. Also de-staticed `OffsetMapCodecManager.errorPolicy`, which had made the
-  policy JVM-global across PC instances.
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; #186, #188 and #195 close with a pointer to the release.
 - **Three `3.9.1` references survive this PR - one is wrong, two are not.** The genuine defect is
