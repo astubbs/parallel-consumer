@@ -225,6 +225,14 @@ public class CoreApp {
         // example
     }
 
+    /**
+     * Never called - this exists so the README's shutdown section can include real code rather than a snippet pasted
+     * into the doc. The {@code closeModes} tag below is pulled into {@code src/docs/README_TEMPLATE.adoc} by the
+     * asciidoc template plugin, so compiling this file is what stops that example silently going stale: if the
+     * options builder or the close API changes, this method fails to compile instead of the README quietly lying.
+     * <p>
+     * The other tagged methods in this class exist for the same reason.
+     */
     void closeModes() {
         // tag::closeModes[]
         var options = ParallelConsumerOptions.<String, String>builder()

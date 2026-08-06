@@ -77,8 +77,9 @@ public interface DrainingCloseable extends Closeable {
      *
      * @param timeout      how long to wait for the records already in flight to finish - overrides
      *                     {@link ParallelConsumerOptions#shutdownTimeout} only. {@link
-     *                     ParallelConsumerOptions#drainTimeout} is NOT overridden, and still bounds the draining phase
-     *                     of a {@link DrainingMode#DRAIN} close.
+     *                     ParallelConsumerOptions#drainTimeout} is NOT overridden, and still contributes its share of
+     *                     the overall budget for a {@link DrainingMode#DRAIN} close. Note it is a term in that budget
+     *                     rather than a deadline on draining itself - the drain loop runs until the backlog is empty.
      * @param drainingMode specify if PC should wait for messages already consumed from the broker to be processed before closing
      */
     void close(Duration timeout, DrainingMode drainingMode);
