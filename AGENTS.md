@@ -369,6 +369,25 @@ Keep the existing subject convention for *upstream* references (`... (#893)`, `c
 
 ## PR Discipline
 
+- **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates
+  fix-ups, review responses and course corrections that nobody wants in the permanent log, but it
+  usually also contains two or three genuinely separate pieces of work. Do not default; look at the
+  actual commits and recommend one of:
+  - **Re-cutting the commits.** `git reset --mixed <merge-base>`, then restage into a handful of
+    atomic commits and rebase-merge, so each lands on master on its own. Right when the branch holds
+    distinct workstreams someone will later want to bisect to or revert independently. The test for
+    "atomic" is whether the commit message needs an "and also". Verify the re-cut with
+    `git diff <old-tip> HEAD` - it must be empty, proving history changed and content did not.
+    **`git fetch origin master` first, every time**, then reset to the **merge-base**, not to
+    `origin/master`: a stale ref or the wrong base silently reverts whatever master gained meanwhile.
+    That failed here - the tell was files appearing in the staged set that the branch never touched.
+  - **Squash-merge.** Right when the branch is one idea and the intermediate commits are noise. If
+    you recommend this, **write the suggested squash commit message out in full** - it becomes the
+    permanent record, and the default (a concatenation of every commit subject) is unreadable.
+    Remember the subject becomes the PR title with `(#N)` appended.
+  - **Rebase-merge as-is.** Right only when the existing commits are already clean and atomic.
+  Releases after 0.6.0.0 generate their notes from the commit log, so this choice decides what a
+  future changelog has to work with.
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they happen to know about, and the one-way link strands the other half. If the
