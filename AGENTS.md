@@ -22,7 +22,7 @@ owned that content all along.)
 | **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping (branch/PR → upstream issue/PR, status) | Editorial opinion - that is the `.adoc` beside it |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when they disagree, the manifest wins |
-| **`CHANGELOG.adoc`** | Release notes. Frozen up to `== 0.6.0.0`; later sections are generated at release time from the commit log. `README.adoc` links to it and no longer embeds it | Anything invisible to users or operators - and **not** a per-PR chore: do not add entries in a feature PR |
+| **`CHANGELOG.adoc`** | Release notes. Sections for **shipped** releases are frozen; the section for the release being cut - **`== 0.6.0.0` included** - is regenerated at release time from the commit log, so what is under it today is working text, not the notes v6 will publish. `README.adoc` links to it and no longer embeds it | Anything invisible to users or operators - and **not** a per-PR chore: a PR never *adds* an entry. Correcting a factual error in an existing one is the only edit it may make |
 
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
@@ -196,12 +196,35 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 ## Changelog
 
-`CHANGELOG.adoc` holds the release notes. **Nothing about it is a per-PR chore.** Do not add entries
-in a feature PR, and do not maintain an `== Unreleased` section. Everything up to and including
-`== 0.6.0.0` is hand-written and now frozen; from the next release on, each section is **generated at
-release time from the commit log** and then frozen in turn.
+`CHANGELOG.adoc` holds the release notes. **Nothing about it is a per-PR chore.**
 
-This removes the file that every PR used to touch - it appeared in 30 of the last 30 master commits,
+**Release-time generation is in effect now, and it covers `0.6.0.0` itself.** "Frozen" below is a
+statement about *text already written in the file* - leave it alone - and never a claim that some
+release's published notes are settled. What state a section is in follows from whether its release
+has **shipped**:
+
+| Section | State |
+|---|---|
+| `== 0.5.x` and below | Hand-written legacy from before the fork, and shipped. **Frozen.** |
+| `== 0.6.0.0` - the release being cut | **Not shipped, so not settled.** Whatever sits under this heading now is working text. It will be **regenerated at release time from `git log <last-tag>..HEAD`**, replacing what is there, and frozen only once 0.6.0.0 ships. |
+| Every release after it | Same treatment: generated when that release is cut, frozen once it ships. |
+
+Two readings this is written to rule out. **`0.6.0.0` is not on the hand-written side of the line** -
+generation does not start at some later release. And **the current contents of `== 0.6.0.0` are not
+what v6 will publish** - do not cite them as the release notes, and do not treat the section as
+appendable just because the release has not gone out. It is not yours to add to *or* to trust.
+
+**In a PR the changelog is never added to.** No new entries, and no `== Unreleased` section - a
+shipped section is finished, and the in-flight section belongs to the generator. There is no window
+in which a PR contributes an entry.
+
+**The one edit a PR may make is correcting a factual error in text that is already there.** #198 did
+exactly this: a Dependencies entry said the Kafka client stayed on `3.9.1` when the pom had moved to
+`3.9.2`. A wrong statement in a published artefact does not get better by waiting for the next
+generation pass, so fix it. The test is whether you are *changing an existing claim to be true*
+(allowed) or *adding information about a change* (the generator's job, not yours).
+
+The policy removes the file that every PR used to touch - it appeared in 30 of the last 30 master commits,
 dragging the generated `README.adoc` with it - and removes the ordering problem where an entry had to
 cite a PR number that did not exist when the entry was written.
 
@@ -236,10 +259,26 @@ section. The judgement it applies, and that a human should re-apply before freez
   confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and PRs
   from one sequence.
 
-**Still live, and now inert:** the `PR Checklist` gate's changelog rule
-(`.github/scripts/changelog-ref-gate.js`) fails a human PR that *adds* a `CHANGELOG.adoc` entry citing
-no issue. Since PRs no longer touch the file, it should never fire - it remains a guard for anyone
-hand-editing the frozen sections.
+### The `PR Checklist` changelog gate is a different, narrower check
+
+`.github/scripts/changelog-ref-gate.js` fails a human PR that adds a `CHANGELOG.adoc` bullet under
+`Breaking`, `Improvements`, `Fixes` or `Examples` without an explicit `/issues/NN` link. **Do not read
+a green gate as compliance with the rule above** - it is neither a subset nor a superset of it, and it
+is not dormant:
+
+- It **passes** entries the policy forbids. The gate only cares about the *citation*, so an added
+  entry that links an issue sails through. #57's entries all cite issues.
+- It **fires** on the one edit the policy allows. The gate cannot tell an edit from an addition - its
+  own header explains that matching removed bullets against added ones was tried and abandoned as the
+  subtlest code in the file - so a correction like #198's looks like a new entry. That is what
+  `changelog-ref: N/A - <reason>` on its own line in the PR body is for; the workflow names this case
+  explicitly.
+- PRs **do** still touch the file. #51, #57, #105 and #106 were all open before this policy landed and
+  all modify `CHANGELOG.adoc`; every PR predating the policy is in the same position.
+
+So the gate enforces the *citation convention* on entries, and a human author and reviewer enforce
+"no entries in a PR". Tightening it to reject every addition was considered and rejected - see
+[`docs/inflight/ci-changelog-gate-scope.md`](docs/inflight/ci-changelog-gate-scope.md).
 
 ## PR Discipline
 

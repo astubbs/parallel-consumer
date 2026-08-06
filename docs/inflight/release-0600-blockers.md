@@ -32,10 +32,11 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   regenerate with `./mvnw -N asciidoc-template:build` (or `mvn process-sources`). Every README change
   is therefore a two-file diff, and a PR that touches only the template has silently not changed the
   published README.
-- **`CHANGELOG.adoc` is frozen up to `== 0.6.0.0`.** It is not a per-PR chore (AGENTS.md → *Changelog*),
-  so a PR editing it is either fixing a factual error in a frozen section or is wrong. When several
-  agents work in parallel, exactly one may hold that file - it is the highest-collision file in the
-  repo and conflicts in it are pure noise.
+- **`CHANGELOG.adoc` is not a per-PR chore, and the `== 0.6.0.0` section is not final** (AGENTS.md →
+  *Changelog*). It is regenerated from the commit log when the release is cut, so the text there now
+  is working text - do not quote it as the release notes. A PR editing the file is either fixing a
+  factual error in existing text or is wrong. When several agents work in parallel, exactly one may
+  hold that file - it is the highest-collision file in the repo and conflicts in it are pure noise.
 - **Anything asserting a dependency version in prose can drift silently.** The `3.9.1`/`3.9.2` mismatch
   arose because a Dependabot group bump moved `kafka.version` after the release note was written, and
   nothing cross-checks prose against `pom.xml`. Re-read the `=== Dependencies` section against the pom
