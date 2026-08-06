@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.examples.core;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
@@ -222,6 +223,21 @@ public class CoreApp {
 
     private void processBatchPayload(List<String> batchPayload) {
         // example
+    }
+
+    void closeModes() {
+        // tag::closeModes[]
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(getKafkaConsumer())
+                .drainTimeout(Duration.ofMinutes(2)) // <1>
+                .shutdownTimeout(Duration.ofSeconds(30)) // <2>
+                .build();
+        var pc = ParallelStreamProcessor.createEosStreamProcessor(options);
+
+        pc.poll(context -> processRecord(context.getSingleRecord().getConsumerRecord()));
+
+        pc.closeDrainFirst(); // <3>
+        // end::closeModes[]
     }
 
     private String preparePayload(RecordContext<String, String> rc) {

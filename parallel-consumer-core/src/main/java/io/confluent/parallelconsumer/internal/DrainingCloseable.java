@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import java.io.Closeable;
@@ -24,8 +25,18 @@ public interface DrainingCloseable extends Closeable {
     }
 
     /**
-     * Close the consumer, without draining. Uses a timeout specified through ParallelConsumerOptions.
+     * Close the consumer <b>WITHOUT draining</b> - this is {@link #closeDontDrainFirst()}, not
+     * {@link #closeDrainFirst()}.
+     * <p>
+     * Note that this is also what try-with-resources and any other {@link Closeable} handling will call. Records that
+     * have been downloaded but not yet started are therefore dropped (never committed, so redelivered after the
+     * rebalance), and only the records already in flight are waited for. If you want the queued backlog processed
+     * before closing, call {@link #closeDrainFirst()} explicitly.
+     * <p>
+     * Uses the timeout specified through {@link ParallelConsumerOptions#shutdownTimeout}.
      *
+     * @see DrainingMode#DONT_DRAIN
+     * @see #closeDrainFirst()
      * @see ParallelConsumerOptions#shutdownTimeout
      * @see #close(Duration, DrainingMode)
      */
@@ -64,7 +75,10 @@ public interface DrainingCloseable extends Closeable {
     /**
      * Close the consumer.
      *
-     * @param timeout      how long to wait before giving up - override timeout set in ParallelConsumerOptions
+     * @param timeout      how long to wait for the records already in flight to finish - overrides
+     *                     {@link ParallelConsumerOptions#shutdownTimeout} only. {@link
+     *                     ParallelConsumerOptions#drainTimeout} is NOT overridden, and still bounds the draining phase
+     *                     of a {@link DrainingMode#DRAIN} close.
      * @param drainingMode specify if PC should wait for messages already consumed from the broker to be processed before closing
      */
     void close(Duration timeout, DrainingMode drainingMode);
