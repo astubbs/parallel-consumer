@@ -1,6 +1,6 @@
 # Offset-encoding forward compatibility - `fix/offset-encoding-policy-bypass`
 
-Non-blocking finding on #197, fixed on its own branch: `invalidOffsetMetadataPolicy` was
+Non-blocking finding on astubbs#197, fixed on its own branch: `invalidOffsetMetadataPolicy` was
 **unreachable for the case it exists to handle**. `EncodedOffsetPair.unwrap` resolved the magic byte
 via `OffsetEncoding.decode`, which threw a bare `RuntimeException("Unexpected magic: ...")` *before*
 any code that knew the policy ran - so an older PC reading a commit written by a newer PC died on
