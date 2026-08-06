@@ -4,11 +4,14 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import lombok.Value;
 import org.slf4j.MDC;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -37,9 +40,20 @@ public class MdcBoundaryProbe {
 
     public static final String CALLER_VALUE = "caller-trace-abc";
 
-    private final ConcurrentLinkedQueue<String> threadsUsed = new ConcurrentLinkedQueue<>();
+    /**
+     * What one invocation on the far side of the boundary saw. Thread and value are kept together in ONE object, added
+     * to ONE collection, deliberately: a test awaits {@link #observations()} and then asserts on both fields, so if
+     * they lived in two collections the first would <em>lead</em> the awaited one and the assertions would race a
+     * still-arriving invocation. That is the defect fixed in {@code MultiInstanceMetricsTest} (await the value you are
+     * about to assert, never a proxy that leads it); this shape makes it unrepresentable rather than merely absent.
+     */
+    @Value
+    public static class Observation {
+        String threadName;
+        String callerValueSeen;
+    }
 
-    private final ConcurrentLinkedQueue<String> contextSeen = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Observation> observations = new ConcurrentLinkedQueue<>();
 
     /**
      * Puts the caller's context on the <em>current</em> thread. Call this on the test thread, before starting Parallel
@@ -61,15 +75,16 @@ public class MdcBoundaryProbe {
      * code that runs on the far side of the boundary under test.
      */
     public void observeCurrentThread() {
-        threadsUsed.add(Thread.currentThread().getName());
-        contextSeen.add(String.valueOf(MDC.get(CALLER_KEY)));
+        // single add - see the note on Observation for why this must not become two collections
+        observations.add(new Observation(Thread.currentThread().getName(), String.valueOf(MDC.get(CALLER_KEY))));
     }
 
     /**
-     * @return one entry per observation, for the test's own count assertion
+     * @return one entry per invocation observed. Awaiting this bounds <em>everything</em> the assertions below read, so
+     *         a test that awaits it is not racing a still-arriving invocation.
      */
-    public Collection<String> observations() {
-        return contextSeen;
+    public Collection<Observation> observations() {
+        return observations;
     }
 
     /**
@@ -83,9 +98,17 @@ public class MdcBoundaryProbe {
      */
     public void assertObservedOnlyOn(String engineThreadDescription, Predicate<String> engineThreadName) {
         assertWithMessage("the observing code must run on the %s, not the PC worker thread - threads seen: %s",
-                engineThreadDescription, threadsUsed)
-                .that(threadsUsed.stream().allMatch(engineThreadName))
+                engineThreadDescription, threadNamesSeen())
+                .that(observations.stream().map(Observation::getThreadName).allMatch(engineThreadName))
                 .isTrue();
+    }
+
+    private List<String> threadNamesSeen() {
+        return observations.stream().map(Observation::getThreadName).collect(Collectors.toList());
+    }
+
+    private List<String> callerValuesSeen() {
+        return observations.stream().map(Observation::getCallerValueSeen).collect(Collectors.toList());
     }
 
     /**
@@ -96,8 +119,8 @@ public class MdcBoundaryProbe {
      */
     public void assertCallersContextWasVisible(String engineThreadDescription) {
         assertWithMessage("the caller's diagnostic context must be visible on the %s - values seen: %s",
-                engineThreadDescription, contextSeen)
-                .that(contextSeen.stream().allMatch(CALLER_VALUE::equals))
+                engineThreadDescription, callerValuesSeen())
+                .that(observations.stream().map(Observation::getCallerValueSeen).allMatch(CALLER_VALUE::equals))
                 .isTrue();
     }
 
