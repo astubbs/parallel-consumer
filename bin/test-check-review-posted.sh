@@ -81,7 +81,8 @@ assert "run url at the very end of the stream" \
 # The live failure this script shipped with: the match is found, but >64 KiB of
 # comments follow it, so `printf | grep -q` + pipefail turned success into exit 1.
 # Cases 5 and 6 missed it - case 6 puts the match LAST, so nothing follows to
-# fill the pipe buffer. Observed on #198, #199, #204 and #210; on #210 a 4.7 KB
+# fill the pipe buffer. Observed on astubbs#198, astubbs#199, astubbs#204 and
+# astubbs#210; on astubbs#210 a 4.7 KB
 # review comment was followed by a 127 KB similarity report.
 LARGE_TRAILER="$(yes 'padding to exceed the 64 KiB pipe buffer, as a similarity report does' | head -n 2000)"
 assert "match found, then >64 KiB of further comments (SIGPIPE regression)" \

@@ -249,7 +249,7 @@ appendable just because the release has not gone out. It is not yours to add to 
 shipped section is finished, and the in-flight section belongs to the generator. There is no window
 in which a PR contributes an entry.
 
-**The one edit a PR may make is correcting a factual error in text that is already there.** #198 did
+**The one edit a PR may make is correcting a factual error in text that is already there.** astubbs#198 did
 exactly this: a Dependencies entry said the Kafka client stayed on `3.9.1` when the pom had moved to
 `3.9.2`. A wrong statement in a published artefact does not get better by waiting for the next
 generation pass, so fix it. The test is whether you are *changing an existing claim to be true*
@@ -298,13 +298,13 @@ a green gate as compliance with the rule above** - it is neither a subset nor a 
 is not dormant:
 
 - It **passes** entries the policy forbids. The gate only cares about the *citation*, so an added
-  entry that links an issue sails through. #57's entries all cite issues.
+  entry that links an issue sails through. astubbs#57's entries all cite issues.
 - It **fires** on the one edit the policy allows. The gate cannot tell an edit from an addition - its
   own header explains that matching removed bullets against added ones was tried and abandoned as the
-  subtlest code in the file - so a correction like #198's looks like a new entry. That is what
+  subtlest code in the file - so a correction like astubbs#198's looks like a new entry. That is what
   `changelog-ref: N/A - <reason>` on its own line in the PR body is for; the workflow names this case
   explicitly.
-- PRs **do** still touch the file. #51, #57, #105 and #106 were all open before this policy landed and
+- PRs **do** still touch the file. astubbs#51, astubbs#57, astubbs#105 and astubbs#106 were all open before this policy landed and
   all modify `CHANGELOG.adoc`; every PR predating the policy is in the same position.
 
 So the gate enforces the *citation convention* on entries, and a human author and reviewer enforce
