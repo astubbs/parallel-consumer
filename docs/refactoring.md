@@ -72,23 +72,51 @@ so a major-release prep can action them in one pass.
   (`origin/improvements/nonnull-default` @684c02a0) and add a JPMS `module-info`
   (`origin/improvements/module-info` @d74f5e8b) - both tighten the published
   contract and can break downstream callers / module-path consumers.
-- **Version-gated API work** already tracked under Cross-cutting: `upstream #186`
-  (thread-safe public APIs, labelled *ver:1.0* blocker) and `upstream #172`
+- **Version-gated API work** already tracked under Cross-cutting: `confluentinc#186`
+  (thread-safe public APIs, labelled *ver:1.0* blocker) and `confluentinc#172`
   (1.0 release train).
 
 ---
 
+
+## Mirrored refactor issues
+
+Every upstream issue is mirrored in this repo, so a refactor sweep can work from here without a
+round trip to GitHub. These are the refactor-shaped ones; each links the fork mirror (where the
+diagnosis and current status live) and the upstream original.
+
+| Fork | Upstream | What | Where it lives below |
+|---|---|---|---|
+| [#117](https://github.com/astubbs/parallel-consumer/issues/117) | [#233](https://github.com/confluentinc/parallel-consumer/issues/233) | Refactor `OffsetMapCodecManager` - split encode/decode, drop the consumer dep | *offsets/OffsetMapCodecManager.java* |
+| [#131](https://github.com/astubbs/parallel-consumer/issues/131) | [#130](https://github.com/confluentinc/parallel-consumer/issues/130) | Remove static-state manipulation in tests | *Remove static state* |
+| [#142](https://github.com/astubbs/parallel-consumer/issues/142) | [#200](https://github.com/confluentinc/parallel-consumer/issues/200) | Shared-nothing architecture | *Thread model* |
+| [#143](https://github.com/astubbs/parallel-consumer/issues/143) | [#241](https://github.com/confluentinc/parallel-consumer/issues/241) | `WorkContainer.workType` `String` → enum | *state/WorkContainer.java* |
+| [#146](https://github.com/astubbs/parallel-consumer/issues/146) | [#290](https://github.com/confluentinc/parallel-consumer/issues/290) | Refactor the test base - finish the Truth-Subject extraction | *(no section yet)* |
+| [#139](https://github.com/astubbs/parallel-consumer/issues/139) | [#186](https://github.com/confluentinc/parallel-consumer/issues/186) | Thread-safe public API surface | *Thread-safe public API surface* |
+| [#192](https://github.com/astubbs/parallel-consumer/issues/192) | [#903](https://github.com/confluentinc/parallel-consumer/issues/903) | Why custom run-length/bitset encoders, not RoaringBitmap | *offsets/* |
+
+Two of these carry findings that are **not** in this document, because they were discovered while
+diagnosing the mirror rather than while reading the file:
+
+- **astubbs#143** - `workType` is written by the vertx and reactor modules and **read by nobody** (three
+  `@see` javadoc references, zero call sites). The honest refactor is deleting the field, not
+  converting it to an enum.
+- **astubbs#131** - astubbs#101 fixed the *flake* by adding the missing `@ResourceLock`, not the *hazard*. The
+  public mutable statics on `OffsetMapCodecManager` are still there, and its own
+  `todo remove static state manipulation from tests` still stands.
+
 ## Cross-cutting / architectural
 
-Large, mostly interdependent, several **undecided**. Most trace to upstream #200.
+Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
 
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
-- **upstream #200** - "Consider a shared-nothing architecture, to reduce thread
+*Mirror: [#142](https://github.com/astubbs/parallel-consumer/issues/142) · orphaned implementation in [confluentinc PR #270](https://github.com/confluentinc/parallel-consumer/pull/270), closed unmerged in the 2023-06-15 sweep.*
+- **confluentinc#200** - "Consider a shared-nothing architecture, to reduce thread
   complexity" - the canonical tracker ("the ultimate simplification would be to
-  eliminate the separate poller thread"). Would also kill the `upstream #857` deadlock class
+  eliminate the separate poller thread"). Would also kill the `confluentinc#857` deadlock class
   (poll vs control thread on `commitCommand`).
-- Design ref: draft `upstream #270` (Partition Events). Abandoned branches:
+- Design ref: draft `confluentinc#270` (Partition Events). Abandoned branches:
   `origin/improvements/interrupt-reason` @93a06fe0 (the interrupting-poll model - wake a
   blocking poll when work arrives), `origin/improvements/poller-bus-actor` @b1598f21 (poller
   as an actor), `origin/improvements/rebalance-messages` @49e977bf (rebalance via messages),
@@ -100,35 +128,37 @@ Do not start one casually.
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
   rebalance listener + deprecated options in one class. Design ref: draft
-  `upstream #488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
-  state machine). Do alongside the #200 work; high risk.
+  `confluentinc#488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
+  state machine). Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
 
 ### Actor / IPC message bus for commits & results
 - Replace shared-state coordination with a lightweight actor/mailbox. Design refs:
-  drafts `upstream #524` (commit-command actor), `upstream #325` (lambda actor queue
+  drafts `confluentinc#524` (commit-command actor), `confluentinc#325` (lambda actor queue
   IPC). Branches: `origin/improvements/lambda-actor-bus` @da7dc92c (the bus),
   `origin/improvements/commit-command-actor` @1c50225e,
   `origin/improvements/async-process-send-results-using-actor` @00f35016 (process send-results
-  via actor instead of a blocking `future.get` - relates to draft `upstream #356`),
+  via actor instead of a blocking `future.get` - relates to draft `confluentinc#356`),
   `origin/improvements/transactions-dont-block` @17f019b8 (non-blocking tx, depends on the
   actor system), `origin/improvements/scheduled-commit` @b6f0a542,
   `origin/improvements/actor-scheduled` @4db0da0f, `origin/improvements/remove-commit-queue` @381d6997.
-  Only meaningful as part of the #200 rework.
+  Only meaningful as part of the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) rework.
 
 ### Remove static state (unblocks parallel test execution)
+*Mirror: [#131](https://github.com/astubbs/parallel-consumer/issues/131).*
 - Several classes hold static state only to satisfy tests, forcing serial test
-  runs. Design refs: drafts `upstream #405` (remove static state), `upstream #126`
-  (remove static manipulation in tests) → enables `upstream #143` (parallel tests).
+  runs. Design refs: drafts `confluentinc#405` (remove static state), `confluentinc#126`
+  (remove static manipulation in tests) → enables `confluentinc#143` (parallel tests).
   Branches `origin/improvements/remove-static` @c34ee4a4 and `.../remove-static-use-pcmodule` @806b505e
   (replace static state with PCModule DI). Concrete sites under the offsets/state
   files below. **Still relevant.**
 
 ### Thread-safe public API surface
-- **upstream #186** - "Ensure all PC APIs are thread safe" (labelled *blocker,
+*Mirrors: [#139](https://github.com/astubbs/parallel-consumer/issues/139), [#158](https://github.com/astubbs/parallel-consumer/issues/158) · upstream's "Fixed by [#346](https://github.com/confluentinc/parallel-consumer/pull/346)" is wrong - that PR never merged.*
+- **confluentinc#186** - "Ensure all PC APIs are thread safe" (labelled *blocker,
   ver:1.0*). Cross-cutting audit; pairs with the thread-model work.
 
 ### Thread-visibility findings surfaced by SpotBugs 4.10 (11, pre-existing)
-- The `spotbugs 4.8.6 → 4.10.3` bump (#73) expanded the multithreading (`AT_*`)
+- The `spotbugs 4.8.6 → 4.10.3` bump (astubbs#73) expanded the multithreading (`AT_*`)
   detectors, which then fired on **existing** `parallel-consumer-core` code (they
   dropped out of "new" once master regenerated the baseline, so nothing is red -
   but the observations stand, all verified still present on master 2026-08-04):
@@ -145,9 +175,9 @@ Do not start one casually.
   While in `ConsumerManager`, fix the `erroneousWakups` typo.
 
 ### Performance
-- **upstream #884** - "Parallel Consumer is 30x slower than normal consumer" - the
+- **confluentinc#884** - "Parallel Consumer is 30x slower than normal consumer" - the
   headline perf issue to characterise before/after any hot-path change.
-- Shard-count caching (O(n) scan → cached): design ref draft `upstream #530`;
+- Shard-count caching (O(n) scan → cached): design ref draft `confluentinc#530`;
   branches `origin/improvements/cache-counts` @f99e6b60, `origin/improvements/set-to-list` @7ada9918,
   `origin/improvements/headset` @3e67fe7d (cache / headSet
   the counts; "push TreeSet construction up to source"). **Concrete, still relevant.**
@@ -157,7 +187,8 @@ Do not start one casually.
 
 ## By file / module (parallel-consumer-core)
 
-### offsets/OffsetMapCodecManager.java — upstream #233 (central)
+### offsets/OffsetMapCodecManager.java — confluentinc#233 (central)
+*Mirror: [#117](https://github.com/astubbs/parallel-consumer/issues/117).*
 - Encoding and decoding are conflated; the class needs a `Consumer` only for one
   decode-on-assignment method (L131), is passed `null` elsewhere, and is created as
   throwaway instances. Refactor: split encode/decode, drop the consumer dependency,
@@ -196,14 +227,16 @@ Do not start one casually.
 
 ### state/PartitionState.java (715 lines)
 - L96: concurrent commit-data collection exists only because control/poller threads
-  share state - removed under shared-nothing (upstream #200). L491: `null` passed to
-  the codec manager (upstream #233). L327: visibility widened for legacy tests.
+  share state - removed under shared-nothing (confluentinc#200). L491: `null` passed to
+  the codec manager (confluentinc#233). L327: visibility widened for legacy tests.
 
 ### state/PartitionStateManager.java
-- L123 was a throwaway `OffsetMapCodecManager` per assignment (upstream #233); PR #57
-  cached it (the `upstream #859` leak site), but the broader #233 refactor remains.
+- L123 was a throwaway `OffsetMapCodecManager` per assignment (confluentinc#233); PR astubbs#57
+  cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)
+  (mirror astubbs#117) refactor remains.
 
 ### state/WorkContainer.java
+*Mirror: [#143](https://github.com/astubbs/parallel-consumer/issues/143) - and see the index above: the field is read by nobody, so deletion beats an enum.*
 - L42: instance field working around static state - folds into static-state removal.
 
 ### internal/AbstractParallelEoSStreamProcessor.java
@@ -226,13 +259,13 @@ Do not start one casually.
   same-thread second `unlock()` on a `ReentrantReadWriteLock.ReadLock` with zero held
   read locks throws `IllegalMonitorStateException` - yet no such exception appears in
   any run, so *something* prevents it and **we do not know what**. Pre-existing, but
-  #110's fix now drives this path for real (the old mock-context test never did), so
+  astubbs#110's fix now drives this path for real (the old mock-context test never did), so
   it is more exposed than before. Establish which release actually fires and why the
   second is harmless - or, if it is not, what is swallowing it.
 
 ### internal/ProducerManager.java
 - L162: `syncBeginTransaction()` is `private synchronized` (locks on `this`) -
-  lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `upstream #859`
+  lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. L265: brute-force transaction-commit retry.
 
 ### internal/DynamicLoadFactor.java
@@ -262,7 +295,7 @@ Do not start one casually.
   `awaitForSomeLoopCycles(50)` / `(3)` with "async commit can be slow - todo change this to event
   based", and "remove all wait nevers in favour of triggers as it slows down test". Not a style
   point: cycle-counting is the mechanism behind this class's flake history (one such wait was the
-  shutdown-commit flake fixed in #101) - a loaded machine changes how much happens per cycle. Converting
+  shutdown-commit flake fixed in astubbs#101) - a loaded machine changes how much happens per cycle. Converting
   to event/trigger-based waits removes the flake class and speeds the suite up. Related to *Remove
   static state* above, which is the other half of why these tests cannot run cleanly in parallel.
 
@@ -291,7 +324,7 @@ date, so if a branch is later deleted or moved we still know what it was. The
 thread-model / actor / static-state / shard-caching clusters are listed under
 Cross-cutting above; the rest:
 
-**Perf: engine & queue experiments** → mostly dead-ends; ideas for upstream #884:
+**Perf: engine & queue experiments** → mostly dead-ends; ideas for confluentinc#884:
 - `origin/features/disrupter` @9473ab39 - LMAX Disruptor engine experiment.
 - `origin/direct-ringbuffer` @c247d89c, `origin/ringbuffer-batch` @ee942830 - ring-buffer engine.
 - `origin/refactor/double-ended-queue` @58a2b997 - block on work submission to the pool
@@ -306,16 +339,16 @@ Cross-cutting above; the rest:
 - `origin/predictive-offset-payloads` @fa4a79bd - approximate in-flight per partition from the
   offset range.
 - `origin/features/least-loaded` @278cc0a5 - incomplete futures as a loading proxy (→ draft
-  `upstream #473` / issue `upstream #394`, least-loaded broker).
+  `confluentinc#473` / issue `confluentinc#394`, least-loaded broker).
 
 **Offset encoding** → relevant to the offsets/*Encoder items above:
 - `origin/refactor/encode-with-incompletes-direct` @fa56ff18 - invoke the encoder with known
   incompletes directly instead of iterating (the `OffsetSimultaneousEncoder` L218 hot-spot).
 - `origin/refactor/continuous-encode-22` @0b98d4de, `origin/continuous-encode` @25340f89 - split
-  run-length sequence/entry; continuous encoding (draft `upstream #46`).
+  run-length sequence/entry; continuous encoding (draft `confluentinc#46`).
 - `origin/encoders-truncate-themselves` @8d3903b9 - push truncation into the encoders.
 
-**Offsets/state classes** → tie to upstream #233 / #200:
+**Offsets/state classes** → tie to [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233) / [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirrored as astubbs#117 and astubbs#142):
 - `origin/refactors/offsets-class` @6916467a, `.../offsets-class-partition-state` @d79f47bd - introduce
   an `Offset` type used by `PartitionState`.
 - `origin/refactors/refactor-psm-and-ps` @e2d512b4, `origin/partition-state` @a5be4885 - PSM/PS rework.
@@ -324,7 +357,7 @@ Cross-cutting above; the rest:
 - `origin/features/producer-facade` @d7a118c0 - **DEAD-END, conclusion recorded**: "doesn't
   make sense to have a producer facade." Don't revisit.
 - `origin/features/consumer-interface` @e67833f8, `origin/refactor/interface` @400643c8 - Consumer /
-  interface naming (→ cohesive-API draft `upstream #303`).
+  interface naming (→ cohesive-API draft `confluentinc#303`).
 - `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API (breaking removal is
   queued under *Breaking changes queued for next major version*).
 - `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
@@ -332,19 +365,19 @@ Cross-cutting above; the rest:
   *Breaking changes queued for next major version*).
 - `origin/improvements/nonnull-default` @684c02a0 - adopt `@ParametersAreNonnullByDefault`.
 - `origin/improvements/module-info` @d74f5e8b - add JPMS `module-info`.
-- `origin/improvements/loom` @32ebac17 - Loom/Virtual-Threads POC → **superseded by upstream #908**.
-- `origin/custom-thread-pool` @8e7f56c9 - customisable `ThreadPoolExecutor` (→ upstream #78; also
-  subsumed by `upstream #908`).
+- `origin/improvements/loom` @32ebac17 - Loom/Virtual-Threads POC → **superseded by confluentinc#908**.
+- `origin/custom-thread-pool` @8e7f56c9 - customisable `ThreadPoolExecutor` (→ confluentinc#78; also
+  subsumed by `confluentinc#908`).
 
 **Test infrastructure**:
 - `origin/refactor/chaos-broker` @1b9bd385, `.../chaos-broker-challage-test` @c9acb00c,
   `.../test-consumer-disconnect` @6a968074 - ChaosBroker / broker-disconnect testing (draft
-  `upstream #345`, issue `upstream #203`).
+  `confluentinc#345`, issue `confluentinc#203`).
 - `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M.
-- `origin/refactor/empty-tests` @5f8b3dba - remove/implement the empty placeholder tests (draft `upstream #496`).
+- `origin/refactor/empty-tests` @5f8b3dba - remove/implement the empty placeholder tests (draft `confluentinc#496`).
 - `origin/improvements/test-perf` @932210b6, `.../multi-topic-test` @dd3ad77b - test perf / multi-topic.
-- `origin/client-factory` @9636c33d - client-factory config to prevent client reuse (draft `upstream #106`).
-- `origin/slf4j-no-logger` @9c9396b8 - warn when no SLF4J logger is bound (→ `upstream #139`; UX, not a refactor).
+- `origin/client-factory` @9636c33d - client-factory config to prevent client reuse (draft `confluentinc#106`).
+- `origin/slf4j-no-logger` @9c9396b8 - warn when no SLF4J logger is bound (→ `confluentinc#139`; UX, not a refactor).
 
 ---
 
@@ -353,17 +386,46 @@ Cross-cutting above; the rest:
 `src/docs/development/upstream-pr-analysis.adoc` Part 2 keeps the full catalogue and
 verdicts for ~53 closed-unmerged upstream PRs. The refactor/perf-relevant ones, as
 specs (not branches):
-- **Perf:** `upstream #530` (shard-count caching), `#356` (async producing, #29),
-  `#408` (run-length v3 with Longs), `#46` (continuous encoding), `#237` (shard starvation #236).
-- **Architecture:** `upstream #488` (God class), `#270` (shared-nothing #200),
-  `#524` (commit actor), `#325` (lambda-actor IPC), `#271` (package restructure),
-  `#303` (cohesive Consumer/Function API), `#405` (remove static state).
-- **Test infra:** `upstream #345` (ChaosBroker #203), `#126` (remove static in
-  tests) → `#143` (parallel tests), `#106` (client factory), `#492`/`#494`/`#496`.
+**Every number in this section is upstream** unless it says *fork*. Each is written out and
+hyperlinked rather than left bare, because a bare `#NNN` autolinks to the *fork* issue of that number
+- and those are real, different issues. `#29` here is the clearest trap: confluentinc#29 is "Support
+asynchronous sending of result messages", while fork astubbs#29 is the paused-consumption-after-rebalance
+fix. Nothing but the prefix distinguishes them.
 
-Other open refactor issues: `upstream #200`, `#233`, `#290` (refactor test base),
-`#186` (thread-safe APIs, 1.0 blocker), `#192` (unique thread names), `#78` (custom
-ThreadPoolExecutor), `#172` (1.0 release train); fork `#40` (dedupe MockConsumer* tests).
+- **Perf:** [confluentinc#530](https://github.com/confluentinc/parallel-consumer/pull/530) (shard-count
+  caching), [confluentinc#356](https://github.com/confluentinc/parallel-consumer/pull/356) (async
+  producing, for [confluentinc#29](https://github.com/confluentinc/parallel-consumer/issues/29)),
+  [confluentinc#408](https://github.com/confluentinc/parallel-consumer/pull/408) (run-length v3 with
+  Longs), [confluentinc#46](https://github.com/confluentinc/parallel-consumer/pull/46) (continuous
+  encoding), [confluentinc#237](https://github.com/confluentinc/parallel-consumer/pull/237) (shard
+  starvation, for [confluentinc#236](https://github.com/confluentinc/parallel-consumer/issues/236)).
+- **Architecture:** [confluentinc#488](https://github.com/confluentinc/parallel-consumer/pull/488) (God
+  class), [confluentinc#270](https://github.com/confluentinc/parallel-consumer/pull/270) (shared-nothing,
+  part of [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200)),
+  [confluentinc#524](https://github.com/confluentinc/parallel-consumer/pull/524) (commit actor),
+  [confluentinc#325](https://github.com/confluentinc/parallel-consumer/pull/325) (lambda-actor IPC),
+  [confluentinc#271](https://github.com/confluentinc/parallel-consumer/pull/271) (package restructure),
+  [confluentinc#303](https://github.com/confluentinc/parallel-consumer/pull/303) (cohesive
+  Consumer/Function API), [confluentinc#405](https://github.com/confluentinc/parallel-consumer/pull/405)
+  (remove static state).
+- **Test infra:** [confluentinc#345](https://github.com/confluentinc/parallel-consumer/pull/345)
+  (ChaosBroker, for [confluentinc#203](https://github.com/confluentinc/parallel-consumer/issues/203)),
+  [confluentinc#126](https://github.com/confluentinc/parallel-consumer/issues/126) (remove static in
+  tests) → [confluentinc#143](https://github.com/confluentinc/parallel-consumer/issues/143) (parallel
+  tests), [confluentinc#106](https://github.com/confluentinc/parallel-consumer/issues/106) (client
+  factory), [confluentinc#492](https://github.com/confluentinc/parallel-consumer/pull/492) /
+  [#494](https://github.com/confluentinc/parallel-consumer/pull/494) /
+  [#496](https://github.com/confluentinc/parallel-consumer/pull/496).
+
+Other open refactor issues:
+[confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirrored as astubbs#142),
+[confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233) (mirrored as astubbs#117),
+[confluentinc#290](https://github.com/confluentinc/parallel-consumer/issues/290) (refactor test base),
+[confluentinc#186](https://github.com/confluentinc/parallel-consumer/issues/186) (thread-safe APIs, 1.0
+blocker), [confluentinc#192](https://github.com/confluentinc/parallel-consumer/issues/192) (unique
+thread names), [confluentinc#78](https://github.com/confluentinc/parallel-consumer/issues/78) (custom
+ThreadPoolExecutor), [confluentinc#172](https://github.com/confluentinc/parallel-consumer/issues/172)
+(1.0 release train); fork astubbs#40 (dedupe MockConsumer* tests).
 
 ---
 
