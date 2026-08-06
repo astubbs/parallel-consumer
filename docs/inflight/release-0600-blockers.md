@@ -5,14 +5,13 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 
 ## Still open
 
-- **The rest of #197's triage list.** Four non-blocking defects were found while checking the two
-  blocking ones and none are fixed: `PCModule` builds `DynamicLoadFactor(static, static)` when
+- **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
+  two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
+  fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when
   `messageBufferSize` is set, so "Max loading factor steps reached" WARNs on every control-loop pass
-  for anyone following the README's own tuning advice (#155); MDC context is not captured at submit
-  time, so a caller's `trace_id` is lost into the worker pool and the vert.x event loop;
-  `OffsetEncoding` throws on an unknown magic byte *before* `invalidOffsetMetadataPolicy` is consulted,
-  so a future encoding kills an older reader regardless of policy - a forward-compatibility hazard in a
-  wire format this fork now owns; and `release.yml` publishes an empty GitHub Release body, so the
+  for anyone following the README's own tuning advice (astubbs#155); MDC context is not captured at
+  submit time, so a caller's `trace_id` is lost into the worker pool and the vert.x event loop;
+  and `release.yml` publishes an empty GitHub Release body, so the
   curated changelog never reaches the release page.
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; #186, #188 and #195 close with a pointer to the release.

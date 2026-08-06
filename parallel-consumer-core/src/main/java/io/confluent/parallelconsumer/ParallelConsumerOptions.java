@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
@@ -331,8 +332,12 @@ public class ParallelConsumerOptions<K, V> {
     public static final Duration SASL_AUTHENTICATION_EXCEPTION_RETRY_BACKOFF = Duration.ofSeconds(5);
 
     /**
-     * Error handling strategy to use when invalid offsets metadata is encountered. This could happen accidentally or
-     * deliberately if the user attempts to reuse an existing consumer group id.
+     * Error handling strategy to use when <em>recognisably Kafka Streams</em> offset metadata is encountered. This could
+     * happen accidentally or deliberately if the user attempts to reuse an existing consumer group id.
+     * <p>
+     * This policy applies only to metadata PC can positively identify as Kafka Streams'. Metadata it cannot decode at
+     * all - written by some other framework, by operator tooling, or simply corrupt - is never fatal under either
+     * policy: PC logs it, drops the offset map, and resumes from the committed offset.
      */
     public enum InvalidOffsetMetadataHandlingPolicy {
         /**
@@ -346,9 +351,11 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * Controls the error handling behaviour to use when invalid offsets metadata from a pre-existing consumer group is
-     * encountered. A potential scenario where this could occur is when a consumer group id from a Kafka Streams
-     * application is accidentally reused.
+     * Controls the error handling behaviour to use when Kafka Streams offset metadata from a pre-existing consumer group
+     * is encountered - the scenario where a consumer group id from a Kafka Streams application is reused.
+     * <p>
+     * Note this does not govern metadata PC cannot decode at all; that is always recovered from rather than being fatal.
+     * See {@link InvalidOffsetMetadataHandlingPolicy}.
      * <p>
      * Default is {@link InvalidOffsetMetadataHandlingPolicy#FAIL}
      */

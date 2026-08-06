@@ -75,7 +75,11 @@ public class OffsetMapCodecManager<K, V> {
 
     private final PCMetrics pcMetrics;
 
-    private static ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy = ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
+    /**
+     * Per-instance: two {@link io.confluent.parallelconsumer.ParallelConsumer}s in one JVM may be configured with
+     * different policies, and previously the last one constructed silently set it for all of them.
+     */
+    private ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy = ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
 
     /**
      * Decoding result for encoded offsets
@@ -157,7 +161,9 @@ public class OffsetMapCodecManager<K, V> {
                     PartitionState<K, V> state = decodePartitionState(tp, offsetAndMeta);
                     partitionStates.put(tp, state);
                 } catch (OffsetDecodingError offsetDecodingError) {
-                    log.error("Error decoding offsets from assigned partition, dropping offset map (will replay previously completed messages - partition: {}, data: {})",
+                    log.error("Error decoding offsets from assigned partition, dropping offset map (will replay previously completed messages - partition: {}, data: {}). " +
+                                    "If this consumer group was previously used by another application, its offset metadata isn't ours to read - " +
+                                    "processing resumes from the committed offset, and PC will write its own metadata from now on.",
                             tp, offsetAndMeta, offsetDecodingError);
                 }
             }
@@ -179,17 +185,50 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     private HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(OffsetAndMetadata offsetData) throws OffsetDecodingError {
-        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata());
+        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata(), errorPolicy);
     }
 
+    /**
+     * Decodes an offset payload under the default {@link ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy#FAIL}
+     * policy.
+     * <p>
+     * The policy only decides what happens for metadata identifiable as Kafka Streams'. Metadata that cannot be decoded
+     * at all raises {@link OffsetDecodingError} under either policy, so callers must handle it regardless of which they
+     * pass.
+     *
+     * @throws OffsetDecodingError if the payload is not valid base64, or holds an encoding this version cannot read
+     * @see #deserialiseIncompleteOffsetMapFromBase64(long, String, ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy)
+     */
     public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition, String base64EncodedOffsetPayload) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload,
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+    }
+
+    /**
+     * Decodes the base64 offset payload committed against a partition, into the highest offset seen and the set of
+     * incomplete offsets below it.
+     *
+     * @param committedOffsetForPartition the committed offset the payload is relative to - incompletes are encoded as
+     *                                    offsets from this base
+     * @param base64EncodedOffsetPayload  the {@code metadata} field of the committed offset
+     * @param errorPolicy                 what to do about metadata recognisable as Kafka Streams'. Does <em>not</em>
+     *                                    govern metadata that cannot be decoded at all, which always raises
+     *                                    {@link OffsetDecodingError}
+     * @throws OffsetDecodingError if the payload is not valid base64, or its leading magic byte matches no encoding this
+     *                             version knows - both of which callers are expected to recover from by dropping the
+     *                             offset map, not by failing
+     * @see #loadPartitionStateForAssignment
+     */
+    public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition,
+                                                                                       String base64EncodedOffsetPayload,
+                                                                                       ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy) throws OffsetDecodingError {
         byte[] decodedBytes;
         try {
             decodedBytes = OffsetSimpleSerialisation.decodeBase64(base64EncodedOffsetPayload);
         } catch (IllegalArgumentException a) {
             throw new OffsetDecodingError(msg("Error decoding offset metadata, input was: {}", base64EncodedOffsetPayload), a);
         }
-        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes);
+        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy);
     }
 
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
@@ -265,12 +304,35 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     /**
-     * Print out all the offset status into a String, and potentially use zstd to effectively do run length encoding
-     * compression
+     * Decodes an offset map under the default {@link ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy#FAIL}
+     * policy.
      *
      * @return Set of offsets which are not complete, and the highest offset encoded.
+     * @throws OffsetDecodingError if the bytes hold an encoding this version cannot read
+     * @see #decodeCompressedOffsets(long, byte[], ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy)
      */
-    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset, byte[] decodedBytes) {
+    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset, byte[] decodedBytes) throws OffsetDecodingError {
+        return decodeCompressedOffsets(nextExpectedOffset, decodedBytes, ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+    }
+
+    /**
+     * Decodes the offset map out of already-base64-decoded bytes, whose leading byte is the {@link OffsetEncoding}
+     * magic number.
+     * <p>
+     * Empty input is not an error: it means the commit carried no offset map, so nothing was incomplete below the
+     * committed offset.
+     *
+     * @param nextExpectedOffset the committed offset the map is relative to
+     * @param decodedBytes       the payload, magic byte first
+     * @param errorPolicy        what to do about metadata recognisable as Kafka Streams'. Does <em>not</em> govern an
+     *                           unreadable magic byte, which always raises {@link OffsetDecodingError} so the caller
+     *                           can drop the offset map rather than die - see {@link OffsetEncoding#decode(byte)}
+     * @return Set of offsets which are not complete, and the highest offset encoded.
+     * @throws OffsetDecodingError if the magic byte matches no encoding this version knows
+     */
+    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset,
+                                                               byte[] decodedBytes,
+                                                               ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy) throws OffsetDecodingError {
 
         // if no offset bitmap data
         if (decodedBytes.length == 0) {

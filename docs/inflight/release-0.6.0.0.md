@@ -35,12 +35,6 @@ survive the release.
    but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a
    caller's `trace_id` is lost crossing into the worker threads and the vert.x event loop. Raised by
    a user in the `confluentinc#907` thread (astubbs#195).
-5. **`OffsetEncoding` throws on an unknown magic byte *before* `invalidOffsetMetadataPolicy` is
-   consulted.** `OffsetEncoding:66` `throw new RuntimeException("Unexpected magic: " + magic)` is
-   reached from `EncodedOffsetPair.unwrap()`, while the policy is only honoured later at
-   `EncodedOffsetPair:123-130`. So if a future PC version introduces a new encoding, an older PC
-   reading that commit metadata dies **regardless of how the policy is configured** - and the fork
-   now owns this wire format. Forward-compatibility hazard, worth fixing before more encodings exist.
 
 ## Marked for 0.6.0.0
 
