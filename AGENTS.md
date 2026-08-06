@@ -180,6 +180,22 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 ## CI
 
+**Reading a failed job's log.** `gh run view --log` refuses while *any* job in the run is still going
+("logs will be available when it is complete"), and `--log-failed` is often empty for a Maven job,
+because the failure text is ordinary stdout rather than an `::error::` annotation. Neither means the
+log is unavailable. Fetch the job directly - this works as soon as **that job** finishes, regardless
+of the rest of the run:
+
+```bash
+jid=$(gh run view <run-id> --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
+gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
+```
+
+Then grep it - `Tests run:`, `<<< FAILURE`, and for broker ITs the
+`=== AMBIENT PROBE AUTOPSY ===` block, which classifies contention-vs-bug before you start reading
+stack traces (see Testing).
+
+
 - **`.github/workflows/maven.yml`** — Build and test on every push/PR. PRs run two tiers in parallel: (1) split suites on default Kafka 3.9.1 for fast feedback (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`, `bin/performance-test.sh`), and (2) an experimental Kafka 4.x compatibility check (`bin/ci-build.sh`). A seconds-fast "Quarantine Audit" job enforces the quarantine registry on every PR; the `@Quarantined` lane itself runs non-gating on every PR push and every push to master (+ dispatch) in its own workflow (`quarantine-lane.yml`) — see Testing. Push to master runs a single full build on default Kafka version via `bin/ci-build.sh` to gate SNAPSHOT publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps` job - never `setup-java cache: 'maven'`. Includes SpotBugs, duplicate detection, mutation testing (PIT), and dependency vulnerability scanning on PRs.
 - **`.github/workflows/publish.yml`** — Publishes to Maven Central on every push to `master`. The pom.xml version is the source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full releases (and create a git tag + GitHub release).
 - **`.github/workflows/copyright.yml`** — Copyright-header conformance via `bin/check-copyright-headers.sh` (runs its self-test `bin/test-check-copyright-headers.sh` first, then the real scan) on every push/PR. GitHub-hosted; needs `fetch-depth: 0` so the fork-point commit is in history.
