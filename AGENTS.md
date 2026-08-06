@@ -146,7 +146,7 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 ## Known Issues
 
-- **Mutiny module**: Has a `release.target=9` override in its pom.xml because Mutiny's `Multi` implements `java.util.concurrent.Flow.Publisher` which is not available with `--release 8`.
+- **Mutiny module requires Java 17**: it has a `release.target=17` override in its pom.xml, for two reasons. Mutiny's `Multi` implements `java.util.concurrent.Flow.Publisher`, which `--release 8` hides, so the module will not compile at 8; and SmallRye Mutiny 2.8.0+ is itself compiled for Java 17 (class-file major 61), so 17 is the module's real runtime floor. Because `--release` only constrains the platform API and not what javac reads off the classpath, that second constraint is invisible to the build - it was previously set to 9, which compiled fine but shipped an artefact that blew up with `UnsupportedClassVersionError` on Java 8 and 11. Every other module (core, vertx, reactor) stays on Java 8. If you change the Mutiny version, re-check its `maven-compiler-plugin.release` and this override together.
 
 ## Code Style
 
