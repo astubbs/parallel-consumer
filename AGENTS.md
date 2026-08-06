@@ -73,7 +73,7 @@ bin/performance-test.sh
 
 ## Key Architecture Decisions
 
-- **Jabel cross-compilation**: Source is Java 17, bytecode targets Java 8 via Jabel annotation processor. This means `--release 8` is set in the compiler plugin, which restricts available APIs to Java 8 surface. The Mutiny module overrides this to `--release 9` because Mutiny uses `java.util.concurrent.Flow` (Java 9+).
+- **Jabel cross-compilation**: Source is Java 17, bytecode targets Java 8 via Jabel annotation processor. This means `--release 8` is set in the compiler plugin, which restricts available APIs to Java 8 surface. The Mutiny module overrides this to 17, which is that module's real runtime floor: `Multi` needs `java.util.concurrent.Flow` (9+), and SmallRye Mutiny 2.8+ is itself compiled for Java 17. Its pom carries the full reasoning, including why the build cannot detect the second constraint.
 - **Offset encoding**: Custom offset map encoding (run-length, bitset) stored in Kafka commit metadata for tracking in-flight messages.
 - **Sharding**: Messages are distributed to processing shards by key or partition for ordering guarantees.
 
@@ -143,10 +143,6 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
   `@Quarantined` scenarios (`-Dexcluded.groups=` is empty), so known-RED detectors still fire locally.
   See `ChaosChurnStormIT`'s class javadoc for the full recipe.
 - A RED run is investigation food, not flake noise — the probes are calibrated against the real historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in measured gaps). Never loosen a probe to go green; tune the workload/conductor instead.
-
-## Known Issues
-
-- **Mutiny module**: Has a `release.target=9` override in its pom.xml because Mutiny's `Multi` implements `java.util.concurrent.Flow.Publisher` which is not available with `--release 8`.
 
 ## Code Style
 
@@ -321,6 +317,20 @@ at the cost of an opt-out on every correction.
 Every upstream issue now has a **fork mirror** (astubbs#44, astubbs#117-astubbs#195, label `upstream-mirror`), so a
 reference has a fork-local number a reader can click. Find one with
 `gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "upstream #NNN"`.
+
+**Working a mirrored issue? Read the upstream original too - body and comments.**
+`gh issue view <N> -R confluentinc/parallel-consumer --json body,comments`. Every mirror says
+"Summarised, not copied", which makes it one agent's reading of the issue rather than the issue.
+Verify the summary against the original and against the code before fixing or documenting anything.
+This is not hypothetical: astubbs#194's summary said the Mutiny dependency "requires a higher
+bytecode level", while confluentinc#906's reporter had written *"I think the compiler target for
+that dependency is 17"* - the detail that actually mattered. A fix followed the summary, set
+`release.target=9`, compiled green, and shipped a jar that died with `UnsupportedClassVersionError`
+on Java 8 and 11. astubbs#171 shows the same failure in its **Fork status** notes rather than its
+summary - "`shutdownTimeout` and `drainTimeout` (default 30s)" reads as one shared default, where the
+code has two (10s and 30s) - so check the mirror's added commentary as sceptically as its summary.
+When the mirror turns out to be wrong, say so in the PR **and correct the mirror**, or the next
+reader inherits the same error.
 
 **The convention: below #1000, say which repo you mean.** `astubbs#119` for this fork,
 `confluentinc#857` for the original - or a hyperlink, which qualifies it just as well. Add `PR` or
