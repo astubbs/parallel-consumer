@@ -345,6 +345,19 @@ does not auto-link there, and a bare `#NN` in a comment silently resolves agains
 is posted in.
 
 At or above #1000 a bare number is unambiguous, because only this fork can have one.
+
+**Check it before you push: `bin/check-issue-refs.sh`.** The `PR Checklist` workflow fails a PR that
+adds an unqualified reference, and finding that out from CI costs a push cycle for a one-character
+fix. The script applies the same rule as the gate, because it calls the same
+`.github/scripts/issue-ref-gate.js` module rather than a second copy of it - so the rule cannot drift
+from CI. It judges the working tree, like `bin/check-copyright-headers.sh`, so uncommitted edits are
+caught too. Only lines you *add* are scanned; pre-existing bare refs in a file you touch are fine.
+
+The *inputs* can differ in one narrow case, and only in the safe direction: CI reads patches from
+GitHub's `pulls.listFiles`, which omits `patch` for a very large diff, and the gate skips a file it
+cannot see - while the local script builds its own patch with `git diff` and still checks it. So a
+green local run is not a promise that CI has looked at every file, but a red one is always real. It
+can flag something CI would silently pass; it cannot pass something CI would flag.
 That holds only while confluentinc's numbering stays below 1000 - it is dormant rather than
 archived, so it still creeps. Measure the headroom rather than trusting a figure written here:
 `gh api 'repos/confluentinc/parallel-consumer/issues?state=all&per_page=1&sort=created&direction=desc' --jq '.[0].number'` -
