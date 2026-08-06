@@ -1,7 +1,8 @@
 # MDC (diagnostic context) propagation into the processing threads
 
-Branch `feat/mdc-context-propagation`. Raised as a non-blocking finding on #197 (mirror of `upstream #907`,
-mirrored here as #195): PC never carried the caller's SLF4J MDC across into the worker pool, so a `trace_id` /
+Branch `feat/mdc-context-propagation`. Raised as a non-blocking finding on astubbs#197, against the
+confluentinc#907 thread (mirrored on this fork as astubbs#195): PC never carried the caller's SLF4J MDC
+across into the worker pool, so a `trace_id` /
 `request_id` / tenant established by the caller was invisible in the logs their user function wrote.
 
 ## What landed

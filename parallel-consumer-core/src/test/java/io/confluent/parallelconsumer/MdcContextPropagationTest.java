@@ -29,7 +29,7 @@ import static org.awaitility.Awaitility.await;
 /**
  * End to end tests for propagating the caller's SLF4J {@link MDC} into the threads that run the user function.
  * <p>
- * Reported against {@code #197} (mirror of {@code upstream #907}): a caller who has established diagnostic context - a
+ * Reported against astubbs#197, against the confluentinc#907 thread: a caller who has established diagnostic context - a
  * {@code trace_id}, a {@code request_id}, a tenant - used to lose all of it the moment work crossed into the worker
  * pool, so the logs their function wrote could not be correlated back to the originating request.
  * <p>
