@@ -1036,6 +1036,49 @@ For implementations details, see the <<Transactional System Architecture>> secti
          */
 ----
 
+[[shutdown]]
+== Shutdown and Close Modes
+
+There are two ways to shut the system down.
+`closeDrainFirst()` (`DrainingMode.DRAIN`) stops polling the broker, then keeps processing the records it has already downloaded until that backlog is empty, and only then shuts the worker pool down.
+`closeDontDrainFirst()` (`DrainingMode.DONT_DRAIN`) also stops polling, but throws away the queued records that have not started yet, and waits only for the records actually in flight in your user function.
+Discarded records are simply never committed, so they are redelivered to whichever consumer picks up the partition next.
+Both modes commit the offsets of everything that did complete, so neither mode loses finished work.
+
+IMPORTANT: A bare `close()` is `closeDontDrainFirst()` - the *non* draining mode.
+That includes the implicit close from try-with-resources, as the processors are `Closeable`.
+If you want the queued backlog finished first, you have to ask for it with `closeDrainFirst()`.
+
+Two options bound how long a close may take, and they apply to different phases:
+
+* `shutdownTimeout` (default 10 seconds) is how long the worker pool is given to finish the records already in flight.
+When it expires the remaining workers are interrupted, so a user function that swallows interrupts can still hold the close up.
+* `drainTimeout` (default 30 seconds) is the extra budget for working through the queued backlog, so it only has an effect in `DRAIN` mode.
+
+A `DONT_DRAIN` close therefore waits up to `shutdownTimeout`, and a `DRAIN` close up to `drainTimeout` plus `shutdownTimeout` (both plus a fixed ten second grace period).
+Exceeding that budget throws a `TimeoutException` out of `close`, rather than returning quietly.
+
+NOTE: The `Duration` argument on the `close(Duration, ...)` overloads overrides `shutdownTimeout` only - `drainTimeout` always comes from the options.
+
+.Configuring the close timeouts, and closing with draining
+[source,java,indent=0]
+----
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(getKafkaConsumer())
+                .drainTimeout(Duration.ofMinutes(2)) // <1>
+                .shutdownTimeout(Duration.ofSeconds(30)) // <2>
+                .build();
+        var pc = ParallelStreamProcessor.createEosStreamProcessor(options);
+
+        pc.poll(context -> processRecord(context.getSingleRecord().getConsumerRecord()));
+
+        pc.closeDrainFirst(); // <3>
+----
+
+<1> Budget for finishing the already downloaded backlog - only used by a `DRAIN` close.
+<2> Budget for finishing the records in flight, used by both modes.
+<3> Drain the backlog before closing. `close()` on its own would not.
+
 [[streams-usage]]
 == Using with Kafka Streams
 
@@ -1255,15 +1298,23 @@ NOTE:: any additional binders / metrics need to be cleaned up appropriately - fo
 [[roadmap]]
 == Roadmap
 
-For released changes, see the link:CHANGELOG.adoc[CHANGELOG].
+*Yes, this is maintained - and this repository is where the maintenance happens.*
+{base_url}[astubbs/parallel-consumer] is the active line of development: it is what is published to
+Maven Central as `bz.stub.parallelconsumer`, and it is where fixes, releases and issue triage land.
+The original {base_confluent_url}[confluentinc/parallel-consumer] is no longer actively maintained.
 
-For features in development and a more accurate view on the roadmap, have a look at the
-https://github.com/confluentinc/parallel-consumer/issues[GitHub issues], and clone https://github.com/astubbs/parallel-consumer[Antony's fork].
+For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
+
+For what is planned, in progress, or known-broken, the {issues_link}[issue tracker on this repository]
+is the single place to look. We mirrored every open issue from the upstream tracker into it (all 78 of
+them, labelled `upstream-mirror` and titled `upstream #NNN: ...`), so an upstream report you are
+following has a counterpart here that reflects its real status on this fork. Please raise new issues
+here rather than upstream - see <<Support and Issues>>.
 
 == Usage Requirements
 
 * Client side
-** JDK 8
+** JDK 8, except for the Mutiny module - see <<java-version-per-module>> below
 ** SLF4J
 ** Apache Kafka (AK) Client libraries 2.5
 ** Supports all features of the AK client (e.g. security setups, schema registry etc)
@@ -1274,6 +1325,31 @@ https://github.com/confluentinc/parallel-consumer/issues[GitHub issues], and clo
 * Server side
 ** Should work with any cluster that the linked AK client library works with
 *** If using EoS/Transactions, needs a cluster setup that supports EoS/transactions
+
+[[java-version-per-module]]
+=== Java Version per Module
+
+Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny itself is built for Java 17.
+
+|===
+| Module | Minimum Java
+
+| `parallel-consumer-core`
+| 8
+
+| `parallel-consumer-vertx`
+| 8
+
+| `parallel-consumer-reactor`
+| 8
+
+| `parallel-consumer-mutiny`
+| 17
+|===
+
+WARNING: Adding `parallel-consumer-mutiny` to a Java 8 or Java 11 application will build without complaint and then fail at runtime with an `UnsupportedClassVersionError`, because its SmallRye Mutiny dependency is compiled for Java 17.
+Maven cannot warn you about this, so check the table before picking the module.
+The other modules are unaffected, and using them does not pull Mutiny in.
 
 == Development Information
 

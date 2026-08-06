@@ -22,7 +22,6 @@ set -euo pipefail
   -Pci \
   clean verify \
   -DskipUTs=true \
-  -Dlicense.skip \
   -Dexcluded.groups=performance,chaos,quarantined \
   -Dsurefire.rerunFailingTestsCount=2 \
   "$@"

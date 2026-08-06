@@ -1,19 +1,41 @@
 # Optional, NON-GATING fast feedback on a self-hosted high-CPU runner (many-core Linux, native Docker).
 #
-# Runs unit + integration + performance + mutation as separate matrix jobs concurrently on real cores - far
-# faster than GitHub's 2-core gate. The runner may be offline at any time, so these jobs are FYI only:
-# continue-on-error + not-required means an offline runner never blocks a merge (the required gate stays
-# GitHub-hosted, see maven.yml).
+# Runs the two suites that this runner is genuinely better at - performance and chaos - as separate
+# matrix jobs. The runner may be offline at any time, so these jobs are FYI only: continue-on-error +
+# not-required means an offline runner never blocks a merge (the required gate stays GitHub-hosted, see
+# maven.yml).
+#
+# WHAT WAS REMOVED, AND WHY. This lane is for work the hosted gate cannot do well, not for a second copy
+# of it. A duplicate check that says nothing new is not free: it is another red-or-pending tick to triage
+# on every PR, and it trains people to skim the checks list.
+#
+#   - Unit + Integration: measured as NOT faster here than the GitHub-hosted gate that already runs them
+#     (maven.yml). Same suites, same verdict, extra noise - so the hosted gate owns them outright.
+#   - Mutation (PIT), both entries: PIT ran THREE times per PR (this matrix twice, plus maven.yml), two
+#     of them the same scoped computation - and a fourth copy sat in the `local` lane, dormant only
+#     because that workflow's pull_request trigger is commented out. There is now exactly
+#     ONE per-PR mutation lane - maven.yml -> "Mutation Tests (PIT, PR-scoped)". The full sweep moved to
+#     mutation-full-sweep.yml (manual, and retargeted off internal.* - see there): the internal.* sweep
+#     that used to run here had never once completed, so it scored ZERO mutants while holding a 16-core
+#     runner for its whole 60-minute timeout on every push.
+#     See docs/plans/2026-08-03-002-mutation-testing-plan.md.
+#
+# What remains is what actually needs the cores: Performance (meaningless on 2 cores) and the Chaos Pain
+# Suite (concurrency scenarios that need real parallelism to provoke anything).
 #
 # TRIGGER: `pull_request` (same-repo only - see SECURITY below) plus manual `workflow_dispatch`. These
 # jobs are advisory (continue-on-error + not-required), so if the `[self-hosted, highcpu]` runner is
 # offline the checks simply sit pending and NEVER block a merge - the required gate stays GitHub-hosted
 # (maven.yml). Run on demand any time: `gh workflow run highcpu --ref <branch>` or Actions -> highcpu.
 #
-# Tuning (measured on this 16c/32t box): unit forks 1-per-core (1C=32); more (2C) is flat, so 1C is the knee.
-# Integration is capped at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism).
-# Performance runs concurrently too: it's just a correctness gate here, and its *timing* is noisy under load
-# (accurate benchmarking belongs in a separate isolated/on-demand run - highcpu runner solo is ~1m54 vs GitHub ~3m50).
+# Performance is a CORRECTNESS gate here, not a benchmark: its timing is noisy when it shares the box with
+# chaos (accurate benchmarking belongs in a separate isolated/on-demand run - highcpu solo is ~1m54 vs
+# GitHub ~3m50).
+#
+# Tuning notes kept for whoever re-adds a forked suite here, since they were measured on this 16c/32t box
+# and are otherwise lost: unit forks 1-per-core (1C=32; 2C is flat, so 1C is the knee), and integration
+# caps at 8 Kafka-broker forks (16 was SLOWER - per-broker overhead beats the parallelism). Note that
+# neither made this lane beat the hosted gate, which is why they are not here.
 #
 # SECURITY (public repo + self-hosted runner): guarded to SAME-REPO pull requests only, so a fork PR's
 # untrusted code NEVER runs on the self-hosted machine (RCE). pull_request (no secrets), never pull_request_target.
@@ -33,10 +55,11 @@ on:
 
 # NOTE: concurrency is JOB-level (per suite), not workflow-level - see the job's `concurrency:` block.
 # A single workflow-level group made every new push's fast suites queue ~5 minutes behind the previous
-# run's Mutation (PIT) job: cancel-in-progress signalled it, but the maven/PIT JVM tree rides out the
-# runner's full cancellation grace before force-kill, and the group only frees once the old run fully
-# completes. Per-suite groups mean a push's Unit/Integration/Performance start within seconds (their
-# predecessors finish or die fast); only Mutation queues behind old Mutation - fine for an advisory job.
+# run's slowest job: cancel-in-progress signalled it, but a maven JVM tree rides out the runner's full
+# cancellation grace before force-kill, and the group only frees once the old run fully completes.
+# Per-suite groups mean each push's suites start within seconds, queueing only behind their own kind.
+# (The original offender was the Mutation job, which no longer runs here - but the property is general
+# and worth keeping: any slow-dying suite would otherwise stall the fast ones.)
 
 permissions:
   contents: read
@@ -55,7 +78,7 @@ jobs:
     continue-on-error: ${{ matrix.optional != 'false' }}   # optional / FYI - except chaos (see name comment)
     timeout-minutes: 60
     # Per-suite superseding: a new push cancels only ITS OWN suite's previous run, so fast suites start
-    # within seconds instead of queueing behind the old run's slow-dying Mutation job (see header note).
+    # within seconds instead of queueing behind the old run's slowest-dying job (see header note).
     concurrency:
       group: highcpu-${{ matrix.suite-name }}-${{ github.head_ref || github.ref }}
       cancel-in-progress: true
@@ -63,28 +86,17 @@ jobs:
       fail-fast: false           # each suite is independent
       matrix:
         include:
-          # Fork-only sweet spot. (fork x threads was measured: SAFE - JUnit thread-parallelism no longer races,
-          # Unit went green - but NOT faster (forking already saturates the cores), so no reason to keep it.
-          # Useful finding for the inflight "Step 2" thread-parallelism question.)
-          # Unit: 1 fork PER CORE (1C = 32). Integration: 8 broker-forks (16 was slower).
-          - suite-name: "Unit"
-            # -Dsurefire.forkCount (NOT bare -DforkCount): the pom pins <forkCount>${surefire.forkCount}</forkCount>,
-            # so surefire only honours the namespaced property; a bare -DforkCount is silently ignored.
-            cmd: "bin/ci-unit-test.sh -Dsurefire.forkCount=1C"
-          - suite-name: "Integration"
-            cmd: "bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true"
+          # (Unit, Integration and two Mutation entries used to live here - see WHAT WAS REMOVED in the
+          # header. If you re-add a forked suite, the commands were:
+          #   Unit:        bin/ci-unit-test.sh -Dsurefire.forkCount=1C
+          #   Integration: bin/ci-integration-test.sh -DforkCount=8 -DreuseForks=true
+          # and note -Dsurefire.forkCount, NOT a bare -DforkCount: the pom pins
+          # <forkCount>${surefire.forkCount}</forkCount>, so surefire only honours the namespaced
+          # property and a bare -DforkCount is silently ignored.)
+          #
           # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
           - suite-name: "Performance"
             cmd: "bin/performance-test.sh"
-          # Mutation (PIT): one minion JVM per thread. threads=16 (~2g heap each ~= RAM ceiling on 48GB).
-          # Two jobs side by side (experimental - see how they compare on cost/signal): SCOPED mutates only
-          # the classes changed vs the PR base (fast); FULL does the whole internal.* sweep (thorough) by
-          # setting PIT_FULL_SWEEP, which makes the script ignore the PR base ref. Both advisory.
-          - suite-name: "Mutation (PIT, scoped)"
-            cmd: "bin/ci-mutation-test.sh -Dverbose=true -Dthreads=16"
-          - suite-name: "Mutation (PIT, full)"
-            cmd: "bin/ci-mutation-test.sh -Dverbose=true -Dthreads=16"
-            full-sweep: "true"
           # Chaos Pain Suite: the per-PR ambient tripwire (moved here from chaos-pain.yml so all
           # self-hosted per-PR feedback shares one lane and its per-suite superseding concurrency).
           # NOT optional: a chaos RED is a real finding. bin/chaos-test.sh excludes @Quarantined
@@ -95,10 +107,10 @@ jobs:
             optional: "false"
     steps:
       - name: Checkout
+        # Shallow is fine: the only suite that needed full history was the scoped Mutation job (it diffs
+        # vs the PR base to pick changed classes), and mutation no longer runs here - see header. No other
+        # suite here reads git history, and no build plugin derives version info from it.
         uses: actions/checkout@v6
-        with:
-          # Full history: the scoped Mutation job diffs vs the PR base to pick changed classes (repo is tiny).
-          fetch-depth: 0
 
       - name: Setup JDK 17
         uses: actions/setup-java@v5
@@ -115,10 +127,6 @@ jobs:
           docker info | head -20
 
       - name: ${{ matrix.suite-name }} tests
-        env:
-          # "true" only on the "Mutation (PIT, full)" entry - forces the full internal.* sweep; empty
-          # (all other suites) leaves the script's default PR-scoping in place.
-          PIT_FULL_SWEEP: ${{ matrix.full-sweep }}
         run: time ${{ matrix.cmd }}
 
       - name: Upload test reports

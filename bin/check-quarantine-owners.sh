@@ -21,7 +21,8 @@
 #     - the test file is absent from the merge preview (renamed?) -> cannot verify removal
 #     - annotation's fixedBy PR number disagrees with the registry's Owner line
 #
-# Run by the per-PR Quarantine Audit job and the nightly lane; locally via bin/quarantined-test.sh
+# Run by the per-PR Quarantine Audit job and by the Quarantine Lane (every PR push + every merge to
+# master); locally via bin/quarantined-test.sh
 # (skipped there when gh is absent/unauthenticated).
 
 set -euo pipefail
@@ -94,7 +95,10 @@ for t in $entries; do
                 echo "ADVISORY: $t owner PR #$pr is open; could not fetch its base '$base' to verify - skipping preview check."
                 continue
             fi
-            if ! git show "FETCH_HEAD:$relpath" 2>/dev/null | grep -qE "$QUARANTINE_ANNOTATION_ERE"; then
+            # Herestring: `git show | grep -q` under pipefail turns a MATCH into a failure once
+            # the file exceeds the 64 KiB pipe buffer. The largest source file here is already
+            # within a few hundred bytes of that.
+            if ! grep -qE "$QUARANTINE_ANNOTATION_ERE" <<<"$(git show "FETCH_HEAD:$relpath" 2>/dev/null)"; then
                 echo "ADVISORY: $t owner PR #$pr is open, but the quarantine is not yet on its base '$base' - preview check n/a, re-check after the base updates."
                 continue
             fi
@@ -106,7 +110,7 @@ for t in $entries; do
                 echo "ADVISORY: $t owner PR #$pr merge preview does not contain $relpath (file renamed/moved?) - cannot verify removal; check manually."
                 continue
             fi
-            if git show "FETCH_HEAD:$relpath" 2>/dev/null | grep -qE "$QUARANTINE_ANNOTATION_ERE"; then
+            if grep -qE "$QUARANTINE_ANNOTATION_ERE" <<<"$(git show "FETCH_HEAD:$relpath" 2>/dev/null)"; then
                 echo "ADVISORY: $t owner PR #$pr is open and does NOT yet remove the quarantine - it must delete the @Quarantined annotation + registry entry before merging."
             else
                 echo "OK: $t owner PR #$pr is open and its merge result removes the quarantine - loop closed."

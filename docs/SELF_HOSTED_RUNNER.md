@@ -1,16 +1,21 @@
 # Self-Hosted Runner Setup (Proxmox Linux VM)
 
-The heavy test suites - `Integration Tests` and `Performance Tests` - run on a
-self-hosted GitHub Actions runner so we can throw real hardware at them **and
-run the tests concurrently**. This document walks through the one-time setup on
-a Linux VM.
+Self-hosted runners give the heavy suites real hardware **and** let them run
+concurrently. This document walks through the one-time setup on a Linux VM.
 
-Workflow: [`.github/workflows/self-hosted-tests.yml`](../.github/workflows/self-hosted-tests.yml).
+Workflows that use them:
+[`pr-highcpu-fast-feedback.yml`](../.github/workflows/pr-highcpu-fast-feedback.yml)
+(every in-repo PR) and
+[`mutation-full-sweep.yml`](../.github/workflows/mutation-full-sweep.yml) (manual).
+Both target the single custom label **`highcpu`**.
 
-You can register **more than one** machine (e.g. a Proxmox Linux VM *and* a Mac
-laptop). The workflow targets only the custom `performance` label, so whichever
-machine is online picks up the job - handy when the gaming PC is switched off.
-See [Running on more than one machine](#running-on-more-than-one-machine).
+> **`highcpu` is the only self-hosted label.** Before pinning a job to any other, register a runner
+> advertising it and check it is online (`gh api repos/astubbs/parallel-consumer/actions/runners`) - a
+> job pinned to a label nothing serves **does not fail, it queues** until GitHub cancels it, so the
+> lane reports nothing and simply looks quiet.
+>
+> These lanes are additive. Every suite worth re-running is already a required check on each PR and
+> runs again on every push to master, so don't add a lane for something the gate already covers.
 
 ## Why Linux (not Windows)
 
@@ -34,7 +39,7 @@ mechanism:
   within itself, so tests never contend one shared broker. This is reliable
   **and** parallel - it was the fix for the flakiness described below. (Naive
   JUnit thread-parallelism on one shared broker - `-Dparallel-tests=true` - is
-  ~7-10x faster but flaky, and it surfaced a real main-code deadlock, #857;
+  ~7-10x faster but flaky, and it surfaced a real main-code deadlock, confluentinc#857;
   forked mode avoids the contention without masking anything.)
 
 - **Performance: in-JVM thread parallelism** (`-Dparallel-tests=true`). JUnit is
@@ -50,10 +55,11 @@ order-dependent test).
 ## What you get
 
 - A GitHub Actions runner registered to your fork (`astubbs/parallel-consumer`)
-- Triggered manually via `workflow_dispatch` or weekly on a schedule (never on
-  PRs - see [Security](#security-notes))
-- Runs the integration suite (`bin/ci-integration-test.sh`) and/or the
-  performance suite (`bin/performance-test.sh`), with concurrent test execution
+- Triggered on every **in-repo** pull request, plus `workflow_dispatch`. PRs from
+  forks are skipped by a same-repo guard and never run on your hardware - read
+  [Security & trust model](#security--trust-model) before changing that
+- Runs the performance suite (`bin/performance-test.sh`) and the Chaos Pain
+  Suite with concurrent test execution, advisory rather than gating
 
 ## Provision the VM on Proxmox
 
@@ -90,18 +96,22 @@ tar xzf actions-runner-linux-x64.tar.gz
 ./config.sh --url https://github.com/astubbs/parallel-consumer --token <TOKEN>
 ```
 
-### 3. Add the `performance` label
+### 3. Add the `highcpu` label
 
 When `config.sh` prompts:
 
 ```
-Enter any additional labels (ex. label-1,label-2): performance
+Enter any additional labels (ex. label-1,label-2): highcpu
 ```
 
-The runner's full label set becomes: `self-hosted`, `Linux`, `X64`,
-`performance`. The workflow targets `[self-hosted, performance]` - deliberately
-**not** an OS label - so any online `performance` runner (Linux or Mac) can
-serve it.
+The runner's full label set becomes: `self-hosted`, `Linux`, `X64`, `highcpu`.
+Workflows target `[self-hosted, highcpu]` - deliberately **not** an OS label - so
+any online `highcpu` runner can serve them.
+
+New labels must also be declared in
+[`.github/actionlint.yaml`](../.github/actionlint.yaml), or actionlint flags the
+`runs-on:` as unknown. That file only silences the linter - it is not evidence a
+machine exists, so register the runner too.
 
 ### 4. Run it as a service (survives reboots)
 
@@ -116,19 +126,21 @@ group (step above).
 
 ## Running on more than one machine
 
-Because the workflow targets only the `performance` label, you can register
-several machines and let whichever is online serve the run. A Mac laptop is the
-easiest second runner - you can reach it more often than the gaming PC.
+Because the workflows target only the `highcpu` label, you can register several
+machines and let whichever is online serve the run - there are currently six.
+Give every one of them the same `highcpu` label rather than inventing a new one
+per machine: a second label needs a second `runs-on:`, and a lane with no online
+runner queues silently instead of failing.
 
 **On the Mac** (Docker Desktop already installed and running):
 
 1. Fork's **Settings -> Actions -> Runners -> New self-hosted runner**, choose
    **macOS** and your arch (**arm64** for Apple Silicon).
-2. Run the snippet GitHub gives you, and add the `performance` label at the
+2. Run the snippet GitHub gives you, and add the `highcpu` label at the
    prompt (exactly as in step 3 above):
    ```bash
    ./config.sh --url https://github.com/astubbs/parallel-consumer --token <TOKEN>
-   # Enter any additional labels: performance
+   # Enter any additional labels: highcpu
    ```
 3. Run it as a service so it survives sleep/reboot:
    ```bash
@@ -136,9 +148,11 @@ easiest second runner - you can reach it more often than the gaming PC.
    ./svc.sh start
    ```
 
-Both runners now advertise `performance`. GitHub sends the job to whichever is
-idle and online. The gaming PC will be faster; the Mac is the always-reachable
-fallback.
+Every runner then advertises `highcpu`, and GitHub sends the job to whichever is
+idle and online. The many-core Linux boxes will be faster; a laptop is the
+always-reachable fallback - but only if it is actually **online**. A registered
+runner that is asleep is indistinguishable, from the workflow's point of view,
+from one that was never registered: the job queues.
 
 > Kafka TestContainers on a Mac run inside Docker Desktop's Linux VM, so
 > throughput is lower than the native-Docker Linux VM - but it still beats
@@ -149,46 +163,50 @@ fallback.
 
 The heavy runner is a many-core Linux box running a Docker LXC with **several runner instances** (one per
 concurrent job), targeted by the [`highcpu`](../.github/workflows/pr-highcpu-fast-feedback.yml)
-workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). Unit, integration,
-performance **and mutation (PIT)** run as separate matrix jobs in parallel. Provisioning it (OpenTofu +
-Ansible) and the on-demand power/boot control are generic infrastructure kept in a separate private
-infra repo, not here.
+workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). **Performance** and the
+**Chaos Pain Suite** run there as separate matrix jobs in parallel. Provisioning it (OpenTofu + Ansible)
+and the on-demand power/boot control are generic infrastructure kept in a separate private infra repo,
+not here.
+
+This lane deliberately carries only work the hosted gate cannot do well. Unit and integration used to run
+here too and were removed: they were not actually faster than the GitHub-hosted gate that already runs
+them, so they only added checks to triage. Mutation (PIT) was removed for a stronger reason - it ran three
+times per PR across the lanes (with a fourth copy configured but dormant), and its full sweep had never
+once completed. One PR-scoped mutation
+lane now lives in `maven.yml`, and the full sweep is manual-only in `mutation-full-sweep.yml` (which does
+target this runner, since it wants every core it can get).
 
 **Trigger:** `pull_request` (same-repo only) plus manual `workflow_dispatch`. The jobs are advisory
 (`continue-on-error`, not required), so when the `[self-hosted, highcpu]` runner is offline the checks
 just sit pending and never block a merge - the required gate stays GitHub-hosted (`maven.yml`). **Manually:**
-`gh workflow run highcpu --ref <branch>`, or fork -> **Actions -> highcpu -> Run workflow**. (Contrast
-`pr-local-fast-feedback.yml`, which stays `workflow_dispatch`-only because its runner is retired.)
+`gh workflow run highcpu --ref <branch>`, or fork -> **Actions -> highcpu -> Run workflow**.
 
 ## Fallback behaviour (important)
 
 **There is no automatic fallback from a self-hosted runner to a GitHub-hosted
-one.** If you trigger `Self-Hosted Tests` and no `performance` runner is online,
-the run **queues and waits** for one - it will not silently run on github.com,
-and a scheduled run in that state eventually errors out harmlessly.
+one, and a job pinned to an offline or non-existent label does not fail - it
+queues.** It will not silently run on github.com. It waits, showing as pending,
+until GitHub cancels it (~24h). That failure mode is invisible on a dashboard:
+the lane simply never reports, so "the check is green" and "the check ran" are
+different claims - verify the second.
 
-This does **not** put your work at risk, because the self-hosted workflow is
+This does **not** put your work at risk, because the self-hosted lanes are
 *additive*, not load-bearing:
 
-- Every **pull request** runs the integration and performance suites on
+- Every **pull request** runs the unit, integration and performance suites on
   **GitHub-hosted** runners via [`maven.yml`](../.github/workflows/maven.yml).
-  That is your real gate and it never depends on your machines.
-- `Self-Hosted Tests` is a manual/scheduled *bonus* - a fast full run on real
-  hardware when you want it. If both your machines are off, you simply don't
-  trigger it (or a scheduled run no-ops); nothing you depend on breaks.
+  Those are the required checks, and they never depend on your machines.
+- `highcpu` is advisory (`continue-on-error`, not required). When every runner is
+  offline its checks sit pending and never block a merge.
 
 So the safe mental model is: **PR feedback = GitHub-hosted, always. Fast heavy
-runs = your machines, when they're on.** Registering the Mac as a second runner
-widens the "when they're on" window.
+runs = your machines, when they're on.** More `highcpu` machines widen the
+"when they're on" window; none of them widen the gate.
 
-## Triggering the workflow
-
-**Manually:** fork -> **Actions -> Self-Hosted Tests -> Run workflow**.
-Optionally pick a suite (`both` / `integration` / `performance`) and a Kafka
-version override.
-
-**Automatically:** runs every **Sunday at 02:00 UTC** via cron (defined in the
-workflow).
+**If you add a lane, verify a runner actually serves it.** `gh api
+repos/astubbs/parallel-consumer/actions/runners` lists every registered runner
+with its labels and online status - check the label you just wrote into
+`runs-on:` appears there, on a machine whose status is `online`.
 
 ## Measuring the speedup
 
@@ -205,7 +223,7 @@ time bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true
 
 ### What we measured (2026-07-28) - short version
 
-Integration parallelism was tested on GitHub-hosted runners (PR #66) and a
+Integration parallelism was tested on GitHub-hosted runners (PR astubbs#66) and a
 self-hosted Mac (`mac-laptop`, M2, 12 cores):
 
 - **Naive thread-parallelism (`-Dparallel-tests=true`) is fast but flaky.** On
@@ -214,7 +232,7 @@ self-hosted Mac (`mac-laptop`, M2, 12 cores):
   timing/timeout races on the **one shared broker** all ~104 tests contend.
   Lowering the parallelism factor and doubling Docker RAM had no effect. One of
   those failures (`RebalanceEoSDeadlockTest`) turned out to be a **real main-code
-  deadlock (#857)**, not test flakiness - so we did not loosen timeouts to go
+  deadlock (confluentinc#857)**, not test flakiness - so we did not loosen timeouts to go
   green.
 - **Forked per-broker mode (`-DforkCount=4 -DreuseForks=true`) is the fix** - and
   what the workflow now runs. Each JVM fork gets its own broker, so tests never
@@ -231,12 +249,22 @@ Full diagnosis, the measured runs, and the resolution are in the findings doc:
 ## Security & trust model
 
 This is a **public** repository, so the core risk is: someone opens a PR and
-their code runs on your machine. As currently wired, that risk **does not apply**
-- `self-hosted-tests.yml` triggers only on `workflow_dispatch` and `schedule`,
-**never** on `pull_request`. It only ever runs code you chose to run.
+their code runs on your machine. That risk is **live** - `pr-highcpu-fast-feedback.yml`
+*is* `pull_request`-triggered. What contains it is a same-repo guard on the job:
 
-If you later add a PR-triggered FYI run (see below), understand the trust model
-before you do:
+```yaml
+if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+```
+
+A PR from a fork fails that condition, so the job is skipped and never reaches
+your hardware; only branches pushed to this repository run on it. **That guard is
+the whole trust boundary** - it is one line, it is not enforced by anything else,
+and removing it hands arbitrary PR authors a shell on your machines. Keep it on
+every job with `runs-on: [self-hosted, ...]`, and re-check it whenever you add
+one.
+
+
+Understand the rest of the trust model before widening PR-triggered runs:
 
 - **Containerizing the runner is not a sandbox here.** Our tests need Docker
   (TestContainers spins up Kafka), so a containerized runner must mount the host
@@ -362,4 +390,6 @@ then returns to Proxmox on the following boot. No keyboard, no boot-menu key.
 
 **Workflow can't find the runner:**
 - The runner must be **online** when the workflow is triggered
-- Verify labels match `runs-on:` in `.github/workflows/self-hosted-tests.yml`
+- Verify labels match `runs-on:` in `.github/workflows/pr-highcpu-fast-feedback.yml`
+- Confirm a runner with that label is actually registered AND online:
+  `gh api repos/astubbs/parallel-consumer/actions/runners`

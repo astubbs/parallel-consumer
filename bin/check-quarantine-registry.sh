@@ -10,7 +10,8 @@
 #   - every registry entry must correspond to a still-annotated class, and its named method must
 #     still exist in that class (stale method entries are flagged)
 # Exits non-zero on drift - run by bin/quarantined-test.sh, the per-PR Quarantine Audit job, and the
-# nightly lane (drift turns those red: real actionable errors, unlike quarantined-test failures).
+# Quarantine Lane itself, which runs on every PR push and every merge to master (drift turns those red:
+# real actionable errors, unlike quarantined-test failures).
 
 set -euo pipefail
 

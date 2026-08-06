@@ -232,7 +232,23 @@ public abstract class BrokerIntegrationTest<K, V> {
      * this class of positioning race names itself instead of presenting as a generic empty-collection
      * timeout.
      *
-     * @param nudgeCounter incremented for each nudge record produced (callers use it in log/assert output)
+     * <p>
+     * <b>SIDE EFFECT - read this before asserting on offsets or record counts.</b> This PRODUCES RECORDS
+     * into the topic under test: one per poll interval, so {@code atMost / pollInterval} of them in the
+     * worst case, and how many you actually get depends on how loaded the machine is. It is NOT one.
+     * <p>
+     * Any assertion downstream of this call that needs to know how many records exist must ask the
+     * BROKER (e.g. {@code endOffsets}), not derive it from how many the test produced. Deriving it is a
+     * real bug this project has already paid for twice: {@code committedOffsetRemoved} carried
+     * {@code producedCount + 1 // run sends one} and a {@code TO_PRODUCE + 2} search window, both written
+     * when this helper nudged once up front. Moving the nudge inside the await made the count unbounded,
+     * the arithmetic silently wrong, and the test an intermittent CI failure that was quarantined rather
+     * than diagnosed. See {@code docs/plans/2026-08-05-001-investigate-committedoffset-latest-reflake.md}.
+     *
+     * @param nudgeCounter incremented for each nudge record produced. Both original callers passed one and
+     *                     never read it, which is how the count went unnoticed - if you are asserting
+     *                     anything about the contents of this topic, this number is load-bearing, not
+     *                     decoration.
      */
     protected void awaitWithTopicNudge(ParallelConsumer<?, ?> pc,
                                        Duration pollInterval,

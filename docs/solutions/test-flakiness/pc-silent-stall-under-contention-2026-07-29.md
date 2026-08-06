@@ -347,7 +347,7 @@ On a box where `forks/core >= ~1.3` (e.g. 16 forks on <=12 cores):
 
 ```bash
 ./mvnw -Pci -pl parallel-consumer-core -am verify \
-  -DskipUTs=true -Dlicense.skip -Dexcluded.groups=performance \
+  -DskipUTs=true -Dexcluded.groups=performance \
   -DforkCount=16 -DreuseForks=true
 ```
 

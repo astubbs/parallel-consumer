@@ -72,7 +72,7 @@ prepare-deps:
         restore-keys: |
           setup-java-Linux-x64-maven-
     - name: Download all dependencies
-      run: ./mvnw --batch-mode -Pci dependency:go-offline -Dlicense.skip -DincludeScope=test -U
+      run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
     - name: Save Maven cache (rotating key)
       if: success()
       uses: actions/cache/save@v4

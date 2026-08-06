@@ -198,7 +198,8 @@ while IFS= read -r t; do
     # anchor at the annotation's file when the PR touches it, else the first changed file
     changed=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/files" --paginate -q '.[].filename')
     target="$anchor_path"
-    echo "$changed" | grep -qx "$anchor_path" || target=$(echo "$changed" | head -1)
+    # Herestrings: a SIGPIPE here would take the `||` branch, silently retargeting.
+    grep -qx "$anchor_path" <<<"$changed" || target=$(head -1 <<<"$changed")
     thread_body="$marker
 🚨✅ **Quarantined test \`$t\` PASSED** - its fix appears to have landed.
 

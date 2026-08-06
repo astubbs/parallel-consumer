@@ -58,8 +58,37 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "com.github.tomakehurst:wiremock-jre8" # WireMock 3 (artifact renamed)
         update-types: ["version-update:semver-major"]
-# Don't use any github-actions anymore
-#  - package-ecosystem: "github-actions"
-#    directory: "/"
-#    schedule:
-#      interval: "daily"
+  # Re-enabled 2026-08-06. It was switched off in a470ab0b (2022) with the reason
+  # "Repo doesn't use github actions anymore" - true then, and long since false: the
+  # entire CI estate is Actions, across 24 workflow files. Nothing had bumped an action
+  # version in four years, and drift went unnoticed until a human spotted a new file
+  # authored at actions/checkout@v4 while 21 other uses were on @v6.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # NOT grouped, unlike the maven ecosystem above - the opposite trade applies here.
+    # Grouping buys less noise, and actions bump a few times a YEAR, so there is little
+    # noise to buy off. What it costs is isolation, and an action has repo-wide reach: a
+    # bad actions/checkout or setup-java breaks every workflow at once. In a grouped PR
+    # of five bumps you cannot tell which one broke CI, and cannot merge the safe four.
+    # One PR per action keeps each independently testable and revertable.
+    #
+    # This does NOT fragment an action across versions: Dependabot bumps every use of a
+    # given action in one PR regardless, so all 24 actions/checkout uses move together
+    # and bin/check-action-versions.sh stays green.
+    #
+    # No open-pull-requests-limit on purpose. The default cap exists to stop a swarm of
+    # Java dependency PRs; actions produce a trickle, and a limit here would silently
+    # withhold an update rather than reduce work.
+    ignore:
+      # Our three own forks (check-dependencies.yml, maven.yml x2). Each is pinned to a
+      # SHA that is AHEAD of that fork's newest tag - unreleased work sitting on a branch -
+      # so Dependabot would advance them to newer commits on that branch. That is a
+      # hand-managed decision tied to changes we make in those repos, not an upgrade to
+      # take automatically.
+      #
+      # This ignore is a WORKAROUND, not a policy: remove it once #212 is done and the
+      # three reference immutable release tags, at which point they should be watched like
+      # any other action. See #212 for the per-fork state and what "done" looks like.
+      - dependency-name: "astubbs/*"

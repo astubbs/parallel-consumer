@@ -25,7 +25,7 @@ class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
     @Test
     void consistentRegistryPasses() throws Exception {
         writeAnnotatedTest("SomeQuarantinedIT");
-        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #999**\n");
+        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #999999**\n");
         Result result = runCheck();
         assertThat(result.output).contains("consistent");
         assertThat(result.exitCode).isEqualTo(0);
@@ -44,7 +44,7 @@ class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
 
     @Test
     void staleRegistryEntryWithoutAnnotationFails() throws Exception {
-        writeRegistry("- [ ] `GhostIT.gone` - was re-enabled but the entry was forgotten. **Owner: PR #999**\n");
+        writeRegistry("- [ ] `GhostIT.gone` - was re-enabled but the entry was forgotten. **Owner: PR #999999**\n");
         Result result = runCheck();
         assertWithMessage("a registry entry whose test is no longer annotated must be flagged - output: %s", result.output)
                 .that(result.exitCode).isEqualTo(1);
@@ -106,7 +106,7 @@ class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
                 "                    \"diagnosis\",\n" +
                 "            tracking = \"docs/x.md\")\n" +
                 "    void m() {}\n}\n");
-        writeRegistry("- [ ] `MultiLineIT.m` - diagnosed. **Owner: PR #999**\n");
+        writeRegistry("- [ ] `MultiLineIT.m` - diagnosed. **Owner: PR #999999**\n");
         Result result = runCheck();
         assertWithMessage("multi-line annotation should be consistent - output: %s", result.output)
                 .that(result.exitCode).isEqualTo(0);
@@ -118,12 +118,12 @@ class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
         writeTestSource("TwoIT", "class TwoIT {\n" +
                 "    @Quarantined(reason = \"d\", tracking = \"t\")\n    void one() {}\n" +
                 "    @Quarantined(reason = \"d\", tracking = \"t\")\n    void two() {}\n}\n");
-        writeRegistry("- [ ] `TwoIT.one` - diagnosed. **Owner: PR #999**\n");
+        writeRegistry("- [ ] `TwoIT.one` - diagnosed. **Owner: PR #999999**\n");
         Result result = runCheck();
         assertWithMessage("2 annotations vs 1 entry must drift - output: %s", result.output)
                 .that(result.exitCode).isEqualTo(1);
         // and with both entries present it must pass
-        writeRegistry("- [ ] `TwoIT.one` - d. **Owner: PR #999**\n- [ ] `TwoIT.two` - d. **Owner: PR #999**\n");
+        writeRegistry("- [ ] `TwoIT.one` - d. **Owner: PR #999999**\n- [ ] `TwoIT.two` - d. **Owner: PR #999999**\n");
         assertThat(runCheck().exitCode).isEqualTo(0);
     }
 
@@ -131,8 +131,8 @@ class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
     void staleMethodEntryIsFlagged() throws Exception {
         // ce-review P1 (reproduced there): entry for a method that no longer exists must FAIL
         writeAnnotatedTest("SomeQuarantinedIT");
-        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - d. **Owner: PR #999**\n" +
-                "- [ ] `SomeQuarantinedIT.goneMethod` - d. **Owner: PR #999**\n");
+        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - d. **Owner: PR #999999**\n" +
+                "- [ ] `SomeQuarantinedIT.goneMethod` - d. **Owner: PR #999999**\n");
         Result result = runCheck();
         assertWithMessage("stale method entry must drift - output: %s", result.output)
                 .that(result.exitCode).isEqualTo(1);
@@ -143,7 +143,7 @@ class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
 
     private void writeAnnotatedTest(String className) throws IOException {
         writeTestSource(className, "class " + className + " {\n" +
-                "    @Quarantined(reason = \"diagnosed\", tracking = \"docs/x.md\", fixedBy = \"PR #999\")\n" +
+                "    @Quarantined(reason = \"diagnosed\", tracking = \"docs/x.md\", fixedBy = \"PR #999999\")\n" +
                 "    void someMethod() {}\n" +
                 "}\n");
     }

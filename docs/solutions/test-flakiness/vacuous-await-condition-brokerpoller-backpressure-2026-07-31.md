@@ -110,3 +110,36 @@ were checked and rejected before the rewrite:
 - Test provenance: upstream confluentinc/parallel-consumer #682 (configurable buffer), #836
   (in-flight counts toward backpressure)
 - Adjacent-but-different pattern: [parallel-integration-tests-flaky-under-concurrency-2026-07-28](parallel-integration-tests-flaky-under-concurrency-2026-07-28.md)
+
+## Second instance: MultiInstanceMetricsTest (2026-08-06)
+
+The same shape, found by CI rather than by reading:
+
+```java
+await().until(() -> pc2Counter.get() == expected);   // incremented INSIDE the user function
+assertThat(processedRecordsMetric()).isEqualTo(...); // incremented AFTER it returns
+```
+
+`MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed` failed with
+`expected: 40.0 but was: 39.0`. PC increments `PROCESSED_RECORDS` *after* the user function returns,
+when it records the work succeeded - so a counter incremented inside that function reaches its target
+strictly **before** the metric does. The await was satisfied by a signal that fires earlier than the
+thing being asserted, and the assertion raced the final record. It passed on six consecutive CI runs
+before losing that race once.
+
+The ambient probe called it correctly without any manual diagnosis: *"probe clean - no rebalance
+dwell, no lag stagnation, no frozen partitions observed: the fault is likely in the test itself"*.
+
+**Generalised rule, now covering two instances: await the value you are about to assert, never a
+proxy that leads it.** A user-side counter, a log line, or a queue depth may all move earlier than
+the state under test.
+
+The fix routes all four call sites in that file through one helper whose javadoc names the hazard, so
+the next person to add a metrics assertion inherits the reasoning instead of the bug:
+
+```java
+private void awaitProcessedRecords(double expected, String... pcInstanceTags)
+```
+
+Note the failure mode is load-dependent, so a green local run proves nothing - the original raced on
+every record and simply won each time.

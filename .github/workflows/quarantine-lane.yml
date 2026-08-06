@@ -22,11 +22,19 @@ permissions:
 jobs:
   # Quarantine LANE RUN: actually executes the @Quarantined tests - known-failing-on-master tests
   # excluded from the gating suites - so we still see when they start passing (their fixes landed),
-  # when they get worse, and their signal stays alive. Runs NIGHTLY against master (quarantine is
-  # master-state; running per-PR added ~10min of runner noise for a signal that only changes when
-  # master does) plus on-demand via workflow_dispatch. Red inside the run step is EXPECTED while the
-  # owning fix PR is open; the job itself never goes red for test failures (step-level
-  # continue-on-error) - only audit-class errors would, and those live in quarantine-audit.
+  # when they get worse, and their signal stays alive.
+  #
+  # WHEN IT RUNS: on EVERY PR push, and on every merge to master, plus workflow_dispatch - see the
+  # `on:` block above, which is the authority. This comment used to say "runs NIGHTLY against master,
+  # running per-PR added ~10min of runner noise" - a description of a superseded design that survived
+  # the change to per-PR triggers, and it actively misled a reader into thinking a re-push would not
+  # re-assess. It would, and does: each push gets a fresh checkout of the PR head, re-runs the registry
+  # and owner-claim checks, and re-executes the lane against that code.
+  #
+  # Red inside the run step is EXPECTED while the owning fix PR is open; the job itself never goes red
+  # for test failures (step-level continue-on-error) - only audit-class errors would, and those live in
+  # quarantine-audit. So a GREEN tick here does NOT mean the quarantined tests passed: the verdict is in
+  # the step summary and the sticky PR comment, not the check mark.
   test-quarantined:
     name: "tests"  # renders as "Quarantine Lane / tests" - the workflow name carries the identity
     runs-on: ubuntu-latest
