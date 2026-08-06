@@ -82,6 +82,12 @@ class LoadFactorCeilingReportingTest {
         assertThat(messagesAt(events, Level.WARN)).isEmpty();
         assertThat(messagesAt(events, Level.ERROR)).isEmpty();
 
+        // NOTE the two assertions above are negative, so on their own they would pass vacuously if the appender were
+        // ever attached to the wrong logger (say the reporting moved class). The positive debug assertion below is
+        // what anchors them: it can only hold if the capture is live and pointed at the code under test. Keep them
+        // together - see docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md
+        // for the same shape costing a real regression.
+
         // it is still observable, just at a level that matches how interesting it is
         var debug = messagesAt(events, Level.DEBUG).stream()
                 .filter(message -> message.contains("loading factor is fixed"))
