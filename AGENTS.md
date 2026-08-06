@@ -193,6 +193,20 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
   own reviewer. That is the guard working. Get a real review with a `@claude review this` PR comment
   (which runs from `claude.yml`, unmodified, so it validates), or split the workflow edit into its
   own PR. Do not disable the gate to get a green check.
+- **`.github/workflows/repo-hygiene.yml`** — "Repo Hygiene", on every push/PR plus dispatch. Two independent jobs. `sigpipe` runs `bin/check-shell-sigpipe.sh` (its own self-test first) to catch a `bin/*.sh` piping into `grep -q` under `pipefail`, which silently inverts the script's answer. `actions` runs `bin/check-action-versions.sh`, keeping every GitHub Action pinned to a single version across all workflows. Neither gates the build - they exist because the failures they catch are invisible rather than loud.
+- **`.github/workflows/check-dependencies.yml`** — "PR Dependency Check". Reads `depends on #N` lines from the PR body and blocks the child until every parent has merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out of order. See [PR Discipline](#pr-discipline) for the syntax.
+- **`.github/workflows/cancel-closed-pr-runs.yml`** — Cancels a PR's in-flight runs when it closes, so a withdrawn PR stops occupying runners. Housekeeping only; gates nothing.
+- **Self-hosted lanes** (see [`docs/SELF_HOSTED_RUNNER.md`](docs/SELF_HOSTED_RUNNER.md)). None of these gate merging - they are for speed and for work too heavy for a 2-core hosted runner. All are **skipped for PRs from forks** (`head.repo.full_name == github.repository`), because a fork PR must never run on our own hardware.
+  **`highcpu` is the only self-hosted label** - six runners, all online. Declare labels in [`.github/actionlint.yaml`](.github/actionlint.yaml) or actionlint flags them.
+
+  - `pr-highcpu-fast-feedback.yml` ("highcpu") — on every in-repo PR plus dispatch. The lane that earns the hardware.
+  - `mutation-full-sweep.yml` — dispatch only: the whole-project PIT sweep (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation job in `maven.yml` only covers classes changed against the base; this is its exhaustive counterpart.
+
+  **There is no scheduled build, deliberately.** Every suite worth re-running is already a required check on each PR and runs again on every push to master, so a cron lane would only repeat covered work. **Do not add a lane for suites the gate already covers.**
+
+  **Before pinning a job to a self-hosted label, confirm a runner serves it** - `gh api repos/astubbs/parallel-consumer/actions/runners` lists each runner's labels and online status. A job pinned to a label nothing advertises does not fail; it queues until GitHub cancels it, so the lane reports nothing at all and looks merely quiet.
+
+  **Beware: `performance` names two unrelated things.** It is the *test suite* (`bin/performance-test.sh`, the required **Performance Tests** check, on every PR from `maven.yml`, `ubuntu-latest`). It is **not** a runner label - the only self-hosted label is `highcpu`.
 - **`.semaphore/`** — Legacy Confluent internal CI/release pipelines, retained but inactive on the fork.
 
 ## Changelog
