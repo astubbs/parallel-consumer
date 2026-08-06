@@ -1,9 +1,11 @@
 # Custom labels for self-hosted runners, so actionlint does not flag
 # `runs-on: [self-hosted, <label>]` as an unknown label.
-# See self-hosted-tests.yml (performance), pr-highcpu-fast-feedback.yml (highcpu),
-# pr-local-fast-feedback.yml (local) and docs/SELF_HOSTED_RUNNER.md.
+#
+# Declaring a label here does not create a runner. Before adding one, check a machine actually
+# advertises it and is online (`gh api repos/astubbs/parallel-consumer/actions/runners`) - a job
+# pinned to a label nothing serves queues silently until GitHub cancels it, rather than failing.
+#
+# Used by pr-highcpu-fast-feedback.yml and mutation-full-sweep.yml; see docs/SELF_HOSTED_RUNNER.md.
 self-hosted-runner:
   labels:
-    - performance
     - highcpu
-    - local

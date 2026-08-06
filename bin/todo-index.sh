@@ -15,6 +15,17 @@
 #
 # Scope note: markers inside THIS script and inside the generated index are excluded, otherwise the
 # tool indexes itself.
+#
+# SORT UNDER LC_ALL=C. A bare `sort` collates by locale, so a macOS en_*.UTF-8 shell orders
+# `AbstractParallelEoSStreamProcessor.java` differently from CI's C locale, and the generated file
+# differs by machine - which makes `--check` fail for whoever did not generate it. The content is
+# identical; only the order moves.
+#
+# NO LINE NUMBERS, deliberately. An entry is the marker's own text, so it changes only when the
+# marker does. Recording `L<n>` instead would mean every edit above a marker rewrites every entry
+# below it in the file: the index would land in unrelated diffs, collide between branches, and make
+# `--check` fail on PRs that never touched a marker - which is exactly what stops such a gate being
+# wired into CI. To jump to one, grep its text: `grep -rn "check legacy is recursive"`.
 
 set -euo pipefail
 
@@ -47,7 +58,7 @@ list_files() {
         '*.java' '*.sh' '*.xml' '*.yml' '*.yaml' \
         | grep -v "^${SELF}$" \
         | grep -v "^${OUT}$" \
-        | sort
+        | LC_ALL=C sort
 }
 
 # A marker is TODO / FIXME / XXX as a WORD, case-insensitive. Captures the rest of the line as the
@@ -57,7 +68,7 @@ MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
 # field named `fixmeCount`. Cheap heuristic: drop lines where the word is immediately assigned to.
 # Not every occurrence of the word is a marker. Skip the cases seen in this tree:
 #   shell variables   todo=()   todo+=("$t")   ${todo[*]}   ${#todo[@]}
-#   YAML/schema keys  todo:            (upstream-map.yaml uses `todo` as a field name)
+#   YAML/schema keys  todo:            (a mapping key, not a marker - no live instance today)
 #   string literals   Mono.just("something todo")
 # NOTE: this filter is applied to `grep -n` output, so line-anchored patterns must allow the
 # leading "<lineno>:" prefix - anchoring on ^[[:space:]] alone silently never matches.
@@ -92,12 +103,11 @@ emit_body() {
 
         printf '**`%s`**\n\n' "$file"
         while IFS= read -r hit; do
-            local lineno text
-            lineno="${hit%%:*}"
-            text="${hit#*:}"
+            local text
+            text="${hit#*:}"   # drop grep's line-number prefix; see NO LINE NUMBERS above
             # tidy: strip leading comment punctuation and whitespace, collapse runs of spaces
             text=$(printf '%s' "$text" | sed -E 's/^[[:space:]]*(\/\/|\*|#|<!--)?[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*(-->)?[[:space:]]*$//')
-            printf -- '- L%s - %s\n' "$lineno" "$text"
+            printf -- '- %s\n' "$text"
         done <<< "$hits"
         printf '\n'
     done < <(list_files)
@@ -136,6 +146,17 @@ priority list - that was tried and duplicated the backlog.
 
 Most markers are notes-to-self and should stay exactly where they are; this index makes them
 discoverable in aggregate without promoting them to tasks.
+
+## Finding one
+
+Entries carry no line number - grep the text instead:
+
+\`\`\`bash
+grep -rn "check legacy is recursive"
+\`\`\`
+
+A line number would be wrong within a day and would drag this file into every unrelated diff. The
+marker's own text is stable until someone edits the marker.
 
 ## How to use this
 
