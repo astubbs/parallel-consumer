@@ -318,6 +318,18 @@ Every upstream issue now has a **fork mirror** (astubbs#44, astubbs#117-astubbs#
 reference has a fork-local number a reader can click. Find one with
 `gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "upstream #NNN"`.
 
+**Working a mirrored issue? Read the upstream original too - body and comments.**
+`gh issue view <N> -R confluentinc/parallel-consumer --json body,comments`. Every mirror says
+"Summarised, not copied", which makes it one agent's reading of the issue rather than the issue.
+Verify the summary against the original and against the code before fixing or documenting anything.
+This is not hypothetical: astubbs#194's summary said the Mutiny dependency "requires a higher
+bytecode level", while confluentinc#906's reporter had written *"I think the compiler target for
+that dependency is 17"* - the detail that actually mattered. A fix followed the summary, set
+`release.target=9`, compiled green, and shipped a jar that died with `UnsupportedClassVersionError`
+on Java 8 and 11. astubbs#171's summary likewise implied one shutdown timeout default where there
+are two different ones. When the mirror turns out to be wrong, say so in the PR **and correct the
+mirror**, or the next reader inherits the same error.
+
 **The convention: below #1000, say which repo you mean.** `astubbs#119` for this fork,
 `confluentinc#857` for the original - or a hyperlink, which qualifies it just as well. Add `PR` or
 `issue` where the distinction matters (`confluentinc PR #548`); both forms pass the gate.
