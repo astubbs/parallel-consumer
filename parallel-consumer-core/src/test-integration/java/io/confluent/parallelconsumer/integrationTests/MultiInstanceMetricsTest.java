@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
@@ -19,6 +20,8 @@ import pl.tlinkowski.unij.api.UniSets;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.DoubleSupplier;
+import java.util.stream.Stream;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
@@ -80,9 +83,9 @@ class MultiInstanceMetricsTest extends BrokerIntegrationTest<String, String> {
         pc2.poll(record -> pc2Counter.incrementAndGet());
 
 
-        await().timeout(Duration.ofSeconds(30)).until(() -> pc1Counter.get() + pc2Counter.get() == numberOfRecordsToProduce);
-        assertThat(Search.in(simpleMeterRegistry).tag(PC_INSTANCE_TAG, pcInstance1Tag).name(PROCESSED_RECORDS.getName()).counter().count()).isEqualTo(pc1Counter.get());
-        assertThat(Search.in(simpleMeterRegistry).tag(PC_INSTANCE_TAG, pcInstance2Tag).name(PROCESSED_RECORDS.getName()).counter().count()).isEqualTo(pc2Counter.get());
+        awaitMetric(() -> processedRecordsMetricFor(pcInstance1Tag, pcInstance2Tag), numberOfRecordsToProduce);
+        assertThat(processedRecordsMetricFor(pcInstance1Tag)).isEqualTo(pc1Counter.get());
+        assertThat(processedRecordsMetricFor(pcInstance2Tag)).isEqualTo(pc2Counter.get());
         pc.close();
         pc2.close();
     }
@@ -106,8 +109,7 @@ class MultiInstanceMetricsTest extends BrokerIntegrationTest<String, String> {
         pc.poll(record -> pc1Counter.incrementAndGet());
 
 
-        await().timeout(Duration.ofSeconds(30)).until(() -> pc1Counter.get() == numberOfRecordsToProduce);
-        assertThat(Search.in(simpleMeterRegistry).name(PROCESSED_RECORDS.getName()).counters().stream().mapToDouble(Counter::count).sum()).isEqualTo(pc1Counter.get());
+        awaitMetric(this::processedRecordsMetricTotal, numberOfRecordsToProduce);
         pc.close();
 
         getKcu().produceMessages(topic, numberOfRecordsToProduce);
@@ -119,8 +121,7 @@ class MultiInstanceMetricsTest extends BrokerIntegrationTest<String, String> {
         AtomicInteger pc2Counter = new AtomicInteger();
 
         pc2.poll(record -> pc2Counter.incrementAndGet());
-        await().timeout(Duration.ofSeconds(30)).until(() -> pc2Counter.get() == numberOfRecordsToProduce * 2);
-        assertThat(Search.in(simpleMeterRegistry).name(PROCESSED_RECORDS.getName()).counters().stream().mapToDouble(Counter::count).sum()).isEqualTo(pc2Counter.get());
+        awaitMetric(this::processedRecordsMetricTotal, numberOfRecordsToProduce * 2);
 
         pc2.close();
     }
@@ -138,8 +139,7 @@ class MultiInstanceMetricsTest extends BrokerIntegrationTest<String, String> {
         pc.subscribe(UniSets.of(topic));
         AtomicInteger pc1Counter = new AtomicInteger();
         pc.poll(record -> pc1Counter.incrementAndGet());
-        await().timeout(Duration.ofSeconds(30)).until(() -> pc1Counter.get() == numberOfRecordsToProduce);
-        assertThat(Search.in(simpleMeterRegistry).tag(PC_INSTANCE_TAG, pcInstance1Tag).name(PROCESSED_RECORDS.getName()).counters().stream().mapToDouble(Counter::count).sum()).isEqualTo(pc1Counter.get());
+        awaitMetric(() -> processedRecordsMetricFor(pcInstance1Tag), numberOfRecordsToProduce);
         pc.close();
         assertThat(simpleMeterRegistry.getMeters().size()).isEqualTo(0);
     }
@@ -155,4 +155,57 @@ class MultiInstanceMetricsTest extends BrokerIntegrationTest<String, String> {
                 .build();
 
     }
+
+    /**
+     * Current value of <b>PC's own</b> {@code PROCESSED_RECORDS} metric, summed across every PC
+     * instance present in the registry.
+     * <p>
+     * Note this is not the same number as a counter incremented inside a poll function - see
+     * {@link #awaitMetric(DoubleSupplier, double)} for why that distinction matters.
+     */
+    private double processedRecordsMetricTotal() {
+        return sumCounters(Search.in(simpleMeterRegistry).name(PROCESSED_RECORDS.getName()));
+    }
+
+    /**
+     * Current value of PC's {@code PROCESSED_RECORDS} metric, summed across <b>only</b> the given PC
+     * instances. Pass at least one tag; for the whole registry use
+     * {@link #processedRecordsMetricTotal()}, which says so at the call site.
+     */
+    private double processedRecordsMetricFor(String... pcInstanceTags) {
+        if (pcInstanceTags.length == 0) {
+            throw new IllegalArgumentException(
+                    "No instance tags given. Silently falling back to the registry total would return a "
+                            + "larger, plausible number and hide the mistake - call processedRecordsMetricTotal().");
+        }
+        return Stream.of(pcInstanceTags)
+                .mapToDouble(tag -> sumCounters(
+                        Search.in(simpleMeterRegistry).name(PROCESSED_RECORDS.getName()).tag(PC_INSTANCE_TAG, tag)))
+                .sum();
+    }
+
+    private double sumCounters(Search search) {
+        return search.counters().stream().mapToDouble(Counter::count).sum();
+    }
+
+    /**
+     * Poll a metric until it reaches {@code expected}.
+     * <p>
+     * <b>Always await the metric you are about to assert - never a counter incremented inside the poll
+     * function.</b> PC increments {@code PROCESSED_RECORDS} in {@code WorkManager#onSuccessResult},
+     * i.e. <i>after</i> the user function has returned and the result has travelled back through the
+     * control loop. A counter incremented inside that function therefore reaches its target strictly
+     * earlier, so an assertion following such an await races the final record: it passes almost always,
+     * and fails when the machine is loaded.
+     * <p>
+     * That is exactly how {@code sameRegistryCanBeReusedAfterPcInstanceClosed} failed CI with
+     * {@code expected: 40.0 but was: 39.0} after six consecutive green runs. The same shape has bitten
+     * this repo before - see
+     * {@code docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md}.
+     */
+    private void awaitMetric(DoubleSupplier actual, double expected) {
+        await().timeout(Duration.ofSeconds(30))
+                .untilAsserted(() -> assertThat(actual.getAsDouble()).isEqualTo(expected));
+    }
+
 }

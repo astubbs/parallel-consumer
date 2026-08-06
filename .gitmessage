@@ -1,17 +1,17 @@
 # <type>(<scope>) #NNN: <subject>   (<= 72 chars, imperative; e.g.
-#   "fix(core) upstream #909: replace stale work container on rebalance")
+#   "fix(core) confluentinc#909: replace stale work container on rebalance")
 #
 # Body: what changed and why (wrap ~72).
 #
 # ISSUE REFS GO AT THE FRONT; THE END BELONGS TO THE PR NUMBER. On squash-merge
-# GitHub appends "(#123)" to the subject, so a subject already ending in "(#41)"
-# merges as "(#41) (#123)" -- two bare numbers, nothing to tell them apart.
-#   fork issue      -> "docs(mutation) #41: subject"
-#   upstream issue  -> "fix(core) upstream #909: subject"
-# Prefer the FORK issue number when a mirror exists: a bare "#909" autolinks to
+# GitHub appends `(#123)` to the subject, so a subject already ending in `(#41)`
+# merges as `(#41) (#123)` -- two bare numbers, nothing to tell them apart.
+#   this fork       -> `docs(mutation) astubbs#41: subject`
+#   upstream        -> `fix(core) confluentinc#909: subject`
+# Prefer this fork's mirror number when one exists: a bare `#909` autolinks to
 # fork issue 909, which is not the upstream one you meant. Upstream provenance
 # also belongs in the trailers below, which is where a tool can read it.
-# See AGENTS.md "PR Discipline" -- on a squash-merge the merged subject is the
+# See AGENTS.md "Commits" -- on a squash-merge the merged subject is the
 # PR title, so the same rule governs both.
 #
 # --- Upstream trailers -------------------------------------------------------
