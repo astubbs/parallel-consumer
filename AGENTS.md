@@ -326,9 +326,11 @@ This is not hypothetical: astubbs#194's summary said the Mutiny dependency "requ
 bytecode level", while confluentinc#906's reporter had written *"I think the compiler target for
 that dependency is 17"* - the detail that actually mattered. A fix followed the summary, set
 `release.target=9`, compiled green, and shipped a jar that died with `UnsupportedClassVersionError`
-on Java 8 and 11. astubbs#171's summary likewise implied one shutdown timeout default where there
-are two different ones. When the mirror turns out to be wrong, say so in the PR **and correct the
-mirror**, or the next reader inherits the same error.
+on Java 8 and 11. astubbs#171 shows the same failure in its **Fork status** notes rather than its
+summary - "`shutdownTimeout` and `drainTimeout` (default 30s)" reads as one shared default, where the
+code has two (10s and 30s) - so check the mirror's added commentary as sceptically as its summary.
+When the mirror turns out to be wrong, say so in the PR **and correct the mirror**, or the next
+reader inherits the same error.
 
 **The convention: below #1000, say which repo you mean.** `astubbs#119` for this fork,
 `confluentinc#857` for the original - or a hyperlink, which qualifies it just as well. Add `PR` or
