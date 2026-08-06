@@ -73,7 +73,7 @@ bin/performance-test.sh
 
 ## Key Architecture Decisions
 
-- **Jabel cross-compilation**: Source is Java 17, bytecode targets Java 8 via Jabel annotation processor. This means `--release 8` is set in the compiler plugin, which restricts available APIs to Java 8 surface. The Mutiny module overrides this to `--release 9` because Mutiny uses `java.util.concurrent.Flow` (Java 9+).
+- **Jabel cross-compilation**: Source is Java 17, bytecode targets Java 8 via Jabel annotation processor. This means `--release 8` is set in the compiler plugin, which restricts available APIs to Java 8 surface. The Mutiny module overrides this to 17, which is that module's real runtime floor: `Multi` needs `java.util.concurrent.Flow` (9+), and SmallRye Mutiny 2.8+ is itself compiled for Java 17. Its pom carries the full reasoning, including why the build cannot detect the second constraint.
 - **Offset encoding**: Custom offset map encoding (run-length, bitset) stored in Kafka commit metadata for tracking in-flight messages.
 - **Sharding**: Messages are distributed to processing shards by key or partition for ordering guarantees.
 
@@ -143,10 +143,6 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
   `@Quarantined` scenarios (`-Dexcluded.groups=` is empty), so known-RED detectors still fire locally.
   See `ChaosChurnStormIT`'s class javadoc for the full recipe.
 - A RED run is investigation food, not flake noise — the probes are calibrated against the real historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in measured gaps). Never loosen a probe to go green; tune the workload/conductor instead.
-
-## Known Issues
-
-- **Mutiny module requires Java 17**: it has a `release.target=17` override in its pom.xml, for two reasons. Mutiny's `Multi` implements `java.util.concurrent.Flow.Publisher`, which `--release 8` hides, so the module will not compile at 8; and SmallRye Mutiny 2.8.0+ is itself compiled for Java 17 (class-file major 61), so 17 is the module's real runtime floor. Because `--release` only constrains the platform API and not what javac reads off the classpath, that second constraint is invisible to the build - it was previously set to 9, which compiled fine but shipped an artefact that blew up with `UnsupportedClassVersionError` on Java 8 and 11. Every other module (core, vertx, reactor) stays on Java 8. If you change the Mutiny version, re-check its `maven-compiler-plugin.release` and this override together.
 
 ## Code Style
 
