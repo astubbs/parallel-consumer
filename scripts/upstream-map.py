@@ -8,8 +8,6 @@ Usage:
   scripts/upstream-map.py show <id>     # shell-eval-able fields for one entry
   scripts/upstream-map.py meta          # shell-eval-able manifest-level fields (last_swept, repos)
   scripts/upstream-map.py tracked       # '<kind> <n> <recorded_status> <id>' per primary ref
-  scripts/upstream-map.py posted-refs   # upstream numbers already commented on (idempotency)
-  scripts/upstream-map.py todo          # outstanding actions across entries (from `todo:` fields)
 
 The manifest (src/docs/development/upstream-map.yaml) is the source of truth for
 the fork<->upstream mapping; see its header block for the schema.
@@ -27,7 +25,10 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANIFEST = os.path.join(HERE, "..", "src", "docs", "development", "upstream-map.yaml")
-REQUIRED = ["id", "group", "summary", "fork", "upstream", "forwarded"]
+# `forwarded` was dropped in the 2026-08-05 slim: every upstream issue is now mirrored, so the
+# durable record of a backlink is the comment itself (it carries a hidden marker) plus the
+# mirror, not a field here that goes stale the moment anyone comments.
+REQUIRED = ["id", "group", "summary", "fork", "upstream"]
 FORK_STATUS = {"none", "in-progress", "ready", "pr-open", "merged", "released",
                "superseded", "wontfix"}
 UPSTREAM_STATUS = {"open", "closed", "merged", "mixed"}
@@ -91,7 +92,7 @@ def refs(d):
 
 
 def show(d, eid):
-    """Emit shell-eval-able KEY=value lines for one entry (used by upstream-backlink.sh)."""
+    """Emit shell-eval-able KEY=value lines for one entry."""
     e = next((x for x in d["entries"] if x.get("id") == eid), None)
     if e is None:
         sys.exit(f"no entry with id '{eid}'")
@@ -140,38 +141,6 @@ def tracked(d):
             print(f"pr {n} {st} {e['id']}")
 
 
-def posted_refs(d):
-    """Print upstream issue/PR numbers we've already commented on (from forwarded urls).
-
-    Used for idempotency -- upstream-backlink.sh skips these so we never double-post.
-    """
-    seen = set()
-    for e in d["entries"]:
-        for fw in (e.get("forwarded") or []):
-            url = fw.get("url")
-            if not url:
-                continue
-            m = re.search(r"/(?:issues|pull)/(\d+)", url)
-            if m:
-                seen.add(m.group(1))
-    for n in sorted(seen, key=int):
-        print(n)
-
-
-def todos(d):
-    """List outstanding actions across all entries (from `todo:` fields)."""
-    found = False
-    for e in d["entries"]:
-        items = e.get("todo")
-        if items:
-            found = True
-            print(f"{e['id']} [{e['fork']['status']}]:")
-            for it in items:
-                print(f"  - {it}")
-    if not found:
-        print("(no outstanding todos)")
-
-
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "validate"
     d = load()
@@ -195,10 +164,6 @@ def main():
         meta(d)
     elif cmd == "tracked":
         tracked(d)
-    elif cmd == "posted-refs":
-        posted_refs(d)
-    elif cmd == "todo":
-        todos(d)
     else:
         sys.exit(__doc__)
 

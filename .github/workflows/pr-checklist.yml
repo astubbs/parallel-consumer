@@ -42,6 +42,9 @@ jobs:
       - name: Self-test the changelog gate logic
         run: node .github/scripts/changelog-ref-gate.test.js
 
+      - name: Self-test the issue-reference gate logic
+        run: node .github/scripts/issue-ref-gate.test.js
+
       - name: Verify checklist is present and resolved (checked or N/A)
         uses: actions/github-script@v7
         with:
@@ -93,9 +96,56 @@ jobs:
       # This replaces an earlier rule requiring the entry to cite its own PR. That was a nuisance by
       # construction: the PR number does not exist until the PR is opened, so every PR needed a
       # second push purely to add the reference - which in turn double-triggered the review workflow
-      # (#109). An issue number is known before the work starts.
+      # (astubbs#109). An issue number is known before the work starts.
       #
       # Build & CI is exempt - see SECTIONS_REQUIRING_AN_ISSUE in the gate module for why.
+      # Issue references: below #1000 a reference must name its repo - `astubbs#NN` for this fork,
+      # `confluentinc#NN` for the original (AGENTS.md -> Issue references). The fork's numbers sit
+      # inside confluentinc's range, so a bare number there resolves against whichever repo the reader
+      # happens to be in - and often resolves to a real but unrelated issue, which looks fine and is
+      # not. Every confluentinc issue is mirrored here, so there is almost always a fork number to
+      # cite instead.
+      #
+      # Deliberately narrow: added lines only, and the files in EXEMPT_PATHS are skipped because a
+      # bare number legitimately means confluentinc there. A naive sweep rewrote three of them
+      # wrongly, which is why they are named in the gate module rather than left to judgement.
+      - name: Verify issue references name their repo
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/issue-ref-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - issue reference gate skipped.`);
+              return;
+            }
+            if (gate.findOptOut(pr.body || "")) {
+              core.info("issue-refs: N/A opt-out present - skipping.");
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...context.repo, pull_number: pr.number, per_page: 100,
+            });
+
+            const hits = gate.suspectRefs(files);
+            if (hits.length === 0) {
+              core.info(`No unqualified references below #${gate.QUALIFY_BELOW} on added lines.`);
+              return;
+            }
+
+            core.setFailed(
+              `${hits.length} reference(s) below #${gate.QUALIFY_BELOW} do not say which repo they mean.\n` +
+              `The fork's numbers sit inside upstream's range, so a bare number there is a coin flip.\n` +
+              `Write \`astubbs#NN\` for this repo or \`upstream #NN\` for confluentinc - or link it.\n` +
+              `Every upstream issue has a mirror here, which is usually the better number to cite:\n` +
+              `  gh issue list -R ${context.repo.owner}/${context.repo.repo} --label upstream-mirror --search "upstream #NN"\n` +
+              `If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" ` +
+              `on its own line in the PR body.\n\n` +
+              hits.map(h => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")
+            );
+
       - name: Verify new changelog entries cite an issue
         uses: actions/github-script@v7
         with:
