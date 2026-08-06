@@ -94,7 +94,7 @@ public class PartitionState<K, V> {
      * polling sub system - {@link BrokerPollSystem#maybeDoCommit}. The alternative to having this as a concurrent
      * collection, would be to have the control thread prepare possible commit data on every cycle, and park that data
      * so that the broker polling thread can grab it, if it wants to commit - i.e. the poller would not prepare/query
-     * the data for itself. This requirement is removed in the upcoming PR #200 Refactor: Consider a shared nothing
+     * the data for itself. This requirement is removed in the upcoming confluentinc PR #200 Refactor: Consider a shared nothing
      * architecture.
      *
      * @see io.confluent.parallelconsumer.offsets.BitSetEncoder for disucssion on how this is impacts per record ack
@@ -466,9 +466,9 @@ public class PartitionState<K, V> {
          * race case, there may be a higher getOffsetHighestSequentialSucceeded from the incompleteOffsets collection,
          * but it will always at lease be pessimistically correct in terms of committing offsets to the broker.
          *
-         * See #200 for the complete correct solution.
+         * See confluentinc#200 for the complete correct solution.
          */
-        // use offsetHighestSucceeded instead of offsetHighestSeen to fix issue #826
+        // use offsetHighestSucceeded instead of offsetHighestSeen to fix confluentinc issue #826
         long currentOffsetHighestSeen = offsetHighestSucceeded;
         Long firstIncompleteOffset = incompleteOffsets.keySet().ceiling(KAFKA_OFFSET_ABSENCE);
         boolean incompleteOffsetsWasEmpty = firstIncompleteOffset == null;
@@ -495,7 +495,7 @@ public class PartitionState<K, V> {
         }
 
         try {
-            // todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null #233
+            // todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null - confluentinc#233
             long offsetOfNextExpectedMessage = getOffsetToCommit();
             var offsetRange = getOffsetHighestSucceeded() - offsetOfNextExpectedMessage;
             String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, this);
@@ -527,7 +527,7 @@ public class PartitionState<K, V> {
             setAllowedMoreRecords(false);
             log.warn("Offset map data too large (size: {}) to fit in metadata payload hard limit of {} - cannot include in commit. " +
                             "Warning: messages might be replayed on rebalance. " +
-                            "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {} and issue #47.",
+                            "See kafka.coordinator.group.OffsetConfig#DefaultMaxMetadataSize = {} and confluentinc issue #47.",
                     metaPayloadLength, DefaultMaxMetadataSize, DefaultMaxMetadataSize);
         } else if (metaPayloadLength > getPressureThresholdValue()) { // and thus metaPayloadLength <= DefaultMaxMetadataSize
             // try to turn on back pressure before max size is reached

@@ -9,7 +9,7 @@ NOTE:: Routine/automated dependency bumps (e.g. Dependabot) are not listed here.
 
 NOTE:: *Reference convention (this is a fork).* Links and bare `#NN` / commit hashes refer to this fork, https://github.com/astubbs/parallel-consumer[astubbs/parallel-consumer]. Upstream references are written explicitly as `upstream #NN` and link to https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer]. Entries below `0.6.0.0` predate the fork and their `#NN` refer to upstream.
 
-NOTE:: *How this file is maintained.* Everything up to and including `0.6.0.0` is hand-written and frozen. From the next release on, each section is **generated at release time from the commit log** and then frozen in turn - so do not add entries here in a feature PR, and do not open an `== Unreleased` section. The judgement applied when generating (what earns an entry, and how long it may be) is in `AGENTS.md` -> Changelog.
+NOTE:: *How this file is maintained.* A section is frozen once its release has **shipped** - `0.5.x` and below are hand-written legacy from before the fork, and are finished. The section for the release currently being cut is **generated at release time from the commit log**, replacing whatever text is under it, and is frozen in turn once that release ships. **That includes `0.6.0.0` below**: it has not shipped, so what you are reading there is working text and not the notes that release will publish. Consequently a PR never adds an entry here and never opens an `== Unreleased` section; the only edit a PR may make is correcting a factual error in text that is already present. The judgement applied when generating (what earns an entry, and how long it may be) is in `AGENTS.md` -> Changelog.
 
 // git log --pretty="* %s" 0.3.0.2..HEAD
 
@@ -48,7 +48,7 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 === Dependencies
 
 * Dependencies and build plugins refreshed to their latest non-major versions (https://github.com/astubbs/parallel-consumer/pull/73[#73]): JUnit 5.10.2 → 5.14.4, Mockito 5.12.0 → 5.23.0, Testcontainers 1.19.8 → 1.21.4, AssertJ 3.24.2 → 3.27.7, SLF4J 2.0.13 → 2.0.18, Project Reactor 3.6.2 → 3.8.6, SmallRye Mutiny 2.9.4 → 2.9.5, Vert.x 4.5.7 → 4.5.31, Lombok 1.18.28 → 1.18.46, plus Guava, commons-lang3, Logback and the PostgreSQL driver.
-* The Kafka client stays on **3.9.1** — Kafka 4.x (and the other majors JUnit 6, Testcontainers 2, Vert.x 5, Mutiny 3, WireMock 3) were deliberately deferred to keep the release low-risk. See link:docs/inflight/[docs/inflight/].
+* The Kafka client moves 3.9.1 → **3.9.2**, a patch bump within the same 3.9 line - no API or behaviour change for callers. Kafka 4.x (and the other majors JUnit 6, Testcontainers 2, Vert.x 5, Mutiny 3, WireMock 3) were deliberately deferred to keep the release low-risk. See link:docs/inflight/[docs/inflight/].
 
 === Build & CI
 

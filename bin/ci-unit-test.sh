@@ -20,7 +20,6 @@ set -euo pipefail
 ./mvnw --batch-mode \
   -Pci \
   clean test \
-  -Dlicense.skip \
   -Dexcluded.groups=performance,chaos,quarantined \
   -Dsurefire.rerunFailingTestsCount=2 \
   "$@"

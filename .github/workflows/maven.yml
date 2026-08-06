@@ -54,7 +54,7 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
-        run: ./mvnw --batch-mode -Pci dependency:go-offline -Dlicense.skip -DincludeScope=test -U
+        run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
@@ -282,7 +282,7 @@ jobs:
           else
             echo "No baseline found — reporting all bugs (first run on this base branch)"
           fi
-          ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -Dlicense.skip $EXCLUDE_ARG -pl parallel-consumer-core -am
+          ./mvnw --batch-mode -Pci compile spotbugs:spotbugs $EXCLUDE_ARG -pl parallel-consumer-core -am
       - name: Post SpotBugs annotations on PR
         if: always()
         uses: jwgmeligmeyling/spotbugs-github-action@v1.2
@@ -365,7 +365,7 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
       - name: Compile and generate SpotBugs XML
-        run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -Dlicense.skip -pl parallel-consumer-core -am
+        run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -pl parallel-consumer-core -am
       - name: Convert SpotBugs results to exclude filter
         run: |
           # Transform the SpotBugs XML into an exclude filter that can be

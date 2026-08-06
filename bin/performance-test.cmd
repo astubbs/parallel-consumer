@@ -14,5 +14,4 @@ call mvnw.cmd --batch-mode ^
   clean verify ^
   -Dincluded.groups=performance ^
   -Dexcluded.groups= ^
-  -Dlicense.skip ^
   %*
