@@ -303,7 +303,7 @@ Do not start one casually.
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
 
-### Cross-module test clones (the file-similarity backlog behind #40)
+### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 
 Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the
 `MockConsumer*` family - is done: they now share `MockConsumerTestBase`. The audit of the rest of the
@@ -326,8 +326,8 @@ next reader does not re-derive the list:
   Worth recording because the prediction was wrong: extracting the harness was expected to put these
   two small abstract classes around 70% on the check, on the reasoning that a whole-file token
   measure mostly sees their shared package declaration and imports. It did not - neither file reaches
-  the check's 30% reporting floor against anything (PR #206). The `MockConsumer*Test` scenarios
-  themselves came out at 34-37%, down from the 70.7% that #34 flagged. Estimate similarity from the
+  the check's 30% reporting floor against anything (PR astubbs#206). The `MockConsumer*Test` scenarios
+  themselves came out at 34-37%, down from the 70.7% that astubbs#34 flagged. Estimate similarity from the
   tool, not from a reading of the source.
 
 ## Abandoned draft branches (idea bank)

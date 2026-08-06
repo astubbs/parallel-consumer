@@ -20,18 +20,18 @@ clear that scenario's simulated outage window. Do not hoist them.
 
 ## Collides with
 
-- **PR #202** moves `LongPollingMockConsumer` from test sources to main sources. The FQN does not
+- **PR astubbs#202** moves `LongPollingMockConsumer` from test sources to main sources. The FQN does not
   change, so nothing here breaks - but the harness javadoc points at it, so a future rename does.
 - Anything else editing these six files will conflict textually; the resolution is almost always
   "keep the harness, re-apply the scenario".
 
 ## Reading a file-similarity comment about these files
 
-Measured on PR #206, after the extraction:
+Measured on PR astubbs#206, after the extraction:
 
 - The `MockConsumer*Test` scenarios now pair at **34-37%** (`CommitTimeout`↔`EarlyClose` 37.5%,
-  `CommitTimeout`↔`Sasl` 37.2%, `EarlyClose`↔`Sasl` 34.5%), down from the 70.7% that #34 flagged and
-  that motivated #40. What is left at that level is the copyright header, the import block and the
+  `CommitTimeout`↔`Sasl` 37.2%, `EarlyClose`↔`Sasl` 34.5%), down from the 70.7% that astubbs#34 flagged and
+  that motivated astubbs#40. What is left at that level is the copyright header, the import block and the
   anonymous-`MockConsumer` shape - not wiring.
 - `CommitRejectionTestBase` and `MockConsumerTestBase` **do not appear in the report at all**. The
   harness extraction was predicted to push them to ~70%; it did not, and neither file reaches the
