@@ -106,11 +106,11 @@ class QuarantineLaneReportScriptTest extends AbstractQuarantineScriptTest {
         Path src = fixture.resolve("module/src/test-integration/java");
         Files.createDirectories(src);
         String java = "class " + cls + " {\n" +
-                "    @Quarantined(reason = \"d\", tracking = \"t\", fixedBy = \"PR #80\"" +
+                "    @Quarantined(reason = \"d\", tracking = \"t\", fixedBy = \"PR #999999\"" +
                 (flapping ? ", flapping = true" : "") + ")\n" +
                 "    void " + method + "() {}\n}\n";
         Files.write(src.resolve(cls + ".java"), java.getBytes(StandardCharsets.UTF_8));
-        writeRegistry("- [ ] `" + cls + "." + method + "` - diagnosed. **Owner: PR #80**\n");
+        writeRegistry("- [ ] `" + cls + "." + method + "` - diagnosed. **Owner: PR #999999**\n");
         if (reportXml != null) {
             Path reports = fixture.resolve("module/target/failsafe-reports");
             Files.createDirectories(reports);

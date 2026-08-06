@@ -44,15 +44,36 @@ since="${since:-$LAST_SWEPT}"
 today="$(date +%F)"
 
 # ---- gather + format via gh --jq (no inline python) ------------------------
+#
+# OUR OWN COMMENTS DO NOT COUNT AS UPSTREAM ACTIVITY. Every mirrored issue carries a backlink comment
+# from us, and posting it bumped that issue's `updated` timestamp - so a bare `updated:>=` search
+# returns the entire tracker and the signal is gone. An item is only reported when someone who is not
+# us has touched it: either the item was opened inside the window, or a non-fork account commented in
+# it inside the window.
+FORK_VOICES="$(gh api user --jq .login 2>/dev/null || echo astubbs)"
+
+foreign_activity() {  # $1 = issue/PR number; 0 = someone other than us moved it
+  local n="$1" created foreign
+  created="$(gh api "repos/$UPSTREAM_REPO/issues/$n" --jq '.created_at[0:10]' 2>/dev/null || true)"
+  # opened inside the window: real signal regardless of who has commented since
+  [ -n "$created" ] && [[ ! "$created" < "$since" ]] && return 0
+  foreign="$(gh api "repos/$UPSTREAM_REPO/issues/$n/comments?per_page=100" 2>/dev/null \
+    | jq --arg since "$since" --arg me "$FORK_VOICES" \
+        '[.[] | select(.created_at[0:10] >= $since and .user.login != $me)] | length' 2>/dev/null || echo 0)"
+  [ "${foreign:-0}" -gt 0 ]
+}
+
 list_fmt() {  # $1 = issue|pr
   gh "$1" list --repo "$UPSTREAM_REPO" --state all --limit "$limit" \
     --search "updated:>=$since sort:updated-desc" \
     --json number,title,state,updatedAt \
-    --jq '.[] | "  #\(.number)  \(.state|ascii_upcase[0:6])  \(.updatedAt[0:10])  \(.title)"' \
-    2>/dev/null || true
+    --jq '.[] | "\(.number)\t  #\(.number)  \(.state|ascii_upcase[0:6])  \(.updatedAt[0:10])  \(.title)"' \
+    2>/dev/null | while IFS=$'\t' read -r num line; do
+      foreign_activity "$num" && printf '%s\n' "$line"
+    done || true
 }
-issues_out="$(list_fmt issue)"; [ -n "$issues_out" ] || issues_out="  (none)"
-prs_out="$(list_fmt pr)";       [ -n "$prs_out" ]    || prs_out="  (none)"
+issues_out="$(list_fmt issue)"; [ -n "$issues_out" ] || issues_out="  (none - nothing but our own comments)"
+prs_out="$(list_fmt pr)";       [ -n "$prs_out" ]    || prs_out="  (none - nothing but our own comments)"
 
 # ---- drift on tracked refs (recorded 'open' but now closed/merged) ---------
 drift="$(python3 "$MAP" tracked | while read -r kind num recorded eid; do

@@ -1255,10 +1255,18 @@ NOTE:: any additional binders / metrics need to be cleaned up appropriately - fo
 [[roadmap]]
 == Roadmap
 
-For released changes, see the link:CHANGELOG.adoc[CHANGELOG].
+*Yes, this is maintained - and this repository is where the maintenance happens.*
+{base_url}[astubbs/parallel-consumer] is the active line of development: it is what is published to
+Maven Central as `bz.stub.parallelconsumer`, and it is where fixes, releases and issue triage land.
+The original {base_confluent_url}[confluentinc/parallel-consumer] is no longer actively maintained.
 
-For features in development and a more accurate view on the roadmap, have a look at the
-https://github.com/confluentinc/parallel-consumer/issues[GitHub issues], and clone https://github.com/astubbs/parallel-consumer[Antony's fork].
+For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
+
+For what is planned, in progress, or known-broken, the {issues_link}[issue tracker on this repository]
+is the single place to look. We mirrored every open issue from the upstream tracker into it (all 78 of
+them, labelled `upstream-mirror` and titled `upstream #NNN: ...`), so an upstream report you are
+following has a counterpart here that reflects its real status on this fork. Please raise new issues
+here rather than upstream - see <<Support and Issues>>.
 
 == Usage Requirements
 
