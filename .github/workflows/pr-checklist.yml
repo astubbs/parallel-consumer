@@ -141,16 +141,9 @@ jobs:
               return;
             }
 
-            core.setFailed(
-              `${hits.length} reference(s) below #${gate.QUALIFY_BELOW} do not say which repo they mean.\n` +
-              `The fork's numbers sit inside upstream's range, so a bare number there is a coin flip.\n` +
-              `Write \`astubbs#NN\` for this repo or \`upstream #NN\` for confluentinc - or link it.\n` +
-              `Every upstream issue has a mirror here, which is usually the better number to cite:\n` +
-              `  gh issue list -R ${context.repo.owner}/${context.repo.repo} --label upstream-mirror --search "upstream #NN"\n` +
-              `If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" ` +
-              `on its own line in the PR body.\n\n` +
-              hits.map(h => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")
-            );
+            core.setFailed(gate.formatFailure(hits, {
+              repo: `${context.repo.owner}/${context.repo.repo}`,
+            }));
 
       - name: Verify new changelog entries cite an issue
         uses: actions/github-script@v7

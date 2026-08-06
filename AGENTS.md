@@ -332,17 +332,38 @@ code has two (10s and 30s) - so check the mirror's added commentary as sceptical
 When the mirror turns out to be wrong, say so in the PR **and correct the mirror**, or the next
 reader inherits the same error.
 
-**The convention: below #1000, say which repo you mean.** `astubbs#119` for this fork,
+**The convention: below the threshold, say which repo you mean.** `astubbs#119` for this fork,
 `confluentinc#857` for the original - or a hyperlink, which qualifies it just as well. Add `PR` or
 `issue` where the distinction matters (`confluentinc PR #548`); both forms pass the gate.
+
+> **The threshold was #1000 when this was written, but `QUALIFY_BELOW` in
+> [`.github/scripts/issue-ref-gate.js`](.github/scripts/issue-ref-gate.js) is the source of truth.**
+> It is expected to move - confluentinc's numbering still creeps, as the headroom note below says -
+> and prose cannot read a constant, so every `1000` in this file is a snapshot. If they disagree, the
+> constant is right and this document is stale. Change it there, then sweep the prose.
 
 **Name the owner, not the role.** `confluentinc#857`, not `upstream #857` - "upstream" describes a
 relationship rather than a repository, and it is not stable: this fork is itself upstream to anyone
 who forks it. `upstream #NN` still passes the gate so older text is not broken, but new writing uses
-the owner. Same reasoning that rules out "fork" as a qualifier. In anything
+the owner - and that tolerance is temporary: `docs/inflight/next-qualify-remaining-refs.md` carries
+the sweep that removes the remaining uses and then tightens the gate to reject the form outright.
+Same reasoning that rules out "fork" as a qualifier. In anything
 **posted to GitHub**, use the fully qualified `confluentinc/parallel-consumer#857`: upstream prose
 does not auto-link there, and a bare `#NN` in a comment silently resolves against whichever repo it
 is posted in.
+
+**The `upstream #NNN:` mirror-title prefix is exempt, and so is anything quoting it.** That the
+prefix never changes is [Mirror format](#mirror-format)'s rule; what matters here is the consequence
+for a sweep. The prefix is an **index key**, so the `--search "upstream #NNN"` strings above and in
+the reference gate's failure message are *quoting* a key rather than making a reference. Rewriting
+them to the owner form breaks every one of those lookups at once. Before changing any match, decide
+whether it names an issue or quotes a search.
+
+**Closing keywords are another exception, and getting this one wrong fails silently.** GitHub honours only
+`Fixes #167` or `Fixes astubbs/parallel-consumer#167` - the `owner#NN` short form this section
+otherwise prefers is **not** cross-reference syntax, so `Fixes astubbs#167` renders as plain text and
+closes nothing. A bare number is what the convention above forbids, so in a PR body write the fully
+qualified form: `Fixes astubbs/parallel-consumer#167`.
 
 At or above #1000 a bare number is unambiguous, because only this fork can have one.
 
@@ -377,7 +398,7 @@ names (`bugs/857-...`) and the upstream threads all use. Dropping either breaks 
 **Fix references in any file a PR touches.** Not a bulk rewrite - opportunistic, as files are
 touched. In a file being changed anyway:
 
-- every unqualified `#NNN` below 1000 gains its repo - `astubbs#NNN` or `upstream #NNN` -
+- every unqualified `#NNN` below the threshold gains its repo - `astubbs#NNN` or `confluentinc#NNN` -
   **hyperlinked** where the format allows (markdown link, javadoc `<a href>`; a raw URL in a `//`
   comment, which every IDE linkifies)
 - resolve the number in **both** repos before choosing the prefix; it very likely exists in each
@@ -498,6 +519,20 @@ Snapshots publish automatically on every push to `master` (`publish.yml`). Workf
 - `MAVEN_GPG_PASSPHRASE` — Passphrase for the GPG key
 
 ## Worktree ownership
+
+**Never do any work in the main checkout. Every task gets a worktree.** The main clone at the repo
+root is shared mutable state - several agent sessions run against it at once, so its HEAD can move
+between two of *your own* commands. Work only under `.claude/worktrees/<name>`, and reach a task by
+`cd`-ing into its worktree. `git worktree list` tells you which one holds a branch; create one if
+none does.
+
+**Reaching for `git checkout <branch>` is the tell that you are in the wrong directory** - and it is
+how the rule gets broken silently. Git refuses to check out a branch another worktree already holds,
+so the command *fails*; if you piped it into `tail`/`head`, the pipeline still exits 0 and a
+following `&& git rebase …` runs against whatever branch you were really on. On 2026-08-06 that
+rebased an unrelated PR's branch by accident. Two habits prevent it: change directory rather than
+branch, and never pipe a git command whose failure must stop an `&&` chain (or test
+`${PIPESTATUS[0]}`).
 
 Multiple agents/sessions often work in parallel git worktrees (kept under `.claude/worktrees/`). Neither git nor the Claude UI records **which agent is using which worktree**, so this repo uses a convention:
 

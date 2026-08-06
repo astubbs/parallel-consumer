@@ -83,15 +83,6 @@ if (hits.length === 0) {
   process.exit(0);
 }
 
-console.error(
-  `${hits.length} reference(s) below #${gate.QUALIFY_BELOW} do not say which repo they mean.\n` +
-  `The fork's numbers sit inside confluentinc's range, so a bare number there is a coin flip.\n` +
-  `Write \`astubbs#NN\` for this repo or \`confluentinc#NN\` for the original - or link it.\n` +
-  `Every confluentinc issue is mirrored here, and the mirror is usually the better number to cite:\n` +
-  `  gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "upstream #NN"\n` +
-  `If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" on its own\n` +
-  `line in the PR body - the workflow honours that opt-out; this script does not read the PR body.\n\n` +
-  hits.map((h) => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")
-);
+console.error(gate.formatFailure(hits, { readsPrBody: false }));
 process.exit(1);
 NODE
