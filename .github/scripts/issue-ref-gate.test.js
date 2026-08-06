@@ -146,9 +146,11 @@ check("the failure message names the owner in its prose too, not the role", () =
   assert.ok(!msg.includes("Every upstream issue"), "prose must say Every confluentinc issue");
 });
 
-check("the mirror-lookup hint keeps the literal upstream #NN search key", () => {
-  // The mirror titles are `upstream #NNN: ...`, so this string is an index key, not a reference.
-  assert.ok(formatFailure(HITS).includes('--search "upstream #NN"'));
+check("the mirror-lookup hint searches the owner form, matching the mirror titles", () => {
+  // Mirror titles are `confluentinc#NNN: ...`, so the hint must search that. They used to read
+  // `upstream #NNN:` - an import that deviated from its own plan - and the hint followed it.
+  assert.ok(formatFailure(HITS).includes('--search "confluentinc#NN"'));
+  assert.ok(!formatFailure(HITS).includes('--search "upstream'), "no stale role-form lookup");
 });
 
 check("formatFailure takes the repo from its caller, and defaults to the fork", () => {

@@ -108,12 +108,12 @@ git grep -nE '\bupstream (PR |issue )?#[0-9]+' -- '*.md' '*.adoc' '*.yml' '*.jav
 Convert each to `confluentinc#NNN`, or to the fork mirror where one exists - the mirror is the number
 a reader of *this* repo can act on.
 
-**The carve-out: mirror issue titles are an index key, not prose.** Every `upstream-mirror` issue is
-titled `upstream #622: <original title>`, and both AGENTS.md and the gate's own failure message
-search that literal string (`--label upstream-mirror --search "upstream #NNN"`). Rewriting those
-search strings to the owner form breaks every documented lookup at once. It is the same class of
-mistake as the three the previous sweep made: a reference that is *shown* rather than *made*. Check
-before rewriting whether a match is naming an issue or quoting a search.
+**The mirror titles are already done** - astubbs#196 retitled all 78 from `upstream #NNN:` to
+`confluentinc#NNN:` and moved the `--search` strings with them, so there is no carve-out here and no
+index key to preserve. Keep the general habit that produced the question though: a match that is
+*shown* rather than *made* - a search string, a template, an example of a wrong form - is not a
+reference, and rewriting it can break the thing it documents. That is the class of mistake the
+previous sweep made three times; see the trap below.
 
 ## How, and the trap
 
