@@ -87,7 +87,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * Stress test: 12 PC instances on 80 partitions with aggressive chaos monkey toggling up to
      * 6 of 11 secondary instances every 0-500ms. PC-0 is never toggled and should always be alive.
      * <p>
-     * Originally created for #188/#189, re-enabled for #857 investigation.
+     * Originally created for confluentinc#188 and confluentinc#189, re-enabled for confluentinc#857
+ * investigation.
      * <p>
      * <b>What the test does:</b>
      * <ol>
@@ -106,7 +107,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * If the pass rate drops below 80%, reassess: the test parameters may need backing off,
      * or a new PC bug may have been introduced.
      * <p>
-     * <b>Fixes applied (from #857 investigation):</b>
+     * <b>Fixes applied (from confluentinc#857 investigation):</b>
      * <ul>
      *   <li>commitCommand deadlock — ReentrantLock.tryLock() in onPartitionsRevoked</li>
      *   <li>Non-blocking stopAsync() in chaos monkey — prevents 30-40s close() freeze</li>
@@ -131,17 +132,17 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         // Use CooperativeStickyAssignor — under the eager (Range) protocol, rapid membership
         // changes restart the JoinGroup phase from scratch, leaving all consumers with
         // assignment=[] indefinitely. Cooperative rebalancing lets consumers keep their
-        // existing assignments during rebalance. See #857 investigation.
+        // existing assignments during rebalance. See confluentinc#857 investigation.
         runTest(DEFAULT_MAX_POLL, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.UNORDERED, expectedMessageCount,
                 numberOfPcsToRun, 0.3, 1, true);
     }
 
     /**
      * Variant of {@link #largeNumberOfInstances()} using CooperativeStickyAssignor, which is the assignor
-     * that issue #857 reporters say makes the bug more visible. Cooperative rebalancing revokes and assigns
+     * that issue confluentinc#857 reporters say makes the bug more visible. Cooperative rebalancing revokes and assigns
      * partitions in separate callbacks, creating a wider window for stale container races.
      * <p>
-     * Uses parameters closer to the production environments reported in #857: 30 partitions, 4 consumers.
+     * Uses parameters closer to the production environments reported in confluentinc#857: 30 partitions, 4 consumers.
      */
     @Tag("performance")
     @Test

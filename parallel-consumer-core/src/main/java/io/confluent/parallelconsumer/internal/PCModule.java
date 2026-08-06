@@ -71,7 +71,7 @@ public class PCModule<K, V> {
             // Wrap the user's consumer in a thread-confinement guard. Ownership is claimed
             // by the poll thread when BrokerPollSystem.controlLoop starts. Before that,
             // init-time calls (subscribe, groupMetadata) are allowed from any thread.
-            // See #857.
+            // See confluentinc#857.
             var confinedConsumer = new ThreadConfinedConsumer<>(optionsInstance.getConsumer());
             consumerManager = new ConsumerManager<>(confinedConsumer,
                     optionsInstance.getOffsetCommitTimeout(),

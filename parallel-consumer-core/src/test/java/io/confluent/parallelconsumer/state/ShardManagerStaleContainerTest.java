@@ -54,7 +54,7 @@ class ShardManagerStaleContainerTest {
     }
 
     /**
-     * Core reproduction scenario for #857: after a revoke+reassign cycle, stale work containers
+     * Core reproduction scenario for confluentinc#857: after a revoke+reassign cycle, stale work containers
      * from the old epoch should not block new work from being taken.
      */
     @Test
@@ -92,7 +92,7 @@ class ShardManagerStaleContainerTest {
         List<WorkContainer<String, String>> workAfterRebalance = sm.getWorkIfAvailable(10);
 
         assertWithMessage("Should be able to take new-epoch work after rebalance. " +
-                "If this fails with 0, stale containers are blocking the shard — this is bug #857.")
+                "If this fails with 0, stale containers are blocking the shard — this is bug confluentinc#857.")
                 .that(workAfterRebalance).isNotEmpty();
 
         // Verify the returned work is from the new epoch

@@ -59,7 +59,7 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
                     current.getName() + "' (id:" + current.getId() +
                     ") but consumer is owned by thread '" + owner.getName() +
                     "' (id:" + owner.getId() + ", alive:" + owner.isAlive() +
-                    "). Only wakeup() is thread-safe. See #857.";
+                    "). Only wakeup() is thread-safe. See confluentinc#857.";
             log.error(msg);
             throw new IllegalStateException(msg);
         }

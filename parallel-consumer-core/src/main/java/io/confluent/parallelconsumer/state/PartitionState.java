@@ -290,12 +290,12 @@ public class PartitionState<K, V> {
 
     public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         if (epochIsStale(recordsAndEpoch)) {
-            // #857: upgraded from debug to warn — this is the primary suspect for the silent stall.
+            // confluentinc#857: upgraded from debug to warn — this is the primary suspect for the silent stall.
             // Records polled from the broker are being dropped because the epoch captured at poll
             // time doesn't match the current partition state epoch. This happens when a rebalance
             // occurs between poll() and registration on the control thread.
             log.warn("Dropping polled records — epoch mismatch: poll epoch={}, partition epoch={}, " +
-                            "partition={}, records count={}. This may cause consumption stall if persistent. See #857.",
+                            "partition={}, records count={}. This may cause consumption stall if persistent. See confluentinc#857.",
                     recordsAndEpoch.getEpochOfPartitionAtPoll(), getPartitionsAssignmentEpoch(),
                     recordsAndEpoch.getTopicPartition(), recordsAndEpoch.getRecords().size());
             return;

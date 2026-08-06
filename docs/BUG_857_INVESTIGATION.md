@@ -1,4 +1,4 @@
-# Bug #857 Investigation: Paused Consumption After Rebalance
+# Bug confluentinc#857 Investigation: Paused Consumption After Rebalance
 
 Upstream issue: https://github.com/confluentinc/parallel-consumer/issues/857
 
@@ -48,15 +48,15 @@ In the test:
 3. `ConcurrentModificationException` crashes the PC
 4. `failFast` detects the dead PC → test fails with "Terminal failure"
 
-### What sangreal's PR #882 fix addressed
+### What sangreal's PR confluentinc#882 fix addressed
 
-PR #882 fixed stale work container cleanup in `ProcessingShard.getWorkIfAvailable()`. That fix is correct and necessary, but it addresses a different symptom: stale containers blocking new work after a clean rebalance. It does NOT address the concurrent access crash.
+PR confluentinc#882 fixed stale work container cleanup in `ProcessingShard.getWorkIfAvailable()`. That fix is correct and necessary, but it addresses a different symptom: stale containers blocking new work after a clean rebalance. It does NOT address the concurrent access crash.
 
 ### What the deterministic unit tests showed
 
 The `ShardManagerStaleContainerTest` tests (3 tests, all pass) prove that the stale container logic works correctly in single-threaded scenarios. The epoch tracking, stale detection, and mid-iteration removal all function as designed. The bug is purely a concurrency issue.
 
-## Bug 2: Silent Stall (the real #857)
+## Bug 2: Silent Stall (the real confluentinc#857)
 
 After fixing the restart logic in tests, we still see 100% failure rate — but with a different pattern: NO exceptions, NO crashes, consumers alive and running, but consumption stops making progress. This is exactly what production users describe.
 
@@ -94,10 +94,11 @@ Under moderate rebalance stress, PC handles multi-instance rebalancing correctly
 
 ### What we observed
 
-Diagnostic logging in the poll loop during the aggressive test stall:
-```
-#857-poll: runState=RUNNING, pausedForThrottling=false, assignment=0
-```
+Diagnostic logging in the poll loop during the aggressive test stall, tagged `#857-poll` after
+confluentinc#857 (a temporary marker; it is no longer in the code):
+
+`#857-poll: runState=RUNNING, pausedForThrottling=false, assignment=0`
+
 All PC instances were running, not paused, but the Kafka consumer reported zero assigned partitions. The control loop was requesting work (`delta=41`) but shards were empty because no records were being polled.
 
 ### What we don't yet know
@@ -129,7 +130,7 @@ These are all correct improvements regardless of the root cause:
 3. **Throttle reset**: `pausedForThrottling=false` on partition assignment in `BrokerPollSystem`
 4. **Lifecycle wait**: `ManagedPCInstance.run()` waits for previous PC to fully close before creating a new one
 
-### Regarding production #857
+### Regarding production confluentinc#857
 
 The production reports describe consumers that are stable (not being rapidly toggled). The aggressive chaos test may not reproduce the exact production scenario. With gentle chaos (which better simulates production rebalances from deployments), PC handles rebalances correctly with both Range and Cooperative Sticky assignors.
 
@@ -226,7 +227,7 @@ The dominant remaining cause of test failure was the **chaos monkey blocking on 
 
 ### What was fixed (production code)
 
-1. **commitCommand deadlock** — `ReentrantLock.tryLock()` in `onPartitionsRevoked` (the #857 root cause)
+1. **commitCommand deadlock** — `ReentrantLock.tryLock()` in `onPartitionsRevoked` (the confluentinc#857 root cause)
 2. **ConcurrentModificationException prevention** — `updateCache()` moved after `pollingBroker=false`
 3. **Counter drift** — `adjustOutForProcessingOnRevoke()` in `WorkManager`
 4. **Throttle flag** — `pausedForThrottling` reset on partition assignment

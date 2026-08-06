@@ -58,7 +58,7 @@ class ArchitectureTest {
                     .or().haveRawType(KafkaConsumer.class)
                     .should(beInAllowedClasses(ALLOWED_CONSUMER_HOLDERS))
                     .as("Only " + ALLOWED_CONSUMER_HOLDERS + " may hold a Consumer<K,V> field. " +
-                            "All other consumer access must go through ConsumerManager. See #857.");
+                            "All other consumer access must go through ConsumerManager. See confluentinc#857.");
 
     /**
      * Only ProducerWrapper should hold a raw Producer field.

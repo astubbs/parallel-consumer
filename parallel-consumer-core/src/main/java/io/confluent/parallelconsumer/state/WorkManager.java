@@ -109,7 +109,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
         // Adjust numberRecordsOutForProcessing BEFORE the partition state cleanup removes
         // work from shards. After pm.onPartitionsRevoked, entries will be gone and we can't
-        // count them. See #857 — without this, the counter stays inflated permanently.
+        // count them. See confluentinc#857 — without this, the counter stays inflated permanently.
         adjustOutForProcessingOnRevoke(partitions);
         pm.onPartitionsRevoked(partitions);
         onPartitionsRemoved(partitions);
@@ -133,7 +133,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * These work items were dispatched to the worker pool but may never complete through
      * the mailbox (e.g., if the PC is being closed). Without this adjustment, the counter
      * stays permanently inflated, calculateQuantityToRequest() returns 0, and no new work
-     * is ever distributed - causing the silent stall in #857.
+     * is ever distributed - causing the silent stall in confluentinc#857.
      */
     private void adjustOutForProcessingOnRevoke(Collection<TopicPartition> partitions) {
         long inflightForRemovedPartitions = sm.countInflightForPartitions(partitions);

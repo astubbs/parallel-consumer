@@ -113,7 +113,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * All consumer access goes through ConsumerManager (which wraps with ThreadConfinedConsumer).
-     * No raw Consumer<K,V> reference is held — enforced by ArchUnit. See #857.
+     * No raw Consumer<K,V> reference is held — enforced by ArchUnit. See confluentinc#857.
      */
     private final ConsumerManager<K, V> consumerManager;
 
@@ -203,7 +203,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * Lock for offset commit operations. Replaces synchronized(commitCommand) for commit execution
-     * to allow tryLock() semantics in rebalance callbacks, preventing the deadlock in #857.
+     * to allow tryLock() semantics in rebalance callbacks, preventing the deadlock in confluentinc#857.
      */
     private final java.util.concurrent.locks.ReentrantLock commitLock = new java.util.concurrent.locks.ReentrantLock();
 
@@ -441,7 +441,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // thread is already mid-commit. Blocking here deadlocks: the poll thread (us)
             // holds the rebalance callback, and the control thread's commitSync() needs the
             // poll thread to be responsive. If we can't commit, it's safe — the offsets will
-            // be re-delivered to the new assignee. See #857.
+            // be re-delivered to the new assignee. See confluentinc#857.
             tryCommitOffsetsOnRevoke();
 
             // truncate the revoked partitions
@@ -484,7 +484,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
         } else {
             log.info("Skipping offset commit during partition revocation — control thread is mid-commit. " +
-                    "Uncommitted offsets will be re-delivered to the new assignee. See #857.");
+                    "Uncommitted offsets will be re-delivered to the new assignee. See confluentinc#857.");
         }
     }
 
@@ -501,7 +501,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // Reset the throttle flag — Kafka clears its internal pause state on reassignment,
         // so our flag must match. Without this, shouldThrottle() may re-pause the new
         // partitions immediately if stale shard counts make it think we're overloaded.
-        // See #857.
+        // See confluentinc#857.
         brokerPollSubsystem.onPartitionsAssigned();
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();

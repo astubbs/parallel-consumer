@@ -140,7 +140,7 @@ public class ShardManager<K, V> {
     /**
      * Count work containers that are in-flight (dispatched to worker pool) for the given partitions.
      * Used by {@link WorkManager#onPartitionsRemoved} to adjust the outForProcessing counter
-     * when partitions are revoked, preventing the silent stall described in #857.
+     * when partitions are revoked, preventing the silent stall described in confluentinc#857.
      */
     long countInflightForPartitions(Collection<TopicPartition> partitions) {
         Set<TopicPartition> partitionSet = new HashSet<>(partitions);
