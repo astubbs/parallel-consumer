@@ -124,7 +124,7 @@ function formatFailure(hits, opts = {}) {
     "(`upstream #NN` still passes, for compatibility with older docs - but it names a role,\n" +
     "not a repo. Do not use it in new text; it is being swept out.)\n" +
     "Every confluentinc issue is mirrored here, and the mirror is usually the better number to cite:\n" +
-    `  gh issue list -R ${repo} --label upstream-mirror --search "upstream #NN"\n` +
+    `  gh issue list -R ${repo} --label upstream-mirror --search "confluentinc#NN"\n` +
     'If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" on its own\n' +
     `${optOutTail}\n\n` +
     hits.map((h) => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")

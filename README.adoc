@@ -1309,7 +1309,7 @@ For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
 
 For what is planned, in progress, or known-broken, the {issues_link}[issue tracker on this repository]
 is the single place to look. We mirrored every open issue from the upstream tracker into it (all 78 of
-them, labelled `upstream-mirror` and titled `upstream #NNN: ...`), so an upstream report you are
+them, labelled `upstream-mirror` and titled `confluentinc#NNN: ...`), so an upstream report you are
 following has a counterpart here that reflects its real status on this fork. Please raise new issues
 here rather than upstream - see <<Support and Issues>>.
 
