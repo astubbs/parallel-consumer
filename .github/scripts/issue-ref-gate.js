@@ -98,6 +98,39 @@ function suspectRefs(files, opts = {}) {
   return out;
 }
 
+/**
+ * The single copy of what an author is told when the gate fires. Both callers render this - the CI
+ * job in pr-checklist.yml and the local bin/check-issue-refs.sh - so the two cannot tell different
+ * stories. They did exactly that once: hand-written copies disagreed in *both* directions within
+ * hours of the second one being created, each carrying a correction the other lacked. The script's
+ * own header already says "NO SECOND COPY OF THE RULE" about the matching logic; the message an
+ * author actually reads is part of that rule.
+ *
+ * @param hits  [{ file, ref, text }] from suspectRefs
+ * @param opts  { repo }        owner/name used in the mirror-lookup hint
+ *              { readsPrBody } false when the caller cannot honour the "issue-refs: N/A" opt-out
+ * @returns string
+ */
+function formatFailure(hits, opts = {}) {
+  const repo = opts.repo ?? "astubbs/parallel-consumer";
+  const optOutTail = opts.readsPrBody === false
+    ? "line in the PR body - the workflow honours that opt-out; this script does not read the PR body."
+    : "line in the PR body.";
+
+  return (
+    `${hits.length} reference(s) below #${QUALIFY_BELOW} do not say which repo they mean.\n` +
+    "The fork's numbers sit inside confluentinc's range, so a bare number there is a coin flip.\n" +
+    "Write `astubbs#NN` for this repo or `confluentinc#NN` for the original - or link it.\n" +
+    "(`upstream #NN` still passes, for compatibility with older docs - but it names a role,\n" +
+    "not a repo. Do not use it in new text; it is being swept out.)\n" +
+    "Every confluentinc issue is mirrored here, and the mirror is usually the better number to cite:\n" +
+    `  gh issue list -R ${repo} --label upstream-mirror --search "upstream #NN"\n` +
+    'If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" on its own\n' +
+    `${optOutTail}\n\n` +
+    hits.map((h) => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")
+  );
+}
+
 module.exports = {
-  suspectRefs, findOptOut, isExempt, stripQualified, EXEMPT_PATHS, QUALIFY_BELOW,
+  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, EXEMPT_PATHS, QUALIFY_BELOW,
 };

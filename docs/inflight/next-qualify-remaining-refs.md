@@ -1,6 +1,6 @@
 # Next: qualify the remaining issue references tree-wide
 
-The reference gate requires any `#NNN` below 1000 to name its repo (`astubbs#NNN` / `upstream #NNN`),
+The reference gate requires any `#NNN` below 1000 to name its repo (`astubbs#NNN` / `confluentinc#NNN`),
 because the fork's numbers sit entirely inside upstream's range - **48 of the 51 numbers cited in one
 PR's files existed in *both* repos, meaning different things**. It checks **added lines only**, so it
 never fires on text nobody is editing.
@@ -24,7 +24,7 @@ for (const f of cp.execSync("git ls-files", {encoding:"utf8"}).trim().split("\n"
   if (gate.isExempt(f) || !/\.(md|adoc|java|ya?ml|sh|js)$/.test(f) || !fs.existsSync(f)) continue;
   for (const l of fs.readFileSync(f, "utf8").split("\n"))
     for (const m of gate.stripQualified(l).matchAll(/(?<![\w\/#])#(\d+)\b/g))
-      if (+m[1] < 1000) byExt[f.split(".").pop()] = (byExt[f.split(".").pop()] || 0) + 1;
+      if (+m[1] < gate.QUALIFY_BELOW) byExt[f.split(".").pop()] = (byExt[f.split(".").pop()] || 0) + 1;
 }
 console.log(byExt);'
 ```
@@ -93,6 +93,28 @@ Three worth knowing before you start:
 Mostly mechanical, but resolve each one rather than prefixing blind. `#29`, `#100` and `#114` all
 exist in both repos meaning different things.
 
+## Phase 2: `upstream #NNN` -> the owner form
+
+Everything above turns *bare* numbers into qualified ones. `upstream #NNN` is qualified enough for
+the gate but is not the house form: "upstream" names a relationship rather than a repository, and
+this fork is itself upstream to anyone who forks it (AGENTS.md -> Issue references). Around a dozen
+files still use it, concentrated in `docs/inflight/`, `docs/plans/` and `docs/solutions/`. Count
+fresh rather than trusting that number:
+
+```bash
+git grep -nE '\bupstream (PR |issue )?#[0-9]+' -- '*.md' '*.adoc' '*.yml' '*.java' '*.sh' '*.js'
+```
+
+Convert each to `confluentinc#NNN`, or to the fork mirror where one exists - the mirror is the number
+a reader of *this* repo can act on.
+
+**The carve-out: mirror issue titles are an index key, not prose.** Every `upstream-mirror` issue is
+titled `upstream #622: <original title>`, and both AGENTS.md and the gate's own failure message
+search that literal string (`--label upstream-mirror --search "upstream #NNN"`). Rewriting those
+search strings to the owner form breaks every documented lookup at once. It is the same class of
+mistake as the three the previous sweep made: a reference that is *shown* rather than *made*. Check
+before rewriting whether a match is naming an issue or quoting a search.
+
 ## How, and the trap
 
 `git grep` for candidates, but **classify each before rewriting it**. A previous mechanical sweep
@@ -113,9 +135,28 @@ Reuse the gate's own definition of "unqualified", so the sweep and CI agree:
 
 ```js
 const gate = require("./.github/scripts/issue-ref-gate.js");
-gate.stripQualified(line).matchAll(/(?<![\w\/#])#(\d+)\b/g)   // hits < 1000 need qualifying
+gate.stripQualified(line).matchAll(/(?<![\w\/#])#(\d+)\b/g)   // hits < gate.QUALIFY_BELOW need qualifying
 ```
 
 Resolve numbers in both repos with `gh issue view N -R astubbs/parallel-consumer` and
 `-R confluentinc/parallel-consumer`. Where the fork mirrors the upstream issue, cite the mirror - it
 is the number a reader of this repo can act on.
+
+## Finishing: tighten the gate, so the form cannot come back
+
+The sweep is only durable if the gate stops accepting what it just removed. Once phase 2 is clean:
+
+- Drop the `upstream` alternation from `stripQualified()` (`issue-ref-gate.js:71`), so `upstream #NNN`
+  is flagged like any other unqualified reference.
+- Replace the `allows upstream prose, including 'PR #N' and 'issue #N'` assertion in
+  `issue-ref-gate.test.js` with one asserting the form is now **flagged**. Without that, the
+  tolerance silently returns the next time someone edits the regex.
+- Drop the interim clause from the failure message, which until then tells authors the form still
+  passes. One edit: the message is `formatFailure()` in `issue-ref-gate.js`, rendered by both the CI
+  gate and `bin/check-issue-refs.sh`. It used to be a copy in each, and they drifted apart within
+  hours of the second being written - each carrying a correction the other lacked - which is why it
+  is shared now. Its assertions in `issue-ref-gate.test.js` pin the wording, so update those too.
+
+**Order matters: sweep first, tighten second, both in the same PR.** Tightening first would fail
+every subsequent edit to `docs/inflight/` against text the sweep has not reached yet - and those
+files are edited constantly, so the gate would be training people to work around it within a day.

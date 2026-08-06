@@ -2,7 +2,7 @@
 // broken rule fails loudly rather than silently passing - or failing - every PR.
 const assert = require("assert");
 const {
-  suspectRefs, findOptOut, isExempt, stripQualified, QUALIFY_BELOW,
+  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, QUALIFY_BELOW,
 } = require("./issue-ref-gate.js");
 
 const file = (filename, ...added) => [{ filename, patch: added.map((l) => "+" + l).join("\n") }];
@@ -127,6 +127,46 @@ check("opt-out is recognised, and needs a reason", () => {
   assert.ok(findOptOut("blah\nissue-refs: N/A - all refs here are upstream by construction\nblah"));
   assert.ok(!findOptOut("no marker here"));
   assert.ok(!findOptOut("issue-refs: N/A"), "bare N/A without a reason must not count");
+});
+
+// The failure message is shared by the CI gate and bin/check-issue-refs.sh. Two hand-written copies
+// drifted apart within hours, so these pin the parts that made them disagree.
+const HITS = [{ file: "docs/x.md", ref: "#857", text: "See #857" }];
+
+check("the failure message recommends the owner forms, never the role form", () => {
+  const msg = formatFailure(HITS);
+  assert.ok(msg.includes("`astubbs#NN` for this repo or `confluentinc#NN`"), "must lead with owners");
+  assert.ok(!/Write .*`upstream #NN` for/.test(msg), "must not tell the author to write the role form");
+  assert.ok(msg.includes("it is being swept out"), "must say the tolerance is temporary");
+});
+
+check("the failure message names the owner in its prose too, not the role", () => {
+  const msg = formatFailure(HITS);
+  assert.ok(!msg.includes("upstream's range"), "prose must say confluentinc's range");
+  assert.ok(!msg.includes("Every upstream issue"), "prose must say Every confluentinc issue");
+});
+
+check("the mirror-lookup hint keeps the literal upstream #NN search key", () => {
+  // The mirror titles are `upstream #NNN: ...`, so this string is an index key, not a reference.
+  assert.ok(formatFailure(HITS).includes('--search "upstream #NN"'));
+});
+
+check("formatFailure takes the repo from its caller, and defaults to the fork", () => {
+  assert.ok(formatFailure(HITS, { repo: "acme/thing" }).includes("gh issue list -R acme/thing"));
+  assert.ok(formatFailure(HITS).includes("gh issue list -R astubbs/parallel-consumer"));
+});
+
+check("the opt-out tail matches whether the caller can read the PR body", () => {
+  assert.ok(!formatFailure(HITS).includes("does not read the PR body"));
+  assert.ok(formatFailure(HITS, { readsPrBody: false }).includes("does not read the PR body"));
+});
+
+check("every hit is listed, with its count in the first line", () => {
+  const two = [...HITS, { file: "a.md", ref: "#29", text: "and #29" }];
+  const msg = formatFailure(two);
+  assert.ok(msg.startsWith("2 reference(s) below #" + QUALIFY_BELOW));
+  assert.ok(msg.includes("  docs/x.md: #857  See #857"));
+  assert.ok(msg.includes("  a.md: #29  and #29"));
 });
 
 console.log("\n" + run + " assertions passed");
