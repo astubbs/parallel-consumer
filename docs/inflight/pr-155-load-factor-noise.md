@@ -1,8 +1,9 @@
-# #155 (upstream #402) - "Max loading factor steps reached" log noise
+# astubbs#155 (confluentinc#402) - "Max loading factor steps reached" log noise
 
-Branch `fix/155-load-factor-noise`. Fixes the log spam half of #155; the stall half of that report was
-already fixed (upstream #547/#606 plus the #857 family - see `bug-857-family.md`), and nothing here
-touches it.
+Branch `fix/155-load-factor-noise`, PR astubbs#201. Fixes the log spam half of astubbs#155 (the fork
+mirror of confluentinc#402); the stall half of that report was already fixed in
+confluentinc#547/confluentinc#606 plus the confluentinc#857 family - see `bug-857-family.md` - and
+nothing here touches it.
 
 ## The mechanism, as confirmed in the code
 
@@ -39,6 +40,13 @@ case before the fix.
   values, which is what let the mismatch through in the first place.
 
 ## Left open
+
+**Post the answer when astubbs#201 merges.** The original reporter asked what the line meant and never
+got an answer. Reply on the mirror astubbs#155, and on confluentinc/parallel-consumer#402 while that
+repo still accepts writes: the line is a saturation signal, not a stall cause. This is deliberately
+recorded here rather than in `upstream-map.yaml`, which has no `todo:` field - loose ends live in
+`docs/inflight/` (AGENTS.md -> Upstream mapping).
+
 
 `DynamicLoadFactor`'s warm-up and cool-down are hard-coded `Duration` fields with no seam, so reaching
 the dynamic ceiling for real costs one cool-down per step (minutes for 2 -> 100). The test therefore

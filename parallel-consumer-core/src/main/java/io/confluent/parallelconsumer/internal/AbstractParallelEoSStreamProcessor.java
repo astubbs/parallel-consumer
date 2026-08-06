@@ -1162,7 +1162,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      *     {@value #LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS} seconds.</li>
      * </ul>
      *
-     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/155">#155</a> (upstream #402) - the
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/155">astubbs#155</a> (confluentinc#402) - the
      *         unlimited WARN filled users' logs, and read like an error when it was not one
      */
     private void reportLoadFactorAtCeiling() {

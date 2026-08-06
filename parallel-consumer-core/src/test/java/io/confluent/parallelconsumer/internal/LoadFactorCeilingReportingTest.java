@@ -25,7 +25,7 @@ import static com.google.common.truth.Truth.assertThat;
 
 /**
  * Covers the reporting of a loading factor that has reached its ceiling - see
- * <a href="https://github.com/astubbs/parallel-consumer/issues/155">#155</a> (upstream #402).
+ * <a href="https://github.com/astubbs/parallel-consumer/issues/155">astubbs#155</a> (confluentinc#402).
  * <p>
  * The reported symptom was a log filled with {@code Max loading factor steps reached: 100/100}. Two things produced
  * it, and both are exercised here:

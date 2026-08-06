@@ -334,6 +334,6 @@ entries:
       no rate limiting, and a configured messageBufferSize pins the load factor to
       its own ceiling so it fired from startup. Fix: DynamicLoadFactor#isStaticFactor()
       -> debug for a fixed factor, RateLimiter(30s) + reworded WARN for a dynamic
-      factor at its cap. No change to buffering behaviour. When astubbs#201 merges,
-      answer the original question on the mirror and on confluentinc#402 while that
-      still accepts writes: the line is a saturation signal, not a stall cause.
+      factor at its cap. No change to buffering behaviour. The unanswered question on
+      the original report is tracked in docs/inflight/pr-155-load-factor-noise.md, not
+      here - this manifest has no todo: field.
