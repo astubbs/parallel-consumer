@@ -19,7 +19,7 @@ import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
 import static org.mockito.Mockito.mock;
 
 /**
- * Regression tests for #912 — JStream result deque memory leak.
+ * Regression tests for astubbs#122 / confluentinc#912 - the JStream result deque memory leak.
  * <p>
  * The bug: {@code ConcurrentLinkedDeque<ConsumeProduceResult>} grows without bound when
  * the returned Stream is not actively consumed. On close, the deque was never cleared,
