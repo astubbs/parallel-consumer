@@ -532,6 +532,54 @@ This is a maintained hard fork of the effectively-archived `confluentinc/paralle
 
 Branch naming and commit trailers are git conventions rather than upstream-mapping facts, so they live under [Commits](#commits).
 
+### Mirror format
+
+Every open upstream issue has a mirror here. When you create one, or edit one:
+
+- **Title `upstream #NNN: <description>`.** The `upstream #NNN:` prefix is the join to upstream and
+  never changes. The description half started as upstream's own title, but it is **ours to rewrite** -
+  many upstream titles name only where a failure surfaced ("Error in onPartitionsAssigned") and
+  contain no term anyone would search for. Retitle once the cause is actually known.
+- **Always record the upstream title verbatim in the body header**, whether or not the mirror's title
+  still matches it: `> Upstream title: *"..."*`. Unconditional on purpose. The obvious rule - "record
+  it when you retitle" - is the error-prone one: it needs whoever retitles to remember, and it leaves
+  a reader unable to tell whether any given mirror's title is upstream's words or ours without opening
+  upstream to compare. Recording it always makes the mirror self-describing and the mapping lossless.
+- **The body is a summary that captures the original**, not a verbatim copy - a landing page that
+  preserves the substance and links out. **No `@mentions` in mirrored content**, or the import
+  notifies people who never opted in.
+- **Labels:** `upstream-mirror`, one area label, one type label.
+- **Cross-repo references in the body are fully qualified** - `confluentinc/parallel-consumer#NN`.
+  This is the one place the house prose form does not apply: `upstream #NN` does not auto-link on
+  GitHub, and a bare `#NN` resolves against the fork's own numbering. See
+  [Issue references](#issue-references).
+- **Read the upstream original before acting on a mirror** - see [Issue references](#issue-references)
+  for why the summary is not a substitute, and correct the mirror when it turns out to be wrong.
+
+The header block:
+
+```markdown
+> **Mirror of [confluentinc/parallel-consumer#NNN](https://github.com/confluentinc/parallel-consumer/issues/NNN)**
+> Upstream title: *"<upstream's own title, verbatim>"*
+> Opened by [<author>](https://github.com/<author>), <YYYY-MM-DD> ·
+> <N> comments upstream · last upstream activity <YYYY-MM-DD>
+> Summarised, not copied. Discussion belongs here - upstream is unmaintained and may be archived.
+
+## Summary
+<2-6 sentences: symptom, conditions, what the thread established>
+
+## Fork status
+<fixed-in / investigating / not started, with links to fork PRs and docs/solutions/ entries>
+```
+
+Mirrors created before this convention may lack the upstream title line. Add it when you touch one;
+there is no value in a bulk backfill pass.
+
+`docs/plans/2026-08-04-001-chore-mirror-upstream-issues-plan.md` carries the original bulk-import plan
+and what the run taught. Read it for *why*, not *how* - it is a dated record, so its own copy of this
+format has since drifted (it proposed a `confluentinc#NNN:` title prefix; the import shipped
+`upstream #NNN:`, which is what the mirrors actually use). This section is the live one.
+
 ### Backlinking upstream
 
 **Done, and there is no tooling for it.** All 78 open upstream issues are mirrored here (astubbs#44,

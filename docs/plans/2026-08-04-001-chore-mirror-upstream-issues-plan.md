@@ -3,7 +3,9 @@
 **Status:** **done for issues** (2026-08-05). All 78 upstream issues are mirrored, diagnosed and backlinked; 7 are closed against a released version. Phases 3-5 are done too; nothing outstanding in this plan. See *What actually happened* below - the execution diverged from the plan in ways worth knowing.
 **Date:** 2026-08-04
 **Scope:** all 78 open issues in `confluentinc/parallel-consumer` - **all 78 mirrored 2026-08-05**
-**Ledger entry:** [`docs/inflight/parked-upstream-issue-mirroring.md`](../inflight/parked-upstream-issue-mirroring.md)
+**Ledger entry:** retired - the work landed, so the `docs/inflight/` entry was deleted per the rule that
+inflight files do not outlive their work. The durable half now lives in `AGENTS.md` → *Mirror format*
+(how to write a mirror) and *Backlinking upstream* (that the bulk run is finished).
 **Related:** `src/docs/development/upstream-map.yaml`
 
 ## Why
@@ -117,6 +119,14 @@ unmaintained tracker.
 dates and comment count go in the mirrored body, where they stay accurate by construction.
 
 ## Mirror format
+
+> **Superseded as a spec - kept as the record of what was proposed.** The live convention is
+> `AGENTS.md` → *Mirror format*; follow that when creating or editing a mirror. Two ways this section
+> no longer matches reality: the title prefix below was **not** what shipped (the import used
+> `upstream #NNN:`, which all 78 mirrors carry), and the body template predates the rule that a mirror
+> records its **upstream title verbatim** in the header, which was added on 2026-08-06 after
+> astubbs#118 was retitled. Left unedited otherwise - a dated plan is a record of the decision, not a
+> place to retcon it.
 
 Title:
 
@@ -249,6 +259,19 @@ and four axes were added that this plan did not anticipate:
 - **`next-feature-release` / `next-breaking-release`** instead of `0.6.1.0` / `0.7.0.0`, so a target
   does not commit to a version number that has not been decided. A `next` label was tried and dropped
   as meaningless.
+
+### The title format evolved past this plan, twice
+
+The import shipped `upstream #NNN: <title>`, not the `confluentinc#NNN:` this plan proposed - so every
+one of the 78 carries the `upstream` form. Nothing recorded that at the time; it surfaced on
+2026-08-06 while retitling astubbs#118.
+
+Then the description half stopped being upstream's words. astubbs#118 was mirrored as *"Error in
+onPartitionsAssigned in parallel consumer"*, which names where a failure surfaced and nothing a
+sufferer would search for; once astubbs#217 established the cause it was retitled to lead with the
+error string. That made the upstream title worth keeping, so mirrors now record it verbatim in the
+header block - unconditionally, not only when retitled, so a reader never has to open upstream to
+learn whose words a title is. See `AGENTS.md` → *Mirror format*, which is the live spec.
 
 ### The manifest-driven backlink tooling was retired
 
