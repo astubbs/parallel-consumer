@@ -75,7 +75,11 @@ public class OffsetMapCodecManager<K, V> {
 
     private final PCMetrics pcMetrics;
 
-    private static ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy = ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
+    /**
+     * Per-instance: two {@link io.confluent.parallelconsumer.ParallelConsumer}s in one JVM may be configured with
+     * different policies, and previously the last one constructed silently set it for all of them.
+     */
+    private ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy = ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
 
     /**
      * Decoding result for encoded offsets
@@ -157,7 +161,9 @@ public class OffsetMapCodecManager<K, V> {
                     PartitionState<K, V> state = decodePartitionState(tp, offsetAndMeta);
                     partitionStates.put(tp, state);
                 } catch (OffsetDecodingError offsetDecodingError) {
-                    log.error("Error decoding offsets from assigned partition, dropping offset map (will replay previously completed messages - partition: {}, data: {})",
+                    log.error("Error decoding offsets from assigned partition, dropping offset map (will replay previously completed messages - partition: {}, data: {}). " +
+                                    "If this consumer group was previously used by another application, its offset metadata isn't ours to read - " +
+                                    "processing resumes from the committed offset, and PC will write its own metadata from now on.",
                             tp, offsetAndMeta, offsetDecodingError);
                 }
             }
@@ -179,17 +185,24 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     private HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(OffsetAndMetadata offsetData) throws OffsetDecodingError {
-        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata());
+        return deserialiseIncompleteOffsetMapFromBase64(offsetData.offset(), offsetData.metadata(), errorPolicy);
     }
 
     public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition, String base64EncodedOffsetPayload) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload,
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+    }
+
+    public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition,
+                                                                                       String base64EncodedOffsetPayload,
+                                                                                       ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy) throws OffsetDecodingError {
         byte[] decodedBytes;
         try {
             decodedBytes = OffsetSimpleSerialisation.decodeBase64(base64EncodedOffsetPayload);
         } catch (IllegalArgumentException a) {
             throw new OffsetDecodingError(msg("Error decoding offset metadata, input was: {}", base64EncodedOffsetPayload), a);
         }
-        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes);
+        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy);
     }
 
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
@@ -270,7 +283,13 @@ public class OffsetMapCodecManager<K, V> {
      *
      * @return Set of offsets which are not complete, and the highest offset encoded.
      */
-    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset, byte[] decodedBytes) {
+    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset, byte[] decodedBytes) throws OffsetDecodingError {
+        return decodeCompressedOffsets(nextExpectedOffset, decodedBytes, ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+    }
+
+    static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset,
+                                                               byte[] decodedBytes,
+                                                               ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy) throws OffsetDecodingError {
 
         // if no offset bitmap data
         if (decodedBytes.length == 0) {

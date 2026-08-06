@@ -35,12 +35,23 @@ survive the release.
    but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a
    caller's `trace_id` is lost crossing into the worker threads and the vert.x event loop. Raised by
    a user in the `confluentinc#907` thread (astubbs#195).
-5. **`OffsetEncoding` throws on an unknown magic byte *before* `invalidOffsetMetadataPolicy` is
-   consulted.** `OffsetEncoding:66` `throw new RuntimeException("Unexpected magic: " + magic)` is
-   reached from `EncodedOffsetPair.unwrap()`, while the policy is only honoured later at
-   `EncodedOffsetPair:123-130`. So if a future PC version introduces a new encoding, an older PC
-   reading that commit metadata dies **regardless of how the policy is configured** - and the fork
-   now owns this wire format. Forward-compatibility hazard, worth fixing before more encodings exist.
+5. ~~**`OffsetEncoding` throws on an unknown magic byte *before* `invalidOffsetMetadataPolicy` is
+   consulted.**~~ **FIXED** while debugging astubbs#118 (confluentinc#326). `OffsetEncoding:66`
+   `throw new RuntimeException("Unexpected magic: " + magic)` was reached from
+   `EncodedOffsetPair.unwrap()`, while the policy was only honoured later at `EncodedOffsetPair:123-130`.
+   Two symptoms, one defect: a future PC encoding killed an older reader regardless of policy
+   (forward-compatibility), and metadata left by a *previous non-PC owner* of the consumer group killed
+   PC on assignment (the reported bug - the bare `RuntimeException` slipped past the
+   `catch (OffsetDecodingError)` recovery in `loadPartitionStateForAssignment` and escaped the rebalance
+   listener, which Kafka turns into a fatal "User rebalance callback throws an error").
+   `OffsetEncoding.decode` now throws `OffsetDecodingError`, so both land in the existing recovery path:
+   log, drop the offset map, resume from the committed offset. The policy now governs only
+   recognisably-Kafka-Streams metadata. `OffsetMapCodecManager.errorPolicy` was also de-staticed - it had
+   made the policy JVM-global, so with two PC instances the last one constructed set it for both.
+   Same treatment applied to the one remaining unchecked escape on that path: `EncodedOffsetPair`'s
+   `default ->` branch threw `UnsupportedOperationException` for an encoding that *has* a registered magic
+   byte but no decoder - currently the `ByteArray` pair, which `OffsetSimultaneousEncoder` no longer emits.
+   Covered by `ForeignOffsetMetadataOnAssignmentTest`.
 
 ## Marked for 0.6.0.0
 
