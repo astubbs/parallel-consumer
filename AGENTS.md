@@ -277,8 +277,13 @@ is not dormant:
   all modify `CHANGELOG.adoc`; every PR predating the policy is in the same position.
 
 So the gate enforces the *citation convention* on entries, and a human author and reviewer enforce
-"no entries in a PR". Tightening it to reject every addition was considered and rejected - see
-[`docs/inflight/ci-changelog-gate-scope.md`](docs/inflight/ci-changelog-gate-scope.md).
+"no entries in a PR". Tightening it to reject *every* addition was considered and rejected: "adds an
+entry" and "corrects an existing one" are both `+*` lines and are not mechanically distinguishable -
+the gate's own header records that matching removed bullets against added ones was built and then
+abandoned as the subtlest code in the file. A blanket rule's only escape hatch would be a
+self-declared `changelog-ref: N/A - <reason>` in the PR body, which legitimises a violating addition
+exactly as easily as a legitimate correction: no enforcement the written rule does not already have,
+at the cost of an opt-out on every correction.
 
 ## PR Discipline
 
