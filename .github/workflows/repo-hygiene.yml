@@ -1,0 +1,63 @@
+# Cheap, repo-wide static checks: things that need no JDK, no broker and no build.
+#
+# Separate from copyright.yml deliberately: these checks are not about copyright and never were,
+# and bolting them there left a job called "Copyright header check" doing two unrelated things.
+#
+# ONE JOB PER CONCERN, named `<area>: <check>` to match the context convention already in the master
+# ruleset (`quarantine: audit`, `dups: clones`, `deps: vulnerabilities`). Each appears as its own
+# required-status-check candidate instead of hiding inside a shared green tick - and a job renamed
+# here silently stops satisfying that ruleset, so treat these names as an API.
+
+name: Repo Hygiene
+
+# push scoped to master (matching copyright.yml and maven.yml) so PR-branch commits run once via
+# the pull_request event instead of twice.
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: repo-hygiene-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sigpipe:
+    name: "shell: sigpipe"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Shallow is fine: these checks read the working tree, not history.
+      - uses: actions/checkout@v6
+
+      # The self-test runs BEFORE the guard it protects, the same way copyright.yml sequences
+      # bin/test-check-copyright-headers.sh ahead of the scanner. A guard nobody has proven can
+      # fail is a guard nobody should trust.
+      - name: Self-test the SIGPIPE guard
+        run: bash bin/test-check-shell-sigpipe.sh
+
+      # `writer | grep -q` under `set -o pipefail` reports failure exactly when it MATCHES: grep
+      # exits on the first hit, the writer takes EPIPE, and pipefail promotes 141 to the pipeline's
+      # status. It only bites once the writer has more than one pipe buffer (64 KiB) left, so it
+      # passes every small fixture and surfaces in production. shellcheck does not catch it.
+      - name: No SIGPIPE-prone pipes in bin/
+        run: bash bin/check-shell-sigpipe.sh
+
+  actions:
+    name: "workflows: action versions"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # Dependabot bumps what is already there; it cannot notice a NEW workflow authored at an old
+      # version, which is how repo-hygiene.yml itself shipped at actions/checkout@v4 while 21 other
+      # uses were on @v6. The rule is "one version everywhere", not "checkout must be vN" - the
+      # latter rots on the next bump, the former survives it, because Dependabot raises every use of
+      # an action in one grouped PR.
+      - name: One version per action
+        run: bash bin/check-action-versions.sh
