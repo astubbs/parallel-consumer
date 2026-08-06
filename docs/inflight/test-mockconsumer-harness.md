@@ -29,18 +29,21 @@ clear that scenario's simulated outage window. Do not hoist them.
 
 Measured on PR astubbs#206, after the extraction:
 
-- The `MockConsumer*Test` scenarios now pair at **34-37%** (`CommitTimeout`↔`EarlyClose` 37.5%,
-  `CommitTimeout`↔`Sasl` 37.2%, `EarlyClose`↔`Sasl` 34.5%), down from the 70.7% that astubbs#34 flagged and
-  that motivated astubbs#40. What is left at that level is the copyright header, the import block and the
-  anonymous-`MockConsumer` shape - not wiring.
+- The `MockConsumer*Test` scenarios now pair in the **34-37%** band (`CommitTimeout`↔`EarlyClose` and
+  `CommitTimeout`↔`Sasl` around 37%, `EarlyClose`↔`Sasl` around 34.5%), down from the 70.7% that
+  astubbs#34 flagged and that motivated astubbs#40. What is left at that level is the copyright
+  header, the import block and the anonymous-`MockConsumer` shape - not wiring.
+  Quote the band, not the decimals: the measure is corpus-relative, so every pair's last decimal
+  moves whenever any file in the repo changes. This pair drifted 37.49 -> 37.43 on a single merge
+  from master that touched none of these files.
 - `CommitRejectionTestBase` and `MockConsumerTestBase` **do not appear in the report at all**. The
   harness extraction was predicted to push them to ~70%; it did not, and neither file reaches the
   check's 30% reporting floor against anything. Do not re-introduce that prediction.
 
 PMD CPD reports no new clones. jscpd reports one 8-line "clone" between `MockConsumerEarlyCloseTest`
 and `MockConsumerSaslAuthenticationTest` at line ~8 - that is the package declaration, copyright
-header and import list, every line of which is used by both. It is not actionable in Java; overall
-duplication fell 0.42% on both engines.
+header and import list, every line of which is used by both. It is not actionable in Java. Overall
+duplication fell on both engines: -0.39% (PMD CPD) and -0.42% (jscpd).
 
 See the verdict table in [`docs/refactoring.md`](../refactoring.md) (*Cross-module test clones*),
 which ranks the genuinely-deferred pairs so the next PR does not re-derive the audit.
