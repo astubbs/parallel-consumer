@@ -24,8 +24,12 @@
 # whole write path out of the model's hands: an issue body is attacker-controlled text, and the
 # difference between "the model may run gh issue comment" and "the model may write a file we post"
 # is the difference between arbitrary API calls and a comment whose content is merely untrusted. For
-# the same reason the tool allowlist below is enumerable and read-only - see the long note in
-# claude-code-review.yml, which reaches the same conclusion for the same reason.
+# the same reason the tool allowlist below is enumerable rather than blanket `Bash(*)` - see the long
+# note in claude-code-review.yml, which reaches the same conclusion for the same reason.
+#
+# Precisely: every granted tool is read-only EXCEPT `Write`, whose only intended output is
+# `draft-reply.md`. Nothing Claude can call reaches the GitHub API for a write, which is the property
+# that matters here - "read-only" as shorthand for that is imprecise, so it is spelled out instead.
 
 name: Issue First Response
 
@@ -58,6 +62,13 @@ jobs:
       # write only for the final posting step, which runs a fixed `gh issue comment` and nothing
       # else. Claude itself has no tool that can reach the issues API.
       issues: write
+      # REQUIRED, not incidental: `gh pr view`/`gh pr list` are granted below and the prompt makes
+      # "search merged PRs" step 2 of the research order - the step most likely to produce the
+      # single most useful reply, "that was fixed in #NN, it just has not shipped". Declaring a
+      # permissions block sets every unlisted scope to `none`, so without this line those calls 403
+      # and Claude simply answers without them: no failure, no log line, a visibly worse reply.
+      # claude-code-review.yml grants the same scope for the same tools.
+      pull-requests: read
       id-token: write
 
     steps:
