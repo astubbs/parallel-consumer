@@ -43,7 +43,6 @@ import java.util.stream.Collectors;
 import static io.confluent.csid.utils.BackportUtils.isEmpty;
 import static io.confluent.csid.utils.BackportUtils.toSeconds;
 import static io.confluent.csid.utils.StringUtils.msg;
-import io.confluent.parallelconsumer.State;
 import static io.confluent.parallelconsumer.State.*;
 import static io.confluent.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
 import static java.util.Objects.requireNonNull;
@@ -206,8 +205,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * If the system failed with an exception, it is referenced here.
+     * <p>
+     * {@code volatile} because it is written by the control thread (and by {@link #closeOnException}) but read by
+     * whichever thread calls {@link #getHealth()} - typically a health-check endpoint. Without it, a health check could
+     * see a fresh {@link #state} alongside a stale null cause and report a crashed instance as healthy.
      */
-    private Exception failureReason;
+    private volatile Exception failureReason;
 
     /**
      * Time of last successful commit
@@ -234,11 +237,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * The run state of the controller.
+     * <p>
+     * {@code volatile} because it is written by at least three threads - the caller of {@link #poll} sets
+     * {@link State#RUNNING}, any user thread can set {@link State#PAUSED} or {@link State#RUNNING} through
+     * {@link #pauseIfRunning()} / {@link #resumeIfPaused()}, and the close-caller and control thread set
+     * {@link State#DRAINING}, {@link State#CLOSING} and {@link State#CLOSED} - while a health check reads it from a
+     * fourth.
+     * <p>
+     * The setter is package-scoped deliberately. Lombok's default would generate a <em>public</em> {@code setState},
+     * letting any caller holding the concrete type force the instance to {@link State#CLOSED}. Transitions in this
+     * class assign the field directly; the setter exists for tests in this package.
      *
      * @see State
      */
-    @Setter
-    private State state = State.UNUSED;
+    @Setter(AccessLevel.PACKAGE)
+    private volatile State state = State.UNUSED;
 
     /**
      * Wrapped {@link ConsumerRebalanceListener} passed in by a user that we can also call on events
