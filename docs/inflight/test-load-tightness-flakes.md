@@ -13,6 +13,31 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
 
+**A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
+`TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,
+[job 92733771394](https://github.com/astubbs/parallel-consumer/actions/runs/31135433520/job/92733771394?pr=219);
+the run reports success because attempt 2 passed on the identical tree). It reads exactly like this
+family - an await that expired under load - and it is **not** a member. The 35s await is not the
+margin; it is the deadline for a *consequence*. The margin belongs to the **trigger**, and the trigger
+is a `TimeoutException` from `ProducerManager.acquireCommitLock` that only occurs if the controller
+attempts a commit *while* the slow record holds the produce lock. Two things stop that, neither of them
+tightness:
+
+1. too little margin between the record's sleep and `commitLockAcquisitionTimeout`;
+2. `wm.isDirty()` - AND-ed into the commit gate, single setter `PartitionState#onSuccess` - suppressing
+   the commit attempt entirely, so there is no deadline to widen.
+
+Fixed test-side by making the overlap deterministic. **The mechanism, the ruled-out readings and the
+experiment numbers live in
+[`docs/solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md`](../solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md)**
+- do not restate them here, or the two copies will drift.
+
+**What this means for the members still listed above, `produceTimeout` especially:** before filing any
+of them as a tight assertion, check whether the thing being awaited can be *triggered at all* in every
+interleaving. A test that waits on a consequence it cannot force is not tight - it is unsound, and
+raising its timeout will never fix it. (`produceTimeout` already latches its own trigger, so it is the
+worked example of doing this right.)
+
 **Classify before touching any of them** (the astubbs#68 lesson): this family is exactly where the upstream
 confluentinc#857 deadlock and the drain zombie were hiding, and both looked like tightness first. Two members have
 since been *solved* and left the family, which gives you their signatures to rule out - the nudge race
