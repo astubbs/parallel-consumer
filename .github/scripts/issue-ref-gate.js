@@ -17,6 +17,12 @@
 //     --jq '.[0].number'   # state=all matters: the ceiling is often a merged PR
 // `upstream-sweep.sh` warns when it gets thin - do not rely on noticing unaided.
 //
+// THE PR BODY IS IN SCOPE TOO, via prBodyEntry() below. The body is the surface a human actually
+// reads on GitHub, and a bare `#200` renders there as a working link to the wrong issue - the exact
+// failure this gate exists to prevent, on the one page where it is most visible. The gate already
+// trusts the body enough to accept a *bypass* from it (`issue-refs: N/A`), so "bodies are out of
+// scope" was never a principle, just an omission.
+//
 // Pulled out of the workflow so it can be unit tested; issue-ref-gate.test.js runs first in CI.
 
 // Below this, a reference is ambiguous and must name its repo. At or above it, only this fork has
@@ -110,6 +116,60 @@ function suspectRefs(files, opts = {}) {
   return out;
 }
 
+// What a PR-body hit is attributed to in the failure listing, where every other row is a file path.
+// Angle brackets cannot occur in a path, so this can neither collide with a real file nor be caught
+// by EXEMPT_PATHS, and an author reading `<PR body>: #857` knows at once that no file is at fault.
+const PR_BODY_LABEL = "<PR body>";
+
+// ``` or ~~~, optionally indented up to three spaces, per CommonMark.
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Presents a PR body to suspectRefs as if it were a diff, so the body is judged by the SAME rule as
+ * every file - NO SECOND COPY OF THE RULE. This is an adapter, not a rule: it decides which text is
+ * in scope, and suspectRefs still decides, alone, whether a piece of text is a violation.
+ *
+ * Two adaptations are needed, and both are about presentation rather than judgement:
+ *
+ * 1. EVERY LINE IS AN "ADDED" LINE. suspectRefs reads only `+` lines, because in a diff that is what
+ *    this PR is responsible for; the whole body is what this PR is responsible for. The prefix is
+ *    `"+ "` and not `"+"` so that a body line beginning `++` cannot become `+++`, which suspectRefs
+ *    skips as a diff file header - a one-character hole an author could otherwise fall into (or hide
+ *    in) without ever knowing it existed. The extra space is invisible downstream: hits are trimmed
+ *    before display. Lines starting `-` need no such care; they are only diff markers in a diff.
+ *
+ * 2. FENCED CODE BLOCKS ARE DROPPED. GitHub does not autolink inside a fence, so `#123` there is
+ *    literal text and cannot become the wrong link - the same reasoning by which stripQualified
+ *    already drops code spans. Bodies routinely quote logs, `gh` output and this gate's own failure
+ *    message, all of which are full of bare numbers. This lives here rather than in stripQualified
+ *    because being fenced is a property of a whole document: a patch shows disconnected fragments,
+ *    so no line-at-a-time rule over a diff can know. An UNCLOSED fence swallows the rest of the
+ *    body, which is precisely how GitHub renders it.
+ *
+ * @param body  the PR body, possibly null
+ * @returns { filename, patch } - one more entry for the files array suspectRefs already takes
+ */
+function prBodyEntry(body) {
+  if (!body) return { filename: PR_BODY_LABEL, patch: "" };
+
+  let fence = null;
+  const lines = body.split(/\r?\n/).map((line) => {
+    const m = line.match(FENCE);
+    if (fence) {
+      // A closing fence is the same character, at least as long as the opening one.
+      if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+      return "+";
+    }
+    if (m) {
+      fence = m[1];
+      return "+";
+    }
+    return "+ " + line;
+  });
+
+  return { filename: PR_BODY_LABEL, patch: lines.join("\n") };
+}
+
 /**
  * The single copy of what an author is told when the gate fires. Both callers render this - the CI
  * job in pr-checklist.yml and the local bin/check-issue-refs.sh - so the two cannot tell different
@@ -120,14 +180,27 @@ function suspectRefs(files, opts = {}) {
  *
  * @param hits  [{ file, ref, text }] from suspectRefs
  * @param opts  { repo }        owner/name used in the mirror-lookup hint
- *              { readsPrBody } false when the caller cannot honour the "issue-refs: N/A" opt-out
+ *              { readsPrBody } false when the caller has no PR body: it can neither honour the
+ *                              "issue-refs: N/A" opt-out nor scan the body for references
  * @returns string
  */
 function formatFailure(hits, opts = {}) {
   const repo = opts.repo ?? "astubbs/parallel-consumer";
   const optOutTail = opts.readsPrBody === false
-    ? "line in the PR body - the workflow honours that opt-out; this script does not read the PR body."
+    ? "line in the PR body - the workflow honours that opt-out, and also scans the body itself;\n" +
+      "this script does not read the PR body, so it does neither."
     : "line in the PR body.";
+
+  // The advice above is right for a file and incomplete for the body, because the body is rendered
+  // by GitHub: `astubbs#NN` satisfies this gate but is NOT cross-reference syntax, so it renders as
+  // plain text and the body silently loses the link it had. An author told only "name the repo"
+  // trades a wrong link for no link, which is not the trade this rule is asking for.
+  const bodyNote = hits.some((h) => h.file === PR_BODY_LABEL)
+    ? "\nIn the PR BODY, use the FULLY qualified form - `astubbs/parallel-consumer#NN` or\n" +
+      "`confluentinc/parallel-consumer#NN`. It is the only form that both names the repo and still\n" +
+      "auto-links on GitHub; `astubbs#NN` passes this gate but renders as plain text there. The same\n" +
+      "goes for closing keywords: `Fixes astubbs#NN` closes nothing.\n"
+    : "";
 
   return (
     `${hits.length} reference(s) below #${QUALIFY_BELOW} do not say which repo they mean.\n` +
@@ -138,11 +211,14 @@ function formatFailure(hits, opts = {}) {
     "Every confluentinc issue is mirrored here, and the mirror is usually the better number to cite:\n" +
     `  gh issue list -R ${repo} --label upstream-mirror --search "confluentinc#NN"\n` +
     'If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" on its own\n' +
-    `${optOutTail}\n\n` +
+    `${optOutTail}\n` +
+    bodyNote +
+    "\n" +
     hits.map((h) => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")
   );
 }
 
 module.exports = {
-  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, EXEMPT_PATHS, QUALIFY_BELOW,
+  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
+  EXEMPT_PATHS, QUALIFY_BELOW, PR_BODY_LABEL,
 };
