@@ -35,6 +35,26 @@
             clone forever.
         -->
         <uplot.version>1.6.30</uplot.version>
+        <!--
+            THE UI TEST HARNESS (plan U15/KTD22). Both are test scope only, and module-local for the same
+            reason as the versions above.
+
+            GraalVM's JavaScript engine runs the page's own ES modules on the JVM, so the arithmetic the
+            page is built on - BigInt offsets above 2^53, span widths, row ordering, number formatting - is
+            gated by the ordinary unit suite with no browser anywhere. It is not small (about 60MB resolved,
+            most of it ICU and Truffle) and that is the price of being the only engine on the JVM that runs
+            ES modules and BigInt as written: Nashorn has neither, and Rhino has no ES modules. 23.0.x is
+            the GraalVM-for-JDK-17 line, which is the JDK this repository builds and tests on; 23.1 and
+            later need JDK 21.
+
+            Selenium drives a real browser for the half GraalVM cannot do: the live DOM and screenshots. It
+            is the chrome-driver artifact rather than selenium-java (about 22MB rather than the full
+            aggregate), and it drives whatever Chrome is already on the machine - so it downloads no browser
+            of its own, and the suite skips itself cleanly where there is no browser to find. Playwright was
+            the alternative and its driver bundle alone is a 198MB Maven artifact, before any browser.
+        -->
+        <graaljs.version>23.0.13</graaljs.version>
+        <selenium.version>4.36.0</selenium.version>
     </properties>
 
     <dependencies>
@@ -67,6 +87,19 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- see the graaljs.version / selenium.version comment above for why these two, and what they cost -->
+        <dependency>
+            <groupId>org.graalvm.js</groupId>
+            <artifactId>js</artifactId>
+            <version>${graaljs.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-chrome-driver</artifactId>
+            <version>${selenium.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

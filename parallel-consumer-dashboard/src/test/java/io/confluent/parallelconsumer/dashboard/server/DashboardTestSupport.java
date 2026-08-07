@@ -23,8 +23,12 @@ import java.net.ServerSocket;
  * None of these tests need a running Parallel Consumer or a Kafka broker. The whole point of the snapshot design is
  * that the HTTP layer reads an immutable value, so it can be handed one built from a
  * {@link PcMeterFixture}-shaped registry and be exercised exactly as it would be in production.
+ * <p>
+ * Public - rather than package-private, which is what the server tests alone would need - so the browser UI suite in
+ * {@code integrationTests.ui} binds its servers the same way instead of growing a second copy of the free-port dance
+ * that would drift from this one.
  */
-final class DashboardTestSupport {
+public final class DashboardTestSupport {
 
     private DashboardTestSupport() {
     }
@@ -50,7 +54,7 @@ final class DashboardTestSupport {
      * Every server test uses this rather than 8080, so a developer with something on 8080 does not see phantom
      * failures - and so the tests do not fight each other when surefire forks.
      */
-    static DashboardOptions.DashboardOptionsBuilder testOptions() {
+    public static DashboardOptions.DashboardOptionsBuilder testOptions() {
         return DashboardOptions.builder().port(freePort()).maxPortAttempts(50);
     }
 
@@ -58,7 +62,7 @@ final class DashboardTestSupport {
      * A port that was unbound at the moment this returned. Deliberately not a promise - the port walk is what makes
      * the residual race a non-event, and using this <em>with</em> the walk is closer to how the server really starts.
      */
-    static int freePort() {
+    public static int freePort() {
         try (ServerSocket socket = new ServerSocket(0)) {
             socket.setReuseAddress(true);
             return socket.getLocalPort();

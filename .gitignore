@@ -91,6 +91,13 @@ delombok/
 # Maven
 target
 release.properties
+
+# Screenshots from the dashboard's browser UI harness (parallel-consumer-dashboard, plan U15). They default
+# to target/, which the line above already covers; this entry is what protects a custom output directory set
+# with -Ddashboard.ui.screenshots. A screenshot is a build product exactly as the chart library is: committing
+# one puts a picture in every clone that goes stale the first time the page changes, and nothing notices.
+# ScreenshotOutputTest fails the build if this entry is removed.
+ui-screenshots/
 /.idea/encodings.xml
 /.idea/misc.xml
 /.idea/codeStyles/Project.xml
