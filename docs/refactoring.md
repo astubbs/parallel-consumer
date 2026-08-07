@@ -336,6 +336,10 @@ Only the items needing a decision are listed here - do not restate the inventory
   ran, cannot pass), `sanity/StreamTest.test` (commented-out `@Test` over an infinite stream),
   `SampleTestingFailsafePluginInclusionCore` (empty body), `JavaEnvTest.checkJavaEnvironment`
   (`log.error` dump on every run).
+- **`LargeVolumeInMemoryTests` runs 500 messages, not 1,000,000** - the 1M line is commented out
+  directly above, `git blame`d to 2020 and untouched since. Previously recorded as fixed by PR #49;
+  that PR never touched the file. The restore-to-1M commit and the OOM diagnostics from running it
+  live on `origin/refactor/test-hardening` - **salvage both before deleting that branch**.
 - **Kneecapped volumes still undecided** - `VeryLargeMessageVolumeTest` (1M vs 2M), `LoadTest` (4K vs
   commented alternatives), `TransactionAndCommitModeTest.numThreads` (64 vs 1000) and `.roundsAllowed`
   (10, with a TODO). The last two likely mask real issues rather than being tuning choices.

@@ -21,15 +21,15 @@ are keyed by class and method, never by line number - the predecessor's line num
 | **Why is each disabled?** | **1 of 5 says.** `ProgressBarTest.width` carries `@Disabled("For reference sanity only")`. The other four record no reason anywhere: no annotation message, no comment, and a disabling commit that never names the test. |
 | **How many tests are empty?** | **1** - `SampleTestingFailsafePluginInclusionCore.test`, body `{ }`. |
 | **How many are placeholders?** | **4** - one trivially-false stub, one whose name promises what its body never does, one abandoned mid-write, one diagnostic that cannot fail. |
-| **Tests you intended to write?** | **4 were deleted rather than written**, by upstream `confluentinc#493`. The branch that would have implemented them (`confluentinc#496`) never merged. |
+| **Tests you intended to write?** | **10 were deleted rather than written**, by upstream `confluentinc#493`. Neither follow-up that would have restored them (`confluentinc#494`, `confluentinc#496`) ever merged. |
 
 Two further categories nobody asked about, because an annotation grep cannot see them and they are
 the ones that actually mislead:
 
 | | |
 |---|---|
-| **Tests that assert nothing** | **15 of 289** (5.2%). They can fail only by throwing. |
-| **Tests that report green with their assertions branched away** | **1 test, 6 sites** - `OffsetEncodingTests`, via a helper named `assumeWorkingCodec` that is not an assumption. |
+| **Tests that assert nothing** | **15 of 292** (5.1%). They can fail only by throwing. |
+| **Tests that report green with their assertions branched away** | **1 test, 5 sites** - `OffsetEncodingTests`, via a helper named `assumeWorkingCodec` that is not an assumption. |
 
 **Currently quarantined: zero.** `docs/QUARANTINED_TESTS.md` and the code agree.
 
@@ -38,12 +38,13 @@ the ones that actually mislead:
 ## Reproducing the counts
 
 ```bash
-# Denominator
-for a in '@Test' '@ParameterizedTest' '@RepeatedTest' '@TestFactory' '@ArchTest'; do
-  printf "%-20s " "$a"
-  rg -c --no-filename "^\s*$a\b" -g '*.java' $(find . -type d -path '*/src/test*/java') \
-    | awk '{s+=$1} END {print s+0}'
-done
+# Every test-bearing annotation shape - enumerate rather than assume a whitelist.
+# An earlier draft of this audit undercounted by 3 because it hard-coded a list
+# that omitted @CartesianTest.
+grep -rhoE "^[[:space:]]*@[A-Z][A-Za-z]*Test\b" --include="*.java" \
+  $(find . -type d -path '*/src/test*/java') | sort | uniq -c
+grep -rc --include="*.java" "^[[:space:]]*@Test\b" \
+  $(find . -type d -path '*/src/test*/java') | awk -F: '{s+=$2} END {print "@Test",s}'
 
 # Raw disabled hits (over-counts - see below)
 grep -rn "@Disabled\|@Ignore" --include="*.java" .
@@ -61,16 +62,23 @@ braces. Those counts were derived that way and every hit was then read in source
 
 ## The denominator
 
-**289 test methods** = 242 `@Test` + 45 `@ParameterizedTest` + 2 `@RepeatedTest`. Zero
-`@TestFactory`, zero `@TestTemplate`.
+**292 test methods** = 242 `@Test` + 45 `@ParameterizedTest` + 3 `@CartesianTest` + 2 `@RepeatedTest`.
+Zero `@TestFactory`, and zero *literal* `@TestTemplate`.
 
 Plus **9 `@ArchTest` fields** across 7 classes. These are real, enforced tests and are invisible to
-an annotation grep, so the honest total is **298**.
+an annotation grep, so the honest total is **301**.
+
+Two traps worth naming, because a whitelist-based count walks into both:
+
+- **`@CartesianTest`** (junit-pioneer) contributes 3 methods in `TransactionAndCommitModeTest`. It is
+  meta-annotated `@TestTemplate`, so "zero `@TestTemplate`" is true only of the literal string. A
+  grep returns 6 lines for these 3 methods, because each also carries `@CartesianTest.MethodFactory`.
+- **`@ArchTest`** fields are enforced tests that no `@Test` grep sees.
 
 | Module | Source root | Methods |
 |---|---|---|
 | parallel-consumer-core | `src/test` | 196 (166 + 30) |
-| parallel-consumer-core | `src/test-integration` | 62 (51 + 9 + 2) |
+| parallel-consumer-core | `src/test-integration` | 65 (51 + 9 + 3 + 2) |
 | parallel-consumer-vertx | `src/test` | 10 (8 + 2) |
 | parallel-consumer-vertx | `src/test-integration` | 1 |
 | parallel-consumer-reactor | `src/test` | 7 (5 + 2) |
@@ -78,13 +86,14 @@ an annotation grep, so the honest total is **298**.
 | examples/example-core | `src/test` | 2 |
 | examples/example-{metrics,reactor,streams,vertx} | `src/test` | 1 each |
 
-**Methods are not executions.** 47 of the 289 are parameterised or repeated and run N times each,
-mostly `@EnumSource` over `CommitMode` / `ProcessingOrder` / `OffsetEncoding`. Separately,
-`CommitRejectionTestBase` declares one `@Test` and has two concrete subclasses, so that one declared
-method runs twice.
+**Methods are not executions.** 50 of the 292 are parameterised, cartesian or repeated and run N
+times each, mostly `@EnumSource` over `CommitMode` / `ProcessingOrder` / `OffsetEncoding` - and the
+three `@CartesianTest` methods run the full `CommitMode` x `ProcessingOrder` cross-product.
+Separately, `CommitRejectionTestBase` declares one `@Test` and has two concrete subclasses, so that
+one declared method runs twice.
 
-Worth noting in passing: **the example modules have almost no tests** - 9 test methods across all of
-`parallel-consumer-examples`, against 258 in core.
+Worth noting in passing: **the example modules have almost no tests** - 6 test methods across all of
+`parallel-consumer-examples` (8 counting their 2 `@ArchTest` fields), against 258 in core.
 
 ---
 
@@ -103,9 +112,11 @@ Worth noting in passing: **the example modules have almost no tests** - 9 test m
 
 - **`AbstractQuarantineScriptTest`** - `@DisabledOnOs(OS.WINDOWS)`, a class-level *platform guard*
   on an `abstract` class with **zero test methods of its own**. Its three concrete subclasses hold
-  29 test methods between them (`CheckQuarantineOwnersScriptTest` 10, `QuarantineRegistryScriptTest`
-  12, `QuarantineLaneReportScriptTest` 7). It skips on Windows only, so on every CI runner and dev
-  machine this project uses it **skips nothing**.
+  27 test methods between them (`CheckQuarantineOwnersScriptTest` 10, `QuarantineRegistryScriptTest`
+  10, `QuarantineLaneReportScriptTest` 7 - anchored `^\s*@Test`; an unanchored grep returns 12 for
+  the registry test because two of its hits are a comment and a string fixture, which is the very
+  thing that file exists to test). It skips on Windows only, so on every CI runner and dev machine
+  this project uses it **skips nothing**.
 
 Zero `@Ignore` (JUnit 4) anywhere in the tree.
 
@@ -146,10 +157,24 @@ every method beneath it, not one. Worth remembering if that ever changes.
   `ParallelEoSStreamProcessorTest.lessKeysThanThreads`, the four `ShardKeyTest` methods, and several
   integration tests running `ordering(KEY)`.
 
-  **What is genuinely lost:** the end-to-end, multi-partition, per-`CommitMode` assertion that offset
-  *commits* respect key-order blocking across partitions. `WorkManagerTest` covers the shard and
-  dispatch layer, not the commit layer, and the closest enabled sibling runs a single `CommitMode`.
-  This is the most substantive coverage gap in this audit.
+  More runs across `CommitMode` than is obvious: `TransactionAndCommitModeTest`'s three
+  `@CartesianTest` methods exercise the **full `CommitMode` x `ProcessingOrder` cross-product,
+  including KEY**, end-to-end against a real broker. That is real coverage and this audit should not
+  undersell it.
+
+  **What is genuinely lost, after accounting for all of that:** the end-to-end, multi-partition,
+  per-`CommitMode` assertion that offset *commits* respect key-order blocking across partitions.
+  `WorkManagerTest` covers the shard and dispatch layer, not the commit layer. The cartesian tests
+  assert only **counts** (keys consumed, produced-acknowledged, processed == produced), never
+  committed offsets, and run on `numPartitions = 1` - the default inherited from
+  `BrokerIntegrationTest` and never overridden - so they cannot observe cross-partition blocking at
+  all. `MultiInstanceRebalanceTest` spans two partitions but pins one `CommitMode` and asserts
+  consumed keys. `MultiInstanceHighVolumeTest` hardcodes both. The closest enabled sibling,
+  `processInKeyOrderWorkNotReturnedDoesntBreakCommits`, does inspect commits but runs a single
+  `CommitMode`.
+
+  This is the most substantive coverage gap in this audit, and it survived a deliberate attempt to
+  find a test that closes it.
 
 ### 1.3 `VertxTest.handleHttpResponseCodes`
 
@@ -166,8 +191,8 @@ every method beneath it, not one. Worth remembering if that ever changes.
 
 - **Never ran green.** It was born disabled and, by construction, could never have passed.
 - **Confidence:** high.
-- **Covered elsewhere?** No. Non-200 handling is untested in the vertx module; the enclosing test
-  above it asserts `statusCode()` is 200 on the happy path only.
+- **Covered elsewhere?** No. Non-200 handling is untested in the vertx module. The nearest real test
+  in the file, `testHttp`, asserts `statusCode()` is 200 on the happy path only.
 - This is a **deletion candidate, not a re-enablement candidate** - there is nothing here to restore.
 
 ### 1.4 `MultiInstanceRebalanceTest.largeNumberOfInstances`
@@ -260,7 +285,7 @@ Duration expectedDurationOfClose = JavaUtils.max(timeBetweenCommits, ofSeconds(2
 assertThat(durationOfCloseOperation).as("Should be fast").isLessThan(expectedDurationOfClose);
 ```
 
-The pattern, the `time()` helper and the idiom were all three lines away and were not applied. The
+The pattern, the `time()` helper and the idiom were all a few lines above and were not applied. The
 only backstop is the class-level `@Timeout(value = 3, unit = MINUTES)`, and three minutes is not a
 meaningful bound on "event based fast".
 
@@ -286,34 +311,48 @@ grep -rniE "UnsupportedOperationException|not implemented|notImplemented|\bNYI\b
 
 ## 4. Tests intended but never written
 
-**4 were deleted rather than implemented**, and the intent survives only in git history and an
+**10 were deleted rather than implemented**, and the intent survives only in git history and an
 unmerged branch.
 
-Upstream `confluentinc#493` - *"minor: tests: Removes empty/not implemented tests"*, merged as
-`544593edd` - removed:
+Upstream `confluentinc#493` - *"minor: tests: Removes empty/not implemented tests"*, merged 2022-12-07
+as `544593edd` - removed ten test methods:
 
 | Test | What it was |
 |---|---|
-| `ParallelEoSStreamProcessorTest.avro` | A five-line comment spec (*"send three messages - 0,1,2 / finish processing 1 / make sure no offsets are committed / finish 0 / make sure offset 1, not 0 is committed"*) followed by `assertThat(false).isTrue()` |
+| `ParallelEoSStreamProcessorTest.avro` | Five-line comment spec (*"send three messages - 0,1,2 / finish processing 1 / make sure no offsets are committed / finish 0 / make sure offset 1, not 0 is committed"*) then `assertThat(false).isTrue()` |
+| `ParallelEoSStreamProcessorTest.poisonPillGoesToDeadLetterQueue` | dead-letter-queue behaviour |
+| `ParallelEoSStreamProcessorTest.userSucceedsButProduceToBrokerFails` | partial-failure path |
+| `ParallelEoSStreamProcessorTest.failingMessagesDontBreakCommitOrders` | failure vs commit ordering |
+| `ParallelEoSStreamProcessorTest.failingMessagesThatAreRetriedDontBreakProcessingOrders` | retry vs processing ordering |
+| `ParallelEoSStreamProcessorTest.messagesCanBeProcessedOptionallyPartitionOffsetOrder` | optional partition-offset ordering |
+| `ParallelEoSStreamProcessorTest.ifTooManyMessagesAreInFlightDontPollBrokerForMore` | in-flight backpressure |
 | `WorkManagerOffsetMapCodecManagerTest.truncationOnCommit` | `@Disabled("TODO: Blocker: Not implemented yet")` |
 | `WorkManagerTest.maxPerPartition` | empty body |
 | `WorkManagerTest.maxPerTopic` | empty body |
 
-The follow-up that would have **implemented** them - branch `origin/refactor/empty-tests` @
-`5f8b3dba`, draft upstream `confluentinc#496` - never merged. Its commits read
-*"one-off: removes empty / not implemented tests"*, then *"START: Put back the removed empty tests,
-to be implemented"*. It would have restored them as `throw new NotImplementedException()` carrying
-`// TODO: Blocker: Not implemented yet`, so they were visible as debt rather than absent. No PR for
-that branch exists on the fork.
+The six middle rows matter most. Dead-letter queues, retry ordering and in-flight backpressure are
+core library behaviours, and the only surviving record that tests for them were *wanted* is this
+deletion diff.
 
-So the honest answer is: the *removal* half of that work landed; the *implementing* half never did,
-and the record of what was wanted now lives one `git show` away from being lost.
+**Neither follow-up merged.** `confluentinc#494` (*"Reenables disabled tests, to be fixed"*) and
+`confluentinc#496` are both named in the deleting commit's own body. The branch behind the latter,
+`origin/refactor/empty-tests` @ `5f8b3dba`, has three commits - the removal, *"START: Put back the
+removed empty tests, to be implemented"*, and a third that adds the stubs. At its tip, **only 3 of
+the 10** carry `throw new NotImplementedException()` (`avro`, `maxPerPartition`, `maxPerTopic`). Six
+return unchanged - still `@Disabled`, still empty or `assertThat(false).isTrue()` - and
+`truncationOnCommit` returns *without* its `@Disabled` while keeping `assertThat(true).isFalse()`,
+which would have made it a hard red. So even the restoration was partial. No PR for that branch
+exists on the fork.
+
+So the honest answer is: the *removal* half landed; the *implementing* half never did, and the
+record of what was wanted now lives one `git show` away from being lost.
 
 Two more standing intentions, not deleted but never fulfilled:
 
 - **`MultiTopicTest`** carries a wholesale commented-out assertion helper `assertCommit(...)` with
-  the note *"depends on merge of features/consumer-interface branch"* - a branch that does not exist
-  on master. This is an assertion the suite was meant to make and does not.
+  the note *"depends on merge of features/consumer-interface branch"*. That branch exists as
+  `origin/features/consumer-interface` but was never merged, so the dependency has been unmet for
+  years. This is an assertion the suite was meant to make and does not.
 - **`LargeVolumeInMemoryTests`** carries `// TODO: Assert process ordering` - a named missing
   assertion inside a test that passes without it.
 
@@ -323,7 +362,7 @@ Two more standing intentions, not deleted but never fulfilled:
 
 No annotation grep finds these, and they are the most misleading category in the tree.
 
-**5.1 `assumeWorkingCodec` is not an assumption.** `OffsetEncodingTests` wraps assertions at six
+**5.1 `assumeWorkingCodec` is not an assumption.** `OffsetEncodingTests` wraps assertions at five
 sites in `if (assumeWorkingCodec(encoding, encodingsThatFail)) { … }`. Despite the name, that helper
 is simply:
 
@@ -337,7 +376,7 @@ its assertions branched around, and reports as a pass rather than a skip.** A te
 covers all codecs, reports that it covers all codecs, and materially checks about half of them. The
 `assume*` name is what conceals it.
 
-**5.2 Assumption aborts - 5 tests, 6 sites.** All sit inside `@ParameterizedTest` methods, so they
+**5.2 Assumption aborts - 5 tests, one site each.** All sit inside `@ParameterizedTest` methods, so they
 drop parameter *values* rather than whole tests, and the drop is invisible unless you read the report
 carefully: `ParallelEoSStreamProcessorTest` (AssertJ `Assumptions.assumeThat`), `WorkManagerTest`
 (`assumeFalse(order == KEY)` - drops the KEY ordering case), `RunLengthEncoderTest`,
@@ -352,11 +391,11 @@ would make the skip visible in the report.
 
 ## 6. Tests that assert nothing
 
-**15 of 289 (5.2%).** These can fail only by throwing.
+**15 of 292 (5.1%).** These can fail only by throwing.
 
 Getting this number right required resolving helper indirection: **46** methods had no assertion
 token in their own body, but **31 were cleared** because the helper they call asserts internally.
-The repo uses five coexisting assertion styles - AssertJ, Google Truth, the fork's generated
+The repo uses seven coexisting assertion styles - AssertJ, Google Truth, the fork's generated
 `ManagedTruth`, JUnit 5 Jupiter, Mockito `verify`, Awaitility and Hamcrest - so a naive grep
 misclassifies badly in both directions.
 
@@ -387,7 +426,8 @@ misclassifies badly in both directions.
 - The six `TransactionMarkersTest` methods clear via `waitForRecordsToBeReceived` → its overload,
   which contains `await().untilAsserted(assertThat…)`.
 - `MultiInstanceRebalanceTest`'s three clear via `runTest()` (`assertAll`, `assertThat`,
-  `untilAsserted`).
+  `untilAsserted`) - though one of those three is `largeNumberOfInstances`, which is `@Disabled`, so
+  it is "cleared" in the sense of having assertions, not of running.
 - `TransactionAndCommitModeTest`, `PartitionStateCommittedOffsetIT`, `LoadTest`,
   `VeryLargeMessageVolumeTest`, `RunLengthEncoderTest`, `MultiInstanceMetricsTest`,
   `ChaosRevokeUnderWorkIT` and `ParallelEoSSStreamProcessorRebalancedTest` all clear the same way,
@@ -414,7 +454,9 @@ Genuinely worth fixing: `closeWithoutRunningShouldBeEventBasedFast`, `stringVsBy
 `MockConsumerEarlyCloseTest.mockConsumer` (via the timeout bug in section 8).
 
 Defensible as they stand: the four `MutinyTest`/`ReactorTest` library scratchpads (they catch API
-breakage by throwing on upgrade), `ShardKeyTest.nullKey` (throws-only guard, javadoc says so),
+breakage by throwing on upgrade), `ShardKeyTest.nullKey` (a throws-only NPE guard - its javadoc names
+the scenario, *"Tests when KEY ordering with `null` keyed records"*, without stating that contract
+explicitly),
 `InterruptionTests.waitOnZeroCausesInfiniteWait` (the 1-second timeout is a correct deliberate
 check), `CustomConsumersTest.extendedConsumer` ("does not throw" genuinely is the assertion here),
 and `ProgressBarTest.width` (honestly labelled).
@@ -449,7 +491,7 @@ copy holds nothing this document lacks. **They are recorded, not fixed.**
 
 | Location | Issue | Status |
 |---|---|---|
-| `LargeVolumeInMemoryTests` | 500 vs 1,000,000 messages | Fixed in PR #49. `refactor/test-hardening` also carries a restore-to-1M commit and OOM diagnostics that never landed. |
+| `LargeVolumeInMemoryTests` | 500 vs 1,000,000 messages | **Open.** Still `int quantityOfMessagesToProduce = 500;` with `// 1_000_000` commented above it, `git blame`d to `565230cd5a` (2020-06-04) and untouched since. The predecessor listed this as fixed by PR #49, but carried a caveat - *"Check whether this fix has been merged to master before flagging again"* - and it had not: PR #49 never touched the file. The restore-to-1M commit exists only on `refactor/test-hardening`. |
 | `MultiInstanceHighVolumeTest` | `30_000_00` - an underscore typo giving 3M, not 30M | **Open. A real defect, not a judgement call.** |
 | `VeryLargeMessageVolumeTest` | 1M vs 2M | Open - decide and clean up |
 | `LoadTest` | 4K vs several commented-out alternatives | Open - dead code |
@@ -485,16 +527,24 @@ in the PR performance suite. This is correct behaviour and is recorded only so n
 ### 8.5 Where the predecessor was wrong
 
 Two of its conclusions are **refuted** by the git history, which it did not consult - it recorded
-its reasons as *suspected* and attributed none of them to a commit:
+its reasons as *suspected*, attributed none of them to a commit, and noted an intent to
+`git blame` that it never carried out:
 
 | It said | Actually |
 |---|---|
-| `…Long` was disabled "due to flakiness on slow CI" | Disabled by `c1fefbc64`, an offset-map/commit-semantics change. No flakiness evidence exists. |
-| `processInKeyOrder` was "probably flaky or the feature had bugs" | Disabled by **the same commit**, in the same hunk pattern. |
-| `Short` superseded `Long` | `Simplest`, `Short` and `Long` were all introduced together on 2020-05-27. `Long` then ran green for three months. No javadoc or commit links `Short` to `Long`. |
+| `…Long` was "probably disabled due to flakiness on slow CI" | Disabled by `c1fefbc64`, an offset-map/commit-semantics change. No flakiness evidence exists anywhere. |
+| `processInKeyOrder` was "probably flaky or the feature had bugs when it was written" | Disabled by **the same commit**, in the same hunk pattern, on the same day. |
+
+Both refutations rest on the same evidence: `Simplest`, `Short` and `Long` were all introduced
+together by `61f4c0e41` on 2020-05-27 and ran green for three months, so nothing about their history
+suggests flakiness. It is worth stating plainly that the predecessor did **not** claim `Short`
+superseded `Long` - that was a hypothesis raised while investigating, and the history refutes it, but
+it was never the predecessor's position.
 
 It was right about `largeNumberOfInstances` being a cost problem, and right to recommend
-`@Tag("performance")` over `@Disabled`.
+`@Tag("performance")` over `@Disabled`. And its `LargeVolumeInMemoryTests` entry carried a caveat to
+re-check before flagging - see §8.1, where dropping that caveat is exactly how an earlier draft of
+*this* document turned an open defect into a closed one.
 
 Its line-number references (347, 574, 199) had drifted to 369, 596 and 206 by the time this audit ran
 - four months. That is why this document keys everything by class and method instead.
@@ -520,19 +570,26 @@ milliseconds.
 **Highest value-to-effort fix in this document.**
 
 **9.2 `OffsetEncodingTests` uses JUnit 4's `org.junit.Assume` inside a Jupiter test, and it works
-only by accident of the classpath.** No pom declares JUnit 4; it arrives transitively via
-testcontainers. It currently behaves because `junit-jupiter-engine` ships
+only by accident of the classpath.** No pom declares JUnit 4 (`junit.version` is 5.14.4); it arrives
+transitively, from `testcontainers` 1.21.4 declaring `junit:junit` 4.13.2 at compile scope. It
+currently behaves because `junit-jupiter-engine` ships
 `OpenTest4JAndJUnit4AwareThrowableCollector`, which reflectively recognises
-`org.junit.internal.AssumptionViolatedException` *if junit4 is on the classpath*. The day junit4
-falls off the test classpath, that `assumeThat` stops being a skip and becomes a hard **failure** for
-four enum values. One-line fix to `org.junit.jupiter.api.Assumptions`.
+`org.junit.internal.AssumptionViolatedException` *if junit4 is on the classpath*.
+
+If junit4 ever leaves the test classpath, the `import static org.junit.Assume.assumeThat` fails to
+**compile** - so this surfaces as a build break, not a silent behaviour change, which is the better
+of the two outcomes. Were it to compile, the skip would become a hard failure for four enum values.
+Fixing it is a one-line change to `org.junit.jupiter.api.Assumptions`, but note that would not
+remove the project's JUnit 4 surface: `CoreAppMetricsIntegrationTest` also imports
+`org.junit.Assert`.
 
 **9.3 `assumeWorkingCodec` conceals what it does** - see section 5.1. Of everything in this audit,
 this is the finding most likely to mislead someone reading a green test report.
 
-**9.4 Wall-clock burned by tests that cannot fail.** `MockConsumerEarlyCloseTest.mockConsumer` sleeps
-5 seconds unconditionally and asserts nothing; `ProgressBarTest.width` sleeps 10 seconds. Combined
-with 9.1, roughly 15 seconds per run that can only fail by throwing.
+**9.4 Wall-clock burned by a test that cannot fail.** `MockConsumerEarlyCloseTest.mockConsumer`
+sleeps 5 seconds unconditionally and asserts nothing - so with 9.1's broken timeout, that is ~5
+seconds per run spent on a test with no way to fail except by throwing. (`ProgressBarTest.width`
+sleeps 10 seconds by construction but is `@Disabled`, so it costs nothing.)
 
 ---
 
@@ -555,7 +612,7 @@ them is started here.
    assumptions so the skips appear in the report (5.1).
 6. Point `OffsetEncodingTests` at `org.junit.jupiter.api.Assumptions` (9.2).
 7. Add the timing assertion to `closeWithoutRunningShouldBeEventBasedFast`, copying the idiom from
-   the test three lines above it (3.2).
+   the test just above it (3.2).
 
 **Needs a decision:**
 
@@ -564,7 +621,10 @@ them is started here.
 9. `offsetsAreNeverCommitted…Long` (1.1) - same commit, same reconciliation.
 10. `stringVsByteVsBitSetEncoding` (3.3) and `MultiTopicTest.assertCommit` (8.2) - restore the
     comparison/assertion, or delete it. Leaving it implies coverage that does not exist.
-11. The remaining kneecapped volumes (8.1) - decide the intended value and record why.
+11. `LargeVolumeInMemoryTests` runs 500 messages where 1,000,000 is commented out (8.1). Previously
+    believed fixed; it is not. The restore-to-1M work exists on `refactor/test-hardening` along with
+    OOM diagnostics from running it - salvage both before that branch is deleted.
+12. The remaining kneecapped volumes (8.1) - decide the intended value and record why.
 
 **Already owned - do not touch:**
 
