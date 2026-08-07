@@ -2,11 +2,12 @@ package io.confluent.parallelconsumer.examples.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
 import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
+import io.confluent.parallelconsumer.vertx.VertxParallelStreamProcessor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -33,7 +34,7 @@ public class VertxApp {
         return new KafkaProducer<>(new Properties());
     }
 
-    JStreamVertxParallelStreamProcessor<String, String> parallelConsumer;
+    VertxParallelStreamProcessor<String, String> parallelConsumer;
 
 
     void run() {
@@ -45,7 +46,7 @@ public class VertxApp {
                 .producer(kafkaProducer)
                 .build();
 
-        this.parallelConsumer = JStreamVertxParallelStreamProcessor.createEosStreamProcessor(options);
+        this.parallelConsumer = VertxParallelStreamProcessor.createEosStreamProcessor(options);
         parallelConsumer.subscribe(of(inputTopic));
 
         postSetup();
@@ -53,17 +54,17 @@ public class VertxApp {
         int port = getPort();
 
         // tag::example[]
-        var resultStream = parallelConsumer.vertxHttpReqInfoStream(context -> {
+        parallelConsumer.vertxHttpReqInfo(context -> {
             var consumerRecord = context.getSingleConsumerRecord();
             log.info("Concurrently constructing and returning RequestInfo from record: {}", consumerRecord);
             Map<String, String> params = UniMaps.of("recordKey", consumerRecord.key(), "payload", consumerRecord.value());
             return new RequestInfo("localhost", port, "/api", params); // <1>
+        }, onSend -> {
+            // <2>
+        }, onComplete -> {
+            log.info("Response from the HTTP request: {}", onComplete.result()); // <3>
         });
         // end::example[]
-
-        resultStream.forEach(x -> {
-            log.info("From result stream: {}", x);
-        });
 
     }
 

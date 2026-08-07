@@ -598,17 +598,29 @@ There is no guarantee that the messages will be retried again in the same batch.
 .Call an HTTP endpoint for each message usage
 [source,java,indent=0]
 ----
-        var resultStream = parallelConsumer.vertxHttpReqInfoStream(context -> {
+        parallelConsumer.vertxHttpReqInfo(context -> {
             var consumerRecord = context.getSingleConsumerRecord();
             log.info("Concurrently constructing and returning RequestInfo from record: {}", consumerRecord);
             Map<String, String> params = UniMaps.of("recordKey", consumerRecord.key(), "payload", consumerRecord.value());
             return new RequestInfo("localhost", port, "/api", params); // <1>
+        }, onSend -> {
+            // <2>
+        }, onComplete -> {
+            log.info("Response from the HTTP request: {}", onComplete.result()); // <3>
         });
 ----
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
+<2> Called once the request has been dispatched
+<3> Called with the response - handle each result here, as it completes
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
+
+NOTE: The `JStream*` variants of these processors (which return a `java.util.stream.Stream` of results instead of
+taking a callback) are *deprecated for removal*. They buffer every result in an unbounded queue that only drains when
+you consume the stream, and the returned `Stream` is single-shot - it terminates the first time the queue is
+momentarily empty and cannot be restarted, so results produced after that accumulate until the JVM runs out of memory.
+Use the callback form shown above. See link:https://github.com/astubbs/parallel-consumer/issues/122[astubbs#122].
 
 [[project-reactor]]
 === Project Reactor

@@ -540,8 +540,16 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-ver
 ----
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
+<2> Called once the request has been dispatched
+<3> Called with the response - handle each result here, as it completes
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
+
+NOTE: The `JStream*` variants of these processors (which return a `java.util.stream.Stream` of results instead of
+taking a callback) are *deprecated for removal*. They buffer every result in an unbounded queue that only drains when
+you consume the stream, and the returned `Stream` is single-shot - it terminates the first time the queue is
+momentarily empty and cannot be restarted, so results produced after that accumulate until the JVM runs out of memory.
+Use the callback form shown above. See link:https://github.com/astubbs/parallel-consumer/issues/122[astubbs#122].
 
 [[project-reactor]]
 === Project Reactor
