@@ -853,6 +853,32 @@ module; it is a demo, but an unguarded demo rots. **Basic UI tests only** — th
 renders the snapshot and reflects both lanes; no screenshot diffing, no browser-matrix work. **Domain
 reuses parcel logistics** from the core example, so the demo deepens a story the reader has already
 met rather than teaching a fifth one.
+
+**Do not build a run harness — one already exists.** The `feats/web-gui` branch generalised the chaos
+conductor into a scenario framework (`Scenario`, `ScenarioPhase`, `ScenarioRunner` with `LOOP`/`ONCE`
+modes, `ScenarioActions` registry, `ScriptedPlanSource`), and `ShowcaseScenario` in the dashboard module
+is already a consumer of it declared entirely outside the framework's package and module. `bin/dashboard-demo.sh`
+is the one-command front door.
+
+Two of its design decisions answer questions this plan had to leave open, and the demonstration module
+should inherit both rather than re-deriving them:
+
+- **The same scenario is the demo and the gating test.** `LOOP` runs it for someone to watch; `--once`
+  runs it as a test where a phase that quietly stopped demonstrating its thing is a run *failure*. That
+  is what makes an unguarded demo not rot, and it is the shape "its tests gate CI" should take.
+- **Scripted structure, seeded detail, postconditions per phase.** The phase order is guaranteed so the
+  interesting moment always arrives; the seed varies only the texture. Their own note is the rule worth
+  copying verbatim: *a postcondition that only holds when the RNG cooperates is a flaky test dressed up
+  as a demo.*
+
+So the demonstration module declares a parcel-logistics race `Scenario` as a framework consumer, and
+inherits the runner, the `--once` gate and the front-door script shape.
+
+**Test-scope execution is settled (user-directed, 2026-08-08): the reader runs it from the test package,
+as `ShowcaseScenario` already is.** No part of the scenario framework is promoted to main scope for
+this. A front-door script in the `bin/dashboard-demo.sh` shape is what a reader actually invokes, so the
+test-scope classpath is an implementation detail they never see. Revisit only if the demo is ever
+wanted as a published, standalone artifact — which it is not.
 - **Wiring the `parallel-consumer-dashboard` in anywhere.** Out of scope for this plan on its own
   merits: it would stack this branch on an unmerged PR (`feats/web-gui`, astubbs#215). Its natural home
   is the demonstration module above, not an example module.
