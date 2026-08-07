@@ -38,7 +38,9 @@ public enum TransactionalClaim {
      */
     BULK_SHARED_TRANSACTION(Source.OPTIONS_JAVADOC,
             "Messages sent in parallel by different workers get added to the same transaction block",
-            Status.NOT_YET_COVERED, "owned by U2"),
+            Status.PROVED, "TransactionalBulkCommitTest#recordsFromDifferentWorkersInOneIntervalShareOneTransaction. "
+            + "Negative control observed (U2): splitting the four records across two commit cycles instead of one "
+            + "turned it red with 'Wanted 1 time ... but was 2 times' on beginTransaction()"),
 
     /**
      * C2 - the all-or-none visibility guarantee, per source offset, at READ_COMMITTED.
@@ -68,7 +70,9 @@ public enum TransactionalClaim {
      */
     COMMIT_INTERVAL_AUTO_REDUCED(Source.OPTIONS_JAVADOC,
             "gets automatically reduced from the default of 5 seconds to 100ms",
-            Status.NOT_YET_COVERED, "owned by U2"),
+            Status.COVERED_NO_CONTROL, "TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms "
+            + "and its two sibling arms. No negative control: breaking the mechanism means changing the resolution "
+            + "in ParallelConsumerOptions#transactionsValidation itself, which U11 owns"),
 
     /**
      * C6 - this one is Kafka's guarantee, not ours. We document it, so we record it and test it once; we do not
