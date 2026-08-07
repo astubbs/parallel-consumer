@@ -11,19 +11,15 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import io.micrometer.core.instrument.search.Search;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -35,6 +31,12 @@ import java.util.function.BiConsumer;
  * it, on the calling thread - that is the mechanism behind confluentinc/parallel-consumer#618, where a Prometheus
  * scrape thread evaluated a PC gauge and got {@code ConcurrentModificationException: KafkaConsumer is not safe for
  * multi-threaded access}. {@link SnapshotPublisher} is what guarantees the calling thread is the right one.
+ * <p>
+ * <strong>One pass over the registry per sample.</strong> Every sampling method takes the {@link MeterIndex} rather
+ * than reaching for the registry itself, and {@link StateSampler#sample()} builds exactly one of those per pass. That
+ * is deliberate and is the reason there is no no-argument overload to fall back to: this runs on the loop that can
+ * turn over thousands of times a second, and a per-lookup registry scan is precisely the cost this module exists not
+ * to impose. See {@link MeterIndex} for what a {@code Search} call actually costs.
  * <p>
  * Meter names are taken from {@link PCMetricsDef} rather than written out as string literals here, so a rename in
  * core breaks this module's compilation instead of silently turning every value absent.
@@ -61,8 +63,6 @@ public class MeterSource {
      */
     private static final String ENCODING_TAG = "encoding";
 
-    private static final Set<String> PC_METER_NAMES = pcMeterNames();
-
     private static final Map<Integer, String> STATE_NAMES_BY_VALUE = stateNamesByValue();
 
     private final MeterRegistry registry;
@@ -72,44 +72,45 @@ public class MeterSource {
     }
 
     /**
+     * Indexes the registry once, for one sample's worth of reads. Every other method here takes the result.
+     */
+    public MeterIndex index() {
+        return MeterIndex.of(registry);
+    }
+
+    /**
      * Whether any of Parallel Consumer's own meters are present. Distinguishes "PC has not bound its meters yet, or
      * no registry was supplied" from "PC is genuinely idle", which the page must not conflate.
      */
-    public boolean isPopulated() {
-        if (registry == null) {
-            return false;
-        }
-        return !Search.in(registry).name(PC_METER_NAMES::contains).meters().isEmpty();
+    public boolean isPopulated(MeterIndex index) {
+        return index.hasPcMeters();
     }
 
     /**
      * One row per topic-partition, built by grouping every {@code topic}/{@code partition}-tagged meter family into
      * the row for its partition. Ordered by topic then partition so the page's table keeps a stable row order.
      */
-    public List<PartitionSnapshot> samplePartitions() {
+    public List<PartitionSnapshot> samplePartitions(MeterIndex index) {
         Map<TopicPartition, PartitionSnapshot.PartitionSnapshotBuilder> rows = new HashMap<>();
-        if (registry == null) {
-            return new ArrayList<>();
-        }
 
-        gaugePerPartition(rows, PCMetricsDef.PARTITION_HIGHEST_SEEN_OFFSET,
+        gaugePerPartition(index, rows, PCMetricsDef.PARTITION_HIGHEST_SEEN_OFFSET,
                 PartitionSnapshot.PartitionSnapshotBuilder::highestSeenOffset);
-        gaugePerPartition(rows, PCMetricsDef.PARTITION_HIGHEST_COMPLETED_OFFSET,
+        gaugePerPartition(index, rows, PCMetricsDef.PARTITION_HIGHEST_COMPLETED_OFFSET,
                 PartitionSnapshot.PartitionSnapshotBuilder::highestCompletedOffset);
-        gaugePerPartition(rows, PCMetricsDef.PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED_OFFSET,
+        gaugePerPartition(index, rows, PCMetricsDef.PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED_OFFSET,
                 PartitionSnapshot.PartitionSnapshotBuilder::highestSequentialSucceededOffset);
-        gaugePerPartition(rows, PCMetricsDef.PARTITION_LAST_COMMITTED_OFFSET,
+        gaugePerPartition(index, rows, PCMetricsDef.PARTITION_LAST_COMMITTED_OFFSET,
                 PartitionSnapshot.PartitionSnapshotBuilder::lastCommittedOffset);
-        gaugePerPartition(rows, PCMetricsDef.PARTITION_INCOMPLETE_OFFSETS,
+        gaugePerPartition(index, rows, PCMetricsDef.PARTITION_INCOMPLETE_OFFSETS,
                 PartitionSnapshot.PartitionSnapshotBuilder::incompleteOffsets);
-        gaugePerPartition(rows, PCMetricsDef.PARTITION_ASSIGNMENT_EPOCH,
+        gaugePerPartition(index, rows, PCMetricsDef.PARTITION_ASSIGNMENT_EPOCH,
                 PartitionSnapshot.PartitionSnapshotBuilder::assignmentEpoch);
 
-        counterPerPartition(rows, PCMetricsDef.PROCESSED_RECORDS,
+        counterPerPartition(index, rows, PCMetricsDef.PROCESSED_RECORDS,
                 PartitionSnapshot.PartitionSnapshotBuilder::processedRecords);
-        counterPerPartition(rows, PCMetricsDef.FAILED_RECORDS,
+        counterPerPartition(index, rows, PCMetricsDef.FAILED_RECORDS,
                 PartitionSnapshot.PartitionSnapshotBuilder::failedRecords);
-        counterPerPartition(rows, PCMetricsDef.SLOW_RECORDS,
+        counterPerPartition(index, rows, PCMetricsDef.SLOW_RECORDS,
                 PartitionSnapshot.PartitionSnapshotBuilder::slowRecords);
 
         List<TopicPartition> keys = new ArrayList<>(rows.keySet());
@@ -125,16 +126,16 @@ public class MeterSource {
     /**
      * Instance-wide work state from the aggregate gauges.
      */
-    public WorkSnapshot sampleWork() {
+    public WorkSnapshot sampleWork(MeterIndex index) {
         return WorkSnapshot.builder()
-                .inflightRecords(gaugeAsLong(PCMetricsDef.INFLIGHT_RECORDS))
-                .waitingRecords(gaugeAsLong(PCMetricsDef.WAITING_RECORDS))
-                .shards(gaugeAsLong(PCMetricsDef.NUMBER_OF_SHARDS))
-                .shardsSize(gaugeAsLong(PCMetricsDef.SHARDS_SIZE))
-                .incompleteOffsetsTotal(gaugeAsLong(PCMetricsDef.INCOMPLETE_OFFSETS_TOTAL))
-                .pausedPartitions(gaugeAsLong(PCMetricsDef.NUM_PAUSED_PARTITIONS))
-                .numberOfPartitions(gaugeAsLong(PCMetricsDef.NUMBER_OF_PARTITIONS))
-                .dynamicLoadFactor(gaugeValue(PCMetricsDef.DYNAMIC_EXTRA_LOAD_FACTOR))
+                .inflightRecords(gaugeAsLong(index, PCMetricsDef.INFLIGHT_RECORDS))
+                .waitingRecords(gaugeAsLong(index, PCMetricsDef.WAITING_RECORDS))
+                .shards(gaugeAsLong(index, PCMetricsDef.NUMBER_OF_SHARDS))
+                .shardsSize(gaugeAsLong(index, PCMetricsDef.SHARDS_SIZE))
+                .incompleteOffsetsTotal(gaugeAsLong(index, PCMetricsDef.INCOMPLETE_OFFSETS_TOTAL))
+                .pausedPartitions(gaugeAsLong(index, PCMetricsDef.NUM_PAUSED_PARTITIONS))
+                .numberOfPartitions(gaugeAsLong(index, PCMetricsDef.NUMBER_OF_PARTITIONS))
+                .dynamicLoadFactor(gaugeValue(index, PCMetricsDef.DYNAMIC_EXTRA_LOAD_FACTOR))
                 .build();
     }
 
@@ -144,9 +145,9 @@ public class MeterSource {
      * Returns a builder rather than a finished value because {@link DirectStateSource} contributes the remaining
      * fields - the composition happens once, in {@link StateSampler}.
      */
-    public LifecycleSnapshot.LifecycleSnapshotBuilder sampleLifecycle() {
-        Integer status = gaugeAsInteger(PCMetricsDef.PC_STATUS);
-        Integer pollerStatus = gaugeAsInteger(PCMetricsDef.PC_POLLER_STATUS);
+    public LifecycleSnapshot.LifecycleSnapshotBuilder sampleLifecycle(MeterIndex index) {
+        Integer status = gaugeAsInteger(index, PCMetricsDef.PC_STATUS);
+        Integer pollerStatus = gaugeAsInteger(index, PCMetricsDef.PC_POLLER_STATUS);
         return LifecycleSnapshot.builder()
                 .stateValue(status)
                 .state(stateName(status))
@@ -157,28 +158,26 @@ public class MeterSource {
     /**
      * Offset-encoding timings, codec usage and payload-size ratios.
      */
-    public EncodingSnapshot sampleEncoding() {
+    public EncodingSnapshot sampleEncoding(MeterIndex index) {
         EncodingSnapshot.EncodingSnapshotBuilder builder = EncodingSnapshot.builder();
 
-        Timer encodingTimer = registry == null
-                ? null
-                : Search.in(registry).name(PCMetricsDef.OFFSETS_ENCODING_TIME.getName()).timer();
+        Timer encodingTimer = index.first(PCMetricsDef.OFFSETS_ENCODING_TIME, Timer.class);
         if (encodingTimer != null) {
             builder.encodingCount(encodingTimer.count())
                     .encodingTotalTimeMillis(sane(encodingTimer.totalTime(TimeUnit.MILLISECONDS)))
                     .encodingMaxTimeMillis(sane(encodingTimer.max(TimeUnit.MILLISECONDS)));
         }
 
-        builder.usageByEncoding(sampleEncodingUsage());
+        builder.usageByEncoding(sampleEncodingUsage(index));
 
-        DistributionSummary metadataSpace = summary(PCMetricsDef.METADATA_SPACE_USED);
+        DistributionSummary metadataSpace = index.first(PCMetricsDef.METADATA_SPACE_USED, DistributionSummary.class);
         if (metadataSpace != null) {
             builder.metadataSpaceUsedCount(metadataSpace.count())
                     .metadataSpaceUsedMean(sane(metadataSpace.mean()))
                     .metadataSpaceUsedMax(sane(metadataSpace.max()));
         }
 
-        DistributionSummary payloadRatio = summary(PCMetricsDef.PAYLOAD_RATIO_USED);
+        DistributionSummary payloadRatio = index.first(PCMetricsDef.PAYLOAD_RATIO_USED, DistributionSummary.class);
         if (payloadRatio != null) {
             builder.payloadRatioUsedCount(payloadRatio.count())
                     .payloadRatioUsedMean(sane(payloadRatio.mean()))
@@ -188,14 +187,9 @@ public class MeterSource {
         return builder.build();
     }
 
-    private Map<String, Double> sampleEncodingUsage() {
+    private Map<String, Double> sampleEncodingUsage(MeterIndex index) {
         Map<String, Double> usage = new LinkedHashMap<>();
-        if (registry == null) {
-            return usage;
-        }
-        Collection<Counter> counters =
-                Search.in(registry).name(PCMetricsDef.OFFSETS_ENCODING_USAGE.getName()).counters();
-        List<Counter> ordered = new ArrayList<>(counters);
+        List<Counter> ordered = index.all(PCMetricsDef.OFFSETS_ENCODING_USAGE, Counter.class);
         // deterministic order, so the page's legend does not reshuffle between ticks
         ordered.sort(Comparator.comparing(c -> String.valueOf(c.getId().getTag(ENCODING_TAG))));
         for (Counter counter : ordered) {
@@ -211,10 +205,11 @@ public class MeterSource {
         return usage;
     }
 
-    private void gaugePerPartition(Map<TopicPartition, PartitionSnapshot.PartitionSnapshotBuilder> rows,
+    private void gaugePerPartition(MeterIndex index,
+                                   Map<TopicPartition, PartitionSnapshot.PartitionSnapshotBuilder> rows,
                                    PCMetricsDef def,
                                    BiConsumer<PartitionSnapshot.PartitionSnapshotBuilder, Long> setter) {
-        for (Gauge gauge : Search.in(registry).name(def.getName()).gauges()) {
+        for (Gauge gauge : index.all(def, Gauge.class)) {
             PartitionSnapshot.PartitionSnapshotBuilder row = rowFor(rows, gauge);
             if (row == null) {
                 continue;
@@ -226,10 +221,11 @@ public class MeterSource {
         }
     }
 
-    private void counterPerPartition(Map<TopicPartition, PartitionSnapshot.PartitionSnapshotBuilder> rows,
+    private void counterPerPartition(MeterIndex index,
+                                     Map<TopicPartition, PartitionSnapshot.PartitionSnapshotBuilder> rows,
                                      PCMetricsDef def,
                                      BiConsumer<PartitionSnapshot.PartitionSnapshotBuilder, Double> setter) {
-        for (Counter counter : Search.in(registry).name(def.getName()).counters()) {
+        for (Counter counter : index.all(def, Counter.class)) {
             PartitionSnapshot.PartitionSnapshotBuilder row = rowFor(rows, counter);
             if (row == null) {
                 continue;
@@ -268,25 +264,18 @@ public class MeterSource {
         return existing;
     }
 
-    private DistributionSummary summary(PCMetricsDef def) {
-        return registry == null ? null : Search.in(registry).name(def.getName()).summary();
-    }
-
-    private Double gaugeValue(PCMetricsDef def) {
-        if (registry == null) {
-            return null;
-        }
-        Gauge gauge = Search.in(registry).name(def.getName()).gauge();
+    private Double gaugeValue(MeterIndex index, PCMetricsDef def) {
+        Gauge gauge = index.first(def, Gauge.class);
         return gauge == null ? null : sane(gauge.value());
     }
 
-    private Long gaugeAsLong(PCMetricsDef def) {
-        Double value = gaugeValue(def);
+    private Long gaugeAsLong(MeterIndex index, PCMetricsDef def) {
+        Double value = gaugeValue(index, def);
         return value == null ? null : (long) (double) value;
     }
 
-    private Integer gaugeAsInteger(PCMetricsDef def) {
-        Double value = gaugeValue(def);
+    private Integer gaugeAsInteger(MeterIndex index, PCMetricsDef def) {
+        Double value = gaugeValue(index, def);
         return value == null ? null : (int) (double) value;
     }
 
@@ -310,14 +299,6 @@ public class MeterSource {
         Map<Integer, String> names = new HashMap<>();
         for (State state : State.values()) {
             names.put(state.getValue(), state.name());
-        }
-        return names;
-    }
-
-    private static Set<String> pcMeterNames() {
-        Set<String> names = new HashSet<>();
-        for (PCMetricsDef def : PCMetricsDef.values()) {
-            names.add(def.getName());
         }
         return names;
     }

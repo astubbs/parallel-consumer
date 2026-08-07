@@ -14,7 +14,7 @@
  * page.
  */
 
-import {element, formatBigCount, setAttribute, setText} from '../ui.js';
+import {element, formatBigCount, readPersisted, setAttribute, setText, writePersisted} from '../ui.js';
 import {buildPartitionModels, totalWonRecords} from './offsets/model.js';
 import {offsetRenderer, offsetRenderers} from './offsets/registry.js';
 // side-effect import: this is what puts styles in the registry. See renderers.js for why it is a separate file.
@@ -72,22 +72,6 @@ export function createOffsetsPanel() {
         return choices;
     }
 
-    function storedChoice() {
-        try {
-            return window.localStorage.getItem(STYLE_STORAGE_KEY);
-        } catch (ignored) {
-            return null;
-        }
-    }
-
-    function storeChoice(value) {
-        try {
-            window.localStorage.setItem(STYLE_STORAGE_KEY, value);
-        } catch (ignored) {
-            // a browser with storage disabled still works; it just does not remember the choice
-        }
-    }
-
     function populatePicker() {
         const choices = availableChoices();
         styleSelect.replaceChildren();
@@ -96,7 +80,7 @@ export function createOffsetsPanel() {
             setText(option, choice.label);
             styleSelect.appendChild(option);
         }
-        const remembered = storedChoice();
+        const remembered = readPersisted(STYLE_STORAGE_KEY);
         const valid = choices.some(choice => choice.value === remembered);
         styleSelect.value = valid ? remembered : (choices.length > 0 ? choices[0].value : '');
         // one style is not a choice; say so rather than offering a control that does nothing
@@ -152,7 +136,7 @@ export function createOffsetsPanel() {
     mountChoice();
 
     styleSelect.addEventListener('change', () => {
-        storeChoice(styleSelect.value);
+        writePersisted(STYLE_STORAGE_KEY, styleSelect.value);
         mountChoice();
     });
 

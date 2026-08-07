@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
 import java.util.function.Supplier;
 
 /**
@@ -95,9 +96,15 @@ public class DashboardWatcher implements AutoCloseable {
     private Thread thread;
 
     private final AtomicLong samplesTaken = new AtomicLong();
-    private final AtomicLong peakInflight = new AtomicLong();
-    private final AtomicLong peakShards = new AtomicLong();
-    private final AtomicLong peakProcessedRecords = new AtomicLong();
+    /**
+     * The run's high-water marks. {@link LongAccumulator} rather than a hand-rolled compare-and-set loop over an
+     * {@link AtomicLong}: "keep the largest value ever offered" is exactly what it is for, and the JDK's version does
+     * not have to be re-read to be believed.
+     */
+    private final LongAccumulator peakInflight = new LongAccumulator(Long::max, 0);
+    private final LongAccumulator peakShards = new LongAccumulator(Long::max, 0);
+    private final LongAccumulator peakProcessedRecords = new LongAccumulator(Long::max, 0);
+    /** A plain running total, NOT a peak - every epoch change counts, so this stays an {@link AtomicLong}. */
     private final AtomicLong assignmentEpochChanges = new AtomicLong();
 
     /** Last assignment epoch seen per partition - a change in any of them is a re-assignment. */
@@ -191,12 +198,12 @@ public class DashboardWatcher implements AutoCloseable {
         if (work != null) {
             if (work.getInflightRecords() != null) {
                 long inflight = work.getInflightRecords();
-                raise(peakInflight, inflight);
+                peakInflight.accumulate(inflight);
                 if (inflight > phasePeakInflight) phasePeakInflight = inflight;
             }
             if (work.getShards() != null) {
                 long shards = work.getShards();
-                raise(peakShards, shards);
+                peakShards.accumulate(shards);
                 if (shards > phasePeakShards) phasePeakShards = shards;
             }
         }
@@ -222,7 +229,7 @@ public class DashboardWatcher implements AutoCloseable {
             }
             recordBandIfWidest(partition, key);
         }
-        raise(peakProcessedRecords, processed);
+        peakProcessedRecords.accumulate(processed);
         latchRecoveryIfCommitPassedTheBand();
     }
 
@@ -289,13 +296,6 @@ public class DashboardWatcher implements AutoCloseable {
         this.widestBand = null;
         this.recoveredBand = null;
         this.strandedBandCaptureFrozen = false;
-    }
-
-    private static void raise(AtomicLong holder, long candidate) {
-        long seen;
-        while (candidate > (seen = holder.get())) {
-            if (holder.compareAndSet(seen, candidate)) return;
-        }
     }
 
     // --- whole-run observations ---

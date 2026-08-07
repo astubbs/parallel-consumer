@@ -20,7 +20,16 @@
  * staleness is stated in words with an age beside it (plan R18).
  */
 
-import {formatDuration, formatInstant, interpolateNumber, setAttribute, setText} from './ui.js';
+import {
+    formatDuration,
+    formatInstant,
+    interpolateNumber,
+    readPersisted,
+    setAttribute,
+    setText,
+    toGeometryNumber,
+    writePersisted
+} from './ui.js';
 import {isInterruption, nextGapEstimate, tweenFraction} from './tween.js';
 import {createOffsetsPanel} from './panels/offsets.js';
 
@@ -106,23 +115,6 @@ let renderedSettled = false;
 const panels = [createOffsetsPanel()];
 
 /* -------------------------------------------------------------- cadence UI */
-
-function storedCadence() {
-    try {
-        return window.localStorage.getItem(CADENCE_STORAGE_KEY);
-    } catch (ignored) {
-        // a browser with storage disabled is not a broken browser; it just does not remember the choice
-        return null;
-    }
-}
-
-function storeCadence(value) {
-    try {
-        window.localStorage.setItem(CADENCE_STORAGE_KEY, value);
-    } catch (ignored) {
-        // see storedCadence
-    }
-}
 
 function chosenCadence() {
     return dom.cadence.value;
@@ -359,6 +351,13 @@ function acceptDocument(payload, source) {
  * Builds the view the panels render from: the newest document, with every numeric quantity tweened from the one
  * before it. Offsets keep their exact string form for display and gain a separate approximate number for geometry -
  * the two are never confused, because above 2^53 the number is wrong and the string is not.
+ *
+ * `partitions` IS DELIBERATELY LAZY. This runs on every animation frame, but the panel loop below is gated on
+ * something having changed, and `renderStatus` reads none of it - so on a settled page (an idle healthy consumer,
+ * which is most of the time) the whole per-partition tween would be computed sixty times a second and thrown away.
+ * A getter rather than moving the call up into `frame` because the panels' contract stays exactly `view.partitions`:
+ * nothing downstream has to know, and the work happens if and only if somebody actually reads it. Memoised, so a
+ * panel reading it twice in one frame still pays once.
  */
 function buildView(nowMonotonicMillis) {
     const current = feed.current;
@@ -375,6 +374,7 @@ function buildView(nowMonotonicMillis) {
     }
     const currentDocument = current.document;
     const previousDocument = previous ? previous.document : null;
+    let interpolatedPartitions = null;
 
     return {
         fraction: fraction,
@@ -390,7 +390,12 @@ function buildView(nowMonotonicMillis) {
         lifecycle: currentDocument.lifecycle || {},
         work: interpolateObject(previousDocument ? previousDocument.work : null, currentDocument.work, fraction),
         encoding: currentDocument.encoding || {},
-        partitions: interpolatePartitions(previousDocument, currentDocument, fraction)
+        get partitions() {
+            if (interpolatedPartitions === null) {
+                interpolatedPartitions = interpolatePartitions(previousDocument, currentDocument, fraction);
+            }
+            return interpolatedPartitions;
+        }
     };
 }
 
@@ -454,13 +459,17 @@ function interpolatePartitions(previousDocument, currentDocument, fraction) {
     });
 }
 
+/**
+ * One offset marker's PIXEL number, tweened. The string-to-number step is `toGeometryNumber` rather than a `Number()`
+ * cast written out again here: "the numeric form of an offset, for pixels only" is a rule with a documented reason
+ * and a test, and it is worth exactly one definition.
+ */
 function interpolateOffset(before, current, field, fraction) {
-    const to = current[field];
-    if (to === null || to === undefined) {
+    const to = toGeometryNumber(current[field]);
+    if (to === null) {
         return null;
     }
-    const from = before ? before[field] : null;
-    return interpolateNumber(from === null || from === undefined ? null : Number(from), Number(to), fraction);
+    return interpolateNumber(toGeometryNumber(before ? before[field] : null), to, fraction);
 }
 
 function partitionKey(partition) {
@@ -622,12 +631,12 @@ async function prime() {
 }
 
 function start() {
-    const remembered = storedCadence();
+    const remembered = readPersisted(CADENCE_STORAGE_KEY);
     if (remembered && Array.from(dom.cadence.options).some(option => option.value === remembered)) {
         dom.cadence.value = remembered;
     }
     dom.cadence.addEventListener('change', () => {
-        storeCadence(chosenCadence());
+        writePersisted(CADENCE_STORAGE_KEY, chosenCadence());
         // an explicit choice is also a fresh chance for the stream, since "live" is the only setting it serves
         feed.streamBlocked = false;
         feed.errorText = null;

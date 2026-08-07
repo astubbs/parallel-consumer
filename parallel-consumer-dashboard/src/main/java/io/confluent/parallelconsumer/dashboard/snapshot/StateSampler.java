@@ -58,15 +58,17 @@ public class StateSampler {
      */
     public PcSnapshot sample() {
         long sequence = ++sampleCount;
-        LifecycleSnapshot lifecycle = directStateSource.contributeTo(meterSource.sampleLifecycle()).build();
+        // ONE pass over the registry for the whole sample. See MeterIndex for what the per-lookup alternative costs.
+        MeterIndex meters = meterSource.index();
+        LifecycleSnapshot lifecycle = directStateSource.contributeTo(meterSource.sampleLifecycle(meters)).build();
         return PcSnapshot.builder()
                 .captureEpochMillis(System.currentTimeMillis())
                 .sampleSequence(sequence)
-                .registryPopulated(meterSource.isPopulated())
+                .registryPopulated(meterSource.isPopulated(meters))
                 .lifecycle(lifecycle)
-                .work(meterSource.sampleWork())
-                .encoding(meterSource.sampleEncoding())
-                .partitions(meterSource.samplePartitions())
+                .work(meterSource.sampleWork(meters))
+                .encoding(meterSource.sampleEncoding(meters))
+                .partitions(meterSource.samplePartitions(meters))
                 .build();
     }
 

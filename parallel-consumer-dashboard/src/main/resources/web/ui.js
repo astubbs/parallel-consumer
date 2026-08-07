@@ -181,3 +181,29 @@ export function toGeometryNumber(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
 }
+
+/**
+ * A remembered preference, or null if there is none or storage is unavailable.
+ *
+ * A browser with storage disabled - private mode, a locked-down enterprise profile, a sandboxed iframe - throws from
+ * `localStorage` rather than returning nothing, and that is not a broken browser. It simply does not remember the
+ * choice, which is a complete answer, so the throw is swallowed here once instead of at every call site.
+ */
+export function readPersisted(key) {
+    try {
+        return window.localStorage.getItem(key);
+    } catch (ignored) {
+        return null;
+    }
+}
+
+/**
+ * Remembers a preference, if this browser will let us. See {@link readPersisted} for why failing is not an error.
+ */
+export function writePersisted(key, value) {
+    try {
+        window.localStorage.setItem(key, value);
+    } catch (ignored) {
+        // nothing to do and nothing to report: the page works either way
+    }
+}
