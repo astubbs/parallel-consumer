@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.sanity;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.extern.slf4j.Slf4j;
@@ -21,14 +22,6 @@ import java.util.stream.StreamSupport;
  */
 @Slf4j
 public class StreamTest {
-
-    //    @Test
-    public void test() {
-        Stream<Double> s = Stream.generate(() -> Math.random());
-        s.forEach(x -> {
-            log.info(x.toString());
-        });
-    }
 
     @Test
     public void testStreamSpliterators() {
