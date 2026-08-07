@@ -25,15 +25,26 @@
 # comparison at the end of this script is the tripwire - if it says the count went DOWN, you lost work.
 #
 # The patch is the deliverable: its line count is the spike's answer to "how little had to change".
+#
+# There is a second tree, generated only under -Pkafka-upstream-tests: Kafka's own test fixtures, which
+# need the same accessor conversion for the same reason. Re-derive that one with:
+#
+#   bin/regen-patch.sh kafka-test-pristine kafka-test-patched src/main/patch/pcspike-testfixtures.patch
+#
+# The three arguments are all-or-nothing; with none, the main tree above is assumed.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 module_dir="$(dirname "$here")"
 
-pristine="$module_dir/target/kafka-pristine"
-patched="$module_dir/target/kafka-patched"
-patch_file="$module_dir/src/main/patch/pcspike.patch"
+pristine_name="${1:-kafka-pristine}"
+patched_name="${2:-kafka-patched}"
+patch_rel="${3:-src/main/patch/pcspike.patch}"
+
+pristine="$module_dir/target/$pristine_name"
+patched="$module_dir/target/$patched_name"
+patch_file="$module_dir/$patch_rel"
 
 for d in "$pristine" "$patched"; do
     if [[ ! -d "$d" ]]; then
@@ -45,7 +56,7 @@ done
 
 # diff exits 1 when files differ, which is the normal case here - so don't let set -e kill us.
 set +e
-(cd "$module_dir/target" && diff -ruN "kafka-pristine" "kafka-patched") >"$patch_file.tmp"
+(cd "$module_dir/target" && diff -ruN "$pristine_name" "$patched_name") >"$patch_file.tmp"
 diff_status=$?
 set -e
 
@@ -62,8 +73,8 @@ hunks_before=$(grep -c '^@@' "$patch_file" 2>/dev/null || true)
 
 # diff -ruN prefixes paths with the two directory names; strip them so the patch applies with -p1 from
 # inside the generated directory, which is what apply-patch.sh does.
-sed -e 's|^--- kafka-pristine/|--- a/|' \
-    -e 's|^+++ kafka-patched/|+++ b/|' \
+sed -e "s|^--- $pristine_name/|--- a/|" \
+    -e "s|^+++ $patched_name/|+++ b/|" \
     "$patch_file.tmp" >"$patch_file"
 rm -f "$patch_file.tmp"
 
