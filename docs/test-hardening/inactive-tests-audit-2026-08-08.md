@@ -199,8 +199,8 @@ every method beneath it, not one. Worth remembering if that ever changes.
 
 - **Annotation message:** none; the javadoc carries the only prose.
 - **Created and disabled by:** `53052f512`, Antony Stubbs, authored 2022-02-09, *"fix: Concurrency
-  and State improvements (#190)"*. Javadoc, `@Disabled`, `@Test` and the whole method arrive in one
-  hunk - **born disabled**, never enabled on master.
+  and State improvements"* - the squash of upstream confluentinc#190. Javadoc, `@Disabled`, `@Test`
+  and the whole method arrive in one hunk - **born disabled**, never enabled on master.
 - **Reason: runtime cost, not failure.** Two independent lines of evidence. Its javadoc, written by
   the same commit, says *"This test takes some time, but seems required in order to expose some race
   conditions without syntehticly creatign them"* - no failure is claimed. And it was authored as part
@@ -491,7 +491,7 @@ copy holds nothing this document lacks. **They are recorded, not fixed.**
 
 | Location | Issue | Status |
 |---|---|---|
-| `LargeVolumeInMemoryTests` | 500 vs 1,000,000 messages | **Open.** Still `int quantityOfMessagesToProduce = 500;` with `// 1_000_000` commented above it, `git blame`d to `565230cd5a` (2020-06-04) and untouched since. The predecessor listed this as fixed by PR #49, but carried a caveat - *"Check whether this fix has been merged to master before flagging again"* - and it had not: PR #49 never touched the file. The restore-to-1M commit exists only on `refactor/test-hardening`. |
+| `LargeVolumeInMemoryTests` | 500 vs 1,000,000 messages | **Open.** Still `int quantityOfMessagesToProduce = 500;` with `// 1_000_000` commented above it, `git blame`d to `565230cd5a` (2020-06-04) and untouched since. The predecessor listed this as fixed by astubbs#49, but carried a caveat - *"Check whether this fix has been merged to master before flagging again"* - and it had not: astubbs#49 never touched the file. The restore-to-1M commit exists only on `refactor/test-hardening`. |
 | `MultiInstanceHighVolumeTest` | `30_000_00` - an underscore typo giving 3M, not 30M | **Open. A real defect, not a judgement call.** |
 | `VeryLargeMessageVolumeTest` | 1M vs 2M | Open - decide and clean up |
 | `LoadTest` | 4K vs several commented-out alternatives | Open - dead code |
