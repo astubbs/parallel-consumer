@@ -17,4 +17,8 @@ Also worth adding there, since the table already has rows for both: isolation le
 setting (`share.isolation.level`), not per-consumer, and the delivery counts behind the poison-message
 row "cannot be relied upon to be precise" because those updates are themselves not exactly-once.
 
+- `STRATEGY.md` is missing from `AGENTS.md`'s "Where things live" table. astubbs#223 is the PR that
+  introduces it properly, so it should add that entry too - otherwise the file exists but nothing
+  points an agent at it.
+
 Delete this file once astubbs#223 carries the citation.

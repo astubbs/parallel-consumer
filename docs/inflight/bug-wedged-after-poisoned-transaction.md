@@ -58,3 +58,34 @@ makes observable.
 - `docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md` -
   a different defect with the same user-visible shape, where the cause was that no commit was ever
   *attempted*. Worth reading first: it is the closest prior art for telling these apart.
+
+## Answered from the code, 2026-08-08: there is no recovery path short of close
+
+The review settled this without needing the experiment proposed above.
+
+The only `abortTransaction()` call site in the codebase is `ProducerManager#close(Duration)`. And
+`ProducerWrapper#isTransactionOpen()` is `producerState.equals(BEGIN)`, which stays `BEGIN` after a
+poisoned send - so `lazyMaybeBeginTransaction` never begins a replacement transaction, and nothing in
+band ever aborts the poisoned one.
+
+So the instance either:
+
+- dies at the next commit attempt, when the abortable-state `KafkaException` propagates out of
+  `commitOffsets` and kills the control thread; or
+- if nothing is dirty, so no commit is attempted, stays alive and stuck exactly as observed.
+
+Neither is recovery. The question above is closed; what remains is the design decision, which is
+genuinely open: abort-and-reopen on abortable error, versus fail fast. That belongs with the deferred
+Phase B chaos work rather than bolted onto a produce callback.
+
+Two things would make the wedge cheaper to live with in the meantime, if the design decision takes a
+while:
+
+- `log.error("Error producing result message", exception)` now fires once per record per retry for the
+  life of a wedged instance, unthrottled.
+- PC's failure reason after poisoning is a generic `KafkaException` with no hint that a restart is the
+  only cure.
+
+Until that decision is taken, a small unit test asserting that a poisoned transaction is never
+re-begun would at least freeze today's behaviour, so a future recovery fix shows up as a visible
+change rather than a silent one.
