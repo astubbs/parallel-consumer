@@ -112,6 +112,13 @@
             <artifactId>kafka</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- BrokerIntegrationTest (core test-jar) uses commons-lang3, and test-scope dependencies are not
+             transitive - without this the container fails to start with NoClassDefFoundError. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
