@@ -234,7 +234,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * @return if the system failed, returns the recorded reason - or {@code null} if it did not.
-     * @deprecated prefer {@link #getHealth()} and {@link PCHealth#getFailureCause()}, which returns an
+     * @deprecated since 0.6.0.0 - prefer {@link #getHealth()} and {@link PCHealth#getFailureCause()}, which returns an
      *         {@link java.util.Optional} and so cannot be mistaken for a never-null accessor. Note the two share a
      *         name but not a null contract: {@code health.getFailureCause() != null} is always true, and silently so.
      *         This signature cannot change before a major version.
