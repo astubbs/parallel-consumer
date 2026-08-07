@@ -15,7 +15,6 @@ import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor
 import io.vertx.core.json.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
@@ -64,20 +63,20 @@ import java.util.function.BooleanSupplier;
  * before this module ever sees it, so a meter-built fixture could not exercise the precision the wire format exists
  * to protect.
  *
- * <h2>How it fails, and how it skips</h2>
+ * <h2>It never skips</h2>
  * <p>
- * With no Chrome on the machine the suite aborts its tests rather than failing them, because a laptop without a
- * browser is not a broken build. That is also how a harness quietly becomes decoration, so
- * {@code -Ddashboard.ui.requireBrowser=true} turns the skip into a failure - which is what a CI lane that means to
- * gate on this should set.
+ * If the browser cannot be started, these tests FAIL. They do not abort, and there is no opt-out property. A skipped
+ * suite is indistinguishable from a passing one, which is how a harness becomes decoration; and a build tool the
+ * project needs is a build tool everyone working on it should have.
+ * <p>
+ * There is also nothing to install. Selenium Manager (built in since 4.6, and able to fetch Chrome for Testing itself
+ * since 4.11) resolves both the driver and the browser on first use and caches them under {@code ~/.cache/selenium}.
+ * So a machine without Chrome gets one; a failure here means something genuinely wrong - no network on a cold cache,
+ * a sandbox that forbids the download, an incompatible platform - and every one of those is worth failing on rather
+ * than quietly not testing the page.
  */
 @Slf4j
 abstract class DashboardUiTestBase {
-
-    /**
-     * Set to {@code true} to make a missing browser a failure instead of a skip.
-     */
-    static final String REQUIRE_BROWSER_PROPERTY = "dashboard.ui.requireBrowser";
 
     /**
      * Where screenshots land. A build product, never a source artefact - see the entry this suite added to
@@ -120,16 +119,12 @@ abstract class DashboardUiTestBase {
 
     private static volatile ChromeDriver sharedDriver;
 
-    private static volatile boolean browserUnavailable;
-
-    private static volatile String browserFailure;
-
     private DashboardServer server;
 
     /**
-     * Per test rather than per class, so a machine with no browser reports every test as skipped instead of
-     * reporting the class as having no tests at all. "Tests run: 0" is exactly how a suite disappears without
-     * anyone noticing.
+     * Per test rather than per class, so a browser that cannot start fails every test in the class rather than
+     * reporting the class as having no tests at all. "Tests run: 0" is exactly how a suite disappears without anyone
+     * noticing.
      */
     @BeforeEach
     void requireABrowser() {
@@ -183,28 +178,15 @@ abstract class DashboardUiTestBase {
     /* --------------------------------------------------------------- browser */
 
     static ChromeDriver browser() {
-        if (browserUnavailable) {
-            abortOrFail();
-        }
         if (sharedDriver != null) {
             return sharedDriver;
         }
         synchronized (DashboardUiTestBase.class) {
-            if (sharedDriver == null && !browserUnavailable) {
-                try {
-                    sharedDriver = newDriver();
-                    Runtime.getRuntime().addShutdownHook(new Thread(DashboardUiTestBase::quitBrowser,
-                            "dashboard-ui-browser-shutdown"));
-                } catch (Throwable t) {
-                    browserUnavailable = true;
-                    browserFailure = t.toString();
-                    log.warn("No usable Chrome for the dashboard UI suite; its tests will be skipped. Set -D{}=true "
-                            + "to make this a failure instead.", REQUIRE_BROWSER_PROPERTY, t);
-                }
+            if (sharedDriver == null) {
+                sharedDriver = newDriver();
+                Runtime.getRuntime().addShutdownHook(new Thread(DashboardUiTestBase::quitBrowser,
+                        "dashboard-ui-browser-shutdown"));
             }
-        }
-        if (sharedDriver == null) {
-            abortOrFail();
         }
         return sharedDriver;
     }
@@ -234,15 +216,6 @@ abstract class DashboardUiTestBase {
                 log.debug("Ignoring a failure while closing the dashboard UI browser.", e);
             }
         }
-    }
-
-    private static void abortOrFail() {
-        String message = "No usable Chrome was found, so the dashboard UI suite cannot run: " + browserFailure;
-        if (Boolean.getBoolean(REQUIRE_BROWSER_PROPERTY)) {
-            throw new IllegalStateException(message + " - and -" + REQUIRE_BROWSER_PROPERTY
-                    + "=true says that is a failure, not a skip.");
-        }
-        Assumptions.abort(message);
     }
 
     /* ------------------------------------------------------------ navigation */

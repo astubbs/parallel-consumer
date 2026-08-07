@@ -69,9 +69,13 @@ Method, per the merge-strategy rule in `AGENTS.md`:
 
 ## Settled here
 
-- CI **hard-fails** when the browser UI suite cannot run (`-Ddashboard.ui.requireBrowser=true` in
-  `bin/ci-integration-test.sh`). Locally it still skips, so a developer without Chrome gets a green
-  build; in CI a skipped suite is indistinguishable from a passing one, which is the failure this
-  prevents.
+- **The browser UI suite never skips - anywhere.** If Chrome cannot start, the tests fail, locally and
+  in CI alike. There is no opt-out property. Two reasons: a skipped suite is indistinguishable from a
+  passing one, and a tool the build needs is a tool everyone working on the project should have.
+- **Nothing needs installing for that to be reasonable.** Selenium Manager (built in since 4.6, able
+  to fetch Chrome for Testing itself since 4.11; this module is on 4.36) resolves the driver *and* the
+  browser on first use and caches them under `~/.cache/selenium`. An earlier version of this harness
+  pre-empted that with its own availability check and skipped - it was second-guessing the component
+  whose entire job is to make the browser available.
 
 Delete this file when the work lands.
