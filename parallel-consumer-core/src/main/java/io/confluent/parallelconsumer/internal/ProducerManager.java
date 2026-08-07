@@ -122,11 +122,26 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         ensureProduceStarted();
         lazyMaybeBeginTransaction();
 
-        // only needed if not using tx
+        // Throwing from a producer callback is only safe when NOT using transactions - and this comment used to
+        // say as much while throwing unconditionally anyway.
+        //
+        // KafkaProducer#doSend invokes this callback from inside its own catch(ApiException) handler, and only
+        // AFTERWARDS calls transactionManager.maybeTransitionToErrorState(e). A throw escapes before that runs, so
+        // a terminally failed send never moves the transaction into an abortable state. The records that were
+        // already accepted stay in it, the next commit succeeds, and a READ_COMMITTED consumer sees a PARTIAL
+        // result set for one source offset - which is exactly what the all-or-none guarantee denies. Observed as
+        // "poison-key-0 has 2 of 5" by TransactionalPartialResultSetIT.
+        //
+        // Nothing is lost by not throwing here: the failure still reaches the work container either way, because
+        // processAndProduceResults waits on each returned Future and an exceptionally-completed send fails the
+        // record for retry. In transactional mode the throw only ever cost us the abort.
+        boolean usingTransactions = producerWrapper.isConfiguredForTransactions();
         Callback callback = (RecordMetadata metadata, Exception exception) -> {
             if (exception != null) {
                 log.error("Error producing result message", exception);
-                throw new InternalRuntimeException("Error producing result message", exception);
+                if (!usingTransactions) {
+                    throw new InternalRuntimeException("Error producing result message", exception);
+                }
             }
         };
 
