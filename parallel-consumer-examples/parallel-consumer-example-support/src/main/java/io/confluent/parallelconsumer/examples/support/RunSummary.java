@@ -157,7 +157,10 @@ public class RunSummary {
         field(out, "peak in-flight", Integer.toString(observer.getPeakInFlight()));
         field(out, "peak in-flight per partition", format("%.2f", observer.getPeakInFlight() / (double) partitionCount));
         field(out, "distinct worker threads", Integer.toString(observer.getDistinctThreadCount()));
-        field(out, "records completed", Long.toString(observer.getCompleted()));
+        // NOT the same as "records processed": this counts user-function invocations, so a record that
+        // failed and was retried is counted once per attempt. Reporting both under similar names invited
+        // the reader to treat the difference as records lost.
+        field(out, "user function invocations", Long.toString(observer.getCompleted()));
         field(out, "observed processing window", renderWindow());
         field(out, "throughput", renderThroughput());
         field(out, "implied serial time", renderImpliedSerialTime());
