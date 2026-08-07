@@ -61,14 +61,26 @@ function stripQualified(line) {
     // The href names the repo, so the number in the link text is already unambiguous - strip the
     // whole element, not just the URL, or the visible `#329` reads as an unqualified ref.
     .replace(/<a\s+href=["'][^"']*["'][^>]*>[\s\S]*?<\/a>/gi, " ")
+    // The same anchor, wrapped across two lines. suspectRefs works a line at a time, so the rule
+    // above cannot see it: the opening tag is on one line and `</a>` on the next. Strip each half
+    // only when its counterpart is absent, so a complete anchor is still left to the rule above and
+    // a `#NN` sitting OUTSIDE the element is still caught.
+    .replace(/<a\s+href=["'][^"']*["'][^>]*>(?![\s\S]*<\/a>).*$/i, " ")
+    .replace(/^(?!.*<a\s)[\s\S]*?<\/a>/i, " ")
+    // asciidoc link macro, `URL[link text]` and the attribute-prefixed `{attr}/path[link text]`.
+    // Same reasoning as the html anchor: the target names the repo, so a number in the link text is
+    // already unambiguous. Must run BEFORE the bare-URL rule, which would otherwise eat the URL and
+    // the opening `[` and leave the link text looking like loose prose.
+    .replace(/(?:https?:\/\/|\{[\w-]+\})\S*?\[[^\]]*\]/g, " ")
     .replace(/https?:\/\/\S+/g, " ")            // bare URLs
     .replace(/`[^`]*`/g, " ")                   // code spans
     // Owner-qualified prose form, the house standard: astubbs#209 / confluentinc#857. The spaced
     // variants carry the issue-vs-PR distinction where it matters: "confluentinc PR #548".
     .replace(/\b(?:astubbs|confluentinc)\s*(?:PR\s+|issue\s+)?#\d+/gi, " ")
-    // "upstream #N" and its variants - accepted, but astubbs/confluentinc is preferred: "upstream"
-    // names a role rather than a repo, and this repo is itself an upstream to anyone forking it.
-    .replace(/\bupstream\s+(?:PR\s+|issue\s+)?#\d+/gi, " ")
+    // NOTE: `upstream #N` was accepted here until the tree-wide sweep removed its last use. It
+    // named a role rather than a repo - and this repo is itself an upstream to anyone forking it -
+    // so it is now flagged like any other unqualified reference. The tolerance is deliberately gone
+    // rather than merely discouraged: left in, it comes back the moment someone copies old text.
     .replace(/[\w.-]+\/[\w.-]+#\d+/g, " ");     // fully qualified: owner/repo#N
 }
 
@@ -121,8 +133,8 @@ function formatFailure(hits, opts = {}) {
     `${hits.length} reference(s) below #${QUALIFY_BELOW} do not say which repo they mean.\n` +
     "The fork's numbers sit inside confluentinc's range, so a bare number there is a coin flip.\n" +
     "Write `astubbs#NN` for this repo or `confluentinc#NN` for the original - or link it.\n" +
-    "(`upstream #NN` still passes, for compatibility with older docs - but it names a role,\n" +
-    "not a repo. Do not use it in new text; it is being swept out.)\n" +
+    "(`upstream #NN` is no longer accepted: it names a role, not a repo, and this fork is itself\n" +
+    "an upstream to anyone who forks it. Use `confluentinc#NN`.)\n" +
     "Every confluentinc issue is mirrored here, and the mirror is usually the better number to cite:\n" +
     `  gh issue list -R ${repo} --label upstream-mirror --search "confluentinc#NN"\n` +
     'If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" on its own\n' +
