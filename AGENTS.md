@@ -342,11 +342,21 @@ reader inherits the same error.
 > and prose cannot read a constant, so every `1000` in this file is a snapshot. If they disagree, the
 > constant is right and this document is stale. Change it there, then sweep the prose.
 
+**A hyperlink satisfies the gate, but not the reader - so name the repo anyway in link text.** The
+gate can see the target and stops asking; a human reading `issue #12` cannot, and this fork has its
+own `#12`. Write `[confluentinc issue #12]`, not `[issue #12]`, wherever the number is prose someone
+reads - `README.adoc` above all, since it is the published artefact and its audience is *on the
+fork*. Leave a quoted upstream title intact and append the number instead
+(`[Enhanced retry epic confluentinc#65]`), rather than editing the quotation. This is style, not
+enforcement: the gate will not flag a bare number beside a URL, which is exactly why it is written
+down here.
+
 **Name the owner, not the role.** `confluentinc#857`, not `upstream #857` - "upstream" describes a
 relationship rather than a repository, and it is not stable: this fork is itself upstream to anyone
-who forks it. `upstream #NN` still passes the gate so older text is not broken, but new writing uses
-the owner - and that tolerance is temporary: `docs/inflight/next-qualify-remaining-refs.md` carries
-the sweep that removes the remaining uses and then tightens the gate to reject the form outright.
+who forks it. The gate accepted `upstream #NN` while the tree still used it; the tree-wide sweep
+removed the last use and the tolerance went with it, so the form is now **flagged like any bare
+number**. It was dropped rather than merely discouraged because a tolerated form comes back the
+moment someone copies older text.
 Same reasoning that rules out "fork" as a qualifier. In anything
 **posted to GitHub**, use the fully qualified `confluentinc/parallel-consumer#857`: upstream prose
 does not auto-link there, and a bare `#NN` in a comment silently resolves against whichever repo it
@@ -396,7 +406,8 @@ touched. In a file being changed anyway:
   comment, which every IDE linkifies)
 - resolve the number in **both** repos before choosing the prefix; it very likely exists in each
 - add the fork mirror number alongside an upstream one where a mirror exists
-- the tree-wide remainder is tracked in [`docs/inflight/next-qualify-remaining-refs.md`](docs/inflight/next-qualify-remaining-refs.md)
+- there is no backlog left to work through: the tree-wide sweep qualified every remaining reference
+  and converted the last `upstream #NNN` uses, so anything you find now is drift, not leftovers
 
 **PR titles carry both**, e.g. `fix(core) astubbs#119: paused consumption after rebalance (confluentinc#857)`. The
 title becomes the squash commit subject, so it is the reference most people will ever see.
