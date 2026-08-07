@@ -47,13 +47,19 @@ public enum TransactionalClaim {
      */
     ALL_OR_NONE_PER_SOURCE_OFFSET(Source.OPTIONS_JAVADOC,
             "All records produced from a given source offset will either all be visible, or none will be",
-            Status.PROVED, "TransactionalVisibilityIT#openTransactionIsInvisibleAtReadCommittedAndVisibleAtReadUncommitted, "
-            + "with #readCommittedIsBlockedAtTheFirstStillOpenTransactionNotMerelyFiltered covering the "
-            + "later-committed-transaction case. Negative control observed (U4): flipping the verifying consumer's "
-            + "isolation.level to read_uncommitted - one term, everything else identical - turned it red on 'verifier "
-            + "open-tx (read_committed) must not have seen any in-flight record', i.e. the absence is the isolation "
-            + "level's doing and not an unwritten record. The non-vacuity guard has its own permanent control in "
-            + "#theAbsenceAssertionIsVacuousWithoutTheNonVacuityGuard"),
+            Status.REFUTED, "REFUTED by counterexample, downgraded from PROVED after U5. It holds for every path "
+            + "U4 exercises - TransactionalVisibilityIT#openTransactionIsInvisibleAtReadCommittedAndVisibleAtReadUncommitted "
+            + "and #readCommittedIsBlockedAtTheFirstStillOpenTransactionNotMerelyFiltered, each with an observed "
+            + "control (flipping isolation.level to read_uncommitted turns them red). But none of those arms makes a "
+            + "send FAIL, and that is the case the sentence does not survive: "
+            + "TransactionalBatchVisibilityIT#aTerminallyFailedSendLeavesTheWholeTransactionInvisible observes "
+            + "'poison-key-0 has 2 of 5' - two records from ONE source offset visible at read_committed while three "
+            + "are not, 2/2 reproductions. Cause is shared with C7: ProducerManager#produceMessages installs a "
+            + "Callback that THROWS from onCompletion (its own comment says it is 'only needed if not using tx'), "
+            + "and KafkaProducer#doSend runs that callback inside its catch(ApiException) block BEFORE calling "
+            + "transactionManager.maybeTransitionToErrorState, so the throw escapes, the transaction is never marked "
+            + "abortable, and the next commit publishes the partial set. Whether to correct the javadoc or fix the "
+            + "abort is a maintainer decision; the register records only that the sentence as published is false"),
 
     /**
      * C3 - a failed or crashed transaction is never visible, and is retried as a new transaction whose record
@@ -118,7 +124,33 @@ public enum TransactionalClaim {
     PRODUCE_MANY_ALL_OR_NONE(Source.OPTIONS_JAVADOC,
             "all records must have been produced successfully to the broker before the transaction will commit, "
                     + "after which all will be visible together, or none.",
-            Status.NOT_YET_COVERED, "owned by U5"),
+            Status.REFUTED, "SECOND HALF HOLDS, FIRST HALF REFUTED. "
+            + "TransactionalBatchVisibilityIT#everyResultSetForAnInputRecordIsVisibleInFullOrNotAtAll proves "
+            + "'after which all will be visible together, or none': 20 input records x 5 results each at "
+            + "batchSize=1, with a read_committed verifier polling continuously THROUGHOUT the run and failing "
+            + "the instant any input record's result set is seen part-visible - not merely asserted complete at "
+            + "the end, which a system with no atomicity would also satisfy. Negative control observed and kept "
+            + "as a permanent running test, #thePartialResultSetAssertionRejectsASetSplitAcrossTwoTransactions: "
+            + "the same five records committed as two transactions instead of one - one term, everything else "
+            + "identical - makes the same assertion throw naming 'split-key has 2 of 5', and it then accepts the "
+            + "set once completed. "
+            + "But 'all records must have been produced successfully to the broker before the transaction will "
+            + "commit' is FALSE. #aTerminallyFailedSendLeavesTheWholeTransactionInvisible feeds one input record "
+            + "whose middle result is 2MB and so is rejected against max.request.size: results 0 and 1 are "
+            + "accepted into the open transaction, result 2 fails, results 3 and 4 are never attempted - and the "
+            + "next commit SUCCEEDS, making result|poison-key-0|0 and |1 visible at read_committed. Two of five "
+            + "records from one source offset, visible. The instance neither failed nor shut down. Mechanism: "
+            + "ProducerManager#produceMessages installs a Callback - the one its own comment calls 'only needed "
+            + "if not using tx' - that throws InternalRuntimeException from Callback#onCompletion; "
+            + "KafkaProducer#doSend invokes it from inside its catch (ApiException) handler and only AFTERWARDS "
+            + "calls transactionManager.maybeTransitionToErrorState(e), so the throw escapes first and the "
+            + "transaction is never moved to abortable-error. Nothing else in PC covers the case: a failed "
+            + "WorkContainer leaves the already-sent records in the transaction, and only an abort removes them. "
+            + "That arm ships @Disabled because this class runs in the gating lane. "
+            + "KNOCK-ON: the same observation falsifies C2's sentence (ALL_OR_NONE_PER_SOURCE_OFFSET), which is "
+            + "recorded PROVED on the strength of arms that never make a send fail. Re-triaging C2, and choosing "
+            + "between correcting the javadoc and fixing the abort, is a maintainer decision, not this "
+            + "register's"),
 
     /**
      * C8 - an aborted or timed-out transaction leaves nothing visible, ever.
