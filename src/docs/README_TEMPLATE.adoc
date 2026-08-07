@@ -799,6 +799,22 @@ NOTE:: As with the `synchronous` processing mode, this will also block the proce
 
 CAUTION: This cannot be true for any externally integrated third party system, unless that system is __idempotent__.
 
+[[transaction-system-verified]]
+==== What is machine-checked, as of 2026-08-08
+
+The guarantees on this page are enumerated as a register (`TransactionalClaim`) and each one is tied to a test.
+A build fails if a claim recorded as covered has no test, and also if a claim's sentence here is edited without updating the register - so this section cannot quietly drift from what is actually verified.
+
+*Verified against a real broker, each with a negative control that was observed to fail:* all parallel workers share one bulk transaction; an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; no record reaches the broker whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval is reduced to 100ms only when you have not set one.
+
+*Two documented guarantees do NOT currently hold, and you should design around them:*
+
+* If one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - the records already accepted stay in the transaction and the next commit publishes them. A `read_committed` consumer then sees a *partial* result set for that source offset. The instance does not fail or shut down.
+* Consequently "all records produced from a given source offset will either all be visible, or none" is not true in that case either.
+
+Both have the same cause: a producer callback that throws, which pre-empts the Kafka client's own transition of the transaction into an abortable state.
+Until that is fixed, do not rely on all-or-none for multi-record result sets where a send can fail terminally.
+
 For implementations details, see the <<Transactional System Architecture>> section.
 
 .From the Options Javadoc

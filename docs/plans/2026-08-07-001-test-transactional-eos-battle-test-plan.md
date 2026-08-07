@@ -864,3 +864,66 @@ No test that the plan predicts fails on master may merge into the gating lane - 
 - Phase B (U7-U10, U11's chaos arm) adds the adversarial run. If it outgrows the PR, it lands
   separately and its claims are recorded `NOT_YET_COVERED` with a reason, which the coverage test
   reports without failing.
+
+---
+
+## Results
+
+Recorded 2026-08-08. The register in `TransactionalClaim` is canonical; this is the narrative.
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| C1 bulk shared transaction | PROVED | Four records across two partitions, all four workers inside the user function simultaneously; one `beginTransaction` and one `sendOffsetsToTransaction` covering all four offsets |
+| C2 all-or-none per source offset | **REFUTED** | 2 of 5 records from one source offset visible at `read_committed`, 2/2 |
+| C3 failure invisible and recombined | PROVED | The abandoned attempt held all results in one transaction; the replay spread the same results across several, union exact |
+| C4 offset and records atomic | PROVED | Before the crash: no result visible AND the offset unmoved. After: every result visible AND the offset advanced |
+| C5 commit interval auto-reduced | PROVED | Literal durations asserted after `validate()`, all three directions |
+| C6 READ_COMMITTED blocked to first open tx | KAFKA_GUARANTEE | One open plus one later-committed transaction: the `read_committed` arm saw neither, the `read_uncommitted` arm saw both |
+| C7 pollAndProduceMany all-or-none | **REFUTED** | A terminally failed send leaves the accepted records in the transaction and the next commit publishes them |
+| C8 aborted never visible | PROVED | Abort and transaction-timeout arms, neither ever visible |
+| C9 no produce without its offset | PROVED | Three-point sequence - send returns, WorkContainer reaches the mailbox, commit lock granted - asserted in that order |
+| C10 processing blocked during commit | PROVED | `beginProducing` blocks while the commit lock is held and unblocks on release |
+| C11 commit-lock timeout fails fast | COVERED_NO_CONTROL | Attributed to the existing `TransactionTimeoutsTest#commitTimeout`; no control observed here |
+| C12 produce-lock timeout retries record | COVERED_NO_CONTROL | Attributed to the existing `TransactionTimeoutsTest#produceTimeout`; no control observed here |
+| C13 eager processing may replay | PROVED | Same forced trigger, both arms: the victim ran once strict, twice eager; lock taken before vs after the user function |
+| C14 results exactly once under failure | PROVED | RED 5/5 before astubbs#257, GREEN 5/5 after |
+
+### Negative controls, all observed
+
+Every `PROVED` claim has a control that was seen to fail. Three worth naming:
+
+- **C9's position control.** An identical 400ms delay placed *after* the produce-lock release failed
+  3/3; the same delay *inside* the lock passed 2/2. Same magnitude, different position, so the failure
+  is the ordering rather than the latency. The stated prediction was partly refuted - it failed an
+  assertion earlier than predicted, because the commit completed while the work had not reached the
+  mailbox at all.
+- **C13's attribution control.** With eager processing disabled the trigger fired identically and no
+  replay followed, which is what attributes the replay to the option rather than to the timeout.
+- **C14's control is the defect itself.** It was found by this suite before the fix existed on this
+  branch, and the fix flipped it. Stronger than an injected fault, because nobody chose it for
+  convenience.
+
+### Defects found
+
+1. **The batching stall** - fixed by astubbs#257, merged here. At `batchSize >= 2` the produce lock
+   was released per record but acquired per poll context; every batch failed; only a success marks a
+   partition dirty; so no commit was ever *attempted* and the source offset froze at 3 of 201.
+   Write-up in
+   `docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md`.
+   The prior ledger entry called this a duplicate defect on the strength of a 340/340 measurement
+   taken at `batchSize = 1`, where it cannot fire.
+2. **The partial-result-set violation** - open. `ProducerManager#produceMessages` installs a producer
+   `Callback` that throws from `onCompletion`, above a comment reading "only needed if not using tx".
+   `KafkaProducer#doSend` runs it inside `catch (ApiException)` before `maybeTransitionToErrorState`,
+   so the transaction is never marked abortable. Refutes C2 and C7. Needs an issue and its own fix PR.
+3. **The commit-interval identity check** - open. `transactionsValidation` compares with `==`, so an
+   explicit `Duration.ofSeconds(5)` is silently replaced by 100ms.
+   `docs/inflight/bug-commit-interval-identity-check.md`.
+
+### What was not done
+
+- **Phase B (U7-U10), deliberately deferred.** A chaos scenario calibrated against a master that still
+  carries the `confluentinc#803` commit-lock deadlock would fold that defect into its SLO and then
+  report the live bug as in-SLO. It should follow astubbs#29.
+- **C11 and C12 have no observed control.** They are attributed, not reproved, and the register says
+  so rather than implying proof.
