@@ -2,6 +2,7 @@ package io.confluent.csid.utils;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
@@ -69,6 +70,16 @@ public class BlockedThreadAsserter {
                                     final Duration unblocksAfter) {
 
         AtomicBoolean unblockerHasRun = new AtomicBoolean(false);
+        // Anchor the elapsed measurement to the instant the unblocker's delay starts counting from.
+        //
+        // The scheduler is armed here and the clock below starts afterwards, so timing only the blocked call
+        // measures a window that begins LATER than the delay does - by however long arming and lambda setup take.
+        // The measured elapsed is therefore systematically SHORT, and `isAtLeast(unblocksAfter)` fails by a
+        // millisecond or two whenever the machine is busy enough to widen that gap. Seen as
+        // "expected at least PT1S but was PT0.999S" in a full-suite run that passes when the class runs alone.
+        // Measuring from here instead makes the comparison sound rather than merely tolerant - no assertion is
+        // weakened, and the failure it used to produce said nothing about the code under test.
+        final long armedAtNanos = System.nanoTime();
         scheduledExecutorService.schedule(() -> {
                     log.debug("Running unblocking function - blocked function should return ONLY after this (which will be tested)");
                     try {
@@ -96,7 +107,11 @@ public class BlockedThreadAsserter {
 
         this.methodReturned.set(true);
 
-        Truth.assertThat(time.getElapsed()).isAtLeast(unblocksAfter);
+        var elapsedSinceArming = Duration.ofNanos(System.nanoTime() - armedAtNanos);
+        Truth.assertWithMessage("the blocked function returned before the unblocker was due, measured from the "
+                        + "instant the unblocker's delay was armed (raw blocked-call time was %s)", time.getElapsed())
+                .that(elapsedSinceArming)
+                .isAtLeast(unblocksAfter);
         Truth.assertWithMessage("Unblocking function should complete OK (if false, may not have run at all - or that the expected function to block did NOT block)")
                 .that(unblockerHasRun.get()).isTrue();
     }
