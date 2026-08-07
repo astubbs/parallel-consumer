@@ -102,9 +102,18 @@ public enum TransactionalClaim {
      */
     COMMIT_INTERVAL_AUTO_REDUCED(Source.OPTIONS_JAVADOC,
             "gets automatically reduced from the default of 5 seconds to 100ms",
-            Status.COVERED_NO_CONTROL, "TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms "
-            + "and its two sibling arms. No negative control: breaking the mechanism means changing the resolution "
-            + "in ParallelConsumerOptions#transactionsValidation itself, which U11 owns"),
+            Status.PROVED, "TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms "
+            + "and its two sibling arms, which assert the literal durations after validate() rather than the "
+            + "DEFAULT_* constants, so changing a constant without changing the javadoc still fails. Negative "
+            + "control observed (U11): forcing commitInternalHasNotBeenSet to false in "
+            + "ParallelConsumerOptions#transactionsValidation - one term, everything else identical - failed "
+            + "exactly one of the four arms, 'expected PT0.1S but was PT5S'. The other three still passed, which is "
+            + "what makes the control narrow enough to attribute. Reverted; main is untouched. "
+            + "SEPARATE DEFECT found while proving this, recorded in "
+            + "docs/inflight/bug-commit-interval-identity-check.md: the same gate uses reference identity (==) "
+            + "against DEFAULT_COMMIT_INTERVAL, so a user who explicitly sets Duration.ofSeconds(5) is equals-but-"
+            + "not-identical and gets silently overridden to 100ms - 50x the broker load they configured. Not part "
+            + "of C5's documented sentence, so it is recorded beside the claim rather than asserted as part of it"),
 
     /**
      * C6 - this one is Kafka's guarantee, not ours. We document it, so we record it and test it once; we do not
