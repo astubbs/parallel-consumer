@@ -5,7 +5,6 @@ package io.confluent.parallelconsumer.vertx;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.Java8StreamUtils;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.PollContext;
 import io.vertx.core.Future;
@@ -20,10 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.Optional;
 import io.confluent.parallelconsumer.internal.DrainingCloseable.DrainingMode;
-import io.confluent.parallelconsumer.internal.JStreamResultDeques;
+import io.confluent.parallelconsumer.internal.JStreamResultBuffer;
 
-import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -32,8 +29,9 @@ import java.util.stream.Stream;
 import static io.confluent.parallelconsumer.internal.UserFunctions.carefullyRun;
 
 /**
- * @deprecated Being removed — the JStream interface is not widely used and its unbounded result deque
- * can cause memory leaks if the stream is not actively consumed. Use the callback-based API instead.
+ * @deprecated Superseded by the callback-based API, which does the same job without a result buffer.
+ * The buffer here is now bounded and applies backpressure (see {@link JStreamResultBuffer}), so it no
+ * longer leaks, but it remains a second way to do what {@link VertxParallelEoSStreamProcessor} already does.
  * See <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>.
  */
 @Slf4j
@@ -41,23 +39,7 @@ import static io.confluent.parallelconsumer.internal.UserFunctions.carefullyRun;
 public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelEoSStreamProcessor<K, V>
         implements JStreamVertxParallelStreamProcessor<K, V> {
 
-    /**
-     * The stream of results, constructed from the Queue {@link #userProcessResultsStream}.
-     * <p>
-     * <b>WARNING:</b> This stream MUST be actively consumed in a separate thread, or results
-     * will accumulate in memory indefinitely. If you don't need the result stream, use the
-     * callback-based API instead.
-     *
-     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
-     */
-    private final Stream<VertxCPResult<K, V>> stream;
-
-    /**
-     * The Queue of results. Unbounded — will grow indefinitely if the stream is not consumed.
-     */
-    private final ConcurrentLinkedDeque<VertxCPResult<K, V>> userProcessResultsStream;
-
-    private final AtomicLong resultsAdded = new AtomicLong();
+    private final JStreamResultBuffer<VertxCPResult<K, V>> results;
 
     /**
      * Provide your own instances of the Vertx engine and it's webclient.
@@ -67,11 +49,19 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
     public JStreamVertxParallelEoSStreamProcessor(Vertx vertx,
                                                   WebClient webClient,
                                                   ParallelConsumerOptions<K, V> options) {
+        this(vertx, webClient, options, JStreamResultBuffer.DEFAULT_CAPACITY);
+    }
+
+    /**
+     * @param resultBufferCapacity how many unconsumed results to hold before the producer is made to wait
+     */
+    public JStreamVertxParallelEoSStreamProcessor(Vertx vertx,
+                                                  WebClient webClient,
+                                                  ParallelConsumerOptions<K, V> options,
+                                                  int resultBufferCapacity) {
         super(vertx, webClient, options);
 
-        this.userProcessResultsStream = new ConcurrentLinkedDeque<>();
-
-        this.stream = Java8StreamUtils.setupStreamFromDeque(this.userProcessResultsStream);
+        this.results = new JStreamResultBuffer<>(resultBufferCapacity);
     }
 
     /**
@@ -103,7 +93,7 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
         super.vertxHttpReqInfo(requestInfoFunctionWrapped, onSendCallBack, (ignore) -> {
         });
 
-        return stream;
+        return results.getStream();
     }
 
     @Override
@@ -128,7 +118,7 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
 
         super.vertxHttpRequest(requestInfoFunctionWrapped, onSendCallBack, (ignore) -> {
         });
-        return stream;
+        return results.getStream();
     }
 
     @Override
@@ -155,26 +145,26 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
 
         super.vertxHttpWebClient(wrappedFunc, onSendCallBack);
 
-        return stream;
+        return results.getStream();
     }
 
     private void addResultAndWarnIfBacklogged(VertxCPResult<K, V> result) {
-        JStreamResultDeques.addAndWarnIfBacklogged(userProcessResultsStream, resultsAdded, result);
+        results.add(result);
     }
 
     /**
-     * Clears any unconsumed results from the deque once shutdown completes.
+     * Ends the result stream once shutdown completes, so a consuming {@code forEach} returns.
      * <p>
      * Overrides the {@link DrainingMode}-taking close, which is the single method every other entry point
-     * funnels through - see the sibling override in {@code JStreamParallelEoSStreamProcessor}. The clear
-     * happens after shutdown, since a draining close keeps enqueueing results while it finishes.
+     * funnels through - see the sibling override in {@code JStreamParallelEoSStreamProcessor}. The close
+     * happens after shutdown, since a draining close keeps producing results the consumer should receive.
      *
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
      */
     @Override
     public void close(DrainingMode drainMode) {
         super.close(drainMode);
-        JStreamResultDeques.clearOnClose(userProcessResultsStream);
+        results.close();
     }
 
     /**

@@ -9,26 +9,37 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.assertj.core.util.Lists;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
-import java.lang.reflect.Field;
-import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static com.google.common.truth.Truth.assertThat;
 import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
 
 /**
- * Regression tests for astubbs#122 / confluentinc#912 - the JStream result deque memory leak.
+ * Regression tests for astubbs#122 / confluentinc#912, at the processor level.
  * <p>
- * The bug: {@code ConcurrentLinkedDeque<ConsumeProduceResult>} grows without bound when
- * the returned Stream is not actively consumed. On close, the deque was never cleared,
- * leaving all accumulated results in memory until GC.
+ * The reported bug was unbounded growth of the result buffer when the returned {@link Stream} is not
+ * consumed. The buffer is now bounded and blocking ({@link io.confluent.parallelconsumer.internal.JStreamResultBuffer},
+ * which has its own unit tests) - so what matters <em>here</em> is the wiring: that closing the processor
+ * ends the stream, through <b>every</b> close entry point.
+ * <p>
+ * That last part is the trap this class exists to guard. An earlier fix overrode only the no-arg
+ * {@code close()}, and {@code closeDrainFirst()} - the shutdown the shipped Vert.x example calls - routes
+ * to {@code close(DrainingMode)} and bypassed it entirely. With a blocking buffer the cost of getting that
+ * wrong went up: it is no longer a leak, it is a consumer thread that never returns.
  *
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
  */
 @Slf4j
 class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
+
+    private static final int TIMEOUT_SECONDS = 30;
 
     JStreamParallelEoSStreamProcessor<String, String> streaming;
 
@@ -44,45 +55,83 @@ class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
     }
 
     /**
-     * Core regression test: after producing a result and closing, the deque must be empty.
-     * Before the fix, close() never cleared it.
+     * {@code close()} must end the stream so a consuming {@code forEach} returns.
      */
     @Test
-    void closeShouldClearResultDeque() {
-        ConcurrentLinkedDeque<?> deque = produceOneResultAndAwaitIt();
+    @Timeout(TIMEOUT_SECONDS)
+    void closeEndsTheStream() throws Exception {
+        CountDownLatch consumerFinished = consumeInBackground(produceOneResult());
 
         streaming.close();
 
-        assertThat(deque).isEmpty();
+        assertThat(consumerFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
     }
 
     /**
-     * The leak survived the first version of this fix because only the no-arg {@code close()} was
-     * overridden, while {@code closeDrainFirst()} - the shutdown the shipped Vertx example app uses -
-     * routes to {@code close(DrainingMode)} and never reached it. This guards the funnel rather than one
-     * entry point, so overriding the wrong method fails here.
+     * The funnel guard. {@code closeDrainFirst()} never calls the no-arg {@code close()}, so a fix applied
+     * there leaves this path hanging forever. Overriding the wrong method fails this test.
      */
     @Test
-    void closeDrainFirstShouldAlsoClearResultDeque() {
-        ConcurrentLinkedDeque<?> deque = produceOneResultAndAwaitIt();
+    @Timeout(TIMEOUT_SECONDS)
+    void closeDrainFirstAlsoEndsTheStream() throws Exception {
+        CountDownLatch consumerFinished = consumeInBackground(produceOneResult());
 
         streaming.closeDrainFirst();
 
-        assertThat(deque).isEmpty();
+        assertThat(consumerFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
     }
 
     /**
-     * Runs one record through the processor without consuming the returned stream, and returns the deque
-     * once the result has actually landed in it.
-     * <p>
-     * The wait is on the deque itself rather than on control-loop cycles: the latch fires <em>inside</em>
-     * the user function, but the wrapper only enqueues the result after that function returns, so
-     * cycle-counting raced the enqueue and saw an empty deque under a loaded parallel suite. Nothing
-     * drains the deque here - the stream is deliberately never consumed - so once non-empty it stays so.
+     * Closing with nothing ever produced must still terminate a waiting consumer, rather than leaving it
+     * parked on a buffer that will never fill.
      */
-    private ConcurrentLinkedDeque<?> produceOneResultAndAwaitIt() {
+    @Test
+    @Timeout(TIMEOUT_SECONDS)
+    void closeEndsTheStreamWhenNothingWasEverProduced() throws Exception {
+        Stream<?> stream = streaming.pollProduceAndStream((record) -> Lists.list(mock(ProducerRecord.class)));
+        CountDownLatch consumerFinished = consumeInBackground(stream);
+
+        streaming.close();
+
+        assertThat(consumerFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+    }
+
+    /**
+     * Results already buffered when close is called must still reach the consumer - a draining close is
+     * supposed to hand over its work, not bin it.
+     */
+    @Test
+    @Timeout(TIMEOUT_SECONDS)
+    void resultsProducedBeforeCloseAreStillDelivered() throws Exception {
+        Stream<?> stream = produceOneResult();
+
+        var received = new CopyOnWriteArrayList<Object>();
+        var consumerFinished = new CountDownLatch(1);
+        var consumer = new Thread(() -> {
+            stream.forEach(received::add);
+            consumerFinished.countDown();
+        }, "test-result-consumer");
+        consumer.start();
+
+        await().until(() -> !received.isEmpty());
+
+        streaming.closeDrainFirst();
+
+        assertThat(consumerFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+        assertThat(received).isNotEmpty();
+    }
+
+    /**
+     * Runs one record through the processor and returns the stream, once the result has actually been
+     * produced.
+     * <p>
+     * The latch fires <em>inside</em> the user function, but the wrapper only enqueues the result after
+     * that function returns - so waiting on control-loop cycles instead raced the enqueue and saw an empty
+     * buffer under a loaded parallel suite.
+     */
+    private Stream<?> produceOneResult() {
         var latch = new CountDownLatch(1);
-        streaming.pollProduceAndStream((record) -> {
+        Stream<?> stream = streaming.pollProduceAndStream((record) -> {
             log.info("Processing record: {}", record);
             myRecordProcessingAction.apply(record.getSingleConsumerRecord());
             latch.countDown();
@@ -90,34 +139,16 @@ class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
         });
 
         awaitLatch(latch);
-
-        ConcurrentLinkedDeque<?> deque = getResultDeque();
-        awaitUntilTrue(() -> !deque.isEmpty());
-        assertThat(deque).isNotEmpty();
-        return deque;
+        return stream;
     }
 
-    /**
-     * Verify that the deque is empty after close even with no results produced.
-     */
-    @Test
-    void closeShouldWorkWithEmptyDeque() {
-        ConcurrentLinkedDeque<?> deque = getResultDeque();
-        assertThat(deque).isEmpty();
-
-        streaming.close();
-
-        assertThat(deque).isEmpty();
-    }
-
-    @SuppressWarnings("unchecked")
-    private ConcurrentLinkedDeque<?> getResultDeque() {
-        try {
-            Field field = JStreamParallelEoSStreamProcessor.class.getDeclaredField("userProcessResultsStream");
-            field.setAccessible(true);
-            return (ConcurrentLinkedDeque<?>) field.get(streaming);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to access userProcessResultsStream field", e);
-        }
+    private CountDownLatch consumeInBackground(Stream<?> stream) {
+        var consumerFinished = new CountDownLatch(1);
+        var consumer = new Thread(() -> {
+            stream.forEach(x -> log.debug("Consumed result: {}", x));
+            consumerFinished.countDown();
+        }, "test-result-consumer");
+        consumer.start();
+        return consumerFinished;
     }
 }
