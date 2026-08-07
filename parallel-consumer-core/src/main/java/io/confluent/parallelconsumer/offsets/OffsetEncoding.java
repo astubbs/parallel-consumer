@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.Getter;
@@ -60,10 +61,19 @@ public enum OffsetEncoding {
 
     private static final Map<Byte, OffsetEncoding> magicMap = Arrays.stream(values()).collect(Collectors.toMap(OffsetEncoding::getMagicByte, Function.identity()));
 
-    public static OffsetEncoding decode(byte magic) {
+    /**
+     * The metadata field of a committed offset is free-form - a consumer group previously used by another framework, or
+     * by operator tooling, may hold bytes that match none of our magic numbers. That is a decoding failure, not a fatal
+     * condition: callers drop the offset map and resume from the committed offset. Throwing {@link OffsetDecodingError}
+     * (rather than a bare {@link RuntimeException}) is what routes it to that recovery path instead of letting it
+     * escape the rebalance listener and take the consumer down.
+     *
+     * @see OffsetMapCodecManager#loadPartitionStateForAssignment
+     */
+    public static OffsetEncoding decode(byte magic) throws OffsetDecodingError {
         OffsetEncoding encoding = magicMap.get(magic);
         if (encoding == null) {
-            throw new RuntimeException("Unexpected magic: " + magic);
+            throw new OffsetDecodingError("Unexpected magic: " + magic, null);
         } else {
             return encoding;
         }

@@ -1,21 +1,20 @@
 # Release 0.6.0.0 - correctness of the artefacts we are about to publish
 
 Scope: are the things 0.6.0.0 *publishes* (`CHANGELOG.adoc`, `README.adoc`) true on the day we cut it?
-Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracking issue is #197.
+Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracking issue is astubbs#197.
 
 ## Still open
 
-- **The rest of #197's triage list.** Four non-blocking defects were found while checking the two
-  blocking ones and none are fixed: `PCModule` builds `DynamicLoadFactor(static, static)` when
+- **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
+  two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
+  fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when
   `messageBufferSize` is set, so "Max loading factor steps reached" WARNs on every control-loop pass
-  for anyone following the README's own tuning advice (#155); MDC context is not captured at submit
-  time, so a caller's `trace_id` is lost into the worker pool and the vert.x event loop;
-  `OffsetEncoding` throws on an unknown magic byte *before* `invalidOffsetMetadataPolicy` is consulted,
-  so a future encoding kills an older reader regardless of policy - a forward-compatibility hazard in a
-  wire format this fork now owns; and `release.yml` publishes an empty GitHub Release body, so the
+  for anyone following the README's own tuning advice (astubbs#155); MDC context is not captured at
+  submit time, so a caller's `trace_id` is lost into the worker pool and the vert.x event loop;
+  and `release.yml` publishes an empty GitHub Release body, so the
   curated changelog never reaches the release page.
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
-  coordinate; #186, #188 and #195 close with a pointer to the release.
+  coordinate; astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release.
 - **Three `3.9.1` references survive this PR - one is wrong, two are not.** The genuine defect is
   `AGENTS.md:183`, which tells contributors PRs run "split suites on default Kafka 3.9.1" when CI's
   default is whatever `pom.xml` says - now `3.9.2`. It is a one-word fix, left alone only to keep this

@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests;
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.ArgumentSetsBuilder;
@@ -50,7 +51,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * Originally created to reproduce bug #25 https://github.com/confluentinc/parallel-consumer/issues/25 which was a known
+ * Originally created to reproduce bug confluentinc#25 https://github.com/confluentinc/parallel-consumer/issues/25 which was a known
  * issue with multi-threaded use of the {@link KafkaProducer}.
  * <p>
  * After fixing multi threading issues, using Producer transactions was made optional, and this test grew to uncover

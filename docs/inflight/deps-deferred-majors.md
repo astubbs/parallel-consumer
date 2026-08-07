@@ -7,11 +7,11 @@ builds - without that filter Kafka "latest" mis-resolves to a Confluent build).
 | Held at | Latest | Why, and what unblocks it |
 |---------|--------|---------------------------|
 | kafka-clients / streams `3.9.1` | `4.3.1` | Needs the Java 11 baseline - see `pr-53-java-baseline-kafka4.md` |
-| junit-jupiter / platform `5.14.4` | `6.1.2` | Needs Java 17, **and** `archunit-junit5` will not run on JUnit 6 with no `archunit-junit6` engine yet ([TNG/ArchUnit#1556](https://github.com/TNG/ArchUnit/issues/1556)). Rewire the ArchUnit tests before #38 can land |
+| junit-jupiter / platform `5.14.4` | `6.1.2` | Needs Java 17, **and** `archunit-junit5` will not run on JUnit 6 with no `archunit-junit6` engine yet ([TNG/ArchUnit#1556](https://github.com/TNG/ArchUnit/issues/1556)). Rewire the ArchUnit tests before astubbs#38 can land |
 | testcontainers `1.21.4` | `2.0.5` | Testcontainers 2.x, core artifact only (the `kafka`/`postgresql`/`junit-jupiter` modules already moved) |
 | vertx-junit5 / web-client `4.5.31` | `5.1.5` | Vert.x 5 |
 | mutiny `2.9.5` | `3.3.0` | Mutiny 3 |
 | wiremock-jre8 `2.35.2` | `3.0.1` | WireMock 3 (artifact renamed `org.wiremock:wiremock`, test-only). **Side effect while on 2.x:** it drags in byte-buddy `1.12.18`, which wins the conflict and lacks the `JAVA_V21` field mockito 5.23 needs, so every Mockito test errors. Worked around by pinning `byte-buddy.version=1.17.7`; **remove that pin when wiremock moves to 3.x** |
 | micrometer-core `1.13.15` + registry-prometheus `1.12.2` | `1.17.x` | Not a major, but source-incompatible: micrometer 1.13 renamed `io.micrometer.prometheus` → `io.micrometer.prometheusmetrics`, breaking `example-metrics/CoreApp.java`. Migrate the imports and registry construction, then bump the family together |
-| jackson-databind `2.17.2` (example-metrics, test scope) | `2.18.9` | Module-local **on purpose**: pinning it globally forces WireMock in `parallel-consumer-vertx` onto an incompatible Jackson and breaks `VertxTest` (HTTP 500). Dependabot told to ignore (#76); bump in the next curated sweep with an example-metrics integration-test run |
+| jackson-databind `2.17.2` (example-metrics, test scope) | `2.18.9` | Module-local **on purpose**: pinning it globally forces WireMock in `parallel-consumer-vertx` onto an incompatible Jackson and breaks `VertxTest` (HTTP 500). Dependabot told to ignore (astubbs#76); bump in the next curated sweep with an example-metrics integration-test run |
 | maven-clean/deploy/install/jar/resources/source/compiler, surefire/failsafe, site | Maven-4 betas/milestones | Only pre-releases available; held by the risk policy. Revisit at GA |

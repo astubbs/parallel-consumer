@@ -13,7 +13,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Chaos Pain Suite - W4 "revoke under work" (Phase 2, EAGER assignor): the trigger scenario for
- * <b>Class 2, protocol-INVISIBLE stalls</b> - the "#857 locks forever until manual restart" family,
+ * <b>Class 2, protocol-INVISIBLE stalls</b> - the "confluentinc#857 locks forever until manual restart" family,
  * where the group stays STABLE, heartbeats and polls keep flowing, no rebalance is pending (so the
  * broker's 5-minute eviction clock never starts), yet a partition's committed offset stops moving
  * while its lag is real. {@link ProgressProbe}'s {@code CLASS2_STALL/LAG_STAGNATION} probe is the
@@ -30,7 +30,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *   drains open the Class 1 zombie window and mask the Class 2 mechanism. Hard stops, restarts and
  *   joins force frequent partition REVOCATIONS while heavy non-interruptible work is in flight, with
  *   {@link CommitMode#PERIODIC_CONSUMER_SYNC} to maximise revoke-path vs commit-path lock contention
- *   (the upstream #857 deadlock recipe: {@code synchronized(commitCommand)} between
+ *   (the confluentinc#857 deadlock recipe: {@code synchronized(commitCommand)} between
  *   {@code onPartitionsRevoked} and {@code commitOffsetsThatAreReady}).</li>
  *   <li><b>Quiet observation</b>: chaos stops; a low {@code max.poll.interval.ms} (30s) means any
  *   member wedged during the storm gets evicted quickly, pending rebalances resolve, and the group
@@ -51,7 +51,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *   dwell peak 7.9s. The dwell MEASUREMENT discriminates the defect even though its violation is
  *   delegated to W1.</li>
  *   <li>No true (unbounded) Class 2 stall reproduced on master under this seed/shape or the 8-seed
- *   sweep (9 seeds total, 0 hits) - the open #857 root-cause stall did not bite under EAGER. Hence
+ *   sweep (9 seeds total, 0 hits) - the open confluentinc#857 root-cause stall did not bite under EAGER. Hence
  *   the cooperative-sticky sibling, hypothesized to yield more frequent, smaller revokes = more
  *   draws at the probabilistic deadlock (its calibration REVISED this: revoke events dropped ~6x,
  *   per-event sharpness rose instead), while the eager-restart artifact class disappears

@@ -714,7 +714,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private void doClose(Duration timeout) throws TimeoutException, ExecutionException, InterruptedException {
-        // fixes github issue #809 - ensure doClose() state transition to CLOSED
+        // fixes github issue confluentinc#809 - ensure doClose() state transition to CLOSED
         // by catching unhandled exceptions in subsystems during close
         try {
             innerDoClose(timeout);

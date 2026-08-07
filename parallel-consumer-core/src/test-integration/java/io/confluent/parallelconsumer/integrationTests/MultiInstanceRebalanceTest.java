@@ -87,8 +87,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * Stress test: 12 PC instances on 80 partitions with aggressive chaos monkey toggling up to
      * 6 of 11 secondary instances every 0-500ms. PC-0 is never toggled and should always be alive.
      * <p>
-     * Originally created for confluentinc#188 and confluentinc#189, re-enabled for confluentinc#857
- * investigation.
+     * Originally created to reproduce state and concurrency issues (confluentinc#188,
+     * confluentinc#189), re-enabled for the confluentinc#857 investigation.
      * <p>
      * <b>What the test does:</b>
      * <ol>

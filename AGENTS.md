@@ -316,7 +316,7 @@ at the cost of an opt-out on every correction.
 
 Every upstream issue now has a **fork mirror** (astubbs#44, astubbs#117-astubbs#195, label `upstream-mirror`), so a
 reference has a fork-local number a reader can click. Find one with
-`gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "upstream #NNN"`.
+`gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "confluentinc#NNN"`.
 
 **Working a mirrored issue? Read the upstream original too - body and comments.**
 `gh issue view <N> -R confluentinc/parallel-consumer --json body,comments`. Every mirror says
@@ -332,17 +332,41 @@ code has two (10s and 30s) - so check the mirror's added commentary as sceptical
 When the mirror turns out to be wrong, say so in the PR **and correct the mirror**, or the next
 reader inherits the same error.
 
-**The convention: below #1000, say which repo you mean.** `astubbs#119` for this fork,
+**The convention: below the threshold, say which repo you mean.** `astubbs#119` for this fork,
 `confluentinc#857` for the original - or a hyperlink, which qualifies it just as well. Add `PR` or
 `issue` where the distinction matters (`confluentinc PR #548`); both forms pass the gate.
 
+> **The threshold was #1000 when this was written, but `QUALIFY_BELOW` in
+> [`.github/scripts/issue-ref-gate.js`](.github/scripts/issue-ref-gate.js) is the source of truth.**
+> It is expected to move - confluentinc's numbering still creeps, as the headroom note below says -
+> and prose cannot read a constant, so every `1000` in this file is a snapshot. If they disagree, the
+> constant is right and this document is stale. Change it there, then sweep the prose.
+
+**A hyperlink satisfies the gate, but not the reader - so name the repo anyway in link text.** The
+gate can see the target and stops asking; a human reading `issue #12` cannot, and this fork has its
+own `#12`. Write `[confluentinc issue #12]`, not `[issue #12]`, wherever the number is prose someone
+reads - `README.adoc` above all, since it is the published artefact and its audience is *on the
+fork*. Leave a quoted upstream title intact and append the number instead
+(`[Enhanced retry epic confluentinc#65]`), rather than editing the quotation. This is style, not
+enforcement: the gate will not flag a bare number beside a URL, which is exactly why it is written
+down here.
+
 **Name the owner, not the role.** `confluentinc#857`, not `upstream #857` - "upstream" describes a
 relationship rather than a repository, and it is not stable: this fork is itself upstream to anyone
-who forks it. `upstream #NN` still passes the gate so older text is not broken, but new writing uses
-the owner. Same reasoning that rules out "fork" as a qualifier. In anything
+who forks it. The gate accepted `upstream #NN` while the tree still used it; the tree-wide sweep
+removed the last use and the tolerance went with it, so the form is now **flagged like any bare
+number**. It was dropped rather than merely discouraged because a tolerated form comes back the
+moment someone copies older text.
+Same reasoning that rules out "fork" as a qualifier. In anything
 **posted to GitHub**, use the fully qualified `confluentinc/parallel-consumer#857`: upstream prose
 does not auto-link there, and a bare `#NN` in a comment silently resolves against whichever repo it
 is posted in.
+
+**Closing keywords are the exception, and getting this one wrong fails silently.** GitHub honours only
+`Fixes #167` or `Fixes astubbs/parallel-consumer#167` - the `owner#NN` short form this section
+otherwise prefers is **not** cross-reference syntax, so `Fixes astubbs#167` renders as plain text and
+closes nothing. A bare number is what the convention above forbids, so in a PR body write the fully
+qualified form: `Fixes astubbs/parallel-consumer#167`.
 
 At or above #1000 a bare number is unambiguous, because only this fork can have one.
 
@@ -377,12 +401,13 @@ names (`bugs/857-...`) and the upstream threads all use. Dropping either breaks 
 **Fix references in any file a PR touches.** Not a bulk rewrite - opportunistic, as files are
 touched. In a file being changed anyway:
 
-- every unqualified `#NNN` below 1000 gains its repo - `astubbs#NNN` or `upstream #NNN` -
+- every unqualified `#NNN` below the threshold gains its repo - `astubbs#NNN` or `confluentinc#NNN` -
   **hyperlinked** where the format allows (markdown link, javadoc `<a href>`; a raw URL in a `//`
   comment, which every IDE linkifies)
 - resolve the number in **both** repos before choosing the prefix; it very likely exists in each
 - add the fork mirror number alongside an upstream one where a mirror exists
-- the tree-wide remainder is tracked in [`docs/inflight/next-qualify-remaining-refs.md`](docs/inflight/next-qualify-remaining-refs.md)
+- there is no backlog left to work through: the tree-wide sweep qualified every remaining reference
+  and converted the last `upstream #NNN` uses, so anything you find now is drift, not leftovers
 
 **PR titles carry both**, e.g. `fix(core) astubbs#119: paused consumption after rebalance (confluentinc#857)`. The
 title becomes the squash commit subject, so it is the reference most people will ever see.
@@ -499,6 +524,20 @@ Snapshots publish automatically on every push to `master` (`publish.yml`). Workf
 
 ## Worktree ownership
 
+**Never do any work in the main checkout. Every task gets a worktree.** The main clone at the repo
+root is shared mutable state - several agent sessions run against it at once, so its HEAD can move
+between two of *your own* commands. Work only under `.claude/worktrees/<name>`, and reach a task by
+`cd`-ing into its worktree. `git worktree list` tells you which one holds a branch; create one if
+none does.
+
+**Reaching for `git checkout <branch>` is the tell that you are in the wrong directory** - and it is
+how the rule gets broken silently. Git refuses to check out a branch another worktree already holds,
+so the command *fails*; if you piped it into `tail`/`head`, the pipeline still exits 0 and a
+following `&& git rebase …` runs against whatever branch you were really on. On 2026-08-06 that
+rebased an unrelated PR's branch by accident. Two habits prevent it: change directory rather than
+branch, and never pipe a git command whose failure must stop an `&&` chain (or test
+`${PIPESTATUS[0]}`).
+
 Multiple agents/sessions often work in parallel git worktrees (kept under `.claude/worktrees/`). Neither git nor the Claude UI records **which agent is using which worktree**, so this repo uses a convention:
 
 - **`.worktree-owner` marker** — each worktree holds a `.worktree-owner` file at its root describing `owner`, `status`, `branch`, `pr`, and a brief `work:` line. It is **local-only** (git-ignored via `.gitignore`, so it is never committed). When you claim, hand off, or finish a worktree, write/update this file.
@@ -524,7 +563,7 @@ This is a maintained hard fork of the effectively-archived `confluentinc/paralle
 
 **When you start work that maps to an upstream PR, add or update its entry in `upstream-map.yaml`** (don't just note it in prose). Design follows Debian DEP-3, Yocto `Upstream-Status:`, and OpenShift's `UPSTREAM:` fork conventions.
 
-**If the work maps to an upstream *issue*, the fork mirror is where status goes** - diagnosis, labels, and closing all belong on the mirror, because this manifest tracks upstream **PRs** only (every upstream issue has one: astubbs#44, astubbs#117-astubbs#195, label `upstream-mirror`). Find it with `gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "upstream #NNN"`, and cite both numbers, fork first - see [Issue references](#issue-references).
+**If the work maps to an upstream *issue*, the fork mirror is where status goes** - diagnosis, labels, and closing all belong on the mirror, because this manifest tracks upstream **PRs** only (every upstream issue has one: astubbs#44, astubbs#117-astubbs#195, label `upstream-mirror`). Find it with `gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "confluentinc#NNN"`, and cite both numbers, fork first - see [Issue references](#issue-references).
 
 **Keeping it in sync is the agent's job, and it does not stop at "start work".** Nothing automated checks the *fork* side: `upstream-map.py validate` only checks the schema, and `upstream-sweep.sh` only watches upstream — so a manifest that says `prs: []` while a fork PR is open still passes every check, and the mapping quietly rots (a 2026-08-04 audit found five such entries). Update the entry **at every lifecycle transition of your own work**, in the same commit that causes it: opening a PR (`prs:` + `status: pr-open`), finishing on a branch without a PR (`status: ready`), merging (`merged`), releasing (`released`), abandoning (`superseded`/`wontfix`). Loose ends do **not** go in this manifest - it has no `todo:` field. Anything a command can answer ("how far behind is PR #N?" - `git rev-list --left-right --count`) should be asked of the command rather than cached here, where it rots. Record what no command knows in `docs/inflight/`; keep this manifest to the mapping itself.
 
@@ -536,8 +575,13 @@ Branch naming and commit trailers are git conventions rather than upstream-mappi
 
 Every open upstream issue has a mirror here. When you create one, or edit one:
 
-- **Title `upstream #NNN: <description>`.** The `upstream #NNN:` prefix is the join to upstream and
-  never changes. The description half started as upstream's own title, but it is **ours to rewrite** -
+- **Title `confluentinc#NNN: <description>`.** The `confluentinc#NNN:` prefix is the join to
+  upstream and never changes. It uses the owner form for the same reason everything else does - see
+  [Issue references](#issue-references). It read `upstream #NNN:` until astubbs#196: the bulk import
+  deviated from its own plan, which had specified the owner form, and the deviation was written up
+  afterwards as if it were the intent. Neither form auto-links in a title, so nothing was gained by
+  the role word; all 78 mirrors were retitled. The description half started as upstream's own title,
+  but it is **ours to rewrite** -
   many upstream titles name only where a failure surfaced ("Error in onPartitionsAssigned") and
   contain no term anyone would search for. Retitle once the cause is actually known.
 - **Always record the upstream title verbatim in the body header**, whether or not the mirror's title
@@ -550,9 +594,10 @@ Every open upstream issue has a mirror here. When you create one, or edit one:
   notifies people who never opted in.
 - **Labels:** `upstream-mirror`, one area label, one type label.
 - **Cross-repo references in the body are fully qualified** - `confluentinc/parallel-consumer#NN`.
-  This is the one place the house prose form does not apply: `upstream #NN` does not auto-link on
-  GitHub, and a bare `#NN` resolves against the fork's own numbering. See
-  [Issue references](#issue-references).
+  This is the one place the house prose form does not apply: `confluentinc#NN` does not auto-link on
+  GitHub - only `owner/repo#NN` does - and a bare `#NN` resolves against the fork's own numbering.
+  Titles are different again: nothing auto-links there, which is why they use the short owner form.
+  See [Issue references](#issue-references).
 - **Read the upstream original before acting on a mirror** - see [Issue references](#issue-references)
   for why the summary is not a substitute, and correct the mirror when it turns out to be wrong.
 
@@ -577,8 +622,9 @@ there is no value in a bulk backfill pass.
 
 `docs/plans/2026-08-04-001-chore-mirror-upstream-issues-plan.md` carries the original bulk-import plan
 and what the run taught. Read it for *why*, not *how* - it is a dated record, so its own copy of this
-format has since drifted (it proposed a `confluentinc#NNN:` title prefix; the import shipped
-`upstream #NNN:`, which is what the mirrors actually use). This section is the live one.
+format has since drifted. Its title prefix was right and the run was wrong: it specified
+`confluentinc#NNN:`, the import shipped `upstream #NNN:`, and that deviation stood until astubbs#196
+retitled all 78 back to the planned form. This section is the live one.
 
 ### Backlinking upstream
 

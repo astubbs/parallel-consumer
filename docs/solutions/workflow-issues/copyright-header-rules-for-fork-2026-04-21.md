@@ -24,9 +24,9 @@ tags:
 
 # Copyright header management rules for Apache 2.0 fork
 
-> **Update (2026-07-31, PR #90; revised 2026-08-05, PR #124):** enforcement is now automated and parts of the guidance below are superseded. Current state:
+> **Update (2026-07-31, PR astubbs#90; revised 2026-08-05, PR astubbs#124):** enforcement is now automated and parts of the guidance below are superseded. Current state:
 >
-> - The mycila license plugin is **gone** - removed outright, along with `license.skip` and `license.mode`. It was skipped by default from PR #90 onward and never invoked after that, so it was deleted rather than left as an escape hatch for a case that can no longer arise. `-Dlicense.skip` is not a property this build defines any more: passing it is inert, and any command below that still carries it should have it dropped rather than copied forward.
+> - The mycila license plugin is **gone** - removed outright, along with `license.skip` and `license.mode`. It was skipped by default from PR astubbs#90 onward and never invoked after that, so it was deleted rather than left as an escape hatch for a case that can no longer arise. `-Dlicense.skip` is not a property this build defines any more: passing it is inert, and any command below that still carries it should have it dropped rather than copied forward.
 > - Header conformance is enforced by `bin/check-copyright-headers.sh` (provenance-aware, keyed on the pinned fork-point commit) and runs in CI via the `Copyright Headers` workflow. Run it locally before pushing header-related changes; `bin/test-check-copyright-headers.sh` self-tests the scanner itself.
 > - New fork-original files use `Copyright (C) <year> Antony Stubbs and contributors` - never the Confluent header.
 > - Upstream-derived files **modified** since the fork point keep the Confluent header and add `Modifications Copyright (C) <year> Antony Stubbs and contributors` beneath it (Apache 2.0 4(b)/4(c) dual-notice convention).
@@ -94,7 +94,7 @@ Copyright (C) 2020-${license.git.copyrightYears} Confluent, Inc. and contributor
 
 ## When to Apply
 
-- ~~Any time you run a Maven command: always include `-Dlicense.skip`~~ (superseded: skipped by default from PR #90, then the plugin and the property were removed entirely in PR #124)
+- ~~Any time you run a Maven command: always include `-Dlicense.skip`~~ (superseded: skipped by default from PR astubbs#90, then the plugin and the property were removed entirely in PR astubbs#124)
 - Any time you create a new file that did not exist in upstream: do not add Confluent copyright
 - Any time a code review suggests changing a copyright header: only accept if the same commit has substantive code changes
 - Any time you see a standalone "bump copyright year" commit: reject it
@@ -130,7 +130,7 @@ Fix: run Maven with `-Dlicense.skip` and revert the header change.
 
 The commit only added a null-epoch guard. The range `2020-2022` was correct. The reviewer's change was reverted.
 
-**Correct - substantive code change warrants a header update (current dual-notice convention, PR #90):**
+**Correct - substantive code change warrants a header update (current dual-notice convention, PR astubbs#90):**
 
 ```java
 // Before: Copyright (C) 2020-2022 Confluent, Inc.
@@ -142,7 +142,7 @@ The commit only added a null-epoch guard. The range `2020-2022` was correct. The
 ## Related
 
 - `AGENTS.md`, "Copyright rules for this fork" under Code Style - the codified rules (authoritative source)
-- `bin/check-copyright-headers.sh` + `bin/test-check-copyright-headers.sh` - the enforcement and its self-tests (PR #90)
+- `bin/check-copyright-headers.sh` + `bin/test-check-copyright-headers.sh` - the enforcement and its self-tests (PR astubbs#90)
 - `.github/workflows/copyright.yml` - CI enforcement
 - `NOTICE` file at repo root - legal attribution structure
 - `pom.xml` - mycila license plugin config, dormant behind `<license.skip>true</license.skip>`
