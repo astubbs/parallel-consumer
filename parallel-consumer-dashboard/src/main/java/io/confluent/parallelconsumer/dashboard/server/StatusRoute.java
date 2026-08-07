@@ -227,7 +227,7 @@ public final class StatusRoute implements Handler<RoutingContext> {
         html.append("<h1>Parallel Consumer dashboard - self diagnostic</h1>");
         html.append("<p class=\"sub\">EXPERIMENTAL module. Read-only. Bound to ")
                 .append(escape(options.getBindHostLiteral()))
-                .append(" over ").append(escape(options.getScheme()))
+                .append(" over ").append(DashboardOptions.SCHEME)
                 .append(", sampling every ").append(options.getUpdateInterval().toMillis()).append("ms.</p>");
 
         html.append("<table><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>");

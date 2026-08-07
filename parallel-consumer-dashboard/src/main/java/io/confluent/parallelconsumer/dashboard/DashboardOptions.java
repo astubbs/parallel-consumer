@@ -32,9 +32,9 @@ import java.util.Set;
  *       depending on {@code /etc/hosts} - a default that is only usually safe is not a safe default.</li>
  *   <li><strong>Port: {@value #DEFAULT_PORT}, then walking upward.</strong> See
  *       {@link DashboardServer} for the search and why it is silent.</li>
- *   <li><strong>TLS: off.</strong> Turning it on with no supplied certificate means a self-signed one, which means a
- *       browser interstitial, which would spoil the zero-setup path this module exists for. On is one flag away.</li>
  * </ul>
+ * <p>
+ * The scheme is not among them: it is fixed at {@value #SCHEME}. See {@link #SCHEME}.
  * <p>
  * Experimental: the dashboard module is opt-in and its API may change without notice.
  */
@@ -47,6 +47,19 @@ public class DashboardOptions {
      * walks upward rather than failing (plan R54).
      */
     public static final int DEFAULT_PORT = 8080;
+
+    /**
+     * The one scheme this server speaks. Named rather than inlined because three places have to agree on it - the
+     * startup URL, the {@code /status} page, and the {@code Origin} comparison in
+     * {@code HostAllowlist} - and a same-origin check that disagreed with the scheme actually served would reject
+     * the page's own requests.
+     * <p>
+     * There is deliberately no HTTPS option. It was built and then removed before release, because on the loopback
+     * bind this module is for it buys a browser interstitial rather than confidentiality. It is deferred rather than
+     * refused - plan requirement R50, under Scope Boundaries, records what reviving it actually costs on a modern
+     * JDK, which is more than it looks.
+     */
+    public static final String SCHEME = "http";
 
     /**
      * How many consecutive ports the search will try before giving up. Generous enough that a developer machine
@@ -115,22 +128,6 @@ public class DashboardOptions {
     Duration streamIdleTimeout;
 
     /**
-     * Whether to serve HTTPS. Off by default (plan R50).
-     */
-    boolean tlsEnabled;
-
-    /**
-     * PEM certificate chain path. Null with {@link #isTlsEnabled()} true means "generate a self-signed certificate at
-     * startup", which works with no preparation at the cost of a browser warning.
-     */
-    String tlsCertificatePath;
-
-    /**
-     * PEM private key path. Must be supplied if and only if {@link #getTlsCertificatePath()} is.
-     */
-    String tlsPrivateKeyPath;
-
-    /**
      * Whether to query the broker for consumer-group context. Off by default: it is the one part of the dashboard
      * that talks to the broker rather than reading an in-process snapshot, so it is opt-in separately from the
      * dashboard itself.
@@ -150,9 +147,6 @@ public class DashboardOptions {
                      Duration updateInterval,
                      int maxConcurrentStreams,
                      Duration streamIdleTimeout,
-                     boolean tlsEnabled,
-                     String tlsCertificatePath,
-                     String tlsPrivateKeyPath,
                      boolean consumerGroupInfoEnabled) {
         this.bindAddress = bindAddress == null ? InetAddress.getLoopbackAddress() : bindAddress;
         this.port = port == 0 ? DEFAULT_PORT : port;
@@ -161,9 +155,6 @@ public class DashboardOptions {
         this.updateInterval = updateInterval == null ? DEFAULT_UPDATE_INTERVAL : updateInterval;
         this.maxConcurrentStreams = maxConcurrentStreams == 0 ? DEFAULT_MAX_CONCURRENT_STREAMS : maxConcurrentStreams;
         this.streamIdleTimeout = streamIdleTimeout == null ? DEFAULT_STREAM_IDLE_TIMEOUT : streamIdleTimeout;
-        this.tlsEnabled = tlsEnabled;
-        this.tlsCertificatePath = tlsCertificatePath;
-        this.tlsPrivateKeyPath = tlsPrivateKeyPath;
         this.consumerGroupInfoEnabled = consumerGroupInfoEnabled;
 
         if (this.port < 1 || this.port > 65535) {
@@ -185,17 +176,6 @@ public class DashboardOptions {
             throw new IllegalArgumentException(
                     "Dashboard streamIdleTimeout must be at least 1ms, but was " + this.streamIdleTimeout);
         }
-        // half a supplied pair is the failure that would otherwise surface as a self-signed certificate the user did
-        // not ask for, which is worse than not starting: they would believe their own certificate was in use
-        if ((this.tlsCertificatePath == null) != (this.tlsPrivateKeyPath == null)) {
-            throw new IllegalArgumentException("Dashboard TLS needs both tlsCertificatePath and tlsPrivateKeyPath or "
-                    + "neither (neither means a self-signed certificate is generated at startup), but got "
-                    + "certificate=" + this.tlsCertificatePath + " key=" + this.tlsPrivateKeyPath);
-        }
-        if (!this.tlsEnabled && this.tlsCertificatePath != null) {
-            throw new IllegalArgumentException("Dashboard TLS certificate paths were supplied but tlsEnabled is "
-                    + "false, so they would be silently ignored - set tlsEnabled(true) or drop the paths");
-        }
     }
 
     /**
@@ -203,14 +183,6 @@ public class DashboardOptions {
      */
     public static DashboardOptions defaults() {
         return builder().build();
-    }
-
-    /**
-     * {@code https} when TLS is on, {@code http} otherwise. Used to build the startup URL and to decide which
-     * {@code Origin} values can possibly be same-origin.
-     */
-    public String getScheme() {
-        return tlsEnabled ? "https" : "http";
     }
 
     /**
@@ -256,7 +228,7 @@ public class DashboardOptions {
      * The full URL for a bound port - what the startup line prints, and what a terminal linkifies.
      */
     public String url(int boundPort) {
-        return getScheme() + "://" + getReachableHostLiteral() + ":" + boundPort + "/";
+        return SCHEME + "://" + getReachableHostLiteral() + ":" + boundPort + "/";
     }
 
     private static String hostLiteral(InetAddress address) {

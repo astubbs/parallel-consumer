@@ -3,10 +3,6 @@ package io.confluent.parallelconsumer.dashboard.server;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -14,7 +10,6 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,6 +32,12 @@ final class RawHttp {
 
     private static final int DEFAULT_TIMEOUT_MILLIS = 10_000;
 
+    /**
+     * The address dialled. The dashboard binds loopback in these tests; the {@code Host} header is what varies, and
+     * varying it independently of the address is the whole point of this class.
+     */
+    private static final String CONNECT_HOST = "127.0.0.1";
+
     private RawHttp() {
     }
 
@@ -44,22 +45,13 @@ final class RawHttp {
         return request("GET", port, path, new LinkedHashMap<>());
     }
 
-    static Response request(String method, int port, String path, Map<String, String> headers) throws IOException {
-        return request(method, "127.0.0.1", port, path, headers, false);
-    }
-
     /**
      * One request, one connection, closed afterwards - so the response body always ends at EOF and there is no
      * connection reuse to reason about.
      */
-    static Response request(String method,
-                            String connectHost,
-                            int port,
-                            String path,
-                            Map<String, String> headers,
-                            boolean tls) throws IOException {
-        try (Socket socket = connect(connectHost, port, tls)) {
-            Map<String, String> effective = withDefaults(headers, connectHost, port);
+    static Response request(String method, int port, String path, Map<String, String> headers) throws IOException {
+        try (Socket socket = connect(port)) {
+            Map<String, String> effective = withDefaults(headers, CONNECT_HOST, port);
             effective.put("Connection", "close");
             write(socket.getOutputStream(), method, path, effective);
             return readResponse(socket.getInputStream());
@@ -70,21 +62,16 @@ final class RawHttp {
      * Opens a server-sent-events stream and leaves it open for the caller to read from.
      */
     static SseStream openSse(int port, String path) throws IOException {
-        Socket socket = connect("127.0.0.1", port, false);
-        Map<String, String> headers = withDefaults(new LinkedHashMap<>(), "127.0.0.1", port);
+        Socket socket = connect(port);
+        Map<String, String> headers = withDefaults(new LinkedHashMap<>(), CONNECT_HOST, port);
         headers.put("Accept", "text/event-stream");
         write(socket.getOutputStream(), "GET", path, headers);
         return new SseStream(socket);
     }
 
-    private static Socket connect(String host, int port, boolean tls) throws IOException {
-        Socket socket;
-        if (tls) {
-            socket = trustEverythingFactory().createSocket();
-        } else {
-            socket = new Socket();
-        }
-        socket.connect(new InetSocketAddress(host, port), DEFAULT_TIMEOUT_MILLIS);
+    private static Socket connect(int port) throws IOException {
+        Socket socket = new Socket();
+        socket.connect(new InetSocketAddress(CONNECT_HOST, port), DEFAULT_TIMEOUT_MILLIS);
         socket.setSoTimeout(DEFAULT_TIMEOUT_MILLIS);
         return socket;
     }
@@ -159,35 +146,6 @@ final class RawHttp {
             line.write(b);
         }
         return line.size() == 0 ? null : line.toString("ISO-8859-1");
-    }
-
-    /**
-     * A trust manager that trusts anything, used only to reach a server presenting the self-signed certificate the
-     * dashboard generated for itself. Nothing outside these tests uses it.
-     */
-    private static SSLSocketFactory trustEverythingFactory() throws IOException {
-        try {
-            SSLContext context = SSLContext.getInstance("TLS");
-            context.init(null, new TrustManager[]{new X509TrustManager() {
-                @Override
-                public void checkClientTrusted(X509Certificate[] chain, String authType) {
-                    // a test client that reaches a deliberately self-signed server trusts by construction
-                }
-
-                @Override
-                public void checkServerTrusted(X509Certificate[] chain, String authType) {
-                    // as above
-                }
-
-                @Override
-                public X509Certificate[] getAcceptedIssuers() {
-                    return new X509Certificate[0];
-                }
-            }}, new java.security.SecureRandom());
-            return context.getSocketFactory();
-        } catch (Exception e) {
-            throw new IOException("Could not build a trust-everything TLS context for the test client", e);
-        }
     }
 
     /**

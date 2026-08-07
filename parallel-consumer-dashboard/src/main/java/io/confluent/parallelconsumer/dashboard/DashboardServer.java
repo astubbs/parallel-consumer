@@ -17,8 +17,6 @@ import io.vertx.core.file.FileSystemOptions;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
-import io.vertx.core.net.PemKeyCertOptions;
-import io.vertx.core.net.SelfSignedCertificate;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.StaticHandler;
@@ -112,24 +110,6 @@ public class DashboardServer implements AutoCloseable {
     public static final String PAGE_CLASSPATH_ROOT = "web";
 
     /**
-     * What to say when TLS is on, no certificate was supplied, and one cannot be generated.
-     * <p>
-     * This is not an exotic environment - it is <em>every</em> Java 16 and later runtime without BouncyCastle.
-     * Netty's generator reaches into {@code sun.security.x509}, which {@code java.base} has never exported and which
-     * stopped being reachable by illegal access in Java 16, and the JDK offers no public API for building an X.509
-     * certificate. So the underlying failure is a {@code CertificateException} saying "no provider succeeded", which
-     * tells the reader nothing about what to do. This does.
-     */
-    static final String SELF_SIGNED_UNAVAILABLE =
-            "The Parallel Consumer dashboard could not generate a self-signed TLS certificate. The JDK has no public "
-                    + "API for creating one, and the fallback that used to work reaches into sun.security.x509, "
-                    + "which java.base does not export on Java 16 or later. Two ways forward: add "
-                    + "org.bouncycastle:bcpkix-jdk18on to your runtime classpath (it is an optional dependency of "
-                    + "this module precisely so it is not imposed on everyone), or supply your own certificate with "
-                    + "DashboardOptions.tlsCertificatePath and tlsPrivateKeyPath. TLS is off by default, so a third "
-                    + "option is simply not to enable it.";
-
-    /**
      * How long to wait for a bind or a shutdown before deciding the event loop is wedged. Generous; it only exists so
      * a pathological environment produces a message rather than a hung process.
      */
@@ -164,8 +144,6 @@ public class DashboardServer implements AutoCloseable {
     private Vertx vertx;
 
     private HttpServer httpServer;
-
-    private SelfSignedCertificate selfSignedCertificate;
 
     /**
      * The port actually bound, which is not necessarily the one asked for - see the port search.
@@ -227,7 +205,6 @@ public class DashboardServer implements AutoCloseable {
         HttpServerOptions serverOptions = new HttpServerOptions()
                 .setHost(options.getBindHostForSocket())
                 .setCompressionSupported(true);
-        applyTls(serverOptions);
 
         this.httpServer = bindWalkingUpward(serverOptions);
         this.url = options.url(port);
@@ -243,7 +220,6 @@ public class DashboardServer implements AutoCloseable {
                             + "(the default) or put it behind something that authenticates.",
                     options.getBindHostLiteral());
         }
-        logTlsMode();
 
         streamRoute.start(vertx);
         return this;
@@ -264,17 +240,6 @@ public class DashboardServer implements AutoCloseable {
         if (vertx != null) {
             awaitQuietly(vertx.close(), "closing the dashboard Vertx instance");
         }
-        if (selfSignedCertificate != null) {
-            selfSignedCertificate.delete();
-        }
-    }
-
-    /**
-     * Whether a self-signed certificate was generated for this server. False both when TLS is off and when a
-     * certificate was supplied - so a test can prove the default path generates nothing.
-     */
-    public boolean isUsingGeneratedCertificate() {
-        return selfSignedCertificate != null;
     }
 
     /**
@@ -454,8 +419,9 @@ public class DashboardServer implements AutoCloseable {
                 return bound;
             } catch (Exception e) {
                 if (!isPortUnavailable(e)) {
-                    // a TLS misconfiguration or a permissions problem will never be fixed by trying the next port,
-                    // and walking through a hundred of them would turn one clear error into a hundred identical ones
+                    // a permissions problem, or an address that is not on this host, will never be fixed by trying
+                    // the next port, and walking through a hundred of them would turn one clear error into a
+                    // hundred identical ones
                     awaitQuietly(server.close(), "closing a dashboard server that failed to start");
                     throw new IllegalStateException("The Parallel Consumer dashboard could not start on "
                             + options.getBindHostLiteral() + ":" + candidate
@@ -500,40 +466,6 @@ public class DashboardServer implements AutoCloseable {
             }
         }
         return false;
-    }
-
-    private void applyTls(HttpServerOptions serverOptions) {
-        if (!options.isTlsEnabled()) {
-            return;
-        }
-        serverOptions.setSsl(true);
-        if (options.getTlsCertificatePath() != null) {
-            serverOptions.setPemKeyCertOptions(new PemKeyCertOptions()
-                    .setCertPath(options.getTlsCertificatePath())
-                    .setKeyPath(options.getTlsPrivateKeyPath()));
-            return;
-        }
-        try {
-            this.selfSignedCertificate = SelfSignedCertificate.create();
-        } catch (RuntimeException e) {
-            throw new IllegalStateException(SELF_SIGNED_UNAVAILABLE, e);
-        }
-        serverOptions.setKeyCertOptions(selfSignedCertificate.keyCertOptions());
-    }
-
-    private void logTlsMode() {
-        if (!options.isTlsEnabled()) {
-            return;
-        }
-        if (isUsingGeneratedCertificate()) {
-            log.info("Dashboard TLS is ON with a SELF-SIGNED certificate generated at startup. Your browser WILL "
-                    + "warn that the connection is not private - that is expected and it is not a fault: nothing "
-                    + "has vouched for a certificate the server made for itself moments ago. Supply "
-                    + "tlsCertificatePath and tlsPrivateKeyPath to use your own instead.");
-        } else {
-            log.info("Dashboard TLS is ON using the supplied certificate {} and key {}.",
-                    options.getTlsCertificatePath(), options.getTlsPrivateKeyPath());
-        }
     }
 
     /**

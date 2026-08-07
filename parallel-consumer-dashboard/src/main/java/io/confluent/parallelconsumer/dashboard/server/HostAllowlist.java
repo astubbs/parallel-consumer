@@ -55,8 +55,6 @@ public final class HostAllowlist implements Handler<RoutingContext> {
 
     private final Set<String> extraAllowedHosts;
 
-    private final String scheme;
-
     public HostAllowlist(DashboardOptions options) {
         Set<String> hosts = new LinkedHashSet<>(LOOPBACK_NAMES);
         InetAddress bind = options.getBindAddress();
@@ -79,7 +77,6 @@ public final class HostAllowlist implements Handler<RoutingContext> {
         }
         this.allowedHosts = Collections.unmodifiableSet(hosts);
         this.extraAllowedHosts = options.getExtraAllowedHosts();
-        this.scheme = options.getScheme();
     }
 
     /**
@@ -159,7 +156,8 @@ public final class HostAllowlist implements Handler<RoutingContext> {
             // an Origin is scheme + authority and nothing else; a path means this is not an Origin
             return false;
         }
-        if (!scheme.equals(originScheme)) {
+        // the server speaks exactly one scheme, so anything else - https included - is a different origin
+        if (!DashboardOptions.SCHEME.equals(originScheme)) {
             return false;
         }
         String host = hostHeader == null ? null : hostHeader.trim().toLowerCase(Locale.ROOT);
