@@ -28,12 +28,50 @@ and the page in one command. Phases 2-5 are deferred and listed in the plan's Ph
   incident for off-thread PC access.
 - Offsets are strings on the wire and BigInt in JS; numbers are pixel geometry only.
 
-## Open at time of writing
+## TODO before merge: re-cut two commits
 
-- Two commits carry work belonging to their neighbours (`git add -A` ran while a parallel agent was
-  writing): `9cd60ee0` swallowed the chaos framework, `64b5c446` swallowed the GraalVM/Selenium pom
-  entries. Content is complete across the branch; the attribution is not. **Re-cut at merge prep.**
-- Whether CI should hard-fail rather than skip the browser UI suite when Chrome is absent.
-- `ShowcaseScenarioIT` is untagged and costs ~150s in the default integration lane.
+Decided: re-cut rather than squash. The branch holds several genuinely separable workstreams (the
+module, the chaos scenario driver, the demo, the review fixes) that someone will later want to bisect
+to or revert independently, and releases after 0.6.0.0 generate their notes from the commit log.
+
+Two commits carry work that is not theirs. **The content is complete and correct across the branch -
+only the attribution is wrong**, so this is a history fix, not a code fix.
+
+| Commit | Says it does | Also contains, wrongly |
+|---|---|---|
+| `9cd60ee0` | serialise the state document | the whole chaos-scenario framework, which belongs with `39922d72` |
+| `64b5c446` | drop TLS from the MVP | the GraalVM + Selenium pom entries, which belong with `d23ca7a5` |
+
+Cause in both cases: `git add -A` ran in this shared worktree while a parallel agent was still
+writing to a different subtree. Staging explicit paths would have avoided it.
+
+Method, per the merge-strategy rule in `AGENTS.md`:
+
+1. `git fetch origin master` **first, every time** - a stale ref silently reverts whatever master
+   gained meanwhile.
+2. `git reset --mixed <merge-base>` - the **merge-base**, not `origin/master`. The tell that you used
+   the wrong base is files appearing in the staged set that this branch never touched.
+3. Restage into atomic commits. The test for atomic is whether the message needs an "and also".
+4. Verify with `git diff <old-tip> HEAD` - it must be **empty**, proving history changed and content
+   did not.
+5. Rebase-merge, so each lands on master on its own.
+
+## Other open items
+
+- `ShowcaseScenarioIT` is untagged and costs ~150s in the default integration lane. Tagging it out
+  would mean nothing gates the demo, so it stays until there is a reason to move it.
+- Offsets lose exactness above 2^53 at the sampler, because `Gauge.value()` is a `double`. The
+  string-on-the-wire encoding preserves what is left but cannot restore what the gauge already
+  rounded. Reading them from `DirectStateSource` instead is the follow-on that would close it.
+- Core has no `removeLoopEndCallBack` to pair with `addLoopEndCallBack`, so `DashboardServer.close()`
+  stops sampling with a volatile flag rather than actually deregistering. A remover in core is the
+  durable fix.
+
+## Settled here
+
+- CI **hard-fails** when the browser UI suite cannot run (`-Ddashboard.ui.requireBrowser=true` in
+  `bin/ci-integration-test.sh`). Locally it still skips, so a developer without Chrome gets a green
+  build; in CI a skipped suite is indistinguishable from a passing one, which is the failure this
+  prevents.
 
 Delete this file when the work lands.
