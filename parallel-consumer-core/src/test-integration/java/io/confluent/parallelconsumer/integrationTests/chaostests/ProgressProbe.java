@@ -4,6 +4,8 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.MembershipAction;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.Getter;
 import lombok.Value;
@@ -249,8 +251,8 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
 
     // --- ChaosObserver: drain-bound bookkeeping ---
     @Override
-    public void onAction(int instanceId, ChaosConductor.ChaosAction action) {
-        if (action == ChaosConductor.ChaosAction.STOP_DRAIN) {
+    public void onAction(int instanceId, ScenarioAction action) {
+        if (action == MembershipAction.STOP_DRAIN) {
             outstandingDrains.put(instanceId, Instant.now());
         }
     }

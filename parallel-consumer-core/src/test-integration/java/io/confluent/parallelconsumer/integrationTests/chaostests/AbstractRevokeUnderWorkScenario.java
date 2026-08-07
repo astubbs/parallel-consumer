@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ChaosScenarios;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
@@ -111,13 +112,12 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 // eviction horizon (all of it, under the eager assignor); widen the watermark beyond it
                 .withNoProgressWindow(Duration.ofSeconds(60));
 
+        // chaos SHAPE (W4 weights - NO drain stops, faster ticks, no join bias) is declared in
+        // ChaosScenarios.revokeUnderWork()
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed)
-                // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
-                .minTick(Duration.ofMillis(300))
-                .maxTick(Duration.ofMillis(1000))
-                .weights(ChaosConductor.defaultW4Weights()) // NO drain stops - see scenario javadoc
-                .joinAfterDrainBias(0) // no drains to bias after
+                .replayCommand(replayCmd)
+                .scenario(ChaosScenarios.revokeUnderWork())
                 .build();
 
         startRun(probe, conductor);

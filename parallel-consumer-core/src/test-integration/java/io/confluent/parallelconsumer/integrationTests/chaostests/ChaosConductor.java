@@ -4,60 +4,66 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.FleetControl;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.MembershipAction;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioContext;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioRunner;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.WorkloadControl;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Builder;
 import lombok.Getter;
-import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 /**
- * Seeded, replayable chaos scheduler for the Chaos Pain Suite (Phase 1 - see
- * {@code docs/plans/2026-07-30-002-feat-chaos-pain-suite-phase1-plan.md}).
+ * The fleet half of the scenario driver: it owns a fleet of PC instances, an authoritative per-instance
+ * state machine, and the timeline - and it exposes them to a {@link Scenario} as a {@link FleetControl}.
+ * The tick loop itself now lives in {@link ScenarioRunner}, so the same driver runs the Chaos Pain Suite
+ * (see {@code scenario.ChaosScenarios}) and any other scenario declared against the framework.
  * <p>
- * Replaces the ad-hoc {@code Math.random()} chaos monkey with a deterministic draw stream: each tick
- * consumes one complete {@link TickDraws} from the seeded RNG - up front and in full, regardless of
- * live fleet state - so the random stream is a pure function of (seed, tick index). Same seed = same
- * draw sequence, always. The REALIZED action/target is the draw filtered through live fleet state
- * (the join-after-drain bias only fires after a successful STOP_DRAIN; a target roll resolves against
- * the instances currently in the wanted state), so wall-clock timing pins what a draw lands on - never
- * which draws occur, and never how many. Every executed action is appended to a timestamped
- * {@link #getTimeline() timeline}, logged at execution and dumped wholesale by {@link #stop()} - a
- * failing run's first artifact.
+ * Originally the Chaos Pain Suite's seeded chaos scheduler (Phase 1 - see
+ * {@code docs/plans/2026-07-30-002-feat-chaos-pain-suite-phase1-plan.md}), generalised in place per KTD14
+ * of {@code docs/plans/2026-08-07-002-feat-embedded-web-dashboard-plan.md}.
  * <p>
- * Phase 1 action set (W1 churn storm): {@link ChaosAction#STOP_DRAIN}, {@link ChaosAction#STOP_NO_DRAIN},
- * {@link ChaosAction#RESTART}, {@link ChaosAction#JOIN_NEW}. The conductor deliberately supports a
- * <b>join-after-stopDrain bias</b>: the zombie-drain defect class bites hardest when a member joins while
- * another is mid-drain, so after each STOP_DRAIN the next action is forced to JOIN_NEW with probability
- * {@code joinAfterDrainBias} - the calibration tuning knob (probes get tuned via the conductor, never
- * loosened).
+ * <b>Determinism is unchanged by the generalisation.</b> Each tick consumes one complete
+ * {@code ScenarioTick} from the seeded RNG - up front and in full, regardless of live fleet state - so the
+ * random stream is a pure function of (seed, tick index). Same seed = same draw sequence, always. The
+ * REALIZED action/target is the draw filtered through live fleet state (the join-after-drain bias only
+ * fires after a successful STOP_DRAIN; a target roll resolves against the instances currently in the
+ * wanted state), so wall-clock timing pins what a draw lands on - never which draws occur, and never how
+ * many. See {@code scenario.SeededPlanSource} for the draw contract and
+ * {@code scenario.PlanSourceSeedStabilityTest} for the golden values that guard it.
+ * <p>
+ * Every executed action is appended to a timestamped {@link #getTimeline() timeline}, logged at execution
+ * and dumped wholesale by {@link #stop()} - a failing run's first artifact.
+ * <p>
+ * Membership action set: {@link MembershipAction}. The conductor deliberately supports a
+ * <b>join-after-stopDrain bias</b>, declared on the scenario phase as its follow-on action: the
+ * zombie-drain defect class bites hardest when a member joins while another is mid-drain.
  * <p>
  * Lifecycle notes: drives instances via {@link ManagedPCInstance#start(ExecutorService)},
  * {@link ManagedPCInstance#stopAsync()} (DONT_DRAIN) and - because the managed API only exposes
  * DONT_DRAIN closes - raw {@code getParallelConsumer().closeDrainFirst()} on a background thread for
  * DRAIN stops. Drain threads are tracked and joined (bounded by {@link #DRAINER_JOIN_BUDGET}) inside
- * {@link #stop()}, so callers see a quiesced fleet - no drainer races the test's settle/teardown
- * close. The conductor keeps its own authoritative per-instance state machine and never calls
- * {@code toggle()}, so the managed {@code started} flag (which only gates toggle) stays out of play.
+ * {@link #stop()}, so callers see a quiesced fleet - no drainer races the test's settle/teardown close.
+ * The conductor keeps its own authoritative per-instance state machine and never calls {@code toggle()},
+ * so the managed {@code started} flag (which only gates toggle) stays out of play.
  */
 @Slf4j
-public class ChaosConductor {
-
-    public enum ChaosAction {STOP_DRAIN, STOP_NO_DRAIN, RESTART, JOIN_NEW}
+public class ChaosConductor implements ScenarioContext, FleetControl {
 
     /** Conductor's authoritative view of each instance it manages. Public: referenced across the
      * chaostests package (probe, scenarios, assertions). */
@@ -68,31 +74,15 @@ public class ChaosConductor {
      * recorded loudly in the timeline rather than silently leaked into teardown. */
     public static final Duration DRAINER_JOIN_BUDGET = Duration.ofSeconds(60);
 
-    /**
-     * One tick's complete draw set, consumed from the seeded RNG before the tick acts. Consuming every
-     * draw every tick - used or not - is what makes the stream replayable: without it, the number of
-     * draws would depend on live fleet state (bias armed? candidates available?), which is mutated by
-     * wall-clock-timed drain completions, and two runs of the same seed could silently desynchronise.
-     */
-    @Value
-    public static class TickDraws {
-        long tickMs;
-        double biasRoll;
-        ChaosAction action;
-        int targetRoll;
-    }
-
     private final long seed;
-    private final Random random;
-    private final Duration minTick;
-    private final Duration maxTick;
-    private final Map<ChaosAction, Integer> weights;
-    private final double joinAfterDrainBias;
+    private final Scenario scenario;
     private final int maxFleetSize;
     private final ExecutorService pcExecutor;
     private final Supplier<ManagedPCInstance> instanceFactory;
     /** Never touched by chaos - the survivor that guarantees the group always has a healthy member. */
     private final ManagedPCInstance protectedInstance;
+    /** Optional: only scenarios with workload actions need one. */
+    private final WorkloadControl workload;
 
     private final List<ManagedPCInstance> fleet = new CopyOnWriteArrayList<>();
     private final Map<Integer, InstanceState> states = new ConcurrentHashMap<>();
@@ -100,14 +90,14 @@ public class ChaosConductor {
     private final AtomicInteger disturbanceCount = new AtomicInteger();
     @Getter
     private final List<String> timeline = Collections.synchronizedList(new ArrayList<>());
-    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final ScenarioRunner runner;
     private Thread conductorThread;
     private Instant startedAt;
     /** Observer hook for the probe: called with (instanceId, action) as each action executes. */
     private final ChaosObserver observer;
 
     public interface ChaosObserver {
-        void onAction(int instanceId, ChaosAction action);
+        void onAction(int instanceId, ScenarioAction action);
 
         /** A STOP_DRAIN's background close finished (successfully or not) for this instance. */
         default void onDrainComplete(int instanceId) {
@@ -116,28 +106,26 @@ public class ChaosConductor {
 
     @Builder
     public ChaosConductor(long seed,
-                          Duration minTick,
-                          Duration maxTick,
-                          Map<ChaosAction, Integer> weights,
-                          double joinAfterDrainBias,
+                          Scenario scenario,
+                          String replayCommand,
                           int maxFleetSize,
                           ExecutorService pcExecutor,
                           Supplier<ManagedPCInstance> instanceFactory,
                           ManagedPCInstance protectedInstance,
+                          WorkloadControl workload,
                           List<ManagedPCInstance> initialFleet,
                           ChaosObserver observer) {
+        if (scenario == null) {
+            throw new IllegalArgumentException("a conductor needs a scenario - see scenario.ChaosScenarios "
+                    + "for the suite's W1 and W4 declarations");
+        }
         this.seed = seed;
-        this.random = new Random(seed);
-        this.minTick = minTick == null ? Duration.ofSeconds(1) : minTick;
-        this.maxTick = maxTick == null ? Duration.ofSeconds(3) : maxTick;
-        // defensive EnumMap copy: deterministic iteration order is what makes weightedPick
-        // seed-replayable - a caller-supplied HashMap would iterate in identity-hash order
-        this.weights = weights == null ? defaultW1Weights() : new EnumMap<>(weights);
-        this.joinAfterDrainBias = joinAfterDrainBias;
+        this.scenario = scenario;
         this.maxFleetSize = maxFleetSize;
         this.pcExecutor = pcExecutor;
         this.instanceFactory = instanceFactory;
         this.protectedInstance = protectedInstance;
+        this.workload = workload;
         this.observer = observer == null ? (id, a) -> { } : observer;
         if (initialFleet != null) {
             for (ManagedPCInstance pc : initialFleet) {
@@ -145,73 +133,50 @@ public class ChaosConductor {
                 states.put(pc.getInstanceId(), InstanceState.RUNNING);
             }
         }
+        this.runner = ScenarioRunner.builder()
+                .scenario(scenario)
+                .seed(seed)
+                .mode(ScenarioRunner.Mode.LOOP)
+                .context(this)
+                .replayCommand(replayCommand)
+                .build();
     }
 
-    /**
-     * W1 churn-storm defaults: drain-heavy, steady joins, some hard stops. EnumMap on purpose:
-     * deterministic iteration order is what makes the weighted pick seed-replayable.
-     */
-    public static Map<ChaosAction, Integer> defaultW1Weights() {
-        Map<ChaosAction, Integer> w = new EnumMap<>(ChaosAction.class);
-        w.put(ChaosAction.STOP_DRAIN, 4);
-        w.put(ChaosAction.STOP_NO_DRAIN, 2);
-        w.put(ChaosAction.RESTART, 3);
-        w.put(ChaosAction.JOIN_NEW, 1);
-        return w;
+    // --- ScenarioContext ---
+
+    @Override
+    public FleetControl fleet() {
+        return this;
     }
 
-    /**
-     * W4 revoke-under-work defaults: NO drain stops at all - hard stops, restarts and joins only. The
-     * point is to force partition REVOCATIONS while heavy work is in flight without ever opening a
-     * Class 1 drain-zombie window, isolating the protocol-invisible Class 2 stall mechanism (a member
-     * that keeps heartbeating while its partitions' committed offsets freeze). EnumMap for seed-replayable
-     * iteration order, same as W1.
-     */
-    public static Map<ChaosAction, Integer> defaultW4Weights() {
-        Map<ChaosAction, Integer> w = new EnumMap<>(ChaosAction.class);
-        w.put(ChaosAction.STOP_NO_DRAIN, 3);
-        w.put(ChaosAction.RESTART, 3);
-        w.put(ChaosAction.JOIN_NEW, 2);
-        return w;
-    }
-
-    /**
-     * The single draw path - used by BOTH the live {@link #loop()} and {@link #planTicks}, so the
-     * determinism regression test ({@code ChaosConductorPlanIT}) exercises the exact production draw
-     * sequence, bias and target rolls included.
-     */
-    static TickDraws drawTick(Random random, Duration minTick, Duration maxTick, Map<ChaosAction, Integer> weights) {
-        long tickMs = minTick.toMillis()
-                + (long) (random.nextInt(1000) / 1000.0 * (maxTick.toMillis() - minTick.toMillis()));
-        double biasRoll = random.nextDouble();
-        ChaosAction action = weightedPick(random, weights);
-        int targetRoll = random.nextInt(Integer.MAX_VALUE);
-        return new TickDraws(tickMs, biasRoll, action, targetRoll);
-    }
-
-    /** Pure function of the seed: the exact draw sequence a conductor with this seed consumes. */
-    public static List<TickDraws> planTicks(long seed, int steps, Duration minTick, Duration maxTick,
-                                            Map<ChaosAction, Integer> weights) {
-        Random r = new Random(seed);
-        List<TickDraws> plan = new ArrayList<>();
-        for (int i = 0; i < steps; i++) {
-            plan.add(drawTick(r, minTick, maxTick, weights));
+    @Override
+    public WorkloadControl workload() {
+        if (workload == null) {
+            return ScenarioContext.super.workload(); // named failure, not a silent no-op
         }
-        return plan;
+        return workload;
     }
+
+    @Override
+    public void record(String what, int instanceId) {
+        String entry = "t=+" + (startedAt == null ? "?" : Duration.between(startedAt, Instant.now()).toMillis() + "ms")
+                + " " + what + (instanceId >= 0 ? " -> instance " + instanceId : "");
+        timeline.add(entry);
+        log.info("[chaos] {}", entry);
+    }
+
+    // --- lifecycle ---
 
     public void start() {
-        running.set(true);
         startedAt = Instant.now();
-        record("CONDUCTOR START seed=" + seed + " weights=" + weights + " tick=" + minTick + ".." + maxTick
-                + " joinAfterDrainBias=" + joinAfterDrainBias, -1);
-        conductorThread = new Thread(this::loop, "chaos-conductor");
+        record("CONDUCTOR START seed=" + seed + " scenario='" + scenario.getName() + "'", -1);
+        conductorThread = new Thread(runner::run, "chaos-conductor");
         conductorThread.setDaemon(true);
         conductorThread.start();
     }
 
     public void stop() {
-        running.set(false);
+        runner.stop();
         if (conductorThread != null) {
             conductorThread.interrupt();
             try {
@@ -227,6 +192,12 @@ public class ChaosConductor {
                 log.info("[chaos-timeline] {}", entry);
             }
         }
+    }
+
+    /** Postcondition failures the scenario's phases reported. Empty for the unbounded chaos scenarios,
+     * which declare none. */
+    public List<String> getScenarioFailures() {
+        return runner.getFailures();
     }
 
     private void joinDrainers() {
@@ -260,41 +231,16 @@ public class ChaosConductor {
         return disturbanceCount.get();
     }
 
-    private void loop() {
-        boolean forceJoinNext = false;
-        while (running.get()) {
-            try {
-                TickDraws draws = drawTick(random, minTick, maxTick, weights);
-                Thread.sleep(draws.getTickMs());
+    // --- FleetControl: the actions themselves ---
 
-                ChaosAction action = forceJoinNext && draws.getBiasRoll() < joinAfterDrainBias
-                        ? ChaosAction.JOIN_NEW
-                        : draws.getAction();
-                forceJoinNext = false;
-
-                switch (action) {
-                    case STOP_DRAIN -> forceJoinNext = doStopDrain(draws.getTargetRoll());
-                    case STOP_NO_DRAIN -> doStopNoDrain(draws.getTargetRoll());
-                    case RESTART -> doRestart(draws.getTargetRoll());
-                    case JOIN_NEW -> doJoin();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (Exception e) {
-                record("CONDUCTOR ERROR: " + e, -1);
-                log.error("Chaos conductor action failed", e);
-            }
-        }
-    }
-
-    private boolean doStopDrain(int targetRoll) {
+    @Override
+    public boolean stopDrain(int targetRoll) {
         ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return false;
         states.put(victim.getInstanceId(), InstanceState.DRAINING);
         disturbanceCount.incrementAndGet();
         record("STOP_DRAIN", victim.getInstanceId());
-        observer.onAction(victim.getInstanceId(), ChaosAction.STOP_DRAIN);
+        observer.onAction(victim.getInstanceId(), MembershipAction.STOP_DRAIN);
         var pc = victim.getParallelConsumer();
         Thread drainer = new Thread(() -> {
             try {
@@ -314,17 +260,19 @@ public class ChaosConductor {
         return true; // candidate for join-after-drain bias
     }
 
-    private void doStopNoDrain(int targetRoll) {
+    @Override
+    public void stopNoDrain(int targetRoll) {
         ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return;
         states.put(victim.getInstanceId(), InstanceState.STOPPED);
         disturbanceCount.incrementAndGet();
         record("STOP_NO_DRAIN", victim.getInstanceId());
-        observer.onAction(victim.getInstanceId(), ChaosAction.STOP_NO_DRAIN);
+        observer.onAction(victim.getInstanceId(), MembershipAction.STOP_NO_DRAIN);
         victim.stopAsync();
     }
 
-    private void doRestart(int targetRoll) {
+    @Override
+    public void restart(int targetRoll) {
         ManagedPCInstance target = pickInState(InstanceState.STOPPED, targetRoll);
         if (target == null) return;
         // start() first: it can throw (the unexpected-failure-cause canary), in which case the
@@ -333,17 +281,18 @@ public class ChaosConductor {
         states.put(target.getInstanceId(), InstanceState.RUNNING);
         disturbanceCount.incrementAndGet();
         record("RESTART", target.getInstanceId());
-        observer.onAction(target.getInstanceId(), ChaosAction.RESTART);
+        observer.onAction(target.getInstanceId(), MembershipAction.RESTART);
     }
 
-    private void doJoin() {
+    @Override
+    public void joinNew() {
         if (fleet.size() >= maxFleetSize) return;
         ManagedPCInstance recruit = instanceFactory.get();
         recruit.start(pcExecutor);
         fleet.add(recruit);
         states.put(recruit.getInstanceId(), InstanceState.RUNNING);
         record("JOIN_NEW", recruit.getInstanceId());
-        observer.onAction(recruit.getInstanceId(), ChaosAction.JOIN_NEW);
+        observer.onAction(recruit.getInstanceId(), MembershipAction.JOIN_NEW);
     }
 
     private ManagedPCInstance pickInState(InstanceState wanted, int targetRoll) {
@@ -354,23 +303,5 @@ public class ChaosConductor {
         }
         if (candidates.isEmpty()) return null;
         return candidates.get(targetRoll % candidates.size());
-    }
-
-    private static ChaosAction weightedPick(Random r, Map<ChaosAction, Integer> weights) {
-        int total = weights.values().stream().mapToInt(Integer::intValue).sum();
-        int pick = r.nextInt(total);
-        int acc = 0;
-        for (Map.Entry<ChaosAction, Integer> e : weights.entrySet()) {
-            acc += e.getValue();
-            if (pick < acc) return e.getKey();
-        }
-        return ChaosAction.RESTART; // unreachable
-    }
-
-    private void record(String what, int instanceId) {
-        String entry = "t=+" + (startedAt == null ? "?" : Duration.between(startedAt, Instant.now()).toMillis() + "ms")
-                + " " + what + (instanceId >= 0 ? " -> instance " + instanceId : "");
-        timeline.add(entry);
-        log.info("[chaos] {}", entry);
     }
 }

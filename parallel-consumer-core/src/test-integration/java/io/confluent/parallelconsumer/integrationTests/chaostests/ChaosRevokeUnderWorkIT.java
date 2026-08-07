@@ -26,7 +26,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * rebalance itself, i.e. the stall is protocol-VISIBLE - the Class 2 signature can only emerge after
  * rebalances settle):
  * <ol>
- *   <li><b>Storm</b>: <b>no drain stops at all</b> ({@link ChaosConductor#defaultW4Weights()}) -
+ *   <li><b>Storm</b>: <b>no drain stops at all</b> ({@code ChaosScenarios.revokeUnderWork()}) -
  *   drains open the Class 1 zombie window and mask the Class 2 mechanism. Hard stops, restarts and
  *   joins force frequent partition REVOCATIONS while heavy non-interruptible work is in flight, with
  *   {@link CommitMode#PERIODIC_CONSUMER_SYNC} to maximise revoke-path vs commit-path lock contention
