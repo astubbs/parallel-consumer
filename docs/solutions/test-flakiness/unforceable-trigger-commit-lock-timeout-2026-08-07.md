@@ -13,7 +13,7 @@ symptoms:
 root_cause: awaited_trigger_unreachable_in_some_interleavings
 resolution_type: test_fix_deterministic_trigger_plus_guard
 severity: low
-status: "Test-side fix committed on branch test/commit-timeout-deterministic-trigger; PR astubbs#220 OPEN, pending merge as of 2026-08-07. PC is healthy; no product defect. Which of the two paths CI hit was NOT established (no DEBUG in that job); the fix closes both."
+status: "SOLVED - test-side fix merged to master in astubbs#220 (rebase-merged 2026-08-07, `c429d8b6`). PC is healthy; no product defect. Which of the two paths CI hit was NOT established (no DEBUG in that job); the fix closes both."
 last_updated: 2026-08-07
 related_prs:
   - "astubbs#220 - this fix, plus the investigation rules and probe correction in AGENTS.md"

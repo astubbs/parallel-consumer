@@ -7,7 +7,7 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | Test | Rate | Symptom |
 |------|------|---------|
 | `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed` | 0/20 hunt, ~1/104 on CI | 1-2s produce/commit lock timeouts |
-| `TransactionTimeoutsTest.produceTimeout` | 1/20 + 1 highcpu | tight produce-timeout assertion |
+| `TransactionTimeoutsTest.produceTimeout` | 1/20 + 1 highcpu (2026-07-30); **0 in all three reproducers 2026-08-07** - see below | NOT the trigger; suspect is the phase-2 at-most assertion |
 | `LoadTest` | 1/20 | 60s throughput awaits |
 | `DbTest` | 2/20 | postgres container start under contention |
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
@@ -32,7 +32,44 @@ experiment numbers live in
 [`docs/solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md`](../solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md)**
 - do not restate them here, or the two copies will drift.
 
-**What this means for the members still listed above, `produceTimeout` especially:** before filing any
+## `produceTimeout`: investigated 2026-08-07, not reproduced, and the old label was wrong
+
+Do **not** start from "tight assertion", and do not start from the trigger. Both were checked.
+
+**Its trigger is properly latched** - the injected `sendOffsetsToTransaction` counts the latch down
+*while already holding the commit write lock* and then sleeps, and the worker awaits that latch before
+sleeping again and attempting the produce lock against a shorter timeout. Real margin, forced
+ordering. So `produceTimeout` is **not** the unforceable-trigger class, whatever its sibling turned out
+to be.
+
+**The suspect, if it flakes again, is phase 2's `assertConsumedAtMostOffset`.** That helper waits, then
+checks **once**, and it needs *no* transaction to commit new output records in the whole window. The
+injected sleep only fires when the commit's base offset is exactly `OFFSET_TO_PRODUCE_SLOWLY` - which
+requires the two records below it complete and it not (`PartitionState#getOffsetToCommit` is "one below
+the highest sequentially succeeded offset"). A commit tick landing after the first completes but before
+the second does has a lower base, injects no sleep, commits for real, and the at-most assertion loses.
+Nothing in the test prevents that interleaving.
+
+**Not reproduced, at these N** - report the rate, not a verdict:
+
+| Reproducer | Result |
+|---|---|
+| single test + CPU burners, `SOAK_FREE_CORES=1` | 0/20 |
+| full forked IT suite, `rerunFailingTestsCount=0` | 0/3 |
+| CI surefire flake markers, 45 runs | 0 sightings |
+
+The mechanism is unchanged since the 1/20 was measured - no main-code commit has touched
+`ProducerManager`, `PartitionState` or `AbstractParallelEoSStreamProcessor` since - so this is **not**
+"fixed by something else". Three suite runs is a small N against 1-in-20; treat it as "not flaking at a
+detectable rate today", nothing stronger.
+
+**Use the right reproducer.** A single-test CPU soak is the wrong shape for this one: the interleaving
+above needs the gap between two records completing to stretch, which is broker latency, not CPU. The
+original rate came from the whole suite forked per core. Disable `rerunFailingTestsCount` when hunting,
+or CI's own retry will hide the failure you are trying to catch (see
+[`test-ci-flakes-hidden-by-rerun.md`](test-ci-flakes-hidden-by-rerun.md)).
+
+**What this means for the members still listed above:** before filing any
 of them as a tight assertion, check whether the thing being awaited can be *triggered at all* in every
 interleaving. A test that waits on a consequence it cannot force is not tight - it is unsound, and
 raising its timeout will never fix it. (`produceTimeout` already latches its own trigger, so it is the
