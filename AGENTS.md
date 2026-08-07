@@ -164,6 +164,14 @@ bin/performance-test.sh
   count and failure window against those constants before treating a clean probe as a finding. (This is
   not hypothetical: the `commitTimeout` autopsy of 2026-08-07 read `probe clean` on a 15-record test that
   failed in 35s, where the thresholds are 50 records and 150s.)
+- **A flake fails the build - there is no retry, deliberately.** The CI scripts used to pass
+  `-Dsurefire.rerunFailingTestsCount=2`, which retried a failing test and let the run go green,
+  recording it only as a `Flakes:` line in the log that nothing read. A scan of 45 runs found three
+  tests flaking that no ledger knew about, one of them a regression of an already-fixed flake. The
+  retry is gone. **Do not restore it to get a build green** - the lever for that is `@Quarantined` with
+  a diagnosis (below), which keeps the signal in the non-gating lane, where a retry destroys it.
+  Background: [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md);
+  the flakes it uncovered are open in [`docs/inflight/test-untracked-ci-flakes.md`](docs/inflight/test-untracked-ci-flakes.md).
 - **Unit tests**: `mvn test` / surefire plugin. Source in `src/test/java/`.
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.

@@ -67,7 +67,7 @@ detectable rate today", nothing stronger.
 above needs the gap between two records completing to stretch, which is broker latency, not CPU. The
 original rate came from the whole suite forked per core. Disable `rerunFailingTestsCount` when hunting,
 or CI's own retry will hide the failure you are trying to catch (see
-[`test-ci-flakes-hidden-by-rerun.md`](test-ci-flakes-hidden-by-rerun.md)).
+[`../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md)).
 
 **What this means for the members still listed above:** before filing any
 of them as a tight assertion, check whether the thing being awaited can be *triggered at all* in every

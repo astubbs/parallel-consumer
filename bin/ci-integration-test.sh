@@ -23,5 +23,4 @@ set -euo pipefail
   clean verify \
   -DskipUTs=true \
   -Dexcluded.groups=performance,chaos,quarantined \
-  -Dsurefire.rerunFailingTestsCount=2 \
   "$@"
