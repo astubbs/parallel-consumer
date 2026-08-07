@@ -62,14 +62,34 @@ public enum TransactionalClaim {
     FAILURE_INVISIBLE_AND_RECOMBINED(Source.OPTIONS_JAVADOC,
             "none will ever be visible and the system will eventually retry them in new transactions - "
                     + "potentially with different combinations of records from the original.",
-            Status.NOT_YET_COVERED, "owned by U13"),
+            Status.PROVED, "TransactionalCrashReplayIT#abandonedTransactionIsInvisibleAndTheReplacementFencesItsProducer "
+            + "covers the invisibility half (an instance abandoned mid-transaction, its records seen by a "
+            + "read_uncommitted control arm and never by a read_committed one), and "
+            + "#theReplayRecombinesTheSameResultsIntoDifferentTransactions covers the recombination half - the "
+            + "abandoned attempt held every payload result in ONE transaction, the replay spread the same results "
+            + "over several, and their union is exactly the expected set. Negative control observed (U13): "
+            + "replacing the shared, stable transactional.id with KafkaClientUtils' default random one - one term, "
+            + "everything else identical - turned it red at assertTheAbandonedProducerWasFenced, because the "
+            + "replacement no longer fences its predecessor and the abandoned instance is never refused. That is "
+            + "the control that matters here: without it, 'nothing is visible' would also be satisfied by an "
+            + "unfenced open transaction pinning the last stable offset"),
 
     /**
      * C4 - the source offset and its produced records commit together or not at all.
      */
     OFFSET_AND_RECORDS_ATOMIC(Source.OPTIONS_JAVADOC,
             "A source offset, and it's produced records will be committed as an atomic set.",
-            Status.NOT_YET_COVERED, "owned by U13"),
+            Status.PROVED, "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
+            + "both halves at both ends of a crash: before, no payload result visible AND the source offset still "
+            + "on the priming record; after, every result visible AND the offset moved to the end of the input. A "
+            + "system committing the offset without the records, or the records without the offset, fails one of "
+            + "the four. Record counts come from what the verifier consumed, never from offsets (markers occupy "
+            + "offsets); the only offset read is the group's committed position on the non-transactional INPUT "
+            + "topic. Negative control observed (U13): the same random-transactional.id control recorded on "
+            + "FAILURE_INVISIBLE_AND_RECOMBINED - with no fencing the abandoned instance is never refused and the "
+            + "test goes red before the replay begins. VALID ONLY AT batchSize=1: at batchSize>=2 the produce-lock "
+            + "double-release stops the instance committing at all, which is recorded under "
+            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/inflight/bug-producing-lock-double-release.md"),
 
     /**
      * C5 - selecting transactional mode silently changes the commit interval default.
@@ -176,7 +196,21 @@ public enum TransactionalClaim {
      */
     RESULTS_EXACTLY_ONCE_UNDER_FAILURE(Source.README_TEMPLATE,
             "This means that even under failure, the results will exist exactly once in the Kafka output topic.",
-            Status.NOT_YET_COVERED, "owned by U13");
+            Status.REFUTED, "REFUTED AT batchSize >= 2, holds at batchSize = 1. "
+            + "TransactionalCrashReplayIT#outputHoldsEachResultExactlyOnceAcrossTheReplay passes 4/4 at "
+            + "batchSize=1 across a real crash and replay (200 payload records, every input key demonstrably "
+            + "reprocessed, each result present exactly once). The sibling arm "
+            + "#outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching fails 5/5 at batchSize=3, same volume "
+            + "and machine, unloaded - and the refutation is by LIVENESS, not duplication: the produce lock is "
+            + "acquired per PollContextInternal but released per WorkContainer, so every batch fails, only a "
+            + "success sets a partition dirty (PartitionState#onFailure is a no-op), the commit gate ANDs "
+            + "wm.isDirty(), and the instance therefore stops committing entirely - the replacement's source "
+            + "offset froze at 3 of 201 for the whole await against a 200ms commit interval, with no commit-path "
+            + "error, i.e. commits were never attempted rather than attempted and failing. The promised results "
+            + "never come to exist. That arm ships @Disabled because this class runs in the gating lane; the fix "
+            + "is d95a21d4 on fix/produce-lock-double-release. Full evidence, alternatives ruled out and the "
+            + "n/N in docs/inflight/bug-producing-lock-double-release.md. Triage - correct the README or land the "
+            + "fix - is a decision for the maintainer, not this register");
 
     /**
      * Where a claim is published, and how to find the text that must still contain it.
