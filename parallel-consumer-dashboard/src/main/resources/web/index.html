@@ -1,0 +1,48 @@
+<!doctype html>
+<!--
+  Copyright (C) 2026 Antony Stubbs and contributors
+
+  Placeholder page shell. The real dashboard page - layout, palette, live loop and panels - is built in a later
+  unit of the plan; this exists so the server is complete and demonstrable on its own, and so the classpath
+  resource the /status diagnostic checks for is actually there.
+-->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Parallel Consumer dashboard</title>
+    <style>
+        body {
+            font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            margin: 0; padding: 2rem; background: #fff; color: #111;
+        }
+        h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+        .experimental { color: #a11; font-weight: 600; letter-spacing: .04em; font-size: .75rem; }
+        ul { max-width: 44rem; }
+        code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        footer { margin-top: 2rem; color: #555; max-width: 44rem; font-size: .85rem; }
+        @media (prefers-color-scheme: dark) {
+            body { background: #111; color: #eee; }
+            .experimental { color: #f87171; }
+            footer { color: #aaa; }
+        }
+    </style>
+</head>
+<body>
+<p class="experimental">EXPERIMENTAL &middot; READ-ONLY</p>
+<h1>Parallel Consumer dashboard</h1>
+<p>The server is running. The rendered page is not built yet.</p>
+<ul>
+    <li><a href="/api/state.json"><code>/api/state.json</code></a> - the state document, everything the page will
+        render, as JSON.
+    </li>
+    <li><code>/api/stream</code> - the same document pushed as server-sent events, one per sample.</li>
+    <li><a href="/status"><code>/status</code></a> - the self-diagnostic: why the dashboard is showing you nothing.
+    </li>
+</ul>
+<footer>
+    Sampled operational view of one Parallel Consumer instance, not a measurement platform. Values are point-in-time
+    samples taken on the control loop and may be stale. Use Micrometer for anything that has to be accurate.
+</footer>
+</body>
+</html>

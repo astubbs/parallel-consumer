@@ -35,6 +35,11 @@
             clone forever.
         -->
         <uplot.version>1.6.30</uplot.version>
+        <!--
+            Only needed to GENERATE a self-signed certificate when TLS is enabled without one being
+            supplied. Optional, and module-local for the same reason as the two above.
+        -->
+        <bouncycastle.version>1.82</bouncycastle.version>
     </properties>
 
     <dependencies>
@@ -61,6 +66,25 @@
             <groupId>org.webjars.npm</groupId>
             <artifactId>uplot</artifactId>
             <version>${uplot.version}</version>
+        </dependency>
+        <!--
+            OPTIONAL, and deliberately so - it is not imposed on anyone who depends on this module.
+
+            It is needed for exactly one thing: generating a self-signed certificate when TLS is
+            switched on without one being supplied. The JDK has no public API for creating an X.509
+            certificate, and Netty's fallback reaches into sun.security.x509, which java.base has not
+            exported since Java 9 - so on Java 16+ (where the illegal-access fallback is gone) the
+            generation fails outright unless BouncyCastle is present.
+
+            TLS is off by default and a supplied certificate needs none of this, so the common paths
+            carry no crypto provider. Anyone enabling TLS without a certificate is told exactly what
+            to add: see DashboardServer's self-signed error message.
+        -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <optional>true</optional>
         </dependency>
 
         <!-- Testing -->
