@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-streams-spike</artifactId>
+    <name>Kafka Parallel Consumer - Kafka Streams Spike (throwaway)</name>
+    <description>
+        Throwaway experiment for astubbs#255: can PC's WorkManager feed and execute a Kafka Streams
+        processor chain instead of the serial PartitionGroup.nextRecord() loop?
+
+        NO APACHE KAFKA SOURCE IS COMMITTED TO THIS REPOSITORY. The patched Kafka classes are generated
+        at build time by unpacking them from the published kafka-streams sources jar and applying
+        src/main/patch/pcspike.patch. Only that patch file is tracked. See the plan's KTD-S4 and KTD1:
+        docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md
+    </description>
+
+    <!-- This is an experiment, not a library artifact. Don't publish it. Mirrors
+         parallel-consumer-examples/pom.xml - note skipPublishing is plugin CONFIGURATION, not a
+         property; a properties-only copy silently fails to protect anything. -->
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+
+        <!-- Where the unpacked-then-patched Kafka sources land. Generated, gitignored, never tracked. -->
+        <kafka.patched.dir>${project.build.directory}/generated-sources/kafka-patched</kafka.patched.dir>
+        <kafka.pristine.dir>${project.build.directory}/kafka-pristine</kafka.pristine.dir>
+
+        <!-- The classes this spike patches. Named deliberately, not discovered: RecordCollectorImpl is
+             required (its non-concurrent maps are written from every worker thread via the to() sink)
+             but is constructed outside StreamTask, so the compiler never demands it. ProcessorContextImpl
+             is required because it reads/writes AbstractProcessorContext's fields directly.
+             If this list has to grow much past a dozen, that sprawl is itself the spike's answer. -->
+        <spike.patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java</spike.patched.classes>
+
+        <!-- Match the version kafka-streams already resolves at runtime scope, so the generated sources
+             compile against exactly the Jackson the jar expects. Module-local and explicitly versioned on
+             purpose: pinning jackson-databind in root dependencyManagement forces WireMock
+             (parallel-consumer-vertx) onto an incompatible Jackson and breaks VertxTest. -->
+        <spike.jackson.version>2.16.2</spike.jackson.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams</artifactId>
+            <version>${kafka.version}</version>
+        </dependency>
+
+        <!-- jackson-databind is runtime-scope in the kafka-streams POM, so the generated sources will
+             not compile without it promoted to compile scope here. (slf4j-api has the same problem but
+             needs no declaration - the root pom's <dependencies> already gives it to every module.) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${spike.jackson.version}</version>
+        </dependency>
+
+        <!-- Tests -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams-test-utils</artifactId>
+            <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+
+            <!-- 1. Unpack the target classes from the published sources jar, twice: a pristine copy
+                    (used by bin/regen-patch.sh to re-derive the patch) and the working copy that gets
+                    patched. Always overwrite, so every build starts from released source and the patch
+                    applies to a clean tree rather than to itself. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>unpack-kafka-streams-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>unpack</goal>
+                        </goals>
+                        <configuration>
+                            <overWriteReleases>true</overWriteReleases>
+                            <overWriteSnapshots>true</overWriteSnapshots>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.apache.kafka</groupId>
+                                    <artifactId>kafka-streams</artifactId>
+                                    <version>${kafka.version}</version>
+                                    <classifier>sources</classifier>
+                                    <type>jar</type>
+                                    <includes>${spike.patched.classes}</includes>
+                                    <outputDirectory>${kafka.patched.dir}</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.apache.kafka</groupId>
+                                    <artifactId>kafka-streams</artifactId>
+                                    <version>${kafka.version}</version>
+                                    <classifier>sources</classifier>
+                                    <type>jar</type>
+                                    <includes>${spike.patched.classes}</includes>
+                                    <outputDirectory>${kafka.pristine.dir}</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- 2. Apply the tracked patch. The script dry-runs first and fails the build on any
+                    rejected hunk - a half-applied patch is the worst failure available here. An empty
+                    patch is an explicit no-op (that is U3's control arm).
+
+                    Bound to process-sources, NOT generate-sources, so it is ordered AFTER the unpack
+                    above by lifecycle phase. Within a single phase Maven orders executions by plugin
+                    declaration order in the EFFECTIVE pom - and the root pom declares
+                    exec-maven-plugin before maven-dependency-plugin, so a same-phase binding runs the
+                    patch before the sources it patches exist. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>apply-kafka-patch</id>
+                        <phase>process-sources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>${project.basedir}/bin/apply-patch.sh</executable>
+                            <arguments>
+                                <argument>${kafka.patched.dir}</argument>
+                                <argument>${project.basedir}/src/main/patch/pcspike.patch</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- 3. Compile the patched sources into target/classes, which precedes the kafka-streams
+                    jar on the classpath - so these win and their siblings still load from the jar. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>add-patched-kafka-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${kafka.patched.dir}</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
