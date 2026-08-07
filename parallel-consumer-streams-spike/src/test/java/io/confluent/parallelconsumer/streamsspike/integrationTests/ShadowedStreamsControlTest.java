@@ -31,16 +31,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The control arm (U3). Runs a stateless topology through <em>stock</em> Kafka Streams while our generated -
- * but as yet <em>unpatched</em> - copies of {@code StreamTask}, {@code AbstractProcessorContext},
- * {@code ProcessorContextImpl} and {@code RecordCollectorImpl} shadow the jar's.
+ * The control arm. Runs a stateless topology through stock, single-threaded Kafka Streams while our generated
+ * copies of {@code StreamTask}, {@code AbstractProcessorContext}, {@code ProcessorContextImpl} and
+ * {@code RecordCollectorImpl} shadow the jar's.
  * <p>
- * The patch file is empty at this point by design, so those classes are byte-for-byte the released 3.9.2
- * sources. Any behavioural difference here is therefore the generate-and-patch harness's fault and nothing
- * else's. That is the whole point: without this arm, a failure at U5 could not be attributed between the
- * technique and the change, and the spike's verdict would be worthless.
+ * It was written at U3 against an <em>empty</em> patch, which made it an attribution test for the
+ * generate-and-patch harness itself: byte-for-byte the released 3.9.2 sources, so any behavioural difference
+ * had to be the harness's fault and nothing else's. Without that baseline, a failure later could not be
+ * attributed between the technique and the change, and the spike's verdict would be worthless.
  * <p>
- * If this test goes red, the plan says STOP - write up the verdict and re-plan rather than proceeding to U4.
+ * From U4 on it earns its keep a second way: the patch is no longer empty, so this arm is the standing
+ * assertion that the confinement change is <em>behaviour-preserving</em> when only one thread is running.
+ * Concurrency fixes that quietly break the serial path are not fixes.
+ * <p>
+ * If this test goes red, the plan says STOP - write up the verdict and re-plan.
  *
  * @see io.confluent.parallelconsumer.streamsspike.ShadowedClassLoadingTest
  */

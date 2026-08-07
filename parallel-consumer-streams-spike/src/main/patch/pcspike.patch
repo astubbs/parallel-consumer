@@ -1,7 +1,334 @@
-# pcspike.patch - the ONLY place Kafka changes are expressed in this repository.
-#
-# Empty by design at U3: the control arm proves the generate-and-patch harness is behaviour-neutral
-# before any change is applied, so a later failure can be attributed. U4 fills it in.
-#
-# Regenerate with bin/regen-patch.sh after editing target/generated-sources/kafka-patched/.
-# Pinned to kafka-streams ${kafka.version}; a version bump will require re-deriving it.
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
+--- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-08 02:13:20.378314408 +1200
+@@ -44,8 +44,13 @@
+     private final Serde<?> keySerde;
+     private final Serde<?> valueSerde;
+     private boolean initialized;
+-    protected ProcessorRecordContext recordContext;
+-    protected ProcessorNode<?, ?, ?, ?> currentNode;
++    // PC spike (astubbs#255): thread-confined. Stock Streams gets away with one instance per task because
++    // exactly one StreamThread ever touches it; under PC, N worker threads are inside process() on the same
++    // task at once and would otherwise scribble over each other's current record and current node.
++    // These were `protected` fields read directly by subclasses - ProcessorContextImpl had to be converted to
++    // the accessors below in the same change, or the confinement is silently bypassed by getfield/putfield.
++    private final ThreadLocal<ProcessorRecordContext> recordContext = new ThreadLocal<>();
++    private final ThreadLocal<ProcessorNode<?, ?, ?, ?>> currentNode = new ThreadLocal<>();
+     private long cachedSystemTimeMs;
+     protected ThreadCache cache;
+     private ProcessorMetadata processorMetadata;
+@@ -131,66 +136,66 @@
+ 
+     @Override
+     public String topic() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For topic, the dummy value is `null`.
+             return null;
+         } else {
+-            return recordContext.topic();
++            return recordContext.get().topic();
+         }
+     }
+ 
+     @Override
+     public int partition() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For partition, the dummy value is `-1`.
+             return -1;
+         } else {
+-            return recordContext.partition();
++            return recordContext.get().partition();
+         }
+     }
+ 
+     @Override
+     public long offset() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For offset, the dummy value is `-1L`.
+             return -1L;
+         } else {
+-            return recordContext.offset();
++            return recordContext.get().offset();
+         }
+     }
+ 
+     @Override
+     public Headers headers() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For headers, the dummy value is an empty headers collection.
+             return new RecordHeaders();
+         } else {
+-            return recordContext.headers();
++            return recordContext.get().headers();
+         }
+     }
+ 
+     @Override
+     public long timestamp() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For timestamp, the dummy value is `0L`.
+             return 0L;
+         } else {
+-            return recordContext.timestamp();
++            return recordContext.get().timestamp();
+         }
+     }
+ 
+@@ -209,27 +214,27 @@
+ 
+     @Override
+     public void setRecordContext(final ProcessorRecordContext recordContext) {
+-        this.recordContext = recordContext;
++        this.recordContext.set(recordContext);
+     }
+ 
+     @Override
+     public ProcessorRecordContext recordContext() {
+-        return recordContext;
++        return recordContext.get();
+     }
+ 
+     @Override
+     public Optional<RecordMetadata> recordMetadata() {
+-        return Optional.ofNullable(recordContext);
++        return Optional.ofNullable(recordContext.get());
+     }
+ 
+     @Override
+     public void setCurrentNode(final ProcessorNode<?, ?, ?, ?> currentNode) {
+-        this.currentNode = currentNode;
++        this.currentNode.set(currentNode);
+     }
+ 
+     @Override
+     public ProcessorNode<?, ?, ?, ?> currentNode() {
+-        return currentNode;
++        return currentNode.get();
+     }
+ 
+     @Override
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
+--- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-08 02:13:20.379798407 +1200
+@@ -243,7 +243,11 @@
+                     "multiple times.");
+         }
+ 
+-        final ProcessorRecordContext previousContext = recordContext;
++        // PC spike (astubbs#255): read through the accessor, not the inherited `recordContext` field. This
++        // getfield/putfield pair IS the save/restore stack that makes nested forward() work, so if it keeps
++        // touching the field directly then thread-confining that field in AbstractProcessorContext changes
++        // nothing here and the confinement is defeated without a single compile error to say so.
++        final ProcessorRecordContext previousContext = recordContext();
+ 
+         try {
+             // we don't want to set the recordContext if it's null, since that means that
+@@ -255,13 +259,14 @@
+             // too much about heterogeneous applications, in which the upstream processor is
+             // implementing the new API and the downstream one is implementing the old API.
+             // So, this seems like a fine compromise for now.
+-            if (recordContext != null && (record.timestamp() != timestamp() || record.headers() != headers())) {
+-                recordContext = new ProcessorRecordContext(
++            // previousContext is the current record context - nothing has changed it since it was read above.
++            if (previousContext != null && (record.timestamp() != timestamp() || record.headers() != headers())) {
++                setRecordContext(new ProcessorRecordContext(
+                     record.timestamp(),
+-                    recordContext.offset(),
+-                    recordContext.partition(),
+-                    recordContext.topic(),
+-                    record.headers());
++                    previousContext.offset(),
++                    previousContext.partition(),
++                    previousContext.topic(),
++                    record.headers()));
+             }
+ 
+             if (childName == null) {
+@@ -279,7 +284,7 @@
+             }
+ 
+         } finally {
+-            recordContext = previousContext;
++            setRecordContext(previousContext);
+             setCurrentNode(previousNode);
+         }
+     }
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
+--- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-08 02:13:20.381478155 +1200
+@@ -64,6 +64,7 @@
+ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.Set;
++import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ import static org.apache.kafka.streams.processor.internals.ClientUtils.producerRecordSizeInBytes;
+@@ -80,7 +81,10 @@
+ 
+     private final StreamsMetricsImpl streamsMetrics;
+     private final Sensor droppedRecordsSensor;
+-    private final Map<String, Sensor> producedSensorByTopic = new HashMap<>();
++    // PC spike (astubbs#255): the send callback runs on the producer's I/O thread and computeIfAbsent's here
++    // are triggered by whichever worker thread hit a dynamically routed topic first - a plain HashMap can
++    // corrupt its table under that. Concurrent map also makes computeIfAbsent create the sensor exactly once.
++    private final Map<String, Sensor> producedSensorByTopic = new ConcurrentHashMap<>();
+ 
+     private final AtomicReference<KafkaException> sendException;
+ 
+@@ -116,7 +120,9 @@
+                 ));
+         }
+ 
+-        this.offsets = new HashMap<>();
++        // PC spike (astubbs#255): written from the producer callback for every in-flight send at once, and
++        // snapshotted by the committing thread in offsets().
++        this.offsets = new ConcurrentHashMap<>();
+     }
+ 
+     @Override
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
+--- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-08 02:13:20.383319153 +1200
+@@ -60,6 +60,8 @@
+ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.Set;
++import java.util.concurrent.ConcurrentHashMap;
++import java.util.concurrent.atomic.LongAdder;
+ import java.util.function.Function;
+ import java.util.stream.Collectors;
+ 
+@@ -84,7 +86,12 @@
+     private final int maxBufferedSize;
+     private final AbstractPartitionGroup partitionGroup;
+     private final RecordCollector recordCollector;
+-    private final AbstractPartitionGroup.RecordInfo recordInfo;
++    // PC spike (astubbs#255): one RecordInfo per record, not one per task. partitionGroup.nextRecord() WRITES
++    // into this object and process() reads partition()/queue() back out of it AFTER the record has been
++    // processed - so with a single shared instance, a second thread entering nextRecord() mid-process makes the
++    // first thread attribute its offset to the wrong partition. Non-final because it is now re-assigned per
++    // record, and it must survive the call that fetched it (a retained record keeps its own info).
++    private AbstractPartitionGroup.RecordInfo recordInfo;
+     private final Map<TopicPartition, Long> consumedOffsets;
+     private final Map<TopicPartition, Long> committedOffsets;
+     private final Map<TopicPartition, Long> highWatermark;
+@@ -94,7 +101,8 @@
+     private final PunctuationQueue systemTimePunctuationQueue;
+     private final StreamsMetricsImpl streamsMetrics;
+ 
+-    private long processTimeMs = 0L;
++    // PC spike (astubbs#255): accumulated by every worker thread that processes a batch for this task.
++    private final LongAdder processTimeMs = new LongAdder();
+ 
+     private final Sensor closeTaskSensor;
+     private final Sensor processRatioSensor;
+@@ -113,7 +121,8 @@
+     private final ProcessingExceptionHandler processingExceptionHandler;
+ 
+     private StampedRecord record;
+-    private boolean commitNeeded = false;
++    // PC spike (astubbs#255): set by worker threads, read by the committing thread.
++    private volatile boolean commitNeeded = false;
+     private boolean commitRequested = false;
+     private boolean hasPendingTxCommit = false;
+     private Optional<Long> timeCurrentIdlingStarted;
+@@ -185,14 +194,15 @@
+         maxBufferedSize = config.maxBufferedSize;
+ 
+         // initialize the consumed and committed offset cache
+-        consumedOffsets = new HashMap<>();
++        // PC spike (astubbs#255): consumedOffsets and partitionsToResume are written from every worker thread
++        // in process() and read/iterated by the committing thread. resetOffsetsForPartitions is left alone -
++        // it is only touched by the rebalance path, which stays single-threaded.
++        consumedOffsets = new ConcurrentHashMap<>();
+         resetOffsetsForPartitions = new HashSet<>();
+-        partitionsToResume = new HashSet<>();
++        partitionsToResume = ConcurrentHashMap.newKeySet();
+ 
+         recordQueueCreator = new RecordQueueCreator(this.logContext, config.timestampExtractor, config.deserializationExceptionHandler);
+ 
+-        recordInfo = new RecordInfo();
+-
+         final Sensor enforcedProcessingSensor;
+         enforcedProcessingSensor = TaskMetrics.enforcedProcessingSensor(threadId, taskId, streamsMetrics);
+         final long maxTaskIdleMs = config.maxTaskIdleMs;
+@@ -771,6 +781,7 @@
+             }
+ 
+             // get the next record to process
++            recordInfo = new RecordInfo();
+             record = partitionGroup.nextRecord(recordInfo, wallClockTime);
+ 
+             // if there is no record to process, return immediately
+@@ -780,10 +791,13 @@
+         }
+ 
+         try {
+-            final TopicPartition partition = recordInfo.partition();
++            // PC spike (astubbs#255): pin this thread's RecordInfo for the rest of the call, so a concurrent
++            // fetch cannot swap it out between processing the record and recording where the record came from.
++            final AbstractPartitionGroup.RecordInfo currentRecordInfo = recordInfo;
++            final TopicPartition partition = currentRecordInfo.partition();
+ 
+             if (!(record instanceof CorruptedRecord)) {
+-                doProcess(wallClockTime);
++                doProcess(wallClockTime, currentRecordInfo);
+             }
+ 
+             // update the consumed offset map after processing is done
+@@ -792,7 +806,7 @@
+ 
+             // after processing this record, if its partition queue's buffered size has been
+             // decreased to the threshold, we can then resume the consumption on this partition
+-            if (recordInfo.queue().size() <= maxBufferedSize) {
++            if (currentRecordInfo.queue().size() <= maxBufferedSize) {
+                 partitionsToResume.add(partition);
+             }
+ 
+@@ -844,7 +858,7 @@
+     }
+ 
+     @SuppressWarnings("unchecked")
+-    private void doProcess(final long wallClockTime) {
++    private void doProcess(final long wallClockTime, final AbstractPartitionGroup.RecordInfo recordInfo) {
+         // process the record by passing to the source node of the topology
+         final ProcessorNode<Object, Object, Object, Object> currNode = (ProcessorNode<Object, Object, Object, Object>) recordInfo.node();
+         log.trace("Start processing one record [{}]", record);
+@@ -872,14 +886,13 @@
+ 
+     @Override
+     public void recordProcessBatchTime(final long processBatchTime) {
+-        processTimeMs += processBatchTime;
++        processTimeMs.add(processBatchTime);
+     }
+ 
+     @Override
+     public void recordProcessTimeRatioAndBufferSize(final long allTaskProcessMs, final long now) {
+         bufferedRecordsSensor.record(partitionGroup.numBuffered());
+-        processRatioSensor.record((double) processTimeMs / allTaskProcessMs, now);
+-        processTimeMs = 0L;
++        processRatioSensor.record((double) processTimeMs.sumThenReset() / allTaskProcessMs, now);
+     }
+ 
+     /**

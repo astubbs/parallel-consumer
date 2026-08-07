@@ -17,6 +17,13 @@
 # Editing generated files feels wrong, and it is the honest cost of not committing Apache Kafka source
 # into this repository (see the plan's KTD-S4). This script is what keeps that cost small.
 #
+# !! FOOT-GUN, READ THIS !!
+# The unpack step runs with overWriteReleases=true, so ANY maven invocation between step 2 and step 3
+# silently restores target/kafka-patched to (released sources + the *tracked* patch) and discards
+# whatever you had just edited. It says nothing when it does this. It cost a full editing pass to learn.
+# Rule of thumb: after you start editing, run regen-patch.sh BEFORE you run maven again. The hunk-count
+# comparison at the end of this script is the tripwire - if it says the count went DOWN, you lost work.
+#
 # The patch is the deliverable: its line count is the spike's answer to "how little had to change".
 
 set -euo pipefail
@@ -48,6 +55,11 @@ if [[ $diff_status -gt 1 ]]; then
     exit 1
 fi
 
+# Count what is already tracked BEFORE overwriting, so the foot-gun above is detectable rather than
+# silent: if a stray maven run reverted the working tree, the regenerated patch is smaller than the one
+# on disk and we are about to commit a loss.
+hunks_before=$(grep -c '^@@' "$patch_file" 2>/dev/null || true)
+
 # diff -ruN prefixes paths with the two directory names; strip them so the patch applies with -p1 from
 # inside the generated directory, which is what apply-patch.sh does.
 sed -e 's|^--- kafka-pristine/|--- a/|' \
@@ -56,6 +68,13 @@ sed -e 's|^--- kafka-pristine/|--- a/|' \
 rm -f "$patch_file.tmp"
 
 hunks=$(grep -c '^@@' "$patch_file" || true)
+
+if [[ "${hunks_before:-0}" -gt "$hunks" ]]; then
+    echo "regen-patch: WARNING - hunk count went DOWN, $hunks_before -> $hunks." >&2
+    echo "regen-patch: you have probably lost edits. The usual cause is a maven run between editing" >&2
+    echo "regen-patch: target/kafka-patched/ and running this script - unpack overwrites without asking." >&2
+    echo "regen-patch: the previous patch is recoverable with 'git checkout -- $patch_file'." >&2
+fi
 files=$(grep -c '^--- ' "$patch_file" || true)
 lines=$(wc -l <"$patch_file" | tr -d ' ')
 
