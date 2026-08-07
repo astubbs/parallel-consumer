@@ -115,7 +115,14 @@ jobs:
       # Deliberately narrow: added lines only, and the files in EXEMPT_PATHS are skipped because a
       # bare number legitimately means confluentinc there. A naive sweep rewrote three of them
       # wrongly, which is why they are named in the gate module rather than left to judgement.
-      - name: Verify issue references name their repo
+      #
+      # THE PR BODY IS CHECKED TOO. It is the surface humans actually read, and a bare `#200` renders
+      # there as a working link to the wrong issue - the failure mode this gate exists for, on its
+      # most visible page. `gate.prBodyEntry` presents the body to the SAME suspectRefs call as a
+      # synthetic file, so there is no second copy of the matching rule; it only drops fenced code
+      # blocks, which GitHub does not autolink. The `edited` trigger above already re-runs this job
+      # when a body changes, so a body-only fix does not need a push.
+      - name: Verify issue references name their repo (diff and PR body)
         uses: actions/github-script@v7
         with:
           script: |
@@ -135,9 +142,10 @@ jobs:
               ...context.repo, pull_number: pr.number, per_page: 100,
             });
 
-            const hits = gate.suspectRefs(files);
+            const hits = gate.suspectRefs([...files, gate.prBodyEntry(pr.body)]);
             if (hits.length === 0) {
-              core.info(`No unqualified references below #${gate.QUALIFY_BELOW} on added lines.`);
+              core.info(
+                `No unqualified references below #${gate.QUALIFY_BELOW} on added lines or in the PR body.`);
               return;
             }
 

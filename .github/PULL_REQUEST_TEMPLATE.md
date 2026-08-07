@@ -1,5 +1,11 @@
 <!-- What does this PR change, and why? Keep it in sync with the actual content as the PR evolves. -->
 
+<!-- Issue references in this body are checked by the same gate as the diff: below the threshold, a
+     reference must name its repo. Use the FULLY qualified form here - astubbs/parallel-consumer#NN
+     or confluentinc/parallel-consumer#NN - because it is the only one that both names the repo and
+     auto-links on GitHub, and the only one `Fixes`/`Closes` will act on. Fenced code blocks are
+     skipped, so pasted logs and command output are fine. -->
+
 ## Description
 
 ...
