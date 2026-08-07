@@ -804,14 +804,17 @@ Recorded because the scoping confirmation was skipped in pipeline mode.
   examples stay small and deterministic, and scale becomes the demonstration module's problem, where it
   is unconstrained by a per-module unit test. KD5 is untouched — no load test is added to any example
   module.
-- **OQ2 — How many interval samples does a meter reading expand into (U6)?** KTD6 now requires a
-  multi-element `Flux` per record for `limitRate` to have anything to throttle. The sample count sets
-  both the domain plausibility and the unit-lane time budget.
-- **OQ3 — Does `wiremock-jre8` need its container thread count raised for U5?** `WireMockUtils` does not
-  configure `containerThreads`, so the Jetty default (10) applies, while a barrier held in the stub
-  handler blocks roughly 3N threads for N records in flight. There is headroom at A3's scale; the
-  margin shrinks if fan-out width or record count grows, and exhaustion would surface as a timeout
-  rather than a clean assertion failure.
+- **OQ2 — RESOLVED (user-approved, 2026-08-08): 48 samples per reading.** A day of half-hourly
+  settlement periods, which is what UK energy settlement actually uses — so the number is domain-true
+  rather than invented. With `limitRate(8)` that yields six visible `request(8)` replenishments per
+  reading, which is the demand trace the example exists to show. At ~10ms simulated ingest per sample
+  under `concatMap`, ~480ms per record, comfortably inside the unit lane at these record counts.
+- **OQ3 — RESOLVED (user-approved, 2026-08-08): leave `wiremock-jre8` on its default thread count.**
+  The concern assumed roughly 3N blocked handler threads for N records. Once the barrier is gated to
+  one arrival per record (the `putIfAbsent` fix in KTD2 that stops it proving leg-concurrency instead
+  of record-concurrency), only N threads park. A barrier of 3 against Jetty's default 10 container
+  threads has real headroom. Add a comment tying the two numbers together so the margin is deliberate
+  rather than accidental.
 
 ---
 
@@ -843,6 +846,13 @@ Design seeds worth not losing:
   in-flight, shards, offsets. This shows the outcome, in domain terms. They pair. Mind
   `DashboardOptions.DEFAULT_PORT` (8080), which the vertx example's stub target also uses.
 - Scale, record counts and the run-length question (former OQ1) belong to that plan, not this one.
+
+Settled for that plan already (user-directed, 2026-08-08): **real broker via Testcontainers**, not a
+mock — a race that convinces has to be against the real thing. **Its tests gate CI** like any other
+module; it is a demo, but an unguarded demo rots. **Basic UI tests only** — that the page serves,
+renders the snapshot and reflects both lanes; no screenshot diffing, no browser-matrix work. **Domain
+reuses parcel logistics** from the core example, so the demo deepens a story the reader has already
+met rather than teaching a fifth one.
 - **Wiring the `parallel-consumer-dashboard` in anywhere.** Out of scope for this plan on its own
   merits: it would stack this branch on an unmerged PR (`feats/web-gui`, astubbs#215). Its natural home
   is the demonstration module above, not an example module.
