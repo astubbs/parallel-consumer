@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.truth;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.FailureMetadata;
@@ -48,6 +49,50 @@ public class ProducerManagerSubject extends ProducerManagerParentSubject impleme
         var producerWrap = actual.getProducerWrapper();
         var producerState = producerWrap.getProducerState();
         check("getProducerState()").that(producerState).isEqualTo(targetState);
+    }
+
+    /**
+     * How many produce locks are held right now, across all threads.
+     * <p>
+     * The produce lock is the read side of {@code producerTransactionLock}, so this is the number of workers
+     * currently inside a produce section - which is exactly what the commit lock has to wait to reach zero. Named
+     * as an assertion so tests can state the invariant instead of reaching into
+     * {@link java.util.concurrent.locks.ReentrantReadWriteLock#getReadLockCount()} themselves.
+     *
+     * @param expected the number of produce-lock holders expected
+     */
+    public void hasProduceLockHoldCount(int expected) {
+        check("getProducerTransactionLock().getReadLockCount()")
+                .that(actual.getProducerTransactionLock().getReadLockCount())
+                .isEqualTo(expected);
+    }
+
+    /**
+     * No worker is inside a produce section - the precondition for a transaction commit to be allowed to gather
+     * its offsets.
+     */
+    public void hasNoProduceLockHolders() {
+        hasProduceLockHoldCount(0);
+    }
+
+    /**
+     * The commit lock (the write side) is held by the thread making this assertion. Distinct from
+     * {@code isTransactionCommittingInProgress()}, which is true when <em>any</em> thread holds it - ownership is
+     * what {@code commitOffsets} enforces before it hands offsets to the transaction.
+     */
+    public void commitLockHeldByCurrentThread() {
+        check("getProducerTransactionLock().isWriteLockedByCurrentThread()")
+                .that(actual.getProducerTransactionLock().isWriteLockedByCurrentThread())
+                .isTrue();
+    }
+
+    /**
+     * The commit lock is held by nobody, so producing is free to proceed.
+     */
+    public void commitLockNotHeld() {
+        check("getProducerTransactionLock().isWriteLocked()")
+                .that(actual.getProducerTransactionLock().isWriteLocked())
+                .isFalse();
     }
 
 }

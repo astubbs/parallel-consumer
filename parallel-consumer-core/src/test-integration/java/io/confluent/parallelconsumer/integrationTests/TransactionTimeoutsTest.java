@@ -12,6 +12,8 @@ import io.confluent.parallelconsumer.FakeRuntimeException;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import io.confluent.parallelconsumer.ProvesClaim;
+import io.confluent.parallelconsumer.TransactionalClaim;
 import io.confluent.parallelconsumer.integrationTests.utils.BrokerCommitAsserter;
 import io.confluent.parallelconsumer.internal.PCModule;
 import io.confluent.parallelconsumer.internal.ProducerManager;
@@ -163,6 +165,7 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
     @SneakyThrows
     @ParameterizedTest()
     @MethodSource("commitTimeoutParams")
+    @ProvesClaim(TransactionalClaim.COMMIT_LOCK_TIMEOUT_FAILS_FAST)
     void commitTimeout(int multiple, int expectedHighestSucceededCommittedOffset, List<Integer> expectedIncompletes) {
         var options = createOptions()
                 .shutdownTimeout(Duration.ofSeconds(5))
@@ -275,6 +278,7 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
      */
     @SneakyThrows
     @Test
+    @ProvesClaim(TransactionalClaim.PRODUCE_LOCK_TIMEOUT_RETRIES_RECORD)
     void produceTimeout() {
         final int OFFSET_TO_PRODUCE_SLOWLY = NUMBER_TO_SEND + 2;
 

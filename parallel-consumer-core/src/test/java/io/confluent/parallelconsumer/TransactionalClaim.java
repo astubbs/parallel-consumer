@@ -103,7 +103,13 @@ public enum TransactionalClaim {
     NO_PRODUCE_WITHOUT_ITS_OFFSET(Source.OPTIONS_JAVADOC,
             "The system must prevent records from being produced to the brokers whose source consumer record "
                     + "offsets has not been included in this transaction.",
-            Status.NOT_YET_COVERED, "owned by U3"),
+            Status.PROVED, "ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, with "
+            + "ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome and "
+            + "the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
+            + "before the mailbox handoff, with the 400ms window §11's experiment used, failed 3/3 with 'the work "
+            + "reaches the controller's mailbox only after its record was sent' - the commit had completed while the "
+            + "work was still not in the mailbox. Position control: the same 400ms spent inside the lock, before the "
+            + "handoff, passed 2/2, so it is the ordering and not the added latency"),
 
     /**
      * C10 - holding the commit lock stops processing for the duration of the commit.
@@ -111,7 +117,11 @@ public enum TransactionalClaim {
     PROCESSING_BLOCKED_DURING_COMMIT(Source.OPTIONS_JAVADOC,
             "This periodically slows down record production during this phase, by the time needed to commit the "
                     + "transaction.",
-            Status.NOT_YET_COVERED, "owned by U3"),
+            Status.PROVED, "ProducerManagerTest#producingIsBlockedForTheDurationOfTheCommitAndResumesOnRelease, "
+            + "with ProducerManagerTest#sendingGetsLockedInTx covering the same pair of transitions. Negative "
+            + "control observed (U3): releasing the commit lock before the produce attempt starts made "
+            + "beginProducing return in ~40ms instead of blocking, failing 2/2 on 'getElapsed() expected to be at "
+            + "least PT1S'"),
 
     /**
      * C11 - already proved by {@code TransactionTimeoutsTest#commitTimeout}; U3 attributes it rather than
@@ -120,7 +130,11 @@ public enum TransactionalClaim {
     COMMIT_LOCK_TIMEOUT_FAILS_FAST(Source.OPTIONS_JAVADOC,
             "If the system cannot acquire the commit lock in time, it will shut down for whatever reason, the "
                     + "system will shut down (fail fast) - during the shutdown a final commit attempt will be made.",
-            Status.NOT_YET_COVERED, "owned by U3 - attribution of the existing TransactionTimeoutsTest#commitTimeout"),
+            Status.COVERED_NO_CONTROL, "TransactionTimeoutsTest#commitTimeout, both timeout arms - attributed by U3, "
+            + "not reproved. No negative control: the test needs a broker, so it is not in the lane U3 ran, and "
+            + "breaking what it guards means changing the commit-lock timeout handling in ProducerManager itself. "
+            + "The control recorded in that test (dropping its overlap latch) proves the test's own guard, not the "
+            + "documented fail-fast behaviour"),
 
     /**
      * C12 - already proved by {@code TransactionTimeoutsTest#produceTimeout}; U3 attributes it rather than
@@ -129,7 +143,9 @@ public enum TransactionalClaim {
     PRODUCE_LOCK_TIMEOUT_RETRIES_RECORD(Source.OPTIONS_JAVADOC,
             "If the system cannot acquire the produce lock in time, it will fail the record processing and retry "
                     + "the record later.",
-            Status.NOT_YET_COVERED, "owned by U3 - attribution of the existing TransactionTimeoutsTest#produceTimeout"),
+            Status.COVERED_NO_CONTROL, "TransactionTimeoutsTest#produceTimeout - attributed by U3, not reproved. No "
+            + "negative control: broker-bound, so outside the lane U3 ran, and the retry it asserts is driven by a "
+            + "5s sleep injected into the commit path rather than by anything U3 can flip"),
 
     /**
      * C13 - the documented cost of eager processing during commit.
