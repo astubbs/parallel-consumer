@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.KafkaContainer;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -235,10 +236,49 @@ public class KafkaClientUtils implements AutoCloseable {
     }
 
     /**
+     * The transaction timeout every transactional producer built here gets unless a test asks for another one.
+     * Short on purpose - a test that abandons a transaction should not wait out Kafka's 60s default before the
+     * broker reaps it.
+     */
+    public static final Duration DEFAULT_TRANSACTION_TIMEOUT = ofSeconds(10);
+
+    /**
      * Initialises the producer as well, so can't use with PC
      */
     public <K, V> KafkaProducer<K, V> createAndInitNewTransactionalProducer() {
-        KafkaProducer<K, V> txProd = createNewProducer(TRANSACTIONAL);
+        return createAndInitNewTransactionalProducer(DEFAULT_TRANSACTION_TIMEOUT);
+    }
+
+    /**
+     * As {@link #createAndInitNewTransactionalProducer()}, but with a chosen {@code transaction.timeout.ms}.
+     * <p>
+     * Two things need this. A test that deliberately blows the transaction timeout needs a timeout short enough
+     * to observe (the broker reaps a timed-out transaction on its own cleanup tick, so the wait is the timeout
+     * plus up to one tick). And a scenario whose user function dwells longer than the default 10s while holding
+     * the produce lock needs a timeout above that dwell, or every heavy record fences its own producer for
+     * reasons that have nothing to do with what the test is measuring.
+     *
+     * @param transactionTimeout the value for {@code transaction.timeout.ms}
+     */
+    public <K, V> KafkaProducer<K, V> createAndInitNewTransactionalProducer(Duration transactionTimeout) {
+        return createAndInitNewTransactionalProducer(transactionTimeout, empty());
+    }
+
+    /**
+     * As {@link #createAndInitNewTransactionalProducer(Duration)}, but with a caller-chosen, stable
+     * {@code transactional.id} instead of the random one.
+     * <p>
+     * A crash-and-replay test needs this: the replacement producer only <em>fences</em> the abandoned one when
+     * both carry the same transactional id. With the default random id the abandoned transaction is nobody's
+     * predecessor, so it pins the last stable offset until it times out, and an "is it visible?" assertion can
+     * pass for entirely the wrong reason.
+     *
+     * @param stableTransactionalId the transactional id to reuse across instances, or empty for the default
+     *                              random one
+     */
+    public <K, V> KafkaProducer<K, V> createAndInitNewTransactionalProducer(Duration transactionTimeout,
+                                                                           Optional<String> stableTransactionalId) {
+        KafkaProducer<K, V> txProd = createNewProducer(TRANSACTIONAL, transactionTimeout, stableTransactionalId);
         txProd.initTransactions();
         return txProd;
     }
@@ -257,19 +297,36 @@ public class KafkaClientUtils implements AutoCloseable {
     }
 
     public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode) {
+        return createNewProducer(mode, DEFAULT_TRANSACTION_TIMEOUT, empty());
+    }
+
+    /**
+     * @param transactionTimeout    {@code transaction.timeout.ms} for a {@link ProducerMode#TRANSACTIONAL}
+     *                              producer - see {@link #createAndInitNewTransactionalProducer(Duration)} for
+     *                              why a test would move it. Ignored for a non-transactional producer.
+     * @param stableTransactionalId a fixed {@code transactional.id}, or empty for the default random one - see
+     *                              {@link #createAndInitNewTransactionalProducer(Duration, Optional)}
+     */
+    public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode,
+                                                        Duration transactionTimeout,
+                                                        Optional<String> stableTransactionalId) {
         Properties properties = setupProducerProps();
 
         var txProps = new Properties();
         txProps.putAll(properties);
 
         if (mode.equals(TRANSACTIONAL)) {
-            // random number, so we get a unique producer tx session each time. Normally wouldn't do this in production,
-            // but sometimes running in the test suite our producers' step on each other between test runs and this causes
-            // Producer Fenced exceptions:
+            // random number by default, so we get a unique producer tx session each time. Normally wouldn't do this in
+            // production, but sometimes running in the test suite our producers' step on each other between test runs
+            // and this causes Producer Fenced exceptions:
             // Error looks like: Producer attempted an operation with an old epoch. Either there is a newer producer with
             // the same transactionalId, or the producer's transaction has been expired by the broker.
-            txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, this.getClass().getSimpleName() + ":" + nextInt()); // required for tx
-            txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) ofSeconds(10).toMillis()); // speed things up
+            // A test that WANTS the fencing - one restarted instance taking over from an abandoned one - opts out by
+            // passing a stable id.
+            String transactionalId = stableTransactionalId
+                    .orElseGet(() -> this.getClass().getSimpleName() + ":" + nextInt());
+            txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId); // required for tx
+            txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) transactionTimeout.toMillis());
         }
 
         KafkaProducer<K, V> kvKafkaProducer = new KafkaProducer<>(txProps);

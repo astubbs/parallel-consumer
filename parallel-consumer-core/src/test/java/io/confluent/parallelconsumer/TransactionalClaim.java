@@ -47,7 +47,13 @@ public enum TransactionalClaim {
      */
     ALL_OR_NONE_PER_SOURCE_OFFSET(Source.OPTIONS_JAVADOC,
             "All records produced from a given source offset will either all be visible, or none will be",
-            Status.NOT_YET_COVERED, "owned by U4"),
+            Status.PROVED, "TransactionalVisibilityIT#openTransactionIsInvisibleAtReadCommittedAndVisibleAtReadUncommitted, "
+            + "with #readCommittedIsBlockedAtTheFirstStillOpenTransactionNotMerelyFiltered covering the "
+            + "later-committed-transaction case. Negative control observed (U4): flipping the verifying consumer's "
+            + "isolation.level to read_uncommitted - one term, everything else identical - turned it red on 'verifier "
+            + "open-tx (read_committed) must not have seen any in-flight record', i.e. the absence is the isolation "
+            + "level's doing and not an unwritten record. The non-vacuity guard has its own permanent control in "
+            + "#theAbsenceAssertionIsVacuousWithoutTheNonVacuityGuard"),
 
     /**
      * C3 - a failed or crashed transaction is never visible, and is retried as a new transaction whose record
@@ -80,7 +86,11 @@ public enum TransactionalClaim {
      */
     READ_COMMITTED_BLOCKED_TO_FIRST_OPEN_TX(Source.OPTIONS_JAVADOC,
             "blocked up to the offset of the first STILL open transaction",
-            Status.KAFKA_GUARANTEE, "broker behaviour, surfaced by our docs - reported, not enforced"),
+            Status.KAFKA_GUARANTEE, "broker behaviour, surfaced by our docs - reported, not enforced. Tested once "
+            + "for the record by TransactionalVisibilityIT#readCommittedIsBlockedAtTheFirstStillOpenTransactionNotMerelyFiltered, "
+            + "which distinguishes blocking from filtering: with one transaction open and a LATER one committed, the "
+            + "read_committed arm sees neither while the read_uncommitted arm sees both. Stays KAFKA_GUARANTEE "
+            + "regardless: no change to this repository can break it"),
 
     /**
      * C7 - pollAndProduceMany is all-or-none across the whole produced set.
@@ -95,7 +105,13 @@ public enum TransactionalClaim {
      */
     ABORTED_NEVER_VISIBLE(Source.OPTIONS_JAVADOC,
             "Records produced into a transaction that gets aborted or timed out, will never be visible.",
-            Status.NOT_YET_COVERED, "owned by U4"),
+            Status.PROVED, "TransactionalVisibilityIT#abortedTransactionRecordsAreNeverVisible covers the abort arm "
+            + "(before and after the abort, the 'after' anchored on a sentinel committed post-abort so the verifier "
+            + "demonstrably read past the aborted region), and #transactionThatExceedsItsTimeoutLeavesNoVisibleRecord "
+            + "covers the timeout arm via a 2s transaction.timeout.ms. Negative control observed (U4): flipping the "
+            + "verifying consumer's isolation.level to read_uncommitted turned the abort arm red on 'must not have "
+            + "seen any aborted record' - so the invisibility is the isolation level's, and an aborted record really "
+            + "is still sitting in the log"),
 
     /**
      * C9 - the exactly-once ordering invariant the produce/commit lock pair exists to protect.
