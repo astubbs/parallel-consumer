@@ -34,8 +34,11 @@ class ControllerStateEncapsulationTest {
         Method setState = AbstractParallelEoSStreamProcessor.class
                 .getDeclaredMethod("setState", io.confluent.parallelconsumer.State.class);
 
-        assertThat(Modifier.isPublic(setState.getModifiers()))
-                .as("AbstractParallelEoSStreamProcessor#setState must not be public - see @Setter(AccessLevel.PACKAGE)")
+        int modifiers = setState.getModifiers();
+        // protected is not good enough: ParallelEoSStreamProcessor is a public subclass in another package, so a
+        // protected setter would be inherited straight onto the user-facing type.
+        assertThat(Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers))
+                .as("AbstractParallelEoSStreamProcessor#setState must be package-private - see @Setter(AccessLevel.PACKAGE)")
                 .isFalse();
     }
 

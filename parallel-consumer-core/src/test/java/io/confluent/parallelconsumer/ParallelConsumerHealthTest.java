@@ -61,6 +61,14 @@ class ParallelConsumerHealthTest extends ParallelEoSStreamProcessorTestBase {
         assertThat(health.getControllerState()).isEqualTo(State.CLOSED);
         assertThat(health.isHealthy()).isFalse();
         assertThat(health.getFailureCause()).isEmpty();
+        assertThat(health.isStateObserved())
+                .as("the real processor observes its states rather than deriving them")
+                .isTrue();
+        // Every other poller assertion in this class expects RUNNING, which is the field's own initialiser - so
+        // without this one, wiring the accessor to a constant would pass the whole suite.
+        assertThat(health.getPollerState())
+                .as("the poller state must be read, not echoed from its initial value")
+                .isIn(State.CLOSING, State.CLOSED);
     }
 
     /**
@@ -88,6 +96,67 @@ class ParallelConsumerHealthTest extends ParallelEoSStreamProcessorTestBase {
         assertThat(health.getFailureCause()).isPresent();
         assertThat(health.getFailureCause()).containsSame(parallelConsumer.getFailureCause());
         assertThat(health.getFailureCause().get()).hasRootCauseInstanceOf(FakeRuntimeException.class);
+    }
+
+    /**
+     * A control thread killed by something that is not an {@link Exception} records nothing - the control task's
+     * handler catches {@link Exception}, so an {@link Error} escapes it, leaving the run state on {@link State#RUNNING}
+     * and the failure cause null. The instance is dead all the same.
+     * <p>
+     * This is the failure a liveness probe exists to catch: a subsystem gone inside a JVM that is still up. The
+     * verdict has to be reachable from the control thread's own liveness, not only from the two fields the failure
+     * paths happen to write.
+     */
+    @Test
+    void aControlThreadKilledByAnErrorIsNotHealthy() {
+        ParallelConsumer<String, String> pc = parallelConsumer;
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            throw new StackOverflowError("fake control loop Error - not an Exception");
+        });
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context));
+
+        await().atMost(defaultTimeout)
+                .untilAsserted(() -> assertThat(parallelConsumer.isClosedOrFailed())
+                        .as("control thread should be dead")
+                        .isTrue());
+
+        PCHealth health = pc.getHealth();
+
+        assertThat(health.isHealthy())
+                .as("a dead control thread is not healthy, even though nothing was recorded on it")
+                .isFalse();
+    }
+
+    /**
+     * The new snapshot must never be weaker than the boolean it supersedes. Whenever {@code isClosedOrFailed()} says
+     * the instance is done, the verdict has to agree - otherwise a caller who migrated from one to the other silently
+     * loses coverage of whichever failures only the old one saw.
+     */
+    @Test
+    void aHealthyVerdictNeverContradictsIsClosedOrFailed() {
+        ParallelConsumer<String, String> pc = parallelConsumer;
+
+        assertHealthAgreesWithIsClosedOrFailed(pc, "before poll");
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context));
+        assertHealthAgreesWithIsClosedOrFailed(pc, "running");
+
+        parallelConsumer.pauseIfRunning();
+        assertHealthAgreesWithIsClosedOrFailed(pc, "paused");
+
+        parallelConsumer.resumeIfPaused();
+        parallelConsumer.close();
+        assertHealthAgreesWithIsClosedOrFailed(pc, "closed");
+    }
+
+    private static void assertHealthAgreesWithIsClosedOrFailed(ParallelConsumer<String, String> pc, String phase) {
+        if (pc.isClosedOrFailed()) {
+            assertThat(pc.getHealth().isHealthy())
+                    .as("%s: isClosedOrFailed() is true, so the verdict must not be healthy", phase)
+                    .isFalse();
+        }
     }
 
     /**
@@ -147,11 +216,23 @@ class ParallelConsumerHealthTest extends ParallelEoSStreamProcessorTestBase {
         assertThat(dead.getControllerState()).isEqualTo(State.CLOSED);
         assertThat(dead.getPollerState()).isEqualTo(State.CLOSED);
         assertThat(dead.isHealthy()).isFalse();
+        // The default cannot tell a crash from a clean close, so it must not let an absent cause be read as one.
+        assertThat(dead.getFailureCause()).isEmpty();
+        assertThat(dead.isStateObserved())
+                .as("a derived snapshot must say so, or its empty failure cause reads as a clean shutdown")
+                .isFalse();
+        assertThat(alive.isStateObserved()).isFalse();
     }
 
     /**
      * A third-party shaped implementor: implements only the abstract methods {@link ParallelConsumer} and its
      * supertype {@code DrainingCloseable} declare, and overrides nothing else.
+     * <p>
+     * <strong>If this class stops compiling, a non-{@code default} method was added to {@link ParallelConsumer} or
+     * {@code DrainingCloseable}, and every third-party implementor just broke.</strong> The fix is to make that method
+     * {@code default}, or to take the breaking change deliberately and record it in {@code docs/refactoring.md} -
+     * never to implement the new method here. Implementing it here turns the build green and silently deletes the
+     * only guard this repo has for that guarantee.
      */
     private static class StubParallelConsumer implements ParallelConsumer<String, String> {
 

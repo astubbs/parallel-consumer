@@ -62,6 +62,10 @@ public interface ParallelConsumer<K, V> extends DrainingCloseable {
      * instance is reported here exactly as a cleanly closed one - {@link PCHealth#getFailureCause()} empty. Only an
      * implementation that overrides this method with a real, state-backed snapshot - as
      * {@link AbstractParallelEoSStreamProcessor} does - can distinguish the two.
+     * <p>
+     * Because a caller generally receives a {@link PCHealth} without knowing which implementation produced it, that
+     * limitation is carried on the value itself rather than left in this Javadoc: snapshots from here report
+     * {@link PCHealth#isStateObserved()} as {@code false}.
      *
      * @return the current health of this instance - never {@code null}
      * @see PCHealth
@@ -74,6 +78,7 @@ public interface ParallelConsumer<K, V> extends DrainingCloseable {
         return PCHealth.builder()
                 .controllerState(derived)
                 .pollerState(derived)
+                .stateObserved(false)
                 .build();
     }
 

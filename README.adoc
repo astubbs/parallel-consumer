@@ -1125,8 +1125,9 @@ The snapshot carries four things:
 |===
 |`isHealthy()` |The derived verdict: the control loop is not shutting down *and* no failure has been recorded.
 |`getControllerState()` |The control loop's `State` - one of `UNUSED`, `RUNNING`, `PAUSED`, `DRAINING`, `CLOSING`, `CLOSED`.
-|`getPollerState()` |The broker poller's `State`, reported separately. Diagnostic - it does not affect the verdict.
+|`getPollerState()` |The broker poller's `State`, reported separately. Diagnostic - it does not affect the verdict, and it is a lifecycle flag rather than a liveness signal: it reads `RUNNING` both before the poll thread starts and after it dies.
 |`getFailureCause()` |An `Optional<Exception>`, present only when the instance failed.
+|`isStateObserved()` |`false` only for the coarse fallback a third-party implementation of the interface inherits. On such a snapshot an absent failure cause means nothing - check this before reading a clean shutdown into one.
 |===
 
 === What this replaces

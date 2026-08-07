@@ -119,7 +119,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Getter(PROTECTED)
     protected final Supplier<ThreadPoolExecutor> workerThreadPool;
 
-    private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
+    /**
+     * {@code volatile} because {@link #getHealth()} reads it from a caller thread to detect a control thread that died
+     * without recording anything.
+     */
+    private volatile Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
     // todo make package level
     @Getter(AccessLevel.PUBLIC)
@@ -229,8 +233,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * @return if the system failed, returns the recorded reason.
+     * @return if the system failed, returns the recorded reason - or {@code null} if it did not.
+     * @deprecated prefer {@link #getHealth()} and {@link PCHealth#getFailureCause()}, which returns an
+     *         {@link java.util.Optional} and so cannot be mistaken for a never-null accessor. Note the two share a
+     *         name but not a null contract: {@code health.getFailureCause() != null} is always true, and silently so.
+     *         This signature cannot change before a major version.
      */
+    @Deprecated
     public Exception getFailureCause() {
         return this.failureReason;
     }
@@ -251,6 +260,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * before the failure lands, paired with a {@link State#CLOSED} read just after it - which is exactly the shape of
      * a clean shutdown, and would report a crash as one.
      * <p>
+     * The controller state is additionally reconciled against the control thread's own liveness. The control task
+     * catches {@link Exception}, so an {@link Error} escaping it terminates the thread without writing either field -
+     * the instance is dead while {@link #state} still reads {@link State#RUNNING} and there is no cause to report.
+     * Without that reconciliation this verdict would be strictly weaker than {@link #isClosedOrFailed()}, which
+     * already consults the thread, on exactly the failure a liveness probe exists to catch.
+     * <p>
      * The two states are reported as they actually are, and are not folded together. Before {@link #poll} is ever
      * called, for example, the controller reads {@link State#UNUSED} while the poller's field already reads
      * {@link State#RUNNING}; {@link #pauseIfRunning()} likewise moves only the controller. Both divergences are
@@ -262,9 +277,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public PCHealth getHealth() {
         // read each volatile field exactly once, state before cause - order is load-bearing, see Javadoc
-        final State controllerStateSnapshot = this.state;
+        State controllerStateSnapshot = this.state;
         final Exception failureCauseSnapshot = this.failureReason;
         final State pollerStateSnapshot = brokerPollSubsystem.getRunState();
+
+        // A control thread can die without recording anything: the control task catches Exception, so an Error
+        // escapes it, leaving state on RUNNING and failureReason null. Consulting the thread's own liveness - the
+        // same term isClosedOrFailed() uses - keeps this verdict from being weaker than the boolean it supersedes.
+        if (controllerStateSnapshot.isRunningOrPaused() && areMyThreadsDone()) {
+            controllerStateSnapshot = State.CLOSED;
+        }
 
         return PCHealth.builder()
                 .controllerState(controllerStateSnapshot)

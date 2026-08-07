@@ -11,8 +11,21 @@ liveness verdict. `State` moved to the public package so the snapshot has a sing
 source of truth rather than a mirrored enum. `state` and `failureReason` became
 `volatile`, and the Lombok-accidental public `setState` was narrowed.
 
-Both breaking changes are recorded in
-[`docs/refactoring.md`](../refactoring.md#breaking-changes-already-taken-before-0600-shipped).
+**Two breaking changes were taken**, both before 0.6.0.0 ships, and both named in their
+commit bodies (which is what the release-notes generator reads):
+
+- `State` moved from `io.confluent.parallelconsumer.internal` to
+  `io.confluent.parallelconsumer`. An enum has no source-compatible shim, so the move is
+  irreversible once published. Taken because the type was effectively unreachable — no
+  accessor anywhere returned one.
+- `AbstractParallelEoSStreamProcessor#setState(State)` is no longer public. It was a
+  Lombok `@Setter` default rather than designed API, and let any caller holding the
+  concrete type force the instance to `CLOSED`.
+
+Two further changes are release-gated and queued in
+[`docs/refactoring.md`](../refactoring.md#breaking-changes-queued-for-next-major-version):
+promoting `getHealth()` to abstract, and giving the concrete `getFailureCause()` an
+`Optional` return.
 
 ## What did NOT ship: a stall / progress signal
 
@@ -71,7 +84,7 @@ field can be added to it without touching the `ParallelConsumer` interface.
 
 - astubbs#57 owns `PCMetrics.java` and `PCMetricsDef.java`. This work adds no meter, but
   the `State` move forces a one-line import change in `PCMetricsDef.java`. Sequence behind
-  #57 or expect a trivial import-level conflict.
+  astubbs#57 or expect a trivial import-level conflict.
 - astubbs#29 owns the poll/lifecycle internals. This work touched only field modifiers on
   `state` / `failureReason` and added a read accessor to `BrokerPollSystem`; it did not
   reshape any transition.

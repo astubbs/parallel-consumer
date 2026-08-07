@@ -83,19 +83,6 @@ so a major-release prep can action them in one pass.
   (thread-safe public APIs, labelled *ver:1.0* blocker) and `confluentinc#172`
   (1.0 release train).
 
-### Breaking changes already taken, before 0.6.0.0 shipped
-
-Not queued - these have landed. Recorded here so release-notes prep has them, since a PR
-never edits the changelog.
-
-- **`State` moved from `io.confluent.parallelconsumer.internal` to
-  `io.confluent.parallelconsumer`** (astubbs#126). An enum has no source-compatible shim,
-  so the move is irreversible once published. Taken because the type was effectively
-  unreachable - no accessor anywhere returned one - and 0.6.0.0 had not shipped.
-- **`AbstractParallelEoSStreamProcessor#setState(State)` is no longer public**
-  (astubbs#126). It was a Lombok `@Setter` default rather than designed API, and let any
-  caller holding the concrete type force the instance to `CLOSED`.
-
 ---
 
 

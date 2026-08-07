@@ -71,9 +71,29 @@ public class PCHealth {
      * The run state of the broker poller at the moment the snapshot was taken.
      * <p>
      * Diagnostic only - it does not participate in {@link #isHealthy()}. See the class documentation for why.
+     * <p>
+     * <strong>This is a lifecycle flag, not a liveness signal.</strong> It is moved only by pause, drain and close, so
+     * it reads {@link State#RUNNING} both before the poll thread has started and after that thread has died from an
+     * exception. It cannot tell you the poller is alive - only that nothing has deliberately stopped it. A dead poll
+     * thread surfaces instead as a failure cause on the controller, once the controller notices.
      */
     @NonNull
     private final State pollerState;
+
+    /**
+     * Whether the states in this snapshot were observed from a real run state, or inferred.
+     * <p>
+     * True for every snapshot produced by this library's own processors. False only for the coarse fallback in
+     * {@link ParallelConsumer#getHealth()}, which a third-party implementation of the interface inherits if it does
+     * not override the method: that fallback has nothing but {@link ParallelConsumer#isClosedOrFailed()} to go on, so
+     * it derives the states and can never populate a failure cause.
+     * <p>
+     * Check this before reading anything into an <em>absent</em> {@link #getFailureCause()}. On a derived snapshot an
+     * empty cause carries no clean-versus-crash meaning, because the fallback reports a crashed instance and a
+     * cleanly closed one identically.
+     */
+    @Builder.Default
+    private final boolean stateObserved = true;
 
     /**
      * The exception that killed the instance, or {@code null} if it has not failed. Read through
@@ -85,6 +105,8 @@ public class PCHealth {
     private final Exception failureCause;
 
     /**
+     * Absence means "has not failed" <strong>only on an observed snapshot</strong> - see {@link #isStateObserved()}.
+     *
      * @return the exception that killed this instance, or {@link Optional#empty()} if it has not failed - never
      *         {@code null}
      */
@@ -106,6 +128,7 @@ public class PCHealth {
      *
      * @return true if this instance does not need restarting
      */
+    @ToString.Include
     public boolean isHealthy() {
         return controllerState.isRunningOrPaused() && !getFailureCause().isPresent();
     }

@@ -144,6 +144,22 @@ class PCHealthTest {
         assertThatCode(health::toString).doesNotThrowAnyException();
         assertThat(health.toString())
                 .contains("PAUSED")
-                .contains("DRAINING");
+                .contains("DRAINING")
+                .as("the verdict is the reason the type exists - an operator should not have to re-derive it")
+                .contains("isHealthy=true");
+    }
+
+    /**
+     * A snapshot is observed unless something explicitly says otherwise, so that only the coarse interface fallback
+     * has to remember to mark itself.
+     */
+    @Test
+    void aSnapshotIsObservedByDefault() {
+        var health = PCHealth.builder()
+                .controllerState(State.RUNNING)
+                .pollerState(State.RUNNING)
+                .build();
+
+        assertThat(health.isStateObserved()).isTrue();
     }
 }
