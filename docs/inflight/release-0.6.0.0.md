@@ -40,8 +40,11 @@ survive the release.
 
 - **astubbs#196** - fixes astubbs#167 (confluentinc#622): the README's retry-delay example used `multiplier = 0.5`, so
   `Math.pow(multiplier, attempts)` *halved* the wait on each failed attempt instead of growing it.
-  Reported upstream 2023-08-08, never fixed there, inherited by the fork. Fixed in `CoreApp.java`,
-  since the README embeds that snippet by asciidoc include, and `README.adoc` regenerated.
+  Reported upstream 2023-08-08 and patched there by confluentinc#864 - but only in the generated
+  `README.adoc`, not the `CoreApp.java` it is generated from, so upstream's source still reads `0.5`
+  and the patch reverts on the next regeneration. This fork inherited that patch and lost it exactly
+  that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
+  `README.adoc` regenerated.
 
 ## Do at release: one sweep over the upstream mirrors
 
