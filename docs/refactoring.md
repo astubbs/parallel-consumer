@@ -69,8 +69,12 @@ so a major-release prep can action them in one pass.
   (L564) - `ParallelConsumerOptions.java`.
 - **Remove the JStream API** (deprecate first) - design ref
   `origin/refactor/deprecate-jstream` @8a8f6508.
-- **Rename the enum to the standard pattern** (public enum rename) -
-  `origin/refactor/minor-changes` @193bbf80.
+- **Promote `ParallelConsumer#getHealth()` from `default` to abstract** - it ships as a
+  `default` so that adding it breaks no third-party implementor, but the derived fallback
+  it needs for that cannot distinguish a clean shutdown from a crash (see astubbs#126).
+- **Change `AbstractParallelEoSStreamProcessor#getFailureCause()` to return `Optional`** -
+  it returns a bare nullable `Exception`; `PCHealth#getFailureCause()` already reports the
+  absence explicitly, so the two disagree until this signature changes.
 - **Evaluate for breakage at the bump:** adopt `@ParametersAreNonnullByDefault`
   (`origin/improvements/nonnull-default` @684c02a0) and add a JPMS `module-info`
   (`origin/improvements/module-info` @d74f5e8b) - both tighten the published
@@ -78,6 +82,19 @@ so a major-release prep can action them in one pass.
 - **Version-gated API work** already tracked under Cross-cutting: `confluentinc#186`
   (thread-safe public APIs, labelled *ver:1.0* blocker) and `confluentinc#172`
   (1.0 release train).
+
+### Breaking changes already taken, before 0.6.0.0 shipped
+
+Not queued - these have landed. Recorded here so release-notes prep has them, since a PR
+never edits the changelog.
+
+- **`State` moved from `io.confluent.parallelconsumer.internal` to
+  `io.confluent.parallelconsumer`** (astubbs#126). An enum has no source-compatible shim,
+  so the move is irreversible once published. Taken because the type was effectively
+  unreachable - no accessor anywhere returned one - and 0.6.0.0 had not shipped.
+- **`AbstractParallelEoSStreamProcessor#setState(State)` is no longer public**
+  (astubbs#126). It was a Lombok `@Setter` default rather than designed API, and let any
+  caller holding the concrete type force the instance to `CLOSED`.
 
 ---
 
@@ -353,8 +370,9 @@ Cross-cutting above; the rest:
 - `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API (breaking removal is
   queued under *Breaking changes queued for next major version*).
 - `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
-- `origin/refactor/minor-changes` @193bbf80 - rename enum to the standard pattern (breaking; see
-  *Breaking changes queued for next major version*).
+- `origin/refactor/minor-changes` @193bbf80 - rename enum to the standard pattern. **Landed** -
+  `State`'s constants are already `UNUSED(0)`..`CLOSED(5)` on master, so nothing is pending
+  against this type. Don't revisit.
 - `origin/improvements/nonnull-default` @684c02a0 - adopt `@ParametersAreNonnullByDefault`.
 - `origin/improvements/module-info` @d74f5e8b - add JPMS `module-info`.
 - `origin/improvements/loom` @32ebac17 - Loom/Virtual-Threads POC → **superseded by confluentinc#908**.
