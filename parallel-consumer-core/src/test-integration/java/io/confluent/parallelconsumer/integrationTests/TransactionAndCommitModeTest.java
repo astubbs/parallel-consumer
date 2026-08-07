@@ -163,15 +163,11 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
 
         // increased PC concurrency - improves test stability and performance.
         int numThreads = 64;
-//        int numThreads = 1000;
         var pc = new ParallelEoSStreamProcessor<String, String>(ParallelConsumerOptions.<String, String>builder()
                 .ordering(order)
                 .consumer(newConsumer)
                 .producer(newProducer)
                 .commitMode(commitMode)
-//                .numberOfThreads(1000)
-//                .numberOfThreads(100)
-//                .numberOfThreads(2)
                 .maxConcurrency(numThreads)
                 .build());
         pc.subscribe(of(inputName));
@@ -207,16 +203,9 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         // wait for all pre-produced messages to be processed and produced
         Assertions.useRepresentation(new TrimListRepresentation());
 
-        // todo rounds should be 1? progress should always be made
-        int roundsAllowed = 10;
-//        roundsAllowed = 200;
-//        if (commitMode.equals(CONSUMER_SYNC)) {
-//            roundsAllowed = 3; // sync consumer commits can take time // fails
-////            roundsAllowed = 5; // sync consumer commits can take time // fails
-////            roundsAllowed = 10; // sync consumer commits can take time // fails
-////            roundsAllowed = 12; // sync consumer commits can take time // // works with no logging
-//        }
-
+        // Rounds are deliberately not used here: ProgressTracker rejects being given both a round
+        // count and a timeout, and this test tracks by duration. The open question of whether any
+        // round without progress should be tolerated is recorded in docs/refactoring.md.
         ProgressTracker progressTracker = new ProgressTracker(processedCount, null, defaultTimeout);
         var failureMessage = msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);

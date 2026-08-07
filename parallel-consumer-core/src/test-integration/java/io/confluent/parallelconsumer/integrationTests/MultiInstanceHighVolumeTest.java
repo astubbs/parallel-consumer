@@ -57,8 +57,8 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         numPartitions = 12;
         String inputTopicName = setupTopic(this.getClass().getSimpleName() + "-input");
 
-//        int expectedMessageCount = 10_000_000;
-        int expectedMessageCount = 30_000_00;
+        // Reduced from 10_000_000; the 60s wait below cannot be met at higher volumes on a CI runner.
+        int expectedMessageCount = 3_000_000;
         log.info("Producing {} messages before starting test", expectedMessageCount);
 
         List<String> expectedKeys = getKcu().produceMessages(inputTopicName, expectedMessageCount);

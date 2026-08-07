@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests;
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.ProgressBarUtils;
@@ -42,11 +43,10 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 public class LoadTest extends DbTest {
 
-    //    static int total = 8_000_0;
-//    static int total = 4_000_00;
-//    static int total = 4_000_0;
+    // Untagged, so this runs in the gating integration lane, and it is a listed member of the
+    // load-tightness flake family at this volume (docs/inflight/test-load-tightness-flakes.md).
+    // Classify before raising it - that family is where the confluentinc#857 deadlock was hiding.
     static int total = 4_000;
-//    static int total = 8;
 
     @SneakyThrows
     public void setupTestData() {

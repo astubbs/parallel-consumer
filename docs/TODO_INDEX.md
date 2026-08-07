@@ -3,7 +3,7 @@
 **Generated file - do not edit by hand.** Regenerate with `bin/todo-index.sh`
 (`bin/todo-index.sh --check` fails if this file is stale).
 
-Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **87 marker(s)** at
+Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **86 marker(s)** at
 the time of generation.
 
 ## Prioritised? See the refactoring backlog
@@ -184,7 +184,6 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionAndCommitModeTest.java`**
 
-- todo rounds should be 1? progress should always be made
 - todo performance: tighten up progress check (<2)
 
 **`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionMarkersTest.java`**
