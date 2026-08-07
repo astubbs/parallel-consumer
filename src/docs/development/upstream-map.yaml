@@ -34,6 +34,11 @@
 #   fork:
 #     branches    local branch names carrying the work (may be [])
 #     prs         fork PR numbers on `fork_repo` (astubbs/parallel-consumer)
+#     fork_issue  single fork issue number, when the entry maps 1:1 to one
+#     fork_issues list of fork issue numbers, when one entry groups several
+#                 upstream items that want designing together (mirrors of a
+#                 cohort, an epic and its children). Same meaning as fork_issue,
+#                 plural form -- prefer it over inventing one entry per mirror.
 #     status      lifecycle of OUR work -- does NOT imply landed unless merged/released:
 #                   none         upstream item we track but haven't started
 #                   in-progress  actively being worked, not complete
@@ -301,7 +306,7 @@ entries:
   - id: upstream-pr-log-noise
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [238], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57], prs: [918, 919], related: [629, 631], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -351,7 +356,7 @@ entries:
   - id: sweep-2023-admin-closure
     group: governance
     summary: Two upstream bulk closures (2023-06-15 PRs, 2023-07-07 issues) that closed live work as done
-    fork: {branches: [docs/mirror-2023-admin-sweep], prs: [], status: in-progress}
+    fork: {branches: [docs/mirror-2023-admin-sweep], prs: [], fork_issues: [227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254], status: in-progress}
     upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 29, 34, 40, 41, 48, 49, 50, 53, 57, 65, 119, 144, 154, 175, 183, 187, 191, 199, 203, 205, 246, 267, 319, 320, 372], prs: [22, 45, 46, 66, 81, 106, 143, 179, 181, 204, 220, 270, 271, 291, 300, 303, 316, 325, 345, 346, 356, 366, 390, 405, 408, 441, 442, 443, 464, 473, 488, 492, 494, 496, 506, 524], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -365,7 +370,7 @@ entries:
   - id: sweep-2023-already-fixed
     group: governance
     summary: "Swept issues verified already fixed in fork: #41 offset-scan removal, #319 shutdown CME"
-    fork: {branches: [], prs: [], status: merged}
+    fork: {branches: [], prs: [], fork_issues: [233, 252], status: merged}
     upstream: {repo: confluentinc/parallel-consumer, issues: [41, 319], prs: [270], related: [200, 269], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -382,7 +387,7 @@ entries:
   - id: sweep-2023-retry-lifecycle
     group: features
     summary: Retry expiry, stall detection and scheduled retry -- the unfinished half of the retry epic
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [239, 231, 234], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [65, 34, 48], prs: [366], related: [196, 310, 71, 82, 92, 197, 242], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -397,7 +402,7 @@ entries:
   - id: sweep-2023-api-shape
     group: features
     summary: "Per-topic handlers and separate consume/produce types -- one breaking API change, not two"
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [243, 254], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [175, 372], prs: [390], related: [50], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -412,7 +417,7 @@ entries:
   - id: sweep-2023-consumer-api-exposure
     group: features
     summary: seekToBeginning and post-start subscription changes, both blocked on API thread safety
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [246, 245], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [191, 187], prs: [346], related: [186, 520, 782], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -429,7 +434,7 @@ entries:
   - id: sweep-2023-null-key-ordering
     group: batching-ordering
     summary: "KEY ordering serialises all null-key records into one shard (live defect)"
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [244], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [183], prs: [], related: [], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -445,7 +450,7 @@ entries:
   - id: sweep-2023-async-produce
     group: features
     summary: Consume-process-produce still blocks on producer acks
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [230], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [29], prs: [356], related: [], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -460,7 +465,7 @@ entries:
   - id: sweep-2023-tx-failure-taxonomy
     group: rebalance-stability
     summary: ProducerManager retries every transaction commit failure identically
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [241], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [144], prs: [], related: [112], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -475,7 +480,7 @@ entries:
   - id: sweep-2023-broker-disconnect-commit
     group: rebalance-stability
     summary: Async offset-commit errors after broker downtime are logged and dropped
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [248], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [203], prs: [345], related: [185, 345], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -492,7 +497,7 @@ entries:
   - id: sweep-2023-topic-priority
     group: batching-ordering
     summary: Prioritise some subscribed topics over others via reserved concurrency shares
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [236], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [50], prs: [441], related: [372], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -507,7 +512,7 @@ entries:
   - id: sweep-2023-scs-comparison-doc
     group: governance
     summary: "Spring Cloud Stream vs PC comparison -- already written upstream, never published"
-    fork: {branches: [], prs: [], status: ready}
+    fork: {branches: [], prs: [], fork_issues: [251], status: ready}
     upstream: {repo: confluentinc/parallel-consumer, issues: [267], prs: [], related: [], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -520,7 +525,7 @@ entries:
   - id: sweep-2023-long-tail
     group: features
     summary: "Swept issues tracked but not scheduled: tracing, dynamic concurrency, rate limiting, proxy, Connect, multi-cluster, per-record tx, drain-to-plain-offsets, vertx verticle"
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [227, 228, 229, 232, 235, 240, 242, 249, 253], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 40, 49, 119, 154, 205, 320], prs: [22, 204, 443], related: [], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -544,7 +549,7 @@ entries:
   - id: sweep-2023-small-items
     group: governance
     summary: "Small swept items: #53 exact offset encoding, #246 formatter member sorting, #199 awaitility failFast reason"
-    fork: {branches: [], prs: [], status: none}
+    fork: {branches: [], prs: [], fork_issues: [237, 250, 247], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [53, 246, 199], prs: [46], related: [47], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
