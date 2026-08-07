@@ -7,10 +7,12 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import io.confluent.parallelconsumer.State;
 import io.confluent.parallelconsumer.metrics.PCMetrics;
 import io.confluent.parallelconsumer.metrics.PCMetricsDef;
 import io.confluent.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.SneakyThrows;
@@ -29,7 +31,6 @@ import java.util.concurrent.*;
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
 import static io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
-import io.confluent.parallelconsumer.State;
 import static io.confluent.parallelconsumer.State.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -48,25 +49,13 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * The single source of truth for this subsystem's lifecycle. Volatile: mutated by the control thread
      * (drain / close transitions) and read by the poll thread's loop and by {@link ConsumerManager}'s
      * {@link #isCloseInProgress()} signal (potentially from committer threads).
+     * <p>
+     * Also read by {@link AbstractParallelEoSStreamProcessor#getHealth()} to report alongside the controller's state.
+     * The getter is package-scoped: users reach this through
+     * {@link io.confluent.parallelconsumer.PCHealth#getPollerState()}, not directly.
      */
+    @Getter(AccessLevel.PACKAGE)
     private volatile State runState = RUNNING;
-
-    /**
-     * Reads the poller's current run state, for {@link AbstractParallelEoSStreamProcessor#getHealth()} to report
-     * alongside the controller's.
-     * <p>
-     * Package-scoped: this is an internal read for the health snapshot, not user API - users reach it through
-     * {@link io.confluent.parallelconsumer.PCHealth#getPollerState()}. The field is already {@code volatile}, so this
-     * returns the most recently written value.
-     * <p>
-     * Note this is a plain read of the existing field - it neither changes the field's initial value nor adds a
-     * transition, so the {@code pc.poller.status} gauge is unaffected.
-     *
-     * @return the poller's run state right now
-     */
-    State getRunState() {
-        return runState;
-    }
 
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
 

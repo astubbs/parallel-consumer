@@ -55,6 +55,10 @@ public enum State {
      * the {@code pc.*} Micrometer meters instead.
      *
      * @return true if the controller is not shutting down
+     * @throws IllegalStateException if a state is added to this enum without being classified here. Deliberate: the
+     *         alternative is a silent default that would quietly mis-report the new state's health. Unreachable
+     *         today, and {@code StateTest} fails if it ever stops being so - but note that it would surface out of a
+     *         health check, so the classification must be updated in the same change as any new constant.
      */
     public boolean isRunningOrPaused() {
         switch (this) {
