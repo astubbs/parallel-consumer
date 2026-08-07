@@ -100,8 +100,36 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
             assertThat(registeredGaugeValueFor(PCMetricsDef.NUM_PAUSED_PARTITIONS)).isEqualTo(2);
         });
 
-        //Need to give a little bit of time as racing between scraping metrics and asserts below
-        Thread.sleep(1000);
+        // Wait for the in-flight tail to DRAIN, rather than sleeping a fixed second and hoping it has.
+        //
+        // NUM_PAUSED_PARTITIONS reaching 2 does not mean processing has stopped: a worker that passed the
+        // `counter.get() >= numberToBlockAt` check before the latch closed still sleeps and then increments, so the
+        // counters keep moving afterwards. The assertions below snapshot those counters and compare them against
+        // LIVE gauges, so one straggler landing between the snapshot and the gauge read makes them disagree by
+        // exactly one - seen as "expected: 213.0 but was: 214.0" in a full-suite run that passes when this class
+        // runs alone. A fixed sleep cannot fix that; it only moves the odds, and it moves them the wrong way on a
+        // busy machine, which is where the suite actually runs.
+        //
+        // Requiring the counters to hold still proves the tail has drained instead of assuming it. Strictly
+        // stronger than the sleep it replaces: if processing never quiesces, this fails loudly with what it saw
+        // instead of handing a moving target to the assertions below.
+        int stableReadings = 0;
+        int lastP0 = -1;
+        int lastP1 = -1;
+        long quiescedDeadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        while (stableReadings < 5) {
+            Thread.sleep(100);
+            int p0 = counterP0.get();
+            int p1 = counterP1.get();
+            stableReadings = (p0 == lastP0 && p1 == lastP1) ? stableReadings + 1 : 0;
+            lastP0 = p0;
+            lastP1 = p1;
+            assertThat(System.nanoTime() < quiescedDeadline)
+                    .withFailMessage("processing never quiesced - the counters were still moving after 60s "
+                            + "(counterP0=%s, counterP1=%s), so the offset assertions below would be comparing "
+                            + "a snapshot against a live gauge", p0, p1)
+                    .isTrue();
+        }
         log.info(registry.getMetersAsString());
 
         int remainingP0 = quantityP0 - counterP0.get();
