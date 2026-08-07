@@ -209,6 +209,17 @@ stack traces (see Testing).
   own reviewer. That is the guard working. Get a real review with a `@claude review this` PR comment
   (which runs from `claude.yml`, unmodified, so it validates), or split the workflow edit into its
   own PR. Do not disable the gate to get a green check.
+- **`.github/workflows/claude-issue-response.yml`** — "Issue First Response". Unprompted first reply to
+  issues opened by **non-maintainers** (`author_association` excludes OWNER/MEMBER/COLLABORATOR, so
+  your own mirrors and tracking issues never trigger it), modelled on the Inkeep bot in
+  blakeblackshear/frigate. Distinct from `claude.yml`, which answers only when the reporter typed
+  `@claude`; the two are made mutually exclusive by a guard on that string, or a mention would draw
+  two replies. **Posting is off until the repo variable `CLAUDE_ISSUE_AUTOREPLY` is `true`** - until
+  then the drafted reply goes to the Actions job summary and the issue is untouched. It is a
+  variable, not a commit, so silencing a bot that is answering badly is instant. Claude has no tool
+  that can write to the issue: it produces `draft-reply.md` and a plain step posts it, which keeps an
+  attacker-controlled issue body away from the write path. The AI disclosure is appended by that step
+  rather than asked of the model, so it cannot be injected away.
 - **`.github/workflows/repo-hygiene.yml`** — "Repo Hygiene", on every push/PR plus dispatch. Two independent jobs. `sigpipe` runs `bin/check-shell-sigpipe.sh` (its own self-test first) to catch a `bin/*.sh` piping into `grep -q` under `pipefail`, which silently inverts the script's answer. `actions` runs `bin/check-action-versions.sh`, keeping every GitHub Action pinned to a single version across all workflows. Neither gates the build - they exist because the failures they catch are invisible rather than loud.
 - **`.github/workflows/check-dependencies.yml`** — "PR Dependency Check". Reads `depends on #N` lines from the PR body and blocks the child until every parent has merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out of order. See [PR Discipline](#pr-discipline) for the syntax.
 - **`.github/workflows/cancel-closed-pr-runs.yml`** — Cancels a PR's in-flight runs when it closes, so a withdrawn PR stops occupying runners. Housekeeping only; gates nothing.
