@@ -1,4 +1,4 @@
-# Cite the KIP in #223's Exactly-once comparison row
+# Cite the KIP in astubbs#223's Exactly-once comparison row
 
 The positioning argument and its evidence live in `STRATEGY.md` on this branch - read that first.
 This entry records only the one change that belongs to a *different* branch.
@@ -17,4 +17,4 @@ Also worth adding there, since the table already has rows for both: isolation le
 setting (`share.isolation.level`), not per-consumer, and the delivery counts behind the poison-message
 row "cannot be relied upon to be precise" because those updates are themselves not exactly-once.
 
-Delete this file once #223 carries the citation.
+Delete this file once astubbs#223 carries the citation.

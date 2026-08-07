@@ -722,15 +722,16 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
      * This arm still asserts the multiset, because that is the claim; it simply never reaches it, failing earlier
      * on the source offset. It is disabled rather than deleted or weakened because this is an untagged
      * {@code integrationTests} class and therefore runs in the gating lane, where a permanently red test is how a
-     * lane becomes ignorable. The fix exists on the local branch {@code fix/produce-lock-double-release} as commit
-     * {@code d95a21d4}; when that lands, delete the {@link Disabled} and this arm should pass.
+     * lane becomes ignorable. The fix is astubbs#257; when that lands, delete the {@link Disabled} and this arm
+     * should pass - verified by applying that PR's {@code src/main} files here, which took this class from one
+     * error in 178s to 5/5 passing in 72s.
      */
     @Test
     @Disabled("RED on master, 5/5: the produce lock is acquired per PollContext but released per record, so at "
             + "batchSize > 1 every batch fails, nothing ever sets the partition dirty, and the instance stops "
             + "committing altogether - the source offset froze at 3 of 201. A stall, not the duplicate this was "
-            + "written to catch. Blocked on the produce-lock double-release fix, commit d95a21d4 on "
-            + "fix/produce-lock-double-release - re-enable when that is on master.")
+            + "written to catch. Blocked on the produce-lock double-release fix, astubbs#257 - re-enable when "
+            + "that is on master, where this arm is confirmed to pass 5/5.")
     @ProvesClaim(TransactionalClaim.RESULTS_EXACTLY_ONCE_UNDER_FAILURE)
     void outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching() {
         prepare("exactly-once-batched", PAYLOAD_RECORDS);

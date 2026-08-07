@@ -97,8 +97,23 @@ This is more severe than "a record is produced twice": at `batchSize >= 2` a tra
 poll-and-produce pipeline stops committing entirely. It refutes C14 (`RESULTS_EXACTLY_ONCE_UNDER_FAILURE`)
 by liveness rather than by duplication - the results never come to exist.
 
-The fix is `d95a21d4` on the local branch `fix/produce-lock-double-release`. Until it lands, the IT
-arm ships `@Disabled` naming that commit, because the class is untagged and runs in the gating lane.
+The fix is **astubbs#257** (`fix/produce-lock-double-release`). Until it lands, the IT arm ships
+`@Disabled` naming that PR, because the class is untagged and runs in the gating lane.
+
+**The fix is confirmed to cure the stall, not merely the duplicate it was written for.** Applying only
+its three `src/main` files to this branch and forcing the disabled arm to run turns the class from
+1 error in 178s to **5/5 passing in 72s**. That is the GREEN half of the calibration pair: same test,
+one term changed. Worth stating on astubbs#257 itself, whose commit message describes the defect as
+records "failing and reprocessing" - the severity is higher than that, because a partition whose every
+batch fails is never dirty and therefore never commits at all.
+
+Two notes for whoever lands it. Its `PollContextInternal.java` currently fails
+`bin/check-copyright-headers.sh` - "upstream-derived file modified since the fork point but missing
+'Modifications Copyright ... Antony Stubbs and contributors'" - which is the whole of that PR's red
+Copyright check; the other two modified files already carry the line. And the measurement recorded
+above under "What is measured" should be deleted rather than corrected when this lands: it was taken
+at `batchSize = 1`, where the defect cannot fire, so its 340/340 reading answered a question the run
+could not reach.
 
 ## Why it is worth someone's time
 

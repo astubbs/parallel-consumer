@@ -8,7 +8,7 @@ last_updated: 2026-08-07
 > **Stub.** The full strategy document lands with astubbs/parallel-consumer#223
 > (`docs/strategy-and-share-groups-comparison`), which is expected to merge before this branch.
 > This file carries only the positioning section that depends on *this* branch's test results. On
-> merge, take #223's version of the file and re-apply the section below.
+> merge, take astubbs#223's version of the file and re-apply the section below.
 
 ## Marketing
 
@@ -38,7 +38,7 @@ upon to be precise".
 
 So Share Groups decouple scaling from partitions but deliver out of order *and* cannot acknowledge
 inside a transaction. Nothing else gives low latency, guaranteed per-key ordering, and exactly-once at
-the same time. When #223's `## Target problem` section merges, it names only the ordering half - add
+the same time. When astubbs#223's `## Target problem` section merges, it names only the ordering half - add
 the second gap there too.
 
 ### Do not promote this yet - one half of it is currently refuted
@@ -68,7 +68,7 @@ parallelism, and batching is a parallelism feature - so the break is inside the 
 be selling, not off to one side of it. Marketing this now would be advertising precisely the
 configuration that does not work.
 
-**What has to happen first:** land the produce-lock fix (`d95a21d4`, currently unpushed), re-enable
+**What has to happen first:** land the produce-lock fix (astubbs#257), re-enable
 `outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching`, and confirm it goes green. When
 `TransactionalClaim` shows `RESULTS_EXACTLY_ONCE_UNDER_FAILURE` as `PROVED` rather than `REFUTED`,
 promote the section above to the headline. Until then the honest claim is narrower and still worth

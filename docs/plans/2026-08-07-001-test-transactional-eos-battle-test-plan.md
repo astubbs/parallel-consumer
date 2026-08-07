@@ -174,26 +174,30 @@ output is recorded rather than lost.
 
 ### Key Technical Decisions
 
-KTD1. **Do not re-implement the batch produce-lock fix.** The local branch
-`fix/produce-lock-double-release` (`d95a21d4`, unpushed) already fixes it and ships
-`TransactionalBatchProduceTest` and `ProduceLockReleaseTest`. This plan consumes that branch as a
-calibration arm and adds neither test. Rationale: another worktree owns those files; duplicating
-them collides on merge and splits the diagnosis.
+KTD1. **Do not re-implement the batch produce-lock fix.** astubbs#257
+(`fix/produce-lock-double-release`) already fixes it and ships `TransactionalBatchProduceTest` and
+`ProduceLockReleaseTest`. This plan consumes that PR as a calibration arm and adds neither test.
+Rationale: another worktree owns those files; duplicating them collides on merge and splits the
+diagnosis.
 
 KTD2. **Calibrate against a real defect, not only synthetic controls.** Master with `batchSize >= 2`
-under a transactional producer fails whole batches and redelivers already-succeeded records;
-`d95a21d4` fixes it. This satisfies the chaos suite's acceptance bar - "a chaos suite that never
-caught a known bug is decoration" - with a bug that exists rather than one injected.
+under a transactional producer fails whole batches, and because only a success marks a partition
+dirty it then stops committing entirely - a stall, which is more severe than the redelivery the fix
+was written for. astubbs#257 fixes it: applying only its `src/main` files takes the batched arm from
+one error in 178s to 5/5 passing in 72s. This satisfies the chaos suite's acceptance bar - "a chaos
+suite that never caught a known bug is decoration" - with a bug that exists rather than one injected,
+and with both halves of the pair actually run.
 
 KTD11. **The produce-lock fix lands first; this suite does not merge a known-red gating test.**
-`TransactionalAtomicityIT` is an untagged `integrationTests` class, so `bin/ci-integration-test.sh`
+`TransactionalCrashReplayIT` is an untagged `integrationTests` class, so `bin/ci-integration-test.sh`
 runs it in the gating lane. A test the plan predicts fails on master would turn that lane red for
-every subsequent PR, and the quarantine hatch is unavailable: `bin/check-quarantine-owners.sh`
-requires an owning PR that exists and is open, and `d95a21d4` has none. Therefore: push
-`fix/produce-lock-double-release` as a PR and land it before U13's no-duplicate arm merges. Until it
-lands, U13 ships with that one scenario disabled behind a named reference to the blocking commit,
-and its RED result is recorded in U11 as evidence rather than as a gating test. Rejected: merging it
-red and "fixing it later" - that is how a lane becomes ignorable.
+every subsequent PR. That fix is now astubbs#257, open against master, so the ordering is a
+dependency rather than a hope: land it, then re-enable the arm. Until it lands, U13 ships with that
+one scenario `@Disabled` naming astubbs#257, and its RED result is recorded in U11 as evidence rather
+than as a gating test. Rejected: merging it red and "fixing it later" - that is how a lane becomes
+ignorable. Quarantine was also considered and is the wrong instrument here:
+`bin/check-quarantine-owners.sh` wants an owning PR that removes the annotation, and astubbs#257 is
+someone else's PR fixing main code, not this suite's to carry.
 
 KTD3. **A new chaos scenario, not a widened W4.** W4's legitimate lag-stagnation peaks sit at
 117-123s against a 150s bound - about 1.25x headroom. Transactional commit overhead would trip that
@@ -304,8 +308,9 @@ PC's incomplete-offset encoding present in the commit metadata.
   no user was present to size this.
 - The suite runs on the single shared static `KafkaContainer`; no multi-broker harness exists and
   none is built here.
-- `d95a21d4` is pushed and merged before U13's no-duplicate arm lands (KTD11). If that does not
-  happen, U13 ships with that arm disabled and U11 records the RED arm only, saying so.
+- astubbs#257 merges before U13's no-duplicate arm is re-enabled (KTD11). It is open and mergeable;
+  until it lands, U13 ships that arm disabled and U11 records both halves of the calibration - the
+  RED on master and the GREEN observed by applying that PR's `src/main` files here.
 - U1's coverage scan can see `@ProvesClaim` on integration classes because the root pom adds
   `src/test-integration/java` as a test source root of the same module via `build-helper`, so both
   lanes compile into one `target/test-classes`. This is load-bearing for the register.
