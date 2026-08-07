@@ -874,12 +874,12 @@ Recorded 2026-08-08. The register in `TransactionalClaim` is canonical; this is 
 | Claim | Verdict | Evidence |
 |---|---|---|
 | C1 bulk shared transaction | PROVED | Four records across two partitions, all four workers inside the user function simultaneously; one `beginTransaction` and one `sendOffsetsToTransaction` covering all four offsets |
-| C2 all-or-none per source offset | **REFUTED** | 2 of 5 records from one source offset visible at `read_committed`, 2/2 |
+| C2 all-or-none per source offset | PROVED | Refuted at first - 2 of 5 records from one source offset visible, 2/2 - then fixed by astubbs#261 and re-verified |
 | C3 failure invisible and recombined | PROVED | The abandoned attempt held all results in one transaction; the replay spread the same results across several, union exact |
 | C4 offset and records atomic | PROVED | Before the crash: no result visible AND the offset unmoved. After: every result visible AND the offset advanced |
 | C5 commit interval auto-reduced | PROVED | Literal durations asserted after `validate()`, all three directions |
 | C6 READ_COMMITTED blocked to first open tx | KAFKA_GUARANTEE | One open plus one later-committed transaction: the `read_committed` arm saw neither, the `read_uncommitted` arm saw both |
-| C7 pollAndProduceMany all-or-none | **REFUTED** | A terminally failed send leaves the accepted records in the transaction and the next commit publishes them |
+| C7 pollAndProduceMany all-or-none | PROVED | Refuted at first - a terminally failed send left the accepted records in the transaction - then fixed by astubbs#261 and re-verified |
 | C8 aborted never visible | PROVED | Abort and transaction-timeout arms, neither ever visible |
 | C9 no produce without its offset | PROVED | Three-point sequence - send returns, WorkContainer reaches the mailbox, commit lock granted - asserted in that order |
 | C10 processing blocked during commit | PROVED | `beginProducing` blocks while the commit lock is held and unblocks on release |
@@ -912,10 +912,17 @@ Every `PROVED` claim has a control that was seen to fail. Three worth naming:
    `docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md`.
    The prior ledger entry called this a duplicate defect on the strength of a 340/340 measurement
    taken at `batchSize = 1`, where it cannot fire.
-2. **The partial-result-set violation** - open. `ProducerManager#produceMessages` installs a producer
-   `Callback` that throws from `onCompletion`, above a comment reading "only needed if not using tx".
-   `KafkaProducer#doSend` runs it inside `catch (ApiException)` before `maybeTransitionToErrorState`,
-   so the transaction is never marked abortable. Refutes C2 and C7. Needs an issue and its own fix PR.
+2. **The partial-result-set violation** - fixed by astubbs#261, merged into this branch.
+   `ProducerManager#produceMessages` installed a producer `Callback` that throws from `onCompletion`,
+   above a comment reading "only needed if not using tx". `KafkaProducer#doSend` runs it inside
+   `catch (ApiException)` before `maybeTransitionToErrorState`, so the transaction was never marked
+   abortable and a terminally failed send left a partial result set visible. It refuted C2 and C7;
+   both now read `PROVED`. Split into its own PR off master, rather than riding along here, so the
+   fix reaches other branches without waiting for this suite. The test that found it is the
+   regression test, and it needed one non-obvious mechanism to work at all: PC only attempts a commit
+   when something has SUCCEEDED since the last one, so without healthy records after the poison one
+   nothing is ever dirty, no commit is attempted, and the test passes whether the bug is present or
+   not. An early draft did exactly that.
 3. **The commit-interval identity check** - open. `transactionsValidation` compares with `==`, so an
    explicit `Duration.ofSeconds(5)` is silently replaced by 100ms.
    `docs/inflight/bug-commit-interval-identity-check.md`.

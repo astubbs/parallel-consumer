@@ -20,7 +20,6 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
@@ -461,15 +460,6 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
      * on the claim.
      */
     @Test
-    @Disabled("REFUTED on master, 2/2, and red for the right reason - it fails on the all-or-none assertion "
-            + "itself with 'poison-key-0 has 2 of 5'. A pollAndProduceMany result set whose middle send fails "
-            + "terminally still has its first two records committed and made visible. The transaction commits "
-            + "despite a record never reaching the broker, because ProducerManager's produce callback throws out "
-            + "of KafkaProducer#doSend's ApiException handler before the client can transition the transaction "
-            + "to abortable-error. Disabled rather than deleted or weakened because this is an untagged "
-            + "integrationTests class and therefore gates the lane, where a permanently red test is how a lane "
-            + "becomes ignorable. Re-enable when the defect is fixed - see the class javadoc and "
-            + "TransactionalClaim#PRODUCE_MANY_ALL_OR_NONE for the full evidence.")
     @ProvesClaim(TransactionalClaim.PRODUCE_MANY_ALL_OR_NONE)
     void aTerminallyFailedSendLeavesTheWholeTransactionInvisible() {
         prepare("failed-send");
