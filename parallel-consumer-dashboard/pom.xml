@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-dashboard</artifactId>
+    <name>Kafka Parallel Consumer Dashboard</name>
+    <description>
+        Experimental, opt-in embedded web dashboard showing what a running Parallel Consumer instance is
+        doing right now. Read-only. Nothing starts unless the application explicitly starts it.
+    </description>
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <properties>
+        <!--
+            Deliberately module-local, mirroring parallel-consumer-vertx rather than being promoted to the
+            parent. This repo has a recorded scar from a global pin: pinning jackson-databind in the parent
+            broke WireMock in the vertx module, and the fix was to keep it module-local. Same shape, same
+            treatment.
+        -->
+        <vertx.version>4.5.31</vertx.version>
+        <!--
+            The chart library ships as an ordinary Maven dependency and is served straight off the classpath
+            from META-INF/resources/webjars/. It is deliberately NOT committed to the repository: a
+            third-party build product in git goes stale the first time the UI changes and sits in every
+            clone forever.
+        -->
+        <uplot.version>1.6.30</uplot.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- External -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.webjars.npm</groupId>
+            <artifactId>uplot</artifactId>
+            <version>${uplot.version}</version>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-junit5</artifactId>
+            <version>${vertx.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>me.tongfei</groupId>
+            <artifactId>progressbar</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+        </dependency>
+    </dependencies>
+
+</project>
