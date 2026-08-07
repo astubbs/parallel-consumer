@@ -114,6 +114,17 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+            Needed by the core test-jar classes this module's integration tests reuse rather than
+            reimplement - BrokerIntegrationTest reaches for StringUtils and RandomUtils while building
+            the Testcontainers broker. It is test-scoped in core, and test scope is not transitive, so
+            without this the demo dies at class-initialisation time with a NoClassDefFoundError.
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>

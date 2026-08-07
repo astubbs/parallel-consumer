@@ -120,6 +120,12 @@ bin/ci-build.sh 3.9.1
 
 # Performance tests only (requires substantial hardware)
 bin/performance-test.sh
+
+# The embedded web dashboard, live, with a workload deliberately made to misbehave
+# (requires Docker; prints the URL and loops until Ctrl-C). `--once` runs a single
+# sweep and exits non-zero if a scenario phase failed to produce what it declared.
+bin/dashboard-demo.sh
+bin/dashboard-demo.sh --once
 ```
 
 ## Module Structure

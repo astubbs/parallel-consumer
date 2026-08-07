@@ -34,6 +34,12 @@ import java.util.function.Supplier;
  * The tick loop itself now lives in {@link ScenarioRunner}, so the same driver runs the Chaos Pain Suite
  * (see {@code scenario.ChaosScenarios}) and any other scenario declared against the framework.
  * <p>
+ * Two ways to drive it, and they differ only in who owns the thread: {@link #start()} runs the scenario on a
+ * background thread until {@link #stop()} ({@code LOOP} - what every chaos scenario does), and
+ * {@link #runToCompletion()} runs it on the caller's thread and returns the postcondition failures
+ * ({@code ONCE} - what turns a scenario into a verdict, and what {@code bin/dashboard-demo.sh --once} uses).
+ * The mode reaches the runner and nothing else, so a seed means the same schedule either way.
+ * <p>
  * Originally the Chaos Pain Suite's seeded chaos scheduler (Phase 1 - see
  * {@code docs/plans/2026-07-30-002-feat-chaos-pain-suite-phase1-plan.md}), generalised in place per KTD14
  * of {@code docs/plans/2026-08-07-002-feat-embedded-web-dashboard-plan.md}.
@@ -76,6 +82,13 @@ public class ChaosConductor implements ScenarioContext, FleetControl {
 
     private final long seed;
     private final Scenario scenario;
+    /**
+     * {@link ScenarioRunner.Mode#LOOP} (the default, and what every chaos scenario uses) runs the phase list
+     * until {@link #stop()}; {@link ScenarioRunner.Mode#ONCE} is a single sweep, driven by
+     * {@link #runToCompletion()}. The mode reaches the runner and nothing else - it does not touch the draw
+     * stream, so a seed means the same schedule in either mode.
+     */
+    private final ScenarioRunner.Mode mode;
     private final int maxFleetSize;
     private final ExecutorService pcExecutor;
     private final Supplier<ManagedPCInstance> instanceFactory;
@@ -107,6 +120,7 @@ public class ChaosConductor implements ScenarioContext, FleetControl {
     @Builder
     public ChaosConductor(long seed,
                           Scenario scenario,
+                          ScenarioRunner.Mode mode,
                           String replayCommand,
                           int maxFleetSize,
                           ExecutorService pcExecutor,
@@ -121,6 +135,7 @@ public class ChaosConductor implements ScenarioContext, FleetControl {
         }
         this.seed = seed;
         this.scenario = scenario;
+        this.mode = mode == null ? ScenarioRunner.Mode.LOOP : mode;
         this.maxFleetSize = maxFleetSize;
         this.pcExecutor = pcExecutor;
         this.instanceFactory = instanceFactory;
@@ -136,7 +151,7 @@ public class ChaosConductor implements ScenarioContext, FleetControl {
         this.runner = ScenarioRunner.builder()
                 .scenario(scenario)
                 .seed(seed)
-                .mode(ScenarioRunner.Mode.LOOP)
+                .mode(this.mode)
                 .context(this)
                 .replayCommand(replayCommand)
                 .build();
@@ -173,6 +188,27 @@ public class ChaosConductor implements ScenarioContext, FleetControl {
         conductorThread = new Thread(runner::run, "chaos-conductor");
         conductorThread.setDaemon(true);
         conductorThread.start();
+    }
+
+    /**
+     * Run the whole scenario on the CALLING thread and return when it is done - the {@code ONCE} counterpart
+     * to {@link #start()}, and what turns a scenario into a pass/fail verdict rather than a demonstration.
+     * The fleet plumbing is identical either way, which is the point of extending the conductor rather than
+     * wrapping it.
+     *
+     * @return the postcondition failures, in phase order; empty means every phase produced what it declared
+     * @throws IllegalStateException if this conductor was built in {@code LOOP} mode, where the call could
+     *                               never return - a caller wanting LOOP wants {@link #start()}
+     */
+    public List<String> runToCompletion() {
+        if (mode != ScenarioRunner.Mode.ONCE) {
+            throw new IllegalStateException("runToCompletion() needs a conductor built with "
+                    + "mode(ScenarioRunner.Mode.ONCE); this one is " + mode + ", whose phase list repeats until "
+                    + "stop() - use start() for that");
+        }
+        startedAt = Instant.now();
+        record("CONDUCTOR START seed=" + seed + " scenario='" + scenario.getName() + "' mode=ONCE", -1);
+        return runner.run();
     }
 
     public void stop() {
