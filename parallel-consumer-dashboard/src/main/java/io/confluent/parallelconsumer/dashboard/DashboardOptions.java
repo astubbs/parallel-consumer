@@ -69,11 +69,32 @@ public class DashboardOptions {
     public static final int DEFAULT_MAX_PORT_ATTEMPTS = 100;
 
     /**
-     * How often the server samples the published snapshot for the event stream, and what it advertises to clients as
-     * the expected update cadence. This is a <em>read</em> cadence over an already-published value - it never causes
-     * Parallel Consumer to be sampled more often (plan R19).
+     * The fastest the event stream will send: at most one event per this interval per client, and what the server
+     * advertises to clients as the expected update cadence.
+     * <p>
+     * <strong>This is a ceiling, not a period.</strong> Nothing ticks at it. Snapshots are pushed to
+     * {@code StreamRoute} as they are published, and this only bounds how often they may go out; samples published
+     * inside a window are coalesced, so the client sees the newest rather than every one. It never causes Parallel
+     * Consumer to be sampled more often (plan R19) - sampling already happens on every control loop pass, and this
+     * governs transmission alone.
+     * <p>
+     * <strong>Why 100ms.</strong> It was measured, not guessed. Driving a partition whose spans move on a known
+     * smooth curve and sampling the rendered marker positions on every animation frame, the page's motion is
+     * indistinguishable at 50ms, 100ms, 200ms and 300ms - zero frozen frames and no visible pause in any of them -
+     * and degrades at 500ms (a pause every 3.5 seconds) and badly at the 1s this used to be (pauses up to 204ms,
+     * with velocity jumping by up to 17x at each keyframe). So anything at or below 300ms buys the same picture, and
+     * the number should be chosen on other grounds:
+     * <ul>
+     *   <li>100ms is the threshold at which a change reads as immediate rather than as a delayed reaction, and this
+     *       page exists to watch a race being won in real time.</li>
+     *   <li>It leaves 3x headroom to the 300ms knee, so a loaded machine - where both the event loop's timers and
+     *       the browser's frame pacing are worse than on an idle one - still renders inside the smooth region.</li>
+     *   <li>It gives the page's interpolator about six animation frames per keyframe, which is enough for tweening
+     *       to be doing real work rather than rounding.</li>
+     *   <li>Going faster costs bandwidth linearly - 50ms is twice the traffic for no measurable difference.</li>
+     * </ul>
      */
-    public static final Duration DEFAULT_UPDATE_INTERVAL = Duration.ofSeconds(1);
+    public static final Duration DEFAULT_UPDATE_INTERVAL = Duration.ofMillis(100);
 
     /**
      * Concurrent event streams allowed. Not a resource constraint - Vert.x costs a registration, not a thread, per
@@ -113,7 +134,9 @@ public class DashboardOptions {
     Set<String> extraAllowedHosts;
 
     /**
-     * How often the server re-reads the published snapshot, and the cadence it advertises to clients.
+     * The maximum rate the event stream sends at - at most one event per this interval - and the cadence the server
+     * advertises to clients. See {@link #DEFAULT_UPDATE_INTERVAL} for why it is a ceiling rather than a period, and
+     * why the default is what it is.
      */
     Duration updateInterval;
 

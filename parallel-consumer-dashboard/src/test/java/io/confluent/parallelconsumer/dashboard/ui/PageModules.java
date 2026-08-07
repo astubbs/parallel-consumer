@@ -56,6 +56,12 @@ final class PageModules {
      */
     static final String OFFSET_MODEL = "panels/offsets/model.js";
 
+    /**
+     * How long each tween runs for. Pure arithmetic over millisecond numbers, and DOM-free precisely so that the
+     * page's motion can be gated here rather than only by watching it.
+     */
+    static final String TWEEN = "tween.js";
+
     private final Context context;
 
     private final Path webRoot;

@@ -20,7 +20,8 @@
  * staleness is stated in words with an age beside it (plan R18).
  */
 
-import {clamp, formatDuration, formatInstant, interpolateNumber, setAttribute, setText} from './ui.js';
+import {formatDuration, formatInstant, interpolateNumber, setAttribute, setText} from './ui.js';
+import {isInterruption, nextGapEstimate, tweenFraction} from './tween.js';
 import {createOffsetsPanel} from './panels/offsets.js';
 
 /* ------------------------------------------------------------------ wiring */
@@ -86,6 +87,8 @@ const feed = {
     /** { document, monotonicMillis, wallClockMillis } for the newest and the one before it. */
     current: null,
     previous: null,
+    /** How long the next document is expected to take to arrive. See tween.js. Null until two have landed. */
+    gapEstimateMillis: null,
     documentsReceived: 0
 };
 
@@ -333,10 +336,16 @@ function acceptDocument(payload, source) {
             + 'instance is serving version ' + parsed.schemaVersion + '. Reload to pick up the page that ships with '
             + 'it; what is drawn below may be wrong.';
     }
-    feed.previous = feed.current;
+    const arrivedAt = performance.now();
+    const gapMillis = feed.current === null ? null : arrivedAt - feed.current.monotonicMillis;
+    // An interruption is not a cadence: dropping `previous` makes the next frame SNAP to the new sample instead of
+    // gliding across a hole, and clearing the estimate stops the hole becoming the next tween's duration
+    const interrupted = isInterruption(gapMillis, staleThresholdMillis());
+    feed.gapEstimateMillis = interrupted ? null : nextGapEstimate(feed.gapEstimateMillis, gapMillis);
+    feed.previous = interrupted ? null : feed.current;
     feed.current = {
         document: parsed,
-        monotonicMillis: performance.now(),
+        monotonicMillis: arrivedAt,
         wallClockMillis: Date.now()
     };
     feed.documentsReceived += 1;
@@ -359,10 +368,10 @@ function buildView(nowMonotonicMillis) {
     const previous = feed.previous;
     let fraction = 1;
     if (previous && !reducedMotion.matches) {
-        const gapMillis = current.monotonicMillis - previous.monotonicMillis;
-        if (gapMillis > 0) {
-            fraction = clamp((nowMonotonicMillis - current.monotonicMillis) / gapMillis, 0, 1);
-        }
+        // Sized from an ESTIMATE of the next gap, not from the last measured one. See tween.js - that asymmetry is
+        // what stops the motion-pause-motion this page used to have.
+        const durationMillis = feed.gapEstimateMillis || (current.monotonicMillis - previous.monotonicMillis);
+        fraction = tweenFraction(nowMonotonicMillis - current.monotonicMillis, durationMillis);
     }
     const currentDocument = current.document;
     const previousDocument = previous ? previous.document : null;

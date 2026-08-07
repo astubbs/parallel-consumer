@@ -180,7 +180,8 @@ class DashboardServerTest {
             }
         };
         try (DashboardServer server = new DashboardServer(exploding, null, DashboardTestSupport.testOptions()
-                // long enough that the stream route's timer never fires during this test
+                // the stream route only reads the publisher when a snapshot is published, and nothing here publishes
+                // one - but a ceiling this long makes that independent of timing either way
                 .updateInterval(Duration.ofMinutes(10))
                 .build()).start()) {
 

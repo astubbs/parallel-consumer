@@ -9,6 +9,8 @@ import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -33,10 +35,25 @@ import java.util.concurrent.TimeUnit;
  * {@code SnapshotPublisherTest} caught on the first run, and the reason the pair is an exposed value type rather than
  * two independent getters.
  * <p>
+ * <strong>Why publication is announced rather than polled for.</strong> A reader that wants every sample used to
+ * have no choice but to re-read {@link #getCurrent()} on a timer of its own, which is a poll: it arrives late by up
+ * to its own period, it runs when nothing has been published, and its period becomes an accidental floor on how
+ * fresh anything downstream can be. {@link #addListener(SnapshotListener)} removes the timer - a sample is announced
+ * at the instant it is published.
+ * <p>
+ * <strong>The listener contract is deliberately austere, and it is a hard constraint rather than advice.</strong>
+ * Listeners run on the control thread, inside the loop-end callback, so whatever a listener does is latency added to
+ * every single control loop iteration. A listener must therefore do nothing but hand off: set a flag, offer to a
+ * queue, wake another thread. It must not serialise anything, must not touch a socket, must not block on a lock, and
+ * must not wait on another thread. It is also handed no snapshot - only the fact that one exists - precisely so that
+ * the tempting shortcut of reading the value on this thread and carrying it somewhere is not the path of least
+ * resistance; a listener reads {@link #getSnapshots()} later, from wherever it does its real work.
+ * <p>
  * <strong>Fault isolation.</strong> A dashboard bug must not be able to stop a consumer. {@link #sampleOnce()}
- * catches {@link Throwable}, leaves the previously published pair in place, and logs at WARN with repeat
- * suppression - the control loop runs continuously, so an unsuppressed log line here would be a log flood, which is
- * its own outage.
+ * catches {@link Throwable} from both sampling and notification, leaves the previously published pair in place, and
+ * logs at WARN with repeat suppression - the control loop runs continuously, so an unsuppressed log line here would
+ * be a log flood, which is its own outage. A listener that throws is isolated from the control loop and from the
+ * other listeners.
  * <p>
  * Experimental: the dashboard module is opt-in and its API may change without notice.
  */
@@ -67,17 +84,24 @@ public class SnapshotPublisher {
     private volatile Snapshots snapshots = new Snapshots(null, null);
 
     /**
-     * Total failed sampling attempts since construction. Volatile because it is written on the control thread and
-     * read from anywhere - it is what a health endpoint would surface.
+     * Copy-on-write because the control thread iterates this on every single loop iteration while registration
+     * happens a handful of times in a process's life: iteration must be allocation-free and lock-free, and paying
+     * for that with an array copy per registration is the right way round.
      */
-    private volatile long sampleFailureCount;
+    private final List<SnapshotListener> listeners = new CopyOnWriteArrayList<>();
 
-    // failure-log suppression bookkeeping - touched only on the control thread
-    private String lastFailureSignature;
+    /**
+     * Sampling failures, kept separately from notification failures because they mean different things: a sampling
+     * failure means the page is showing a stale reading, a notification failure means a subscriber is broken while
+     * the reading itself is fine.
+     */
+    private final FailureLog samplingFailures = new FailureLog(
+            "Dashboard state sampling failed and was suppressed - the previously published snapshot is left in "
+                    + "place and the consumer is unaffected.");
 
-    private long lastFailureLoggedAtEpochMillis;
-
-    private long suppressedFailureCount;
+    private final FailureLog notificationFailures = new FailureLog(
+            "A dashboard snapshot listener threw and was suppressed - the snapshot was still published, the other "
+                    + "listeners still ran, and the consumer is unaffected.");
 
     public SnapshotPublisher(StateSampler sampler) {
         this.sampler = sampler;
@@ -114,12 +138,58 @@ public class SnapshotPublisher {
         try {
             fresh = sampler.sample();
         } catch (Throwable t) {
-            recordFailure(t);
+            samplingFailures.record(t);
             return;
         }
         // read-then-write of a field only ever written from the control thread, so no CAS is needed; the volatile
         // write is what makes the new pair visible to readers
         this.snapshots = new Snapshots(fresh, this.snapshots.getCurrent());
+        // AFTER the publish, never before: a listener that reacts by reading getSnapshots() must find the sample it
+        // was told about, not the one before it
+        notifyListeners();
+    }
+
+    /**
+     * Registers a listener to be told, on the control thread, that a new snapshot has been published. Read the
+     * class javadoc before writing one - the constraints on what it may do are not stylistic.
+     * <p>
+     * Registering the same listener twice registers it twice; this is a list, not a set, because a caller that
+     * genuinely wants two independent subscriptions from one object should be able to have them, and silently
+     * dropping a registration is a worse failure than an obvious duplicate.
+     */
+    public void addListener(SnapshotListener listener) {
+        if (listener != null) {
+            listeners.add(listener);
+        }
+    }
+
+    /**
+     * Deregisters a listener, if it is registered. A subscriber that is shutting down must call this: the publisher
+     * outlives the dashboard server, so a listener left behind is a leak that keeps calling into a closed object on
+     * every control loop iteration.
+     */
+    public void removeListener(SnapshotListener listener) {
+        listeners.remove(listener);
+    }
+
+    /**
+     * How many listeners are registered. Exists so a shutdown path can be asserted to have actually deregistered,
+     * which is the only way a leak of this kind is visible from outside.
+     */
+    public int getListenerCount() {
+        return listeners.size();
+    }
+
+    private void notifyListeners() {
+        for (SnapshotListener listener : listeners) {
+            try {
+                listener.onSnapshotPublished();
+            } catch (Throwable t) {
+                // one broken listener must not cost the others their notification, and none of them may cost the
+                // control loop anything at all
+                notificationFailures.record(t);
+            }
+        }
     }
 
     /**
@@ -155,25 +225,82 @@ public class SnapshotPublisher {
      * page is showing a stale reading and something in the sampler needs looking at.
      */
     public long getSampleFailureCount() {
-        return sampleFailureCount;
+        return samplingFailures.getCount();
     }
 
-    private void recordFailure(Throwable t) {
-        sampleFailureCount++;
-        String signature = t.getClass().getName() + ": " + t.getMessage();
-        long now = System.currentTimeMillis();
-        boolean isNewFault = !signature.equals(lastFailureSignature);
-        long sinceLastLog = now - lastFailureLoggedAtEpochMillis;
-        if ((isNewFault && sinceLastLog >= NEW_FAULT_LOG_FLOOR_MS) || sinceLastLog >= FAILURE_LOG_INTERVAL_MS) {
-            log.warn("Dashboard state sampling failed and was suppressed - the previously published snapshot is "
-                            + "left in place and the consumer is unaffected. {} identical failure(s) were not logged "
-                            + "since the last message; {} sampling attempts have failed in total.",
-                    suppressedFailureCount, sampleFailureCount, t);
-            lastFailureSignature = signature;
-            lastFailureLoggedAtEpochMillis = now;
-            suppressedFailureCount = 0;
-        } else {
-            suppressedFailureCount++;
+    /**
+     * How many listener notifications have thrown since construction. Zero is the expected value; anything else
+     * means a subscriber is broken while the published snapshot itself is fine.
+     */
+    public long getListenerFailureCount() {
+        return notificationFailures.getCount();
+    }
+
+    /**
+     * What a listener is told when a snapshot is published. Not a {@link Runnable} so that the constraints below have
+     * somewhere to live where an implementer will read them.
+     * <p>
+     * <strong>Runs on the control thread.</strong> Whatever this method does is added to the latency of every
+     * control loop iteration, on a loop that runs thousands of times a minute. So it must hand off and return: set a
+     * flag, offer to a non-blocking queue, wake an event loop. It must not serialise, must not do I/O, must not
+     * block, and must not wait on another thread.
+     * <p>
+     * It is handed no snapshot on purpose. Read {@link #getSnapshots()} from the thread that does the real work -
+     * see the class javadoc for why carrying a value off this thread is the shortcut worth designing out.
+     * <p>
+     * Experimental: the dashboard module is opt-in and its API may change without notice.
+     */
+    @InterfaceStability.Unstable
+    public interface SnapshotListener {
+
+        void onSnapshotPublished();
+    }
+
+    /**
+     * Repeat-suppressed WARN logging for a fault that recurs on every control loop iteration, with a count of what
+     * it swallowed.
+     * <p>
+     * One class used by both failure paths rather than two copies of the bookkeeping: the suppression rules are the
+     * interesting part and they are identical, so a second copy would be a second place for them to drift.
+     * <p>
+     * Not thread-safe, and does not need to be: every field is touched only from the control thread, except the
+     * count, which is volatile because a health endpoint reads it from anywhere.
+     */
+    private static final class FailureLog {
+
+        private final String what;
+
+        private volatile long count;
+
+        private String lastSignature;
+
+        private long lastLoggedAtEpochMillis;
+
+        private long suppressedSinceLastLog;
+
+        private FailureLog(String what) {
+            this.what = what;
+        }
+
+        long getCount() {
+            return count;
+        }
+
+        void record(Throwable t) {
+            count++;
+            String signature = t.getClass().getName() + ": " + t.getMessage();
+            long now = System.currentTimeMillis();
+            boolean isNewFault = !signature.equals(lastSignature);
+            long sinceLastLog = now - lastLoggedAtEpochMillis;
+            if ((isNewFault && sinceLastLog >= NEW_FAULT_LOG_FLOOR_MS) || sinceLastLog >= FAILURE_LOG_INTERVAL_MS) {
+                log.warn("{} {} identical failure(s) were not logged since the last message; {} failure(s) in "
+                        + "total.", what, suppressedSinceLastLog, count, t);
+                lastSignature = signature;
+                lastLoggedAtEpochMillis = now;
+                suppressedSinceLastLog = 0;
+            } else {
+                suppressedSinceLastLog++;
+            }
         }
     }
 

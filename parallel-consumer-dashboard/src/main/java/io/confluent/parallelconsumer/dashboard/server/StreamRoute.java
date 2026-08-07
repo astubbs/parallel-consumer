@@ -7,6 +7,7 @@ import io.confluent.parallelconsumer.dashboard.DashboardOptions;
 import io.confluent.parallelconsumer.dashboard.json.SnapshotJson;
 import io.confluent.parallelconsumer.dashboard.snapshot.PcSnapshot;
 import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
+import io.vertx.core.Context;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServerResponse;
@@ -35,19 +36,47 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code 503} with {@code Retry-After} so the client degrades to polling instead of treating the dashboard as broken
  * (KTD6). Existing streams are untouched by a rejection.
  *
- * <h2>How a snapshot reaches the wire, and the one honest caveat</h2>
+ * <h2>How a snapshot reaches the wire</h2>
  * <p>
- * {@link SnapshotPublisher} offers a volatile value, not a callback, so this class re-reads it on a timer at
- * {@link DashboardOptions#getUpdateInterval()} and emits when {@link PcSnapshot#getSampleSequence()} has moved. One
- * timer serves every subscriber, so N open tabs cost one read rather than N.
+ * This route <strong>subscribes</strong> to {@link SnapshotPublisher} through
+ * {@link SnapshotPublisher#addListener(SnapshotPublisher.SnapshotListener) addListener} and sends when a snapshot is
+ * published. It does not re-read the published value on a timer of its own.
  * <p>
- * The caveat, stated rather than hidden: if Parallel Consumer's control loop publishes faster than the update
- * interval, intermediate samples are <em>coalesced</em> - the client sees the latest, not every one. That is the
- * correct behaviour for a sampled operational view (plan R42) and it is what keeps client-side smoothing from ever
- * raising the sampling rate against the running instance (plan R19). It is not a guarantee of every sample.
+ * That distinction is the whole point of the endpoint. A timer re-reading a volatile is a poll wearing this
+ * protocol's clothes: it delivers a sample late by up to its own period, it wakes up when nothing has happened, and
+ * its period silently becomes the floor on how fresh the page can ever be. Turning that timer up would only produce
+ * a faster poll. So the timer is gone, and the only remaining time constant is a <em>ceiling</em> on the send rate -
+ * see below.
+ *
+ * <h2>Two threads, and the handoff between them</h2>
  * <p>
- * A newly-connected client is sent the current document immediately, before the next tick, so a tab opened between
- * ticks renders at once instead of showing an empty page for up to an interval.
+ * {@link #onSnapshotPublished()} runs on Parallel Consumer's control thread. It does one compare-and-set and, at
+ * most once per outstanding flush, one non-blocking task handoff to the event loop. It renders nothing, touches no
+ * socket, takes no lock and reads no snapshot. Everything expensive - reading the published pair, serialising it,
+ * writing it to N sockets - happens on the event loop in {@link #flush()}.
+ * <p>
+ * That split is not tidiness. confluentinc/parallel-consumer#618 is a scrape thread that evaluated a Parallel
+ * Consumer gauge off the control thread and got {@code ConcurrentModificationException: KafkaConsumer is not safe
+ * for multi-threaded access}; the snapshot design exists so that the HTTP layer can never be that thread. A
+ * subscriber that did its work inline would additionally put JSON encoding and socket writes on the critical path of
+ * every control loop iteration, which is a throughput regression in somebody else's consumer.
+ *
+ * <h2>The ceiling, and what it coalesces</h2>
+ * <p>
+ * Sampling happens on every control loop pass, which can be thousands of times a second, and nothing on a screen
+ * refreshing 60 times a second can use that. So {@link DashboardOptions#getUpdateInterval()} is a <em>maximum send
+ * rate</em>: at most one event per interval per client. It is a ceiling, not a period - when the instance is quiet,
+ * nothing is sent and nothing wakes up; when a sample arrives after a long silence it goes out immediately rather
+ * than waiting for a tick.
+ * <p>
+ * Inside a ceiling window, intermediate samples are <em>dropped, not queued</em>: the deferred flush sends whatever
+ * is newest when it runs. Queueing them would build an ever-growing backlog of stale frames on a fast instance,
+ * which is the failure mode where a live dashboard drifts further behind the longer you watch it. Coalescing is the
+ * correct behaviour for a sampled operational view (plan R42), and it is what keeps client-side smoothing from ever
+ * raising the sampling rate against the running instance (plan R19).
+ * <p>
+ * A newly-connected client is sent the current document immediately, so a tab opened between samples renders at once
+ * instead of showing an empty page.
  *
  * <h2>Reaping</h2>
  * <p>
@@ -61,7 +90,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @InterfaceStability.Unstable
 @Slf4j
-public final class StreamRoute implements Handler<RoutingContext>, AutoCloseable {
+public final class StreamRoute implements Handler<RoutingContext>, SnapshotPublisher.SnapshotListener, AutoCloseable {
 
     public static final String CONTENT_TYPE = "text/event-stream; charset=utf-8";
 
@@ -76,9 +105,29 @@ public final class StreamRoute implements Handler<RoutingContext>, AutoCloseable
      */
     static final long NOTHING_SENT_YET = -1L;
 
+    /**
+     * The floor on the reconnect delay this server suggests to {@code EventSource}. The send ceiling can be tens of
+     * milliseconds, and suggesting that as a reconnect delay would turn a server that has just died into a target
+     * for a client reconnecting ten times a second - the browser honours this number literally.
+     */
+    private static final long MINIMUM_RETRY_HINT_MILLIS = 1000;
+
+    /**
+     * How often the reaper sweeps, bounded at both ends: often enough that the idle timeout means roughly what it
+     * says, never more than once a second. Deliberately independent of the send ceiling - the two answer different
+     * questions, and deriving the sweep from the ceiling made a faster page also mean a hotter reaper.
+     */
+    private static final long MINIMUM_REAPER_PERIOD_MILLIS = 250;
+
+    private static final long MAXIMUM_REAPER_PERIOD_MILLIS = 1000;
+
     private final SnapshotPublisher publisher;
 
-    private final long updateIntervalMillis;
+    /**
+     * The coalescing ceiling: the shortest gap allowed between two events on one stream. See the class javadoc -
+     * this is a maximum rate, not a period, and nothing ticks at it.
+     */
+    private final long minSendIntervalMillis;
 
     private final long idleTimeoutMillis;
 
@@ -90,35 +139,111 @@ public final class StreamRoute implements Handler<RoutingContext>, AutoCloseable
 
     private final AtomicBoolean closed = new AtomicBoolean();
 
+    /**
+     * Set by the control thread to claim the single outstanding flush, cleared by the event loop when that flush
+     * actually sends. While it is set, further publications cost the control thread one failed compare-and-set and
+     * nothing else - which is what bounds this route's cost on the control loop no matter how fast the loop runs.
+     */
+    private final AtomicBoolean flushClaimed = new AtomicBoolean();
+
     private Vertx vertx;
 
-    private long broadcastTimerId = -1;
+    /**
+     * The one event-loop context every flush runs on - the first one and every deferred one. Captured once so that
+     * they are serialised against each other on a single thread, which is what lets {@link #lastSendMillis} be a
+     * plain field and what stops two flushes writing to one response concurrently.
+     * <p>
+     * Volatile because it is written by whichever thread called {@link #start(Vertx)} and read by Parallel
+     * Consumer's control thread in {@link #onSnapshotPublished()}.
+     */
+    private volatile Context context;
+
+    /**
+     * When the last event was written, for measuring the ceiling against. Event loop only.
+     */
+    private long lastSendMillis;
 
     private long reaperTimerId = -1;
 
     public StreamRoute(SnapshotPublisher publisher, DashboardOptions options) {
         this.publisher = publisher;
-        this.updateIntervalMillis = Math.max(1, options.getUpdateInterval().toMillis());
+        this.minSendIntervalMillis = Math.max(1, options.getUpdateInterval().toMillis());
         this.idleTimeoutMillis = Math.max(1, options.getStreamIdleTimeout().toMillis());
         this.maxConcurrentStreams = options.getMaxConcurrentStreams();
     }
 
     /**
-     * Starts the broadcast and reaper timers. Separate from construction so the route can be wired into a router
-     * before anything begins ticking.
+     * Subscribes to the publisher and starts the reaper sweep. Separate from construction so the route can be wired
+     * into a router before it starts receiving anything.
      */
     public void start(Vertx vertx) {
         this.vertx = vertx;
-        this.broadcastTimerId = vertx.setPeriodic(updateIntervalMillis, id -> broadcastIfNew(System.currentTimeMillis()));
-        // often enough that the timeout means roughly what it says, never so often that it is its own load
-        long reaperPeriod = Math.max(100, Math.min(updateIntervalMillis, idleTimeoutMillis / 4));
-        this.reaperTimerId = vertx.setPeriodic(reaperPeriod, id -> reap(System.currentTimeMillis()));
+        this.context = vertx.getOrCreateContext();
+        // backdated by a full ceiling so the very first sample after startup goes out at once rather than being
+        // deferred by an interval that has not conceptually started yet
+        this.lastSendMillis = System.currentTimeMillis() - minSendIntervalMillis;
+        // the reaper needs no particular context - it touches only concurrent structures - so it stays a plain
+        // periodic timer, unlike the flush path
+        this.reaperTimerId = vertx.setPeriodic(reaperPeriodMillis(), id -> reap(System.currentTimeMillis()));
+        if (publisher != null) {
+            publisher.addListener(this);
+        }
+    }
+
+    private long reaperPeriodMillis() {
+        return Math.max(MINIMUM_REAPER_PERIOD_MILLIS, Math.min(MAXIMUM_REAPER_PERIOD_MILLIS, idleTimeoutMillis / 4));
+    }
+
+    /**
+     * <strong>Runs on Parallel Consumer's control thread.</strong> Claims the single outstanding flush and hands it
+     * to the event loop; does nothing else, ever. See the class javadoc for why this method's cost is a hard
+     * constraint rather than a preference.
+     */
+    @Override
+    public void onSnapshotPublished() {
+        Context loop = this.context;
+        if (loop == null || closed.get()) {
+            return;
+        }
+        if (flushClaimed.compareAndSet(false, true)) {
+            loop.runOnContext(v -> flush());
+        }
+    }
+
+    /**
+     * <strong>Runs on the event loop.</strong> Sends the newest published snapshot, or - if the ceiling has not
+     * elapsed - arranges to do so when it has.
+     * <p>
+     * The claim is deliberately held across the deferral rather than released and re-taken. Holding it is what makes
+     * the wait <em>coalescing</em>: every sample published while the ceiling is still running finds the claim taken,
+     * costs the control thread one failed compare-and-set, and queues nothing. Exactly one deferred flush is ever
+     * outstanding, and when it runs it sends whatever is newest at that moment.
+     */
+    private void flush() {
+        if (closed.get()) {
+            flushClaimed.set(false);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long sinceLastSend = now - lastSendMillis;
+        if (sinceLastSend < minSendIntervalMillis) {
+            // setTimer inside a context handler binds to that context, so the deferred flush lands back on
+            // this same thread
+            vertx.setTimer(minSendIntervalMillis - sinceLastSend, id -> flush());
+            return;
+        }
+        // released BEFORE the snapshot is read, so a sample published during this send re-arms rather than being
+        // lost. The cost of getting that order wrong is a stream that silently stops on the last sample of a burst;
+        // the cost of this order is at worst one extra flush that broadcastIfNew finds nothing to do in.
+        flushClaimed.set(false);
+        lastSendMillis = now;
+        broadcastIfNew(now);
     }
 
     @Override
     public void handle(RoutingContext ctx) {
         if (!tryAcquireSlot()) {
-            long retryAfterSeconds = Math.max(1, (updateIntervalMillis + 999) / 1000);
+            long retryAfterSeconds = Math.max(1, (minSendIntervalMillis + 999) / 1000);
             ctx.response()
                     .setStatusCode(503)
                     .putHeader("Retry-After", Long.toString(retryAfterSeconds))
@@ -146,14 +271,20 @@ public final class StreamRoute implements Handler<RoutingContext>, AutoCloseable
         response.endHandler(v -> release(subscription));
 
         long now = System.currentTimeMillis();
-        // the reconnect hint the EventSource API honours natively, so the client needs no reconnect bookkeeping
-        deliver(subscription, "retry: " + updateIntervalMillis + "\n\n", now);
+        // the reconnect hint the EventSource API honours natively, so the client needs no reconnect bookkeeping.
+        // Floored: this is how hard a client hammers a server that has GONE, which is not the same question as how
+        // fast a healthy server may send.
+        deliver(subscription, "retry: " + Math.max(MINIMUM_RETRY_HINT_MILLIS, minSendIntervalMillis) + "\n\n", now);
         // and the current state at once, so a tab opened between ticks is not blank until the next one
         sendCurrent(subscription, now);
     }
 
     /**
-     * Re-reads the published snapshot and sends it to every subscription that has not already had that sample.
+     * Reads the published snapshot and sends it to every subscription that has not already had that sample.
+     * <p>
+     * The per-subscription sequence check is also what makes "do not resend an unchanged sample" true: a flush that
+     * finds the publisher has not moved since the last one writes nothing at all, rather than re-sending bytes the
+     * client already has.
      * <p>
      * The dedupe is <em>per subscription</em>, not global, and that is the point: a global "last broadcast sequence"
      * would either send a joining client the current sample twice (once on join, once on the next tick) or skip a
@@ -249,14 +380,17 @@ public final class StreamRoute implements Handler<RoutingContext>, AutoCloseable
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        if (vertx != null) {
-            if (broadcastTimerId >= 0) {
-                vertx.cancelTimer(broadcastTimerId);
-            }
-            if (reaperTimerId >= 0) {
-                vertx.cancelTimer(reaperTimerId);
-            }
+        // FIRST, before anything else is torn down: the publisher outlives this server, so a listener left
+        // registered would keep calling into a closed route on every control loop iteration for the life of the
+        // consumer
+        if (publisher != null) {
+            publisher.removeListener(this);
         }
+        if (vertx != null && reaperTimerId >= 0) {
+            vertx.cancelTimer(reaperTimerId);
+        }
+        // a deferred flush may already be armed; it has no id to cancel because at most one exists, and it checks
+        // `closed` on entry and returns without touching a subscription
         for (Subscription subscription : subscriptions) {
             closeQuietly(subscription);
             release(subscription);

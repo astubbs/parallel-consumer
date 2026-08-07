@@ -211,6 +211,64 @@ class SnapshotPublisherTest {
         assertThat(publisher.getSampleFailureCount()).isEqualTo(1);
     }
 
+    /**
+     * The property the event stream is built on: a subscriber is told at publication time, not on a timer of its
+     * own, and by the time it is told the snapshot it was told about is already readable.
+     */
+    @Test
+    void aListenerIsToldOnPublicationAndFindsTheSampleItWasToldAbout() {
+        SnapshotPublisher publisher = publisherOverFullyPopulatedRegistry();
+        List<Long> sequencesVisibleWhenTold = new ArrayList<>();
+        publisher.addListener(() -> sequencesVisibleWhenTold.add(publisher.getCurrent().getSampleSequence()));
+
+        publisher.sampleOnce();
+        publisher.sampleOnce();
+        publisher.sampleOnce();
+
+        assertThat(sequencesVisibleWhenTold)
+                .as("told once per publication, and never before the publication it is about")
+                .containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void aListenerThatThrowsIsIsolatedFromTheControlLoopAndFromTheOtherListeners() {
+        SnapshotPublisher publisher = publisherOverFullyPopulatedRegistry();
+        AtomicBoolean survivorRan = new AtomicBoolean();
+        publisher.addListener(() -> {
+            throw new IllegalStateException("a subscriber's problem is not the consumer's problem");
+        });
+        publisher.addListener(() -> survivorRan.set(true));
+
+        publisher.sampleOnce();
+
+        assertThat(survivorRan).as("one broken listener must not cost the others their notification").isTrue();
+        assertThat(publisher.getCurrent()).as("the snapshot was published regardless").isNotNull();
+        assertThat(publisher.getListenerFailureCount()).isEqualTo(1);
+        assertThat(publisher.getSampleFailureCount())
+                .as("a broken subscriber is not a sampling failure - the reading itself was fine")
+                .isZero();
+    }
+
+    /**
+     * A publisher outlives the dashboard that subscribed to it, so a subscriber that shuts down without
+     * deregistering is not merely untidy: it keeps being called on every control loop iteration for the rest of the
+     * consumer's life.
+     */
+    @Test
+    void aRemovedListenerIsNotCalledAgain() {
+        SnapshotPublisher publisher = publisherOverFullyPopulatedRegistry();
+        AtomicBoolean called = new AtomicBoolean();
+        SnapshotPublisher.SnapshotListener listener = () -> called.set(true);
+
+        publisher.addListener(listener);
+        assertThat(publisher.getListenerCount()).isEqualTo(1);
+        publisher.removeListener(listener);
+        assertThat(publisher.getListenerCount()).isZero();
+        publisher.sampleOnce();
+
+        assertThat(called).isFalse();
+    }
+
     @Test
     void registeringWiresSamplingIntoTheControlLoopEndCallback() {
         AbstractParallelEoSStreamProcessor<?, ?> pc = mock(AbstractParallelEoSStreamProcessor.class);

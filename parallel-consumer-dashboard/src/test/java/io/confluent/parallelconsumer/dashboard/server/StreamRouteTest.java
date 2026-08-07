@@ -72,6 +72,83 @@ class StreamRouteTest {
         }
     }
 
+    /**
+     * The difference between push and a poll wearing this protocol's clothes, made into an assertion.
+     * <p>
+     * The ceiling is set far longer than this test's patience. Under the timer this route used to run, an event
+     * could not reach the client until the next tick, so this sample would sit unsent for ten seconds. Pushed, it
+     * goes out at the moment it is published.
+     */
+    @Test
+    void aSampleIsSentWhenItIsPublishedRatherThanOnSomeLaterTick() throws IOException {
+        Duration ceilingLongerThanThisTestWillWait = Duration.ofSeconds(10);
+        try (DashboardServer pushed = new DashboardServer(publisher, null, DashboardTestSupport.testOptions()
+                .updateInterval(ceilingLongerThanThisTestWillWait)
+                .build()).start();
+             RawHttp.SseStream stream = RawHttp.openSse(pushed.getPort(), DashboardServer.STREAM_PATH)) {
+            stream.readEvent();
+
+            long startedAt = System.nanoTime();
+            publisher.sampleOnce();
+            RawHttp.SseEvent event = stream.readEvent();
+            long waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+
+            assertThat(event.id).isEqualTo("1");
+            assertThat(waitedMillis)
+                    .as("pushed on publication; a %s tick would have made this wait", ceilingLongerThanThisTestWillWait)
+                    .isLessThan(2000);
+        }
+    }
+
+    /**
+     * The control loop samples thousands of times a minute and no screen can use that, so the ceiling drops
+     * intermediate samples rather than queueing them - and, critically, the newest sample still arrives. A queue
+     * would instead deliver every one of them late, and drift further behind the longer the page stayed open.
+     */
+    @Test
+    void samplesArrivingFasterThanTheCeilingAreCoalescedAndTheNewestStillArrives() throws IOException {
+        int burst = 200;
+        Duration ceiling = Duration.ofMillis(300);
+        try (DashboardServer capped = new DashboardServer(publisher, null, DashboardTestSupport.testOptions()
+                .updateInterval(ceiling)
+                .build()).start();
+             RawHttp.SseStream stream = RawHttp.openSse(capped.getPort(), DashboardServer.STREAM_PATH)) {
+            stream.readEvent();
+
+            for (int i = 0; i < burst; i++) {
+                publisher.sampleOnce();
+            }
+
+            List<String> received = new ArrayList<>();
+            while (!received.contains(Long.toString(burst))) {
+                received.add(stream.readEvent().id);
+            }
+
+            assertThat(received)
+                    .as("%d samples inside a %s ceiling must not become %d events", burst, ceiling, burst)
+                    .hasSizeLessThan(10);
+            assertThat(received.get(received.size() - 1))
+                    .as("coalescing drops what is superseded; it must never drop what is newest")
+                    .isEqualTo(Long.toString(burst));
+        }
+    }
+
+    /**
+     * The publisher outlives the server that subscribed to it, so a listener left registered is not untidiness - it
+     * is a dead object being called on every control loop iteration for the rest of the consumer's life.
+     */
+    @Test
+    void closingTheServerDeregistersItsListenerFromTheControlLoop() {
+        SnapshotPublisher itsOwnPublisher = DashboardTestSupport.populatedPublisher();
+        DashboardServer own = new DashboardServer(itsOwnPublisher, null,
+                DashboardTestSupport.testOptions().build()).start();
+        assertThat(itsOwnPublisher.getListenerCount()).isEqualTo(1);
+
+        own.close();
+
+        assertThat(itsOwnPublisher.getListenerCount()).isZero();
+    }
+
     @Test
     void closingTheClientReleasesTheRegistrationRatherThanLeakingIt() throws IOException {
         RawHttp.SseStream stream = RawHttp.openSse(server.getPort(), DashboardServer.STREAM_PATH);
