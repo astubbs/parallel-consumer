@@ -241,9 +241,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * controller can be told apart from the broker poller.
      * <p>
      * Each field is read <em>exactly once</em> into a local and the snapshot is built from those locals, so it cannot
-     * contradict itself by re-reading a field that changed mid-construction. The failure cause is read first
-     * deliberately: a snapshot can then at worst report a failure alongside a slightly stale, healthy-looking state -
-     * never a healthy verdict for an instance that had already recorded a failure.
+     * contradict itself by re-reading a field that changed mid-construction.
+     * <p>
+     * The read order is load-bearing, and it is the reverse of the write order. Both failure paths write
+     * {@link #failureReason} <em>before</em> transitioning the state - see {@link #closeOnException} and the control
+     * loop's own error handling - so reading {@link #state} first means that whenever this observes a state a failure
+     * would have produced, the happens-before edge on that volatile read guarantees the cause it was paired with is
+     * visible too. Reading the cause first would allow the opposite interleaving: a {@code null} cause read just
+     * before the failure lands, paired with a {@link State#CLOSED} read just after it - which is exactly the shape of
+     * a clean shutdown, and would report a crash as one.
      * <p>
      * The two states are reported as they actually are, and are not folded together. Before {@link #poll} is ever
      * called, for example, the controller reads {@link State#UNUSED} while the poller's field already reads
@@ -255,9 +261,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     @Override
     public PCHealth getHealth() {
-        // read each volatile field exactly once, cause first - see Javadoc
-        final Exception failureCauseSnapshot = this.failureReason;
+        // read each volatile field exactly once, state before cause - order is load-bearing, see Javadoc
         final State controllerStateSnapshot = this.state;
+        final Exception failureCauseSnapshot = this.failureReason;
         final State pollerStateSnapshot = brokerPollSubsystem.getRunState();
 
         return PCHealth.builder()
