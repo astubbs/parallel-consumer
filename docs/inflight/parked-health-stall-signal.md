@@ -88,3 +88,31 @@ field can be added to it without touching the `ParallelConsumer` interface.
 - astubbs#29 owns the poll/lifecycle internals. This work touched only field modifiers on
   `state` / `failureReason` and added a read accessor to `BrokerPollSystem`; it did not
   reshape any transition.
+
+## Review residuals not actioned
+
+From the pre-merge review. Each was judged real but not worth blocking on; recorded so they
+are not rediscovered from scratch.
+
+- **`State` is a very generic name in the root public package.** Every sibling is qualified
+  (`PCHealth`, `PCMetrics`, `ParallelConsumerOptions`). A user doing a wildcard import who
+  also has their own `State` gets an ambiguous reference. `PCState` was proposed. Not taken:
+  the fork's value is being drop-in for upstream 0.5.x users, and the name is what upstream
+  called it. Frozen once 0.6.0.0 publishes — an enum has no shim.
+- **An interrupt that is not a requested close reads as a clean shutdown.** The control
+  loop's `catch (InterruptedException)` runs `doClose` without writing a failure cause, so
+  the snapshot is `CLOSED` with nothing to blame. `notifySomethingToDo()` interrupts the
+  control thread routinely, so this is a real path. Whether an unsolicited interrupt should
+  count as a failure is a design call.
+- **The read order in `getHealth()` has no test.** Swapping the two lines breaks nothing —
+  every health test reads a quiesced instance. A repeated concurrent-reader test asserting
+  that a `CLOSED` state never coexists with an absent cause after a crash would pin it.
+- **`PCHealth` is not `final`.** Lombok's generated all-args constructor is package-private
+  so external subclassing is blocked today, but that is an accident of Lombok's defaults
+  rather than stated intent.
+- **Serializing `PCHealth` straight out of an Actuator endpoint is likely to disappoint** —
+  an `Optional` needs `jackson-datatype-jdk8`, and an `Exception` field serializes to a
+  large, cycle-prone graph. Callers should map it into their own payload.
+- **If a future field on `PCHealth` is added as `@NonNull`**, every existing
+  `builder()...build()` call site keeps compiling and starts throwing at runtime. Add fields
+  as nullable or with `@Builder.Default`.
