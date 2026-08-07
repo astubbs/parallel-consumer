@@ -302,11 +302,249 @@ entries:
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
     fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [640], prs: [918, 919], related: [629, 631], status: open, last_checked: 2026-07-28}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57], prs: [918, 919], related: [629, 631], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
       Found by the 2026-07-28 sweep. #919 trims the user-function error log / moves
       full PollContext to DEBUG (fixes #640); #918 trims noisy WARN in
       RemovedPartitionState to topic-partition + size + epoch. Low-effort log
       cleanup; pairs with upstream issues #629/#631 (adoc Part 3 category 8).
+      2026-08-07: absorbed upstream #57 ("Reduce debug log output", closed by the
+      2023-07-07 admin sweep) as the umbrella for this family -- it is the same ask
+      at lower resolution. Core main sources carry ~224 debug/trace call sites; the
+      refactor #57 was waiting on (PartitionMonitor -> PartitionStateManager) has
+      since happened, so its precondition is satisfied. Upstream status now `mixed`:
+      #640 open, #57 closed-by-sweep.
 
+
+  # ---------------------------------------------------------------------------
+  # THE 2023 ADMINISTRATIVE SWEEPS
+  #
+  # Upstream ran two bulk clearouts before going quiet. Neither was a triage:
+  #   2023-06-15  eddyv        closed 35 unmerged PRs, comment "Closing - Stale."
+  #                            (34 of them astubbs'; only #464 had a real reason,
+  #                            "superseded by #485")
+  #   2023-07-07  johnbyrnejb  closed 28 issues, comment "Closing Issue", every one
+  #                            marked COMPLETED rather than "not planned"
+  #
+  # The `completed` state reason is why these never surfaced before: GitHub renders
+  # them as resolved, so they read as done at a glance and no symptom search finds
+  # them. Worse, `scripts/upstream-sweep.sh` searches `updated:>=last_swept`, so
+  # anything last touched in 2023 can NEVER appear in a sweep -- the entire cohort
+  # was structurally invisible to our own tooling. Seeded by hand on 2026-08-07.
+  #
+  # Do not trust the closure state of any 2023-era upstream item. Several of these
+  # issue bodies claim "Implemented in #NNN" where #NNN was itself swept unmerged
+  # (e.g. #372 -> PR #390, #319 -> PR #270, #203 -> PR #345, #191 -> PR #346).
+  # All swept PR head commits were verified reachable on 2026-08-07, so the work is
+  # recoverable; cite branch + SHA, not just the PR number.
+  # ---------------------------------------------------------------------------
+
+  - id: sweep-2023-admin-closure
+    group: governance
+    summary: Two upstream bulk closures (2023-06-15 PRs, 2023-07-07 issues) that closed live work as done
+    fork: {branches: [docs/mirror-2023-admin-sweep], prs: [], status: in-progress}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 29, 34, 40, 41, 48, 49, 50, 53, 57, 65, 119, 144, 154, 175, 183, 187, 191, 199, 203, 205, 246, 267, 319, 320, 372], prs: [22, 45, 46, 66, 81, 106, 143, 179, 181, 204, 220, 270, 271, 291, 300, 303, 316, 325, 345, 346, 356, 366, 390, 405, 408, 441, 442, 443, 464, 473, 488, 492, 494, 496, 506, 524], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      Meta-entry for the cohort; the individual work items follow. All 28 issues were
+      re-read in full (bodies + all 58 comments) and each verified against fork
+      source on 2026-08-07 rather than trusted from its thread. Result: 2 genuinely
+      already fixed (#41, #319), 6 partially addressed (#48, #53, #57, #65, #199,
+      #203), 20 fully open. Mirrored into the fork tracker under label
+      `upstream-admin-closed`.
+
+  - id: sweep-2023-already-fixed
+    group: governance
+    summary: "Swept issues verified already fixed in fork: #41 offset-scan removal, #319 shutdown CME"
+    fork: {branches: [], prs: [], status: merged}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [41, 319], prs: [270], related: [200, 269], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      Recorded so nobody re-investigates. #41: findCompletedEligibleOffsetsAndRemove
+      is gone; PartitionState.incompleteOffsets is a ConcurrentSkipListMap and
+      getOffsetHighestSequentialSucceeded() is a ceiling() lookup -- exactly the
+      proposed design. Its own comment still points at upstream #200 for "the
+      complete correct solution", so the exact variant remains open. #319: the CME
+      is structurally impossible now -- PartitionMonitor became PartitionStateManager
+      (#269), partitionStates is a ConcurrentHashMap, and getAssignedPartitions()
+      collects into a fresh map before any stream. Fixed by a different route than
+      PR #270, which was itself swept unmerged.
+
+  - id: sweep-2023-retry-lifecycle
+    group: features
+    summary: Retry expiry, stall detection and scheduled retry -- the unfinished half of the retry epic
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [65, 34, 48], prs: [366], related: [196, 310, 71, 82, 92, 197, 242], status: mixed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      Epic #65 was closed "completed" with two of five children still open upstream:
+      #196 (max retries + action on expiry) and #310 (DLQ, already fork-mirrored as
+      #149). #34 is the stall-detection umbrella; #48 wants a retry-at-time. Fork has
+      retryDelayProvider and PCRetriableException, but the exception carries no
+      Duration, so a delay discovered at the throw site cannot be expressed. Decide
+      the precedence order (exception > provider > default) ONCE across all four.
+      Draft of both remaining children: PR #366 astubbs/features/retry-dlq @e5bf77c9b.
+
+  - id: sweep-2023-api-shape
+    group: features
+    summary: "Per-topic handlers and separate consume/produce types -- one breaking API change, not two"
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [175, 372], prs: [390], related: [50], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      #175 (BDeus): ParallelStreamProcessor<K,V> shares one type pair between consume
+      and produce -- accepted upstream as "a breaking issue for the poll and produce
+      use case", labelled blocker, never fixed. #372: per-topic processing functions;
+      its body claims "Implemented in #390" but PR #390 was swept UNMERGED
+      (astubbs/features/streams @e2f1d53e4, recoverable). These want designing
+      together: per-topic handlers pay off precisely when topics carry different
+      types, which is what #175 blocks. Both are breaking -> major release.
+
+  - id: sweep-2023-consumer-api-exposure
+    group: features
+    summary: seekToBeginning and post-start subscription changes, both blocked on API thread safety
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [191, 187], prs: [346], related: [186, 520, 782], status: mixed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      Same blocker as fork mirrors #158 (upstream #520) and #174 (upstream #782):
+      KafkaConsumer is single-threaded, so any user-facing seek/subscribe must be
+      marshalled onto the poll thread. Upstream #186 (thread-safe APIs) is still
+      OPEN. Today PC.subscribe() writes straight to the raw consumer with no lock
+      while BrokerPollSystem polls it. #191's reporter (fowlerp-qlik) and a second
+      user (rrva) never got a working example of the shutdown/reseek workaround.
+      Implementation exists: PR #346 astubbs/features/consumer-interface @e67833f8d,
+      described upstream as working and used in experimental tests. Whoever picks up
+      #158 should close #174, #187 and #191 with it.
+
+  - id: sweep-2023-null-key-ordering
+    group: batching-ordering
+    summary: "KEY ordering serialises all null-key records into one shard (live defect)"
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [183], prs: [], related: [], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      rjoly-qlik, 2022-01: ~95% null-key order-independent traffic serialised because
+      KEY ordering treats null as a real key. NEVER RECEIVED A REPLY before being
+      closed as "completed". Mechanism confirmed in fork source:
+      ShardKey.KeyWithEquals.equals returns true when both keys are null (with a
+      matching hashCode branch), so every null-key record in a topic-partition maps
+      to one shard. Fix: key the unordered case by record offset (already unique
+      within the partition) behind an option defaulting to today's behaviour --
+      parallelising silently would be a correctness change for anyone relying on it.
+
+  - id: sweep-2023-async-produce
+    group: features
+    summary: Consume-process-produce still blocks on producer acks
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [29], prs: [356], related: [], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      ProducerManager.produceMessages() returns futures, but ParallelEoSStreamProcessor
+      immediately drains them with futureSend.get(sendTimeout). The source comment
+      naming PR #356 is still in the tree. Needs work-unit limbo state + back pressure
+      so producer timeouts do not feed themselves. Interacts with the produce lock in
+      PERIODIC_TRANSACTIONAL_PRODUCER: async produce changes when a commit cycle may
+      safely begin. Draft: PR #356 astubbs/improvements/async-process-send-results
+      @a89f0bce2.
+
+  - id: sweep-2023-tx-failure-taxonomy
+    group: rebalance-stability
+    summary: ProducerManager retries every transaction commit failure identically
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [144], prs: [], related: [112], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      commitOffsets still has one generic loop bounded by a constant literally named
+      arbitrarilyChosenLimitForArbitraryErrorSituation. ProducerFencedException is
+      singled out and rethrown; the rest (IllegalState, UnsupportedVersion,
+      Authorization, Kafka, Timeout, Interrupt) are undifferentiated despite having
+      different fatality. Design together with fork issue #225 (fencing should abort
+      and rejoin like Kafka Streams' TaskMigratedException) -- both are about giving
+      transaction failures a taxonomy. Upstream ideas on astubbs:tx-commit-failure.
+
+  - id: sweep-2023-broker-disconnect-commit
+    group: rebalance-stability
+    summary: Async offset-commit errors after broker downtime are logged and dropped
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [203], prs: [345], related: [185, 345], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      nioertel, 2022-03; never reproduced (reporter did not answer three diagnostic
+      questions), so this closure was the one arguably defensible on merits -- though
+      "completed" is still wrong. PARTIALLY addressed since: commitDeferringOnRebalance()
+      now defers RebalanceInProgress/CommitFailed instead of throwing or swallowing.
+      NOT addressed: PERIODIC_CONSUMER_ASYNCHRONOUS still only log.errors the callback
+      exception, with "// todo keep work in limbo until async response is received?"
+      still in source -- which matches the reported symptom exactly. Before any fix,
+      try to reproduce with the swept ChaosBroker harness: PR #345
+      astubbs/bugs/broker-disconnect @bc620f3b8.
+
+  - id: sweep-2023-topic-priority
+    group: batching-ordering
+    summary: Prioritise some subscribed topics over others via reserved concurrency shares
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [50], prs: [441], related: [372], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      Reservation model, not strict priority: a tier gets up to its share only if it
+      has records to use it, so low tiers are not starved. Nothing in ShardManager or
+      options expresses per-topic weighting today. The harder half is fetch-side --
+      prioritisation only bites among buffered records, so DynamicLoadFactor must know
+      the reservation targets or high-priority topics have nothing queued to promote.
+      Draft: PR #441 astubbs/features/queue-priority @383a87456. Has unanswered user
+      demand on the PR (C0mbatwombat, notification use-case).
+
+  - id: sweep-2023-scs-comparison-doc
+    group: governance
+    summary: "Spring Cloud Stream vs PC comparison -- already written upstream, never published"
+    fork: {branches: [], prs: [], status: ready}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [267], prs: [], related: [], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      Highest value-per-effort item in the cohort: rkolesnev wrote a full comparison
+      (threading, offsets, failure handling, back pressure) in the upstream thread and
+      it was never moved into docs. Preserved in the fork mirror body. Needs its
+      Spring-side claims re-verified against current versions and the "no Spring
+      integration" line updated before publishing. Fits fork #208 (docs site).
+
+  - id: sweep-2023-long-tail
+    group: features
+    summary: "Swept issues tracked but not scheduled: tracing, dynamic concurrency, rate limiting, proxy, Connect, multi-cluster, per-record tx, drain-to-plain-offsets, vertx verticle"
+    fork: {branches: [], prs: [], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 40, 49, 119, 154, 205, 320], prs: [22, 204, 443], related: [], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      All verified absent from fork source 2026-08-07. #28 tracing: re-scope to
+      OpenTelemetry (OpenTracing archived 2022); PC is a strong candidate because it
+      reorders work, which logs cannot show. #21 dynamic concurrency: distinct from
+      DynamicLoadFactor, which sizes the buffer feeding a fixed pool, not the pool
+      (draft PR #22 @ba6b71f10). #24 distributed rate limiting: note internal.RateLimiter
+      is unrelated (throttles status logging in tests). #119 Connect: reporter offered
+      to do the work and was told there was no demand; maintainer later had working
+      hacks both directions and judged "Connect sinks inside PC" publishable -- that
+      question was never answered. #154 proxy: largest item here, a product direction,
+      needs a lease/ack protocol and a lease-timeout story; PR #443 (Robbie-Palmer,
+      Python support) attacked the same goal from the client side. #320 multi-cluster:
+      open design question stands -- multiple PCs already work; gain would be a shared
+      concurrency budget. #205 vertx verticle: best argument is vert.x's blocked-thread
+      checker (draft PR #204 @02ab32894). #40 per-record tx: collapses throughput to
+      single-consumer, document as such. #49 drain-to-plain-offsets: building blocks
+      exist (getOffsetHighestSequentialSucceeded vs getOffsetHighestSucceeded).
+
+  - id: sweep-2023-decline-candidates
+    group: governance
+    summary: "Swept issues recommended for decline rather than carry: #53 exact encoding, #246 member sorting, #199 awaitility reason"
+    fork: {branches: [], prs: [], status: wontfix}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [53, 246, 199], prs: [46], related: [47], status: closed, last_checked: 2026-08-07}
+    adoc_anchor: null
+    notes: >
+      Mirrored for completeness, recommended closed. #53 says on its face that #47 may
+      suffice, and #47 is what shipped (USED_PAYLOAD_THRESHOLD_MULTIPLIER 0.75); only
+      revisit if that margin is shown to cost throughput (draft PR #46 @25340f898).
+      #246 member sorting would rewrite most files on first run, destroying git blame
+      continuity -- which matters more than usual for a fork tracing divergence from
+      upstream; import-sorting only is the defensible subset. #199 is largely moot:
+      failFast(String, Callable) is used across the suite; only the reason-from-failure-
+      cause form is missing. Check current Awaitility before spending anything.
