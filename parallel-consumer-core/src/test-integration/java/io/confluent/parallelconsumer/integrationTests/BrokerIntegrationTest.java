@@ -19,6 +19,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.TopicPartition;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
@@ -167,23 +168,49 @@ public abstract class BrokerIntegrationTest<K, V> {
     }
 
     /**
-     * Closes everything {@link #register(AutoCloseable)} was given, tolerating failures.
+     * How long a Kafka client gets to shut down during teardown before it is abandoned.
+     * <p>
+     * Failure isolation is not enough on its own here: {@code AutoCloseable#close()} on a KafkaProducer is
+     * effectively unbounded, and the clients this base class is asked to close are frequently ones a test
+     * deliberately broke - a fenced producer, a poisoned transaction, a consumer whose coordinator is gone. Those
+     * are exactly the closes that hang rather than throw, and a hang in teardown reports as the whole job timing
+     * out rather than as the test that caused it.
+     */
+    private static final Duration CLIENT_CLOSE_TIMEOUT = Duration.ofSeconds(10);
+
+    /**
+     * Closes everything {@link #register(AutoCloseable)} was given, tolerating failures and bounding the time each
+     * one may take.
      * <p>
      * Teardown only, and after every assertion has run, so a swallowed exception here cannot mask a result -
      * whereas a throw could. Tests that deliberately leave a client in a broken state (a fenced producer, a
      * producer whose transaction the broker already reaped) legitimately fail to close cleanly: that IS the
      * scenario, so it is logged and the remaining clients are still closed.
+     * <p>
+     * {@link Producer} and {@link Consumer} are special-cased onto their {@code close(Duration)} overloads because
+     * they are the two that offer one; anything else registered here is closed plainly, since there is no general
+     * way to bound an {@link AutoCloseable}.
      */
     @AfterEach
     void closeRegisteredTestClients() {
         for (AutoCloseable closeable : toClose) {
             try {
-                closeable.close();
+                closeBounded(closeable);
             } catch (Exception e) {
                 log.warn("Problem closing test client {} - tolerated during teardown", closeable, e);
             }
         }
         toClose.clear();
+    }
+
+    private static void closeBounded(AutoCloseable closeable) throws Exception {
+        if (closeable instanceof Producer) {
+            ((Producer<?, ?>) closeable).close(CLIENT_CLOSE_TIMEOUT);
+        } else if (closeable instanceof Consumer) {
+            ((Consumer<?, ?>) closeable).close(CLIENT_CLOSE_TIMEOUT);
+        } else {
+            closeable.close();
+        }
     }
 
     protected void setupTopic() {

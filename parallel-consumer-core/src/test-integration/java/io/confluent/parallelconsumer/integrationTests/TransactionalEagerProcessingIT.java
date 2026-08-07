@@ -22,6 +22,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
@@ -45,6 +46,7 @@ import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUt
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofMinutes;
 import static java.time.Duration.ofSeconds;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static org.awaitility.Awaitility.await;
 
@@ -98,6 +100,12 @@ import static org.awaitility.Awaitility.await;
  */
 @Tag("transactions")
 @Slf4j
+// Per-method timeout, following DrainingMemberRebalanceIT and the rest of this package. Without one, a thread
+// blocked on a broker call or a lock becomes a job that runs to the CI-level timeout with no failing test to
+// point at - which matters more here than anywhere else in this package, because this class deliberately blocks
+// threads on a lock. Comfortably above its own budget: two arms, each paying a PROGRESS_TIMEOUT prime, a
+// TRIGGER_TIMEOUT hold, a PROGRESS_TIMEOUT retry and a straggler window.
+@Timeout(900)
 class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, String> {
 
     /**
@@ -214,9 +222,18 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
      *     transaction itself, just reduces side effects" means, and it would be easy to mistake one for the
      *     other.</li>
      * </ol>
+     * <p>
+     * <b>C12 falls out of the same trigger</b>
+     * ({@link TransactionalClaim#PRODUCE_LOCK_TIMEOUT_RETRIES_RECORD} - "if the system cannot acquire the produce
+     * lock in time, it will fail the record processing and retry the record later"). Both arms force exactly that
+     * timeout, and both then watch the victim retried to success - the retry is awaited, not assumed. The observed
+     * negative control is assertion (2) above: removing the hold, one term with everything else identical, turns
+     * the run red on "never raised a produce-lock timeout", which is the control C12 lacked while it rested on
+     * {@code TransactionTimeoutsTest#produceTimeout} alone.
      */
     @Test
-    @ProvesClaim(TransactionalClaim.EAGER_PROCESSING_MAY_REPLAY)
+    @ProvesClaim({TransactionalClaim.EAGER_PROCESSING_MAY_REPLAY,
+            TransactionalClaim.PRODUCE_LOCK_TIMEOUT_RETRIES_RECORD})
     void eagerProcessingReplaysTheSideEffectOfARetriedRecordWhereStrictProcessingDoesNot() {
         Arm strict = new Arm("strict", false);
         int strictInvocations = strict.runTheTrigger();
@@ -294,6 +311,15 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
         private final AtomicInteger commitAttemptsDuringTheHold = new AtomicInteger();
 
         private final CountDownLatch holdReleased = new CountDownLatch(1);
+
+        /**
+         * Set if the control thread's interlock wait ever expired instead of being released. Expected to stay
+         * false - the interlock is only ever armed while this thread genuinely holds the write lock - and it is
+         * asserted rather than merely logged, because the alternative to a bounded wait is a control thread parked
+         * forever and a failure that surfaces only as the job's own timeout.
+         */
+        private final java.util.concurrent.atomic.AtomicBoolean interlockWaitExpired =
+                new java.util.concurrent.atomic.AtomicBoolean();
 
         private volatile boolean holdActive;
 
@@ -399,7 +425,19 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
                                 // the write lock - it would throw ConcurrentModificationException and kill the
                                 // instance. Expected never to run; counted so that if it does, the trigger's
                                 // failure message says so.
-                                holdReleased.await();
+                                //
+                                // Bounded, because this is the CONTROL thread: an unbounded await here parks the
+                                // whole instance for as long as whatever went wrong on the test thread lasts, and
+                                // the only report would be the CI job's timeout with no failing test to point at.
+                                // TRIGGER_TIMEOUT is the right bound - it is the same budget the test thread gives
+                                // the trigger it is holding the lock for.
+                                if (!holdReleased.await(TRIGGER_TIMEOUT.toMillis(), MILLISECONDS)) {
+                                    interlockWaitExpired.set(true);
+                                    log.error("Arm {}: the control thread waited {} for the produce-lock hold to be "
+                                            + "released and gave up. The test thread never reached its finally - "
+                                            + "letting the controller through so this surfaces as an assertion "
+                                            + "rather than as a hung job", name, TRIGGER_TIMEOUT);
+                                }
                             }
                             super.preAcquireOffsetsToCommit();
                         }
@@ -481,8 +519,33 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
             primeAndQuiesce();
 
             ReentrantReadWriteLock lock = producerTransactionLock();
+
+            // Armed BEFORE the lock is taken, deliberately: holdActive is what makes the control thread stop at
+            // the interlock, and the controller's own path is a check-then-act - it reads holdActive and only then
+            // reaches acquireCommitLock, which throws ConcurrentModificationException if this thread holds the
+            // write lock. Setting the flag first is what narrows that window; setting it after the grant would
+            // leave the whole acquisition open for a controller that had already read false.
             holdActive = true;
-            lock.writeLock().lock();
+
+            // tryLock, not lock(): the countdown that releases the interlock lives in the finally below, so a
+            // write lock that was never granted would leave this thread blocked before the try, the finally
+            // unreached, and the control thread parked in holdReleased.await() - two unbounded waits reported as
+            // nothing more than a job timeout.
+            boolean granted = lock.writeLock().tryLock(TRIGGER_TIMEOUT.toMillis(), MILLISECONDS);
+            if (!granted) {
+                // The flag is already set and a controller may already be waiting on the latch, so the failure
+                // path owes both back before it throws - otherwise the assertion below reports the real problem
+                // while the control thread stays parked on a latch nobody will ever count down.
+                holdActive = false;
+                holdReleased.countDown();
+            }
+            assertWithMessage("arm %s could not take the write side of the produce lock within %s, so the trigger "
+                            + "was never armed. Something else holds it - a worker still producing, or a commit in "
+                            + "flight - which means the arm was not quiescent when the hold was attempted", name,
+                    TRIGGER_TIMEOUT)
+                    .that(granted)
+                    .isTrue();
+
             try {
                 victimKey = getKcu().produceMessages(inputTopic, 1, name + "-" + VICTIM_KEYS).get(0);
                 log.info("Arm {}: produce lock held shut, victim record {} fed", name, victimKey);
@@ -503,6 +566,13 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
                 holdReleased.countDown();
             }
             log.info("Arm {}: trigger fired ({}), produce lock released", name, produceLockTimeouts());
+
+            assertWithMessage("arm %s: the control thread's interlock wait expired instead of being released by "
+                            + "the hold. The instance ran on with the write lock still held by the test thread, so "
+                            + "anything below is unsafe to read - and without the bound this would have been a hung "
+                            + "job rather than this message", name)
+                    .that(interlockWaitExpired.get())
+                    .isFalse();
 
             // the retry, which must succeed - otherwise the count below is of a record still failing rather than
             // of one that was retried across the window

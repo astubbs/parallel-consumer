@@ -22,8 +22,10 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidProducerEpochException;
 import org.apache.kafka.common.errors.ProducerFencedException;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
@@ -95,6 +97,13 @@ import static org.awaitility.Awaitility.await;
  */
 @Tag("transactions")
 @Slf4j
+// Per-method timeout, following DrainingMemberRebalanceIT and the rest of this package. Without one, a thread
+// blocked on a broker call or a lock becomes a job that runs to the CI-level timeout with no failing test to
+// point at. Comfortably above this class's own budget: crashAndReplay chains several 120s awaits - the priming
+// commit, the source offset, the read_uncommitted control, FENCING_TIMEOUT, the replay, the replayed offset -
+// plus the straggler window. Deliberately well under ABANDONED_TRANSACTION_TIMEOUT's role in the class: this is a
+// backstop for a hang, not a second budget the arms are expected to approach.
+@Timeout(900)
 class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
 
     private static final String ATTEMPT_ONE = "attempt-1";
@@ -207,6 +216,35 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
     // ---------------------------------------------------------------------------------------------------------
     // Fixture
     // ---------------------------------------------------------------------------------------------------------
+
+    /**
+     * The invariant every arm in this class rests on: the awaits between abandoning a transaction and reading the
+     * replayed results cannot run long enough for the broker to reap that transaction by itself.
+     * <p>
+     * Asserted on the constants, once per test, rather than on a measured elapsed time. Both waits throw the
+     * instant they expire, so comparing the measured elapsed against {@link #ABANDONED_TRANSACTION_TIMEOUT} after
+     * the fact could never be seen false - a guard nobody has watched fail is decoration. What can actually change
+     * is the budget: widen either await past the abandoned transaction's own timeout and a broker reap becomes an
+     * alternative explanation for the replay's prompt visibility, at which point every arm here proves less than
+     * it claims.
+     * <p>
+     * A {@code @BeforeEach} rather than a call inside {@link #crashAndReplay}, because
+     * {@link #abandonedTransactionIsInvisibleAndTheReplacementFencesItsProducer()} inlines the same
+     * fence-then-await sequence instead of going through it. The constants are class-wide, so the check belongs
+     * where every arm passes - including one written later that uses neither helper.
+     */
+    @BeforeEach
+    void theAwaitBudgetMustNotReachTheAbandonedTransactionTimeout() {
+        Duration worstCaseFromFencingToVisible = FENCING_TIMEOUT.plus(PROGRESS_TIMEOUT);
+        assertWithMessage("this class's own await budget (%s fencing + %s progress) has grown to meet or exceed the "
+                        + "abandoned transaction's timeout of %s. A run can now reach the point where the broker "
+                        + "has reaped the abandoned transaction by itself, which would make the replayed results "
+                        + "visible without any replacement having fenced anything - so either shorten the awaits or "
+                        + "lengthen ABANDONED_TRANSACTION_TIMEOUT", FENCING_TIMEOUT, PROGRESS_TIMEOUT,
+                ABANDONED_TRANSACTION_TIMEOUT)
+                .that(worstCaseFromFencingToVisible.compareTo(ABANDONED_TRANSACTION_TIMEOUT) < 0)
+                .isTrue();
+    }
 
     /**
      * Input and output topics, the priming record, a committed warm-up record on the output topic, and two
@@ -404,13 +442,6 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
 
         committed.awaitAllVisible(expectedResults(ATTEMPT_TWO, payloadKeys), PROGRESS_TIMEOUT);
         Duration untilVisible = Duration.ofNanos(System.nanoTime() - fencedAt);
-
-        assertWithMessage("the replayed results only became visible after %s, at or beyond the abandoned "
-                        + "transaction's own timeout of %s - so this could be the broker reaping a transaction "
-                        + "nobody fenced rather than a replacement taking over", untilVisible,
-                ABANDONED_TRANSACTION_TIMEOUT)
-                .that(untilVisible.compareTo(ABANDONED_TRANSACTION_TIMEOUT) < 0)
-                .isTrue();
 
         awaitSourceOffsetCommittedAt(PRIMING_RECORDS + payloadRecords);
 
@@ -727,6 +758,12 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                 + "failures captured during this run: %s", workerFailures.describe())
                 .that(visibleResultKeys())
                 .containsExactlyElementsIn(allInputKeys());
+
+        // Not redundant with the message above, which is only read if the multiset assertion has already failed.
+        // The defect this arm regression-tests has a worker-path failure as its literal signature - one per batch -
+        // and a PARTIAL regression (some batches fail, are retried, and eventually succeed) still leaves each
+        // result present exactly once. Without this the arm would go green with the defect live and logged.
+        assertNoWorkerThreadFailures();
     }
 
 }

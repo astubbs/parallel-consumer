@@ -13,6 +13,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
@@ -51,6 +52,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 @Tag("transactions")
 @Slf4j
+// Per-method timeout, following DrainingMemberRebalanceIT and the rest of this package. Without one, a thread
+// blocked on a broker call or a lock becomes a job that runs to the CI-level timeout with no failing test to
+// point at. Comfortably above this class's own budget: the worst arm is the transaction-timeout one, which pays a
+// 60s read_uncommitted wait, then the 120s TRANSACTION_REAP_TIMEOUT, then a 60s wait for the post-reap sentinel,
+// on top of broker and topic setup.
+@Timeout(600)
 class TransactionalVisibilityIT extends BrokerIntegrationTest<String, String> {
 
     private static final int RECORDS_PER_TRANSACTION = 4;

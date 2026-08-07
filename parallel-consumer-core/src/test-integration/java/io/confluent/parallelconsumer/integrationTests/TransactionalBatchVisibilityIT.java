@@ -21,6 +21,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
@@ -100,6 +101,11 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 @Tag("transactions")
 @Slf4j
+// Per-method timeout, following DrainingMemberRebalanceIT and the rest of this package. Without one, a thread
+// blocked on a broker call or a lock becomes a job that runs to the CI-level timeout with no failing test to
+// point at. Comfortably above this class's own budget: the failed-send arm chains four PROGRESS_TIMEOUT (120s)
+// awaits plus COMMIT_ATTEMPT_OBSERVATION_WINDOW, and the continuous-watch arm polls for the whole run.
+@Timeout(900)
 class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, String> {
 
     /**
@@ -392,34 +398,47 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
     }
 
     /**
-     * C7, first half - <b>REFUTED on master.</b> The claim is that one terminally failed send means the
-     * transaction never commits, so nothing it held ever becomes visible: neither the rest of that result set,
-     * nor the results of earlier input records the broker had already acknowledged into the same transaction.
-     * What actually happens is that the transaction commits anyway, carrying the part of the failing result set
-     * that was sent before the failure - so a source offset's produced records become <em>partly</em> visible.
+     * C7, first half - the regression record for a claim that <b>was REFUTED</b> until astubbs#261. The claim is
+     * that one terminally failed send means the transaction never commits, so nothing it held ever becomes
+     * visible: neither the rest of that result set, nor the results of earlier input records the broker had
+     * already acknowledged into the same transaction. Before the fix the transaction committed anyway, carrying
+     * the part of the failing result set that had been sent before the failure - so a source offset's produced
+     * records became <em>partly</em> visible. This method passes now; its job is to keep it that way.
      *
-     * <h2>What was observed</h2>
+     * <h2>What was observed, before astubbs#261</h2>
      * One input record returns five results, of which the middle one is 2MB and so is rejected by the producer
-     * itself against {@code max.request.size}. Results 0 and 1 are accepted into the open transaction, result 2
-     * fails, results 3 and 4 are never attempted. The instance neither fails nor shuts down, and the next commit
-     * succeeds: the {@code read_committed} verifier then sees {@code result|poison-key-0|0} and
-     * {@code result|poison-key-0|1} and nothing else of that set - <b>two of five</b> - alongside the complete
-     * result sets of the earlier records that shared the transaction.
+     * itself against {@code max.request.size}. Results 0 and 1 were accepted into the open transaction and result
+     * 2 failed; the throw described below escaped the send loop, so results 3 and 4 were never attempted at all.
+     * The instance neither failed nor shut down, and the next commit succeeded: the {@code read_committed}
+     * verifier then saw {@code result|poison-key-0|0} and {@code result|poison-key-0|1} and nothing else of that
+     * set - <b>two of five</b> - alongside the complete result sets of the earlier records that shared the
+     * transaction. Reproduced 2/2.
      *
-     * <h2>Why</h2>
-     * {@code ProducerManager#produceMessages} installs a {@code Callback} - the one its own comment describes as
-     * "only needed if not using tx" - which throws {@code InternalRuntimeException} from
+     * <h2>Why it happened</h2>
+     * {@code ProducerManager#produceMessages} installed a {@code Callback} - the one its own comment described as
+     * "only needed if not using tx" - which threw {@code InternalRuntimeException} from
      * {@code Callback#onCompletion}. {@code KafkaProducer#doSend} invokes that callback from inside its
      * {@code catch (ApiException)} handler and calls {@code transactionManager.maybeTransitionToErrorState(e)}
-     * only <em>afterwards</em>. The throw escapes the handler first, so the transaction is never moved into the
-     * abortable-error state that would have forced an abort, and the next commit is accepted with a partial
-     * result set inside it. PC has no other mechanism for the case either: a failed {@code WorkContainer} leaves
+     * only <em>afterwards</em>. The throw escaped the handler first, so the transaction was never moved into the
+     * abortable-error state that would have forced an abort, and the next commit was accepted with a partial
+     * result set inside it. PC had no other mechanism for the case either: a failed {@code WorkContainer} leaves
      * the records that were already sent sitting in the transaction, and only an abort could remove them.
      * <p>
-     * The same observation falsifies C2's sentence - "All records produced from a given source offset will
-     * either all be visible, or none will be" - under the same conditions. C2 is currently recorded
-     * {@code PROVED} on the strength of arms that never make a send fail; re-triaging it is the maintainer's
-     * call, not this test's.
+     * astubbs#261 makes that callback non-throwing when the producer is transactional. The client's own
+     * {@code maybeTransitionToErrorState} therefore runs, the transaction becomes abortable, and nothing it held
+     * can commit. The send loop is no longer unwound by a throw either, so the results after the failing one are
+     * attempted rather than skipped - which is why the "never attempted" detail above is history and not a
+     * description of the current path. The negative control is not synthetic: restoring the unconditional throw,
+     * one term with everything else identical, reproduces "poison-key-0 has 2 of 5" exactly and fails only this
+     * assertion.
+     *
+     * <h2>Current disposition</h2>
+     * The same observation falsified C2's sentence - "All records produced from a given source offset will either
+     * all be visible, or none will be" - under the same conditions, because C2's other arms never make a send
+     * FAIL. With astubbs#261 merged, <b>both C2 and C7 are recorded {@code PROVED}</b>, and both rest on this
+     * method: it is the only arm in the register that exercises the failing-send path, so it is the regression
+     * cover for both. If this method is ever disabled or deleted, those two statuses stop being supported by
+     * anything and must be re-triaged rather than left standing.
      *
      * <h2>Structure of the assertions</h2>
      * The earlier records are what make this a proof rather than a restatement. Their results are shown to be on
@@ -428,7 +447,7 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
      * send happened.
      * <p>
      * The sentinel at the end is the same device {@code TransactionalVisibilityIT#abortedTransactionRecordsAreNeverVisible}
-     * uses, and it is what would keep this test honest if the defect were fixed: a record committed by an
+     * uses, and it is what keeps this test honest now that the defect is fixed: a record committed by an
      * unrelated producer <em>after</em> the poisoned transaction is resolved. The verifier consuming it proves
      * it read PAST the region, so "it never saw those results" would be a statement about records it had every
      * opportunity to see - and not about a still-open transaction pinning the last stable offset, which would

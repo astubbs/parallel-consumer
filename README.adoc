@@ -954,11 +954,21 @@ CAUTION: This cannot be true for any externally integrated third party system, u
 The guarantees on this page are enumerated as a register (`TransactionalClaim`) and each one is tied to a test.
 A build fails if a claim recorded as covered has no test, and also if a claim's sentence here is edited without updating the register - so this section cannot quietly drift from what is actually verified.
 
-*Verified against a real broker, each with a negative control that was observed to fail:* all parallel workers share one bulk transaction; an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; no record reaches the broker whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval is reduced to 100ms only when you have not set one.
+The distinction between the two lists below is deliberate, because it is what the evidence actually supports.
 
-Also verified: if one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - none of that result set becomes visible.
-That case used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
+*Verified against a real broker:* an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; a `read_committed` consumer is blocked at the first still-open transaction rather than filtering around it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; and if one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - none of that result set becomes visible.
+
+*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
+These are real proofs of PC's own logic, but no broker takes part in them - so read them as statements about what PC does, not about what a cluster observed.
+
+Each claim in both lists has a negative control that was observed to fail: the mechanism it guards was deliberately broken and the test went red for the stated reason.
+
+The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
 It was found by these tests and fixed; the test that found it is now the regression test.
+
+*Known gap, not fixed:* the commit-interval default is applied by comparing your configured value against the default by reference identity, so explicitly setting `commitInterval(Duration.ofSeconds(5))` - the same value as the non-transactional default - is treated as "not set" and silently replaced with 100ms.
+Any other explicit value survives.
+See `docs/inflight/bug-commit-interval-identity-check.md`.
 
 Two guarantees are attributed rather than re-proved here, and are marked as such in the register: the commit-lock timeout failing fast, and the produce-lock timeout returning the record for retry.
 Both are covered by existing tests, but no negative control was observed for either, so neither is recorded as proved.

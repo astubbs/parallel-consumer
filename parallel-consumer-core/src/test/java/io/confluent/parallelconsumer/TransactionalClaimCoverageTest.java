@@ -161,6 +161,19 @@ class TransactionalClaimCoverageTest {
                 .isEmpty();
     }
 
+    private static final String DISABLED = "org.junit.jupiter.api.Disabled";
+
+    private static final String QUARANTINED = Quarantined.class.getName();
+
+    /**
+     * The JUnit annotations that actually make a method an executable test. A {@link ProvesClaim} on a method
+     * carrying none of them is a private helper, however well named.
+     */
+    private static final List<String> EXECUTABLE_TEST_ANNOTATIONS = java.util.Arrays.asList(
+            "org.junit.jupiter.api.Test",
+            "org.junit.jupiter.params.ParameterizedTest",
+            "org.junit.jupiter.api.RepeatedTest");
+
     /**
      * A {@link ProvesClaim} on a method no test runner would ever execute is coverage on paper only.
      * <p>
@@ -169,6 +182,14 @@ class TransactionalClaimCoverageTest {
      * every integration-lane claim proof, which is most of the visibility half of this register. Mirrors
      * {@link TestConventionRules#test_classes_must_be_named_so_surefire_collects_them} and its integration-test
      * exemption.
+     * <p>
+     * Where the class lives is only half of "will it run". A method the runner <em>collects</em> but never
+     * <em>executes</em> is the same failure wearing a better disguise, and it fails in the direction that keeps the
+     * register green: the claim stays recorded as covered while nothing exercises it. Three ways that happens, all
+     * rejected here - no executable JUnit annotation at all, {@code @Disabled}, and {@link Quarantined}. The last
+     * is not hypothetical: quarantining is a sanctioned move in this repo and the default {@code excluded.groups}
+     * drops the tag from the gating lanes, so an ordinary, correct quarantine would silently hollow out a claim.
+     * The annotation on the owning class counts too - it disables or excludes every method in it.
      */
     @Test
     void claimProofsMustLiveWhereATestRunnerWillFindThem() {
@@ -176,6 +197,7 @@ class TransactionalClaimCoverageTest {
         for (JavaMethod method : claimProvingMethods()) {
             String className = method.getOwner().getName();
             String simpleName = method.getOwner().getSimpleName();
+            String where = className + "#" + method.getName();
 
             boolean failsafeCollects = className.contains(".integrationTest")
                     || className.contains(".integrationTests");
@@ -186,13 +208,34 @@ class TransactionalClaimCoverageTest {
             boolean nested = method.getOwner().isAnnotatedWith("org.junit.jupiter.api.Nested");
 
             if (!failsafeCollects && !surefireCollects && !nested) {
-                unreachable.add(className + "#" + method.getName());
+                unreachable.add(where + " - its class is collected by neither surefire "
+                        + "(Test*/*Test/*Tests/*TestCase) nor failsafe (an integrationTest(s) package)");
+            }
+
+            if (EXECUTABLE_TEST_ANNOTATIONS.stream().noneMatch(annotation -> method.isAnnotatedWith(annotation))) {
+                unreachable.add(where + " - carries no @Test, @ParameterizedTest or @RepeatedTest, so no runner "
+                        + "will ever execute it");
+            }
+
+            if (method.isAnnotatedWith(DISABLED)) {
+                unreachable.add(where + " - is @Disabled");
+            } else if (method.getOwner().isAnnotatedWith(DISABLED)) {
+                unreachable.add(where + " - its class " + simpleName + " is @Disabled");
+            }
+
+            if (method.isAnnotatedWith(QUARANTINED)) {
+                unreachable.add(where + " - is @Quarantined, so the gating lanes exclude it");
+            } else if (method.getOwner().isAnnotatedWith(QUARANTINED)) {
+                unreachable.add(where + " - its class " + simpleName + " is @Quarantined, so the gating lanes "
+                        + "exclude it");
             }
         }
 
-        assertWithMessage("These methods claim to prove a documented guarantee but sit in a class neither surefire "
-                + "(Test*/*Test/*Tests/*TestCase) nor failsafe (an integrationTest(s) package) would collect, so "
-                + "they never run and the claim is covered on paper only")
+        assertWithMessage("These methods claim to prove a documented guarantee but will not actually run - either "
+                + "nothing collects them, or nothing executes them. A claim whose only proof is disabled, "
+                + "quarantined or unannotated is covered on paper only: move the claim to NOT_YET_COVERED with a "
+                + "reason naming its owner until a test that really runs proves it again, rather than leaving the "
+                + "register asserting coverage nothing exercises")
                 .that(unreachable)
                 .isEmpty();
     }

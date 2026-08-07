@@ -216,15 +216,24 @@ public enum TransactionalClaim {
             + "documented fail-fast behaviour"),
 
     /**
-     * C12 - already proved by {@code TransactionTimeoutsTest#produceTimeout}; U3 attributes it rather than
-     * reproving it.
+     * C12 - attributed to {@code TransactionTimeoutsTest#produceTimeout}, and separately proved with an observed
+     * control by the eager-processing trigger.
      */
     PRODUCE_LOCK_TIMEOUT_RETRIES_RECORD(Source.OPTIONS_JAVADOC,
             "If the system cannot acquire the produce lock in time, it will fail the record processing and retry "
                     + "the record later.",
-            Status.COVERED_NO_CONTROL, "TransactionTimeoutsTest#produceTimeout - attributed by U3, not reproved. No "
-            + "negative control: broker-bound, so outside the lane U3 ran, and the retry it asserts is driven by a "
-            + "5s sleep injected into the commit path rather than by anything U3 can flip"),
+            Status.PROVED, "Covered twice, and only the second has a control. "
+            + "TransactionTimeoutsTest#produceTimeout is the original attribution (U3, not reproved): it asserts "
+            + "the retry, but the timeout is driven by a 5s sleep injected into the commit path rather than by "
+            + "anything that can be flipped one term at a time, so on its own this claim sat COVERED_NO_CONTROL. "
+            + "TransactionalEagerProcessingIT#eagerProcessingReplaysTheSideEffectOfARetriedRecordWhereStrictProcessingDoesNot "
+            + "supplies what was missing: it holds the write side of ProducerManager's producerTransactionLock shut "
+            + "until a worker's acquisition is OBSERVED to time out - main's own 'acquire produce lock' failure - "
+            + "feeds one victim record, releases, and then awaits that record's result becoming visible, so the "
+            + "retry is watched to success rather than assumed. Negative control observed (U6, third of three): "
+            + "removing the hold - one term, everything else identical - turns it red on the non-vacuity guard, "
+            + "'never raised a produce-lock timeout ... Worker-path failures seen: []'. That is a control on the "
+            + "timeout itself, which is the term this claim turns on"),
 
     /**
      * C13 - the documented cost of eager processing during commit.
@@ -324,23 +333,44 @@ public enum TransactionalClaim {
             }
             StringBuilder sb = new StringBuilder();
             boolean inRegion = startMarker == null;
+            boolean sawStart = startMarker == null;
+            boolean sawEnd = endMarker == null;
             for (String line : lines) {
                 if (startMarker != null && line.contains(startMarker)) {
                     inRegion = true;
+                    sawStart = true;
                     continue;
                 }
                 if (endMarker != null && line.contains(endMarker)) {
                     inRegion = false;
+                    sawEnd = true;
                 }
                 if (inRegion) {
                     sb.append(stripJavadocPrefix(line)).append(' ');
                 }
             }
-            if (startMarker != null && sb.length() == 0) {
-                throw new IllegalStateException("marker '" + startMarker + "' not found in " + file
+            if (!sawStart) {
+                throw new IllegalStateException("start marker '" + startMarker + "' not found in " + file
                         + " - the tag was renamed or removed, so the register can no longer verify itself");
             }
-            return normalise(sb.toString());
+            // Checked explicitly rather than inferred from the text collected, because losing the end marker fails
+            // in the direction that keeps this check GREEN: the region runs to end-of-file, the "published text"
+            // silently becomes the whole rest of the source, and a claim moved out of the rendered tag region -
+            // exactly what the tag bounds exist to catch - still matches.
+            if (!sawEnd) {
+                throw new IllegalStateException("end marker '" + endMarker + "' not found in " + file
+                        + " - the region is unbounded and runs to the end of the file, so this check would accept a "
+                        + "claim that has been moved off the rendered page. Restore the marker.");
+            }
+            String published = normalise(sb.toString());
+            if (published.isEmpty()) {
+                throw new IllegalStateException(startMarker == null
+                        ? "claim source " + file + " is empty - there is no published text to check claims against"
+                        : "the region between '" + startMarker + "' and '" + endMarker + "' in " + file
+                        + " is empty - both markers are present but nothing is published between them, so every "
+                        + "claim taken from this source would drift at once");
+            }
+            return published;
         }
 
         private static String stripJavadocPrefix(String line) {

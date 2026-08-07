@@ -137,7 +137,7 @@ class ProducerManagerTest {
      * {@link io.confluent.parallelconsumer.ParallelEoSStreamProcessor#pollAndProduce} does.
      * <p>
      * This is load-bearing, not tidying: the lock must not be released until the work has reached the
-     * controller's inbound queue - see {@link io.confluent.parallelconsumer.state.WorkContainer#onPostAddToMailBox},
+     * controller's inbound queue - see {@link AbstractParallelEoSStreamProcessor#cleanUpContext},
      * which states the invariant and is the sanctioned release point. Releasing it inside the user function opens
      * a window in which the controller can take the commit lock, drain a mailbox that does not yet contain this
      * work, and commit an offset one behind - the ~1-in-6 flake written up in
@@ -154,13 +154,13 @@ class ProducerManagerTest {
     /**
      * The guard from {@code docs/plans/2026-08-03-001} §11: the produce lock must still be owned by the context
      * when the user function returns, because that ownership is what defers release to
-     * {@link io.confluent.parallelconsumer.state.WorkContainer#onPostAddToMailBox}. Reintroduce hand-managed
+     * {@link AbstractParallelEoSStreamProcessor#cleanUpContext}. Reintroduce hand-managed
      * unlocking in a user function and this fails deterministically, instead of coming back as a flake that also
      * takes the whole PIT mutation lane down with it.
      */
     private static void assertProduceLockStillOwnedByContext(PollContextInternal<String, String> context) {
         Truth.assertWithMessage("produce lock must still be owned by the context when the user "
-                        + "function returns, so release is deferred to onPostAddToMailBox")
+                        + "function returns, so release is deferred to cleanUpContext")
                 .that(context.getProducingLock().isPresent())
                 .isTrue();
     }
@@ -530,11 +530,13 @@ class ProducerManagerTest {
 
                         @Override
                         protected void addToMailbox(PollContextInternal<String, String> pollContext, WorkContainer<String, String> wc) {
-                            // Stamped BEFORE super, deliberately: super both enqueues the work AND releases the
-                            // produce lock (via onPostAddToMailBox). Stamping after it would race the controller's
-                            // acquisition and make the ordering assertion non-deterministic - while stamping
-                            // before it is conservative, as the produce lock is provably still held at this
-                            // instant.
+                            // Stamped BEFORE super, deliberately: super only enqueues the work - the produce lock
+                            // is released later, in runUserFunction's finally, by
+                            // AbstractParallelEoSStreamProcessor#cleanUpContext. Stamping before the enqueue is
+                            // therefore the conservative choice: the produce lock is provably still held at this
+                            // instant, so the stamp cannot be later than the moment the work became visible to the
+                            // controller, and the ordering assertion cannot pass on a technicality of when the
+                            // stamp was taken.
                             if (wc.offset() == OFFSET_HELD_BY_PARKED_WORKER) {
                                 workReachedMailboxAt.compareAndSet(0, sequence.incrementAndGet());
                             }

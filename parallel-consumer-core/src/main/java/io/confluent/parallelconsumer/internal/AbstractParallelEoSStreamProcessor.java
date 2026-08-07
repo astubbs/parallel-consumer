@@ -1435,7 +1435,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void cleanUpContext(final PollContextInternal<K, V> context) {
         context.takeProducingLock().ifPresent(lock -> producerManager
                 // a lock can only exist because a ProducerManager handed it out
-                .orElseThrow(() -> new InternalRuntimeException("Produce lock held, but there is no producer manager to return it to"))
+                .orElseThrow(() -> {
+                    // Logged as well as thrown, deliberately. This runs in runUserFunction's finally, on a worker
+                    // thread, and an exception thrown from here is captured into WorkContainer#future - which
+                    // nothing in main reads (docs/inflight/bug-worker-future-swallows-framework-exceptions.md).
+                    // Without this line the loudest signal available for an impossible state would be silent.
+                    log.error("Produce lock held for {}, but there is no producer manager to return it to - the "
+                            + "lock cannot be released and the next transaction commit will block on it", context);
+                    return new InternalRuntimeException("Produce lock held, but there is no producer manager to return it to");
+                })
                 .finishProducing(lock));
     }
 

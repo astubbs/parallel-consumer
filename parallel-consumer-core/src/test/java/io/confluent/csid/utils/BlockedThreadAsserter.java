@@ -77,8 +77,15 @@ public class BlockedThreadAsserter {
         // The measured elapsed is therefore systematically SHORT, and `isAtLeast(unblocksAfter)` fails by a
         // millisecond or two whenever the machine is busy enough to widen that gap. Seen as
         // "expected at least PT1S but was PT0.999S" in a full-suite run that passes when the class runs alone.
-        // Measuring from here instead makes the comparison sound rather than merely tolerant - no assertion is
-        // weakened, and the failure it used to produce said nothing about the code under test.
+        // Measuring from here instead is not free, and the residual error is worth naming rather than claiming
+        // there is none. This stamp is taken just BEFORE schedule(), and the scheduler computes the trigger
+        // instant inside that call, so the window measured is longer than the true one by the cost of arming.
+        // The assertion can therefore still pass for a blocked call that returned a sub-millisecond interval
+        // early. That is a strictly better trade than what it replaces: the error is now sub-millisecond and in
+        // the SAFE direction (measuring slightly long, so a genuinely early return is still caught unless it is
+        // early by less than the arming cost), instead of systematic and in the unsafe direction of failing a
+        // correct implementation. The strictly correct form would be for the scheduled task to record its own
+        // start nanos and for the assertion to measure against that.
         final long armedAtNanos = System.nanoTime();
         scheduledExecutorService.schedule(() -> {
                     log.debug("Running unblocking function - blocked function should return ONLY after this (which will be tested)");

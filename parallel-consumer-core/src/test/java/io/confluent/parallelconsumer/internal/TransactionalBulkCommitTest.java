@@ -188,7 +188,7 @@ class TransactionalBulkCommitTest {
             Function<PollContextInternal<String, String>, List<Object>> userFunc = context -> {
                 // Acquire against the real context and hand the lock to it, exactly as
                 // ParallelEoSStreamProcessor#processAndProduceResults does. Release is then deferred to
-                // WorkContainer#onPostAddToMailBox, so the offset cannot be committed before its produced
+                // AbstractParallelEoSStreamProcessor#cleanUpContext, so the offset cannot be committed before its produced
                 // record is inside the transaction.
                 try {
                     context.setProducingLock(Optional.of(producerManager.beginProducing(context)));
