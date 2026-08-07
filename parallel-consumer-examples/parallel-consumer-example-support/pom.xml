@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-examples</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-example-support</artifactId>
+    <name>Kafka Parallel Consumer Example - Shared Support</name>
+
+    <!-- Scaffolding shared by the example modules: the parts of an example a reader does NOT copy
+         (in-flight/peak observation, the run summary block, the simulated dependency shape, the demo
+         record generator). Deliberately framework-agnostic - core, metrics, vertx and reactor examples
+         all depend on it, so nothing vertx- or reactor-specific may be added here.
+
+         Like every module under the examples aggregator this is NOT published: it inherits
+         maven.deploy.skip / maven.install.skip / gpg.skip / skipPublishing from the aggregator, and both
+         .github/workflows/publish.yml and release.yml name it in their -pl exclusion lists.
+
+         The test-jar (produced by the maven-jar-plugin test-jar execution inherited from the root pom)
+         carries ExampleMockConsumers for the other example modules' tests. It lives here rather than in
+         parallel-consumer-core's test-jar, which IS signed and published - examples-only scaffolding
+         must not enter a published artifact's surface. -->
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
