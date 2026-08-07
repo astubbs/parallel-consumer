@@ -121,8 +121,10 @@ function suspectRefs(files, opts = {}) {
 // by EXEMPT_PATHS, and an author reading `<PR body>: #857` knows at once that no file is at fault.
 const PR_BODY_LABEL = "<PR body>";
 
-// ``` or ~~~, optionally indented up to three spaces, per CommonMark.
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// ``` or ~~~, optionally indented up to three spaces, per CommonMark. Group 1 is the delimiter run,
+// group 2 the rest of the line: the info string on an opening fence, and on a closing fence the
+// thing CommonMark does not permit at all.
+const FENCE = /^ {0,3}((?:`{3,})|(?:~{3,}))(.*)$/;
 
 /**
  * Presents a PR body to suspectRefs as if it were a diff, so the body is judged by the SAME rule as
@@ -144,7 +146,10 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
  *    message, all of which are full of bare numbers. This lives here rather than in stripQualified
  *    because being fenced is a property of a whole document: a patch shows disconnected fragments,
  *    so no line-at-a-time rule over a diff can know. An UNCLOSED fence swallows the rest of the
- *    body, which is precisely how GitHub renders it.
+ *    body, which is precisely how GitHub renders it. The open/close rules are CommonMark-exact
+ *    rather than approximate - see the two comments in the loop for which direction each one
+ *    fails in, and why "close enough" is not good enough for a rule whose entire premise is that a
+ *    plausible-looking wrong answer is worse than an obviously wrong one.
  *
  * @param body  the PR body, possibly null
  * @returns { filename, patch } - one more entry for the files array suspectRefs already takes
@@ -156,11 +161,22 @@ function prBodyEntry(body) {
   const lines = body.split(/\r?\n/).map((line) => {
     const m = line.match(FENCE);
     if (fence) {
-      // A closing fence is the same character, at least as long as the opening one.
-      if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+      // A closing fence is the same character, at least as long as the opening run, and CommonMark
+      // allows it to "be followed only by spaces or tabs". So "``` see the note" does NOT close the
+      // block: GitHub goes on rendering the following lines as code, where nothing auto-links.
+      // Treating it as a closer resumed scanning early and flagged text no reader ever sees as a
+      // link - plausible, wrong, and quiet, which is the shape of failure this gate exists to end.
+      if (m && m[1][0] === fence[0] && m[1].length >= fence.length && /^[ \t]*$/.test(m[2])) {
+        fence = null;
+      }
       return "+";
     }
-    if (m) {
+    // The opening side has its own CommonMark rule, and it is the side that matters more: a BACKTICK
+    // fence may not carry a backtick in its info string, so "```a`b" opens nothing. Accepting it
+    // would drop the lines after it - and those lines DO auto-link on GitHub, so the miss would be
+    // silent. Erring toward "not a fence" here is erring toward flagging, which is the safe way
+    // round. A tilde fence has no such restriction.
+    if (m && !(m[1][0] === "`" && m[2].includes("`"))) {
       fence = m[1];
       return "+";
     }

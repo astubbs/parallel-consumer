@@ -256,6 +256,26 @@ check("fence closing follows the opening fence's character and length", () => {
                          "nor does the other fence character");
 });
 
+// CommonMark lets a closing fence be followed "only by spaces or tabs". Accepting a closer with
+// trailing content closed the block earlier than GitHub does, so lines GitHub still renders as code
+// were scanned and flagged - a reference a reader never sees as a link. Raised in review on
+// astubbs#221 and fixed there.
+check("a closing fence with trailing content does not close the block", () => {
+  assert.deepStrictEqual(suspectRefs(body("```", "#857", "``` see the note", "#29 still fenced")),
+                         [], "trailing content means it is not a closer, so the block stays open");
+  assert.deepStrictEqual(suspectRefs(body("```", "#857", "```  \t", "and #29")).map((h) => h.ref),
+                         ["#29"], "spaces and tabs after the run are allowed, so this one closes");
+});
+
+// The opening side, which fails in the direction that actually costs something: treating a non-fence
+// as a fence drops lines GitHub DOES auto-link, and drops them silently.
+check("a backtick fence whose info string contains a backtick opens nothing", () => {
+  assert.deepStrictEqual(suspectRefs(body("```a`b", "#857 is prose here")).map((h) => h.ref),
+                         ["#857"]);
+  assert.deepStrictEqual(suspectRefs(body("~~~a`b", "#857")), [],
+                         "a tilde fence carries no such restriction");
+});
+
 check("an unclosed fence swallows the rest of the body, exactly as GitHub renders it", () => {
   assert.deepStrictEqual(
     suspectRefs(body("before #29", "```", "#857 and everything after")).map((h) => h.ref), ["#29"]);
