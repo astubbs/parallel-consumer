@@ -17,6 +17,7 @@ owned that content all along.)
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** in their own release-gated section, and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`CONCEPTS.md`** (repo root) | Shared domain vocabulary: entities, named processes and status concepts whose meaning here is project-specific (the produce/commit lock pair, *dirty*, shard, in-flight work). Each entry stands alone - no file paths, class names or current config values. Relevant when orienting to the codebase or writing about it | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with frontmatter for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for a specific piece of work | Durable reference - a plan goes stale once its work lands |
 | **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
