@@ -110,6 +110,15 @@ no equivalent.
 - **Fixture composition is duplicated** across three ITs - two topics, a warm-up transaction, verifiers
   caught up, failure capture - about 10-15 near-identical lines each. The shared *utilities* were
   extracted; their *composition* was not.
+  **Do not expect fixing this to move the `dups: similarity` gate** - it will barely register there,
+  and the reason is worth knowing before anyone spends a refactor on it. That check is a TF-IDF cosine
+  over `word_tokenize`d file text with comments *included*, and on the first CI run it reported these
+  three ITs at 97.2% / 88.3% / 88.3%. Decomposing the dot product showed **96.6% of it came from one
+  token, `--`**: the 110-character rules in the `// ------` section headers tokenise into ~55 `--`
+  each, and no other file in the 233-file corpus used that style, so the term carried a high idf and a
+  huge raw term frequency at once. Deleting the 24 rule lines - no code touched - dropped the same
+  pairs to 55.6% / 44.6% / 45.3%. The fixture duplication below contributes on the order of 0.1%.
+  So this stays a code-quality item, judged on its own merits; the gate is not an argument for it.
 - **`TransactionalTopicVerifier`'s non-vacuity guard is a convention, not a mechanism.** Nothing in
   `assertNoneSeen` checks that `requireLiveAndCaughtUp` ran, though the class javadoc says it must.
   Every current caller is correctly guarded; this is a future-caller risk. A flag would close it, but

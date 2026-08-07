@@ -192,9 +192,7 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
      */
     private static final Duration STRAGGLER_WINDOW = ofSeconds(3);
 
-    // -------------------------------------------------------------------------------------------------------------
     // The test
-    // -------------------------------------------------------------------------------------------------------------
 
     /**
      * C13, both halves, under one trigger.
@@ -272,9 +270,7 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
         eager.assertEachResultExistsExactlyOnce();
     }
 
-    // -------------------------------------------------------------------------------------------------------------
     // One arm: an instance, its topics, and the trigger
-    // -------------------------------------------------------------------------------------------------------------
 
     /**
      * One configuration of {@code ParallelConsumerOptions#allowEagerProcessingDuringTransactionCommit}, with its

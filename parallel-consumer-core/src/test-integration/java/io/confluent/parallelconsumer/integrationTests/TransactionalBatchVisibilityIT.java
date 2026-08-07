@@ -205,9 +205,7 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
 
     private WorkerFunctionFailureCapture workerFailures;
 
-    // ---------------------------------------------------------------------------------------------------------
     // Fixture
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * Input and output topics, a committed warm-up record on the output topic, and two verifiers proved live and
@@ -279,9 +277,7 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
         return getKcu().produceMessages(inputTopic, count, keyPrefix);
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // The all-or-nothing assertion, and the watch that applies it while the work is happening
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * @return how many result records are currently visible for each input key that has any at all - counted
@@ -345,9 +341,7 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
         }
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // Tests
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * C7, second half: every input record's whole result set becomes visible in one step, or not at all.
@@ -580,9 +574,7 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
         assertNoPartialResultSetVisible(committed, RESULTS_PER_INPUT_RECORD);
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // Helpers
-    // ---------------------------------------------------------------------------------------------------------
 
     private static String repeat(int length) {
         StringBuilder sb = new StringBuilder(length);

@@ -213,9 +213,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
 
     private ParallelEoSStreamProcessor<String, String> replacement;
 
-    // ---------------------------------------------------------------------------------------------------------
     // Fixture
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * The invariant every arm in this class rests on: the awaits between abandoning a transaction and reading the
@@ -355,9 +353,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
         Thread.sleep(duration.toMillis());
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // The crash, and the replay
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * Spends the first instance's startup commit on the priming record, then feeds it the payload and walks away
@@ -449,9 +445,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                 untilVisible, PRIMING_RECORDS + payloadRecords);
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // Offsets - read only where an offset means an offset
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * @return the consumer group's committed position for the INPUT partition, or empty if it has never
@@ -478,9 +472,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                         .isEqualTo(OptionalLong.of(expected)));
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // Structure of the log: where one transaction ends and the next begins
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * Split consumed records into transactions using the offsets the commit and abort markers occupy.
@@ -525,9 +517,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                 .collect(Collectors.toList());
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // Helpers
-    // ---------------------------------------------------------------------------------------------------------
 
     private static Set<String> causeChainTypes(Throwable throwable) {
         Set<String> types = new LinkedHashSet<>();
@@ -578,9 +568,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                 .isEmpty();
     }
 
-    // ---------------------------------------------------------------------------------------------------------
     // Tests
-    // ---------------------------------------------------------------------------------------------------------
 
     /**
      * C3, first half, and C4's negative side: an instance abandoned after its records were sent but before its
