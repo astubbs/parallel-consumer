@@ -11,7 +11,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.awaitility.core.ConditionTimeoutException;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
@@ -73,34 +72,12 @@ class TransactionalVisibilityIT extends BrokerIntegrationTest<String, String> {
      */
     private static final Duration TRANSACTION_REAP_TIMEOUT = ofSeconds(120);
 
-    private final List<AutoCloseable> toClose = new ArrayList<>();
-
-    @AfterEach
-    void closeClients() {
-        for (AutoCloseable closeable : toClose) {
-            try {
-                closeable.close();
-            } catch (Exception e) {
-                // Teardown only, and after every assertion has run, so this cannot mask a result. A producer
-                // whose transaction the broker already reaped (the timeout arm) legitimately fails to close
-                // cleanly - that is the scenario, not a defect, so it is logged rather than thrown.
-                log.warn("Problem closing test client {} - tolerated during teardown", closeable, e);
-            }
-        }
-        toClose.clear();
-    }
-
     private TransactionalTopicVerifier readCommittedVerifier(String name, String topicToWatch) {
         return register(TransactionalTopicVerifier.readCommitted(getKcu(), name, topicToWatch));
     }
 
     private TransactionalTopicVerifier readUncommittedControl(String name, String topicToWatch) {
         return register(TransactionalTopicVerifier.readUncommitted(getKcu(), name, topicToWatch));
-    }
-
-    private TransactionalTopicVerifier register(TransactionalTopicVerifier verifier) {
-        toClose.add(verifier);
-        return verifier;
     }
 
     private static List<String> valuesFor(String prefix, int count) {
@@ -136,11 +113,6 @@ class TransactionalVisibilityIT extends BrokerIntegrationTest<String, String> {
 
     private Producer<String, String> transactionalProducer(Duration transactionTimeout) {
         return register(getKcu().createAndInitNewTransactionalProducer(transactionTimeout, empty()));
-    }
-
-    private Producer<String, String> register(Producer<String, String> producer) {
-        toClose.add(producer);
-        return producer;
     }
 
     /**

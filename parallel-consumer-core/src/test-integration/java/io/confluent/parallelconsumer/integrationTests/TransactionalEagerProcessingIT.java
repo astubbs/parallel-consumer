@@ -20,7 +20,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
@@ -184,26 +183,6 @@ class TransactionalEagerProcessingIT extends BrokerIntegrationTest<String, Strin
      * cannot slip in behind the exactly-once assertion.
      */
     private static final Duration STRAGGLER_WINDOW = ofSeconds(3);
-
-    private final List<AutoCloseable> toClose = new ArrayList<>();
-
-    @AfterEach
-    void closeTestClients() {
-        for (AutoCloseable closeable : toClose) {
-            try {
-                closeable.close();
-            } catch (Exception e) {
-                // Teardown only, and after every assertion has run, so this cannot mask a result.
-                log.warn("Problem closing test client {} - tolerated during teardown", closeable, e);
-            }
-        }
-        toClose.clear();
-    }
-
-    private <T extends AutoCloseable> T register(T closeable) {
-        toClose.add(closeable);
-        return closeable;
-    }
 
     // -------------------------------------------------------------------------------------------------------------
     // The test

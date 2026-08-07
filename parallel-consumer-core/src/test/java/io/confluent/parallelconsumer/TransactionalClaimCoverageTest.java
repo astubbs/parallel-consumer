@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.net.URISyntaxException;
@@ -36,27 +37,40 @@ import static com.google.common.truth.Truth.assertWithMessage;
 class TransactionalClaimCoverageTest {
 
     /**
+     * The compiled test classes, imported once and shared by every method here.
+     * <p>
      * Scans the compiled test classes rather than the whole classpath: both the unit lane and the integration
      * lane compile into this one output directory (the root pom adds {@code src/test-integration/java} as a test
      * source root via build-helper), so one import sees {@link ProvesClaim} annotations from both. That shared
      * output is what makes a single register able to span the two lanes at all.
+     * <p>
+     * Held statically because importing that directory is the expensive part of this class and two of the tests
+     * below need it - the classes cannot change while the JVM is running, so a second import could only ever
+     * produce the same answer at the same cost.
      */
-    private static JavaClasses compiledTestClasses() {
+    private static JavaClasses compiledTestClasses;
+
+    @BeforeAll
+    static void importCompiledTestClasses() {
         try {
             Path testClasses = Paths.get(TransactionalClaimCoverageTest.class
                     .getProtectionDomain().getCodeSource().getLocation().toURI());
-            return new ClassFileImporter().importPath(testClasses);
+            compiledTestClasses = new ClassFileImporter().importPath(testClasses);
         } catch (URISyntaxException e) {
             throw new IllegalStateException("could not locate the compiled test classes to scan for @ProvesClaim", e);
         }
     }
 
-    private static Map<TransactionalClaim, List<String>> referencesByClaim() {
-        Map<TransactionalClaim, List<String>> references = new EnumMap<>(TransactionalClaim.class);
-        for (JavaMethod method : compiledTestClasses().stream()
+    private static List<JavaMethod> claimProvingMethods() {
+        return compiledTestClasses.stream()
                 .flatMap(javaClass -> javaClass.getMethods().stream())
                 .filter(method -> method.isAnnotatedWith(ProvesClaim.class))
-                .collect(java.util.stream.Collectors.toList())) {
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    private static Map<TransactionalClaim, List<String>> referencesByClaim() {
+        Map<TransactionalClaim, List<String>> references = new EnumMap<>(TransactionalClaim.class);
+        for (JavaMethod method : claimProvingMethods()) {
             String where = method.getOwner().getName() + "#" + method.getName();
             for (TransactionalClaim claim : method.getAnnotationOfType(ProvesClaim.class).value()) {
                 references.computeIfAbsent(claim, ignored -> new ArrayList<>()).add(where);
@@ -159,10 +173,7 @@ class TransactionalClaimCoverageTest {
     @Test
     void claimProofsMustLiveWhereATestRunnerWillFindThem() {
         List<String> unreachable = new ArrayList<>();
-        for (JavaMethod method : compiledTestClasses().stream()
-                .flatMap(javaClass -> javaClass.getMethods().stream())
-                .filter(method -> method.isAnnotatedWith(ProvesClaim.class))
-                .collect(java.util.stream.Collectors.toList())) {
+        for (JavaMethod method : claimProvingMethods()) {
             String className = method.getOwner().getName();
             String simpleName = method.getOwner().getSimpleName();
 

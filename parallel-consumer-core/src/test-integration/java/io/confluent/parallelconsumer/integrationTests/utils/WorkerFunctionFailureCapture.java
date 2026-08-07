@@ -32,10 +32,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * Filtered by thread name: PC names its worker threads {@code pc-pool-N-thread-M-<myId>}, so an instance built
  * with a per-test nonce in its {@code myId} cannot have its failures confused with those of a sibling test
  * sharing the JVM - which matters, because the integration lane runs methods in parallel.
- * <p>
- * <b>Known duplicate.</b> {@code TransactionalCrashReplayIT} carries a private predecessor of this class. It was
- * left in place deliberately (that file was out of scope for the change that extracted this one) and the two
- * should be collapsed onto this one the next time that test is touched.
  *
  * @author Antony Stubbs
  */

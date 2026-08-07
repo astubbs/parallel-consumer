@@ -19,7 +19,6 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.errors.RecordTooLargeException;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
@@ -59,11 +58,14 @@ import static org.junit.jupiter.api.Assertions.fail;
  * prove the weaker "they all arrive eventually", which a system with no atomicity at all would also satisfy.
  * <p>
  * <b>"all records must have been produced successfully ... before the transaction will commit"</b> is
- * {@link #aTerminallyFailedSendLeavesTheWholeTransactionInvisible()}, and <b>that half is REFUTED</b>. One send
- * in a {@code pollAndProduceMany} result set is made to fail terminally; the transaction commits anyway, and the
- * part of that result set which was sent before the failure becomes visible at {@code read_committed} - two of
- * five records produced from one source offset. That arm therefore ships {@code @Disabled}, with the mechanism,
- * the evidence and the knock-on for C2 recorded on the method and in
+ * {@link #aTerminallyFailedSendLeavesTheWholeTransactionInvisible()}, and <b>that half was REFUTED until
+ * astubbs#261</b>, which is merged in here. This test is what found the defect. One send in a
+ * {@code pollAndProduceMany} result set is made to fail terminally; before the fix the transaction committed
+ * anyway, and the part of that result set which had been sent before the failure became visible at
+ * {@code read_committed} - two of five records produced from one source offset. That arm is now active and
+ * passing, and is the regression test for the defect: it asserts the corrected behaviour, that neither the
+ * poisoned result set nor the results sharing its transaction ever become visible. The mechanism, the evidence
+ * and the knock-on for C2 are recorded on the method and in
  * {@link TransactionalClaim#PRODUCE_MANY_ALL_OR_NONE}.
  *
  * <h2>Why the mid-flight watch cannot see a false partial</h2>
@@ -183,8 +185,6 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
      */
     private static final Duration COMMIT_ATTEMPT_OBSERVATION_WINDOW = ofSeconds(20);
 
-    private final List<AutoCloseable> toClose = new ArrayList<>();
-
     private String inputTopic;
 
     private String outputTopic;
@@ -198,26 +198,6 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
     private TransactionalTopicVerifier uncommitted;
 
     private WorkerFunctionFailureCapture workerFailures;
-
-    @AfterEach
-    void closeTestClients() {
-        for (AutoCloseable closeable : toClose) {
-            try {
-                closeable.close();
-            } catch (Exception e) {
-                // Teardown only, and after every assertion has run, so this cannot mask a result. The failure
-                // arm deliberately leaves an instance whose producer is in an error state - it legitimately
-                // fails to close cleanly, and that IS the scenario.
-                log.warn("Problem closing test client {} - tolerated during teardown", closeable, e);
-            }
-        }
-        toClose.clear();
-    }
-
-    private <T extends AutoCloseable> T register(T closeable) {
-        toClose.add(closeable);
-        return closeable;
-    }
 
     // ---------------------------------------------------------------------------------------------------------
     // Fixture

@@ -4,17 +4,13 @@ package io.confluent.parallelconsumer.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.classic.spi.IThrowableProxy;
-import ch.qos.logback.core.AppenderBase;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.ProvesClaim;
 import io.confluent.parallelconsumer.TransactionalClaim;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
 import io.confluent.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import io.confluent.parallelconsumer.integrationTests.utils.WorkerFunctionFailureCapture;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -26,10 +22,8 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidProducerEpochException;
 import org.apache.kafka.common.errors.ProducerFencedException;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
@@ -41,7 +35,6 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -118,14 +111,25 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
     private static final int PRIMING_RECORDS = 1;
 
     /**
-     * The payload volume. The produce-lock double-release defect this class calibrates against was reported as
-     * 3/3 redeliveries at 6 records and 5/5 at 200, so the batched arm runs comfortably inside its observed range.
+     * The payload volume for {@link #outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching()}, and for that
+     * arm alone. The produce-lock double-release defect it regression-tests was reported as 3/3 redeliveries at 6
+     * records and 5/5 at 200, so this keeps the batched arm comfortably inside the defect's observed range - it is
+     * calibration, not scale, and lowering it would weaken the regression test.
      */
     private static final int PAYLOAD_RECORDS = 200;
 
     /**
+     * The payload for every arm whose mechanics do not depend on volume - crash, fence, replay and the exactly-once
+     * multiset at {@code batchSize=1}. All of those need enough records for the replay to be a real replay and
+     * nothing more, so they pay the smaller volume; only the batching arm above needs the calibrated one.
+     */
+    private static final int REPLAY_PAYLOAD_RECORDS = 40;
+
+    /**
      * The payload for the recombination arm, which needs the replay to be slow enough to span several commit
-     * intervals rather than to be large.
+     * intervals rather than to be large. Deliberately separate from {@link #REPLAY_PAYLOAD_RECORDS} even at the
+     * same value, because what constrains it is {@link #RECOMBINATION_WORK_DELAY} x this count spanning several
+     * {@link #REPLAY_COMMIT_INTERVAL}s.
      */
     private static final int RECOMBINATION_PAYLOAD_RECORDS = 40;
 
@@ -164,8 +168,6 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
      */
     private static final Duration STRAGGLER_WINDOW = ofSeconds(5);
 
-    private final List<AutoCloseable> toClose = new ArrayList<>();
-
     private final Map<String, AtomicInteger> userFunctionInvocations = new ConcurrentHashMap<>();
 
     private String inputTopic;
@@ -196,30 +198,11 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
 
     private TransactionalTopicVerifier uncommitted;
 
-    private WorkerFailureCapture workerFailures;
+    private WorkerFunctionFailureCapture workerFailures;
 
     private ParallelEoSStreamProcessor<String, String> abandoned;
 
     private ParallelEoSStreamProcessor<String, String> replacement;
-
-    @AfterEach
-    void closeTestClients() {
-        for (AutoCloseable closeable : toClose) {
-            try {
-                closeable.close();
-            } catch (Exception e) {
-                // Teardown only, and after every assertion has run, so this cannot mask a result. The abandoned
-                // instance and its fenced producer legitimately fail to close cleanly - that IS the scenario.
-                log.warn("Problem closing test client {} - tolerated during teardown", closeable, e);
-            }
-        }
-        toClose.clear();
-    }
-
-    private <T extends AutoCloseable> T register(T closeable) {
-        toClose.add(closeable);
-        return closeable;
-    }
 
     // ---------------------------------------------------------------------------------------------------------
     // Fixture
@@ -261,7 +244,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
         committed.requireLiveAndCaughtUp(warmupMarker);
         uncommitted.requireLiveAndCaughtUp(warmupMarker);
 
-        workerFailures = register(new WorkerFailureCapture(instanceNonce));
+        workerFailures = register(new WorkerFunctionFailureCapture(instanceNonce));
     }
 
     private static List<String> expectedResults(String attemptTag, List<String> keys) {
@@ -306,8 +289,8 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                 .batchSize(batchSize)
                 .commitInterval(commitInterval)
                 .build());
-        // names this instance's worker threads, which is how WorkerFailureCapture tells our worker failures
-        // from those of any other test sharing this JVM
+        // names this instance's worker threads, which is how WorkerFunctionFailureCapture tells our worker
+        // failures from those of any other test sharing this JVM
         pc.setMyId(Optional.of(instanceNonce + "-" + instanceNumber));
         pc.subscribe(UniSets.of(inputTopic));
         return register(pc);
@@ -582,7 +565,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
     @ProvesClaim({TransactionalClaim.FAILURE_INVISIBLE_AND_RECOMBINED,
             TransactionalClaim.OFFSET_AND_RECORDS_ATOMIC})
     void abandonedTransactionIsInvisibleAndTheReplacementFencesItsProducer() {
-        prepare("crash", PAYLOAD_RECORDS);
+        prepare("crash", REPLAY_PAYLOAD_RECORDS);
 
         runFirstAttemptAndAbandonIt(1, Duration.ZERO);
 
@@ -610,7 +593,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
     @Test
     @ProvesClaim(TransactionalClaim.OFFSET_AND_RECORDS_ATOMIC)
     void replayCommitsTheResultsAndTheirSourceOffsetTogether() {
-        prepare("atomic", PAYLOAD_RECORDS);
+        prepare("atomic", REPLAY_PAYLOAD_RECORDS);
 
         crashAndReplay(1, Duration.ZERO);
 
@@ -681,7 +664,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
     @Test
     @ProvesClaim(TransactionalClaim.RESULTS_EXACTLY_ONCE_UNDER_FAILURE)
     void outputHoldsEachResultExactlyOnceAcrossTheReplay() {
-        prepare("exactly-once", PAYLOAD_RECORDS);
+        prepare("exactly-once", REPLAY_PAYLOAD_RECORDS);
 
         crashAndReplay(1, Duration.ZERO);
         drainStragglers();
@@ -746,70 +729,4 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                 .containsExactlyElementsIn(allInputKeys());
     }
 
-    // ---------------------------------------------------------------------------------------------------------
-    // Worker-thread failure capture
-    // ---------------------------------------------------------------------------------------------------------
-
-    /**
-     * Makes exceptions thrown on the WORKER path observable to the test.
-     * <p>
-     * Nothing in main reads {@code WorkContainer#future}, so when {@code runUserFunction}'s catch-all fails a
-     * batch it logs and rethrows into a future nobody looks at. From the outside the only symptom is a redelivery
-     * - which is indistinguishable from a legitimate retry. Attaching to the logger the exception is reported on
-     * is the only way to name it.
-     * <p>
-     * Filtered by thread name: PC names its worker threads {@code pc-pool-N-thread-M-<myId>}, and both instances
-     * here carry this test's nonce in their id, so a sibling test sharing the JVM cannot pollute the capture.
-     */
-    private static final class WorkerFailureCapture extends AppenderBase<ILoggingEvent> implements AutoCloseable {
-
-        private static final String USER_FUNCTION_STAGE = "Exception caught in user function running stage";
-
-        private final String threadNameMarker;
-
-        private final List<String> failures = new CopyOnWriteArrayList<>();
-
-        private final Logger target =
-                (Logger) LoggerFactory.getLogger(AbstractParallelEoSStreamProcessor.class);
-
-        private WorkerFailureCapture(String threadNameMarker) {
-            this.threadNameMarker = threadNameMarker;
-            setName("worker-failure-capture-" + threadNameMarker);
-            setContext(target.getLoggerContext());
-            start();
-            target.addAppender(this);
-        }
-
-        @Override
-        protected void append(ILoggingEvent event) {
-            if (!event.getThreadName().contains(threadNameMarker)) {
-                return;
-            }
-            if (!event.getFormattedMessage().contains(USER_FUNCTION_STAGE)) {
-                return;
-            }
-            failures.add(event.getThreadName() + ": " + describe(event.getThrowableProxy()));
-        }
-
-        private static String describe(IThrowableProxy proxy) {
-            StringBuilder chain = new StringBuilder();
-            for (IThrowableProxy p = proxy; p != null; p = p.getCause()) {
-                if (chain.length() > 0) {
-                    chain.append(" <- ");
-                }
-                chain.append(p.getClassName()).append('(').append(p.getMessage()).append(')');
-            }
-            return chain.toString();
-        }
-
-        List<String> describe() {
-            return new ArrayList<>(failures);
-        }
-
-        @Override
-        public void close() {
-            target.detachAppender(this);
-            stop();
-        }
-    }
 }

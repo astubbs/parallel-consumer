@@ -34,6 +34,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -128,6 +129,13 @@ public abstract class BrokerIntegrationTest<K, V> {
     @Getter(AccessLevel.PROTECTED)
     private final KafkaClientUtils kcu = new KafkaClientUtils(kafkaContainer);
 
+    /**
+     * Clients a test built for itself and handed to {@link #register(AutoCloseable)}. Disjoint from what
+     * {@link #close()} tears down: that closes {@link KafkaClientUtils}' own default consumer, producer and
+     * admin, none of which are ever registered here.
+     */
+    private final List<AutoCloseable> toClose = new ArrayList<>();
+
     @BeforeAll
     static void followKafkaLogs() {
         if (log.isDebugEnabled()) {
@@ -144,6 +152,38 @@ public abstract class BrokerIntegrationTest<K, V> {
     @AfterEach
     void close() {
         kcu.close();
+    }
+
+    /**
+     * Registers a client for teardown and hands it straight back, so a test can build and keep it in one
+     * expression - {@code committed = register(TransactionalTopicVerifier.readCommitted(...))}. Generic so that
+     * the caller keeps the concrete type it needs to use.
+     *
+     * @return {@code closeable}, so this can wrap the expression that creates it
+     */
+    protected <T extends AutoCloseable> T register(T closeable) {
+        toClose.add(closeable);
+        return closeable;
+    }
+
+    /**
+     * Closes everything {@link #register(AutoCloseable)} was given, tolerating failures.
+     * <p>
+     * Teardown only, and after every assertion has run, so a swallowed exception here cannot mask a result -
+     * whereas a throw could. Tests that deliberately leave a client in a broken state (a fenced producer, a
+     * producer whose transaction the broker already reaped) legitimately fail to close cleanly: that IS the
+     * scenario, so it is logged and the remaining clients are still closed.
+     */
+    @AfterEach
+    void closeRegisteredTestClients() {
+        for (AutoCloseable closeable : toClose) {
+            try {
+                closeable.close();
+            } catch (Exception e) {
+                log.warn("Problem closing test client {} - tolerated during teardown", closeable, e);
+            }
+        }
+        toClose.clear();
     }
 
     protected void setupTopic() {

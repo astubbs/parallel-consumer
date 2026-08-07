@@ -76,17 +76,6 @@ public class ProducerManagerSubject extends ProducerManagerParentSubject impleme
     }
 
     /**
-     * The commit lock (the write side) is held by the thread making this assertion. Distinct from
-     * {@code isTransactionCommittingInProgress()}, which is true when <em>any</em> thread holds it - ownership is
-     * what {@code commitOffsets} enforces before it hands offsets to the transaction.
-     */
-    public void commitLockHeldByCurrentThread() {
-        check("getProducerTransactionLock().isWriteLockedByCurrentThread()")
-                .that(actual.getProducerTransactionLock().isWriteLockedByCurrentThread())
-                .isTrue();
-    }
-
-    /**
      * The commit lock is held by nobody, so producing is free to proceed.
      */
     public void commitLockNotHeld() {
