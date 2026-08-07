@@ -127,6 +127,8 @@ The two are not strict alternatives -- they solve different problems.
 * Also reach for *Parallel Consumer* if you need exactly-once together with parallelism, if your processing step can outlive a 30 second lock, or if you are not on Kafka 4.2 yet -- which includes every cluster still running 3.x.
 ====
 
+NOTE: For the reasoning behind the project as a whole -- the problem it exists to solve, why it is solved in the client rather than the broker, and where effort is currently going -- see link:STRATEGY.md[STRATEGY.md].
+
 [[intro]]
 This library lets you process messages in parallel via a single Kafka Consumer meaning you can increase consumer parallelism without increasing the number of partitions in the topic you intend to process.
 For many use cases this improves both throughput and latency by reducing load on your brokers.
