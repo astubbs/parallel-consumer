@@ -338,6 +338,14 @@ entries:
   # (e.g. #372 -> PR #390, #319 -> PR #270, #203 -> PR #345, #191 -> PR #346).
   # All swept PR head commits were verified reachable on 2026-08-07, so the work is
   # recoverable; cite branch + SHA, not just the PR number.
+  #
+  # MIRROR THE WHOLE COHORT, INCLUDING THE ITEMS WE THINK ARE WORTHLESS. The point is
+  # a clean, known cutoff: "every issue upstream closed administratively is accounted
+  # for here". Carrying a few items nobody will action costs almost nothing; a set
+  # filtered by someone's value judgement is no longer a cutoff, and the next person
+  # cannot tell "not mirrored because it was junk" from "not mirrored because it was
+  # missed". Fork issues can always be closed later on their merits -- that is a
+  # decision with a visible record, which pruning before mirroring is not.
   # ---------------------------------------------------------------------------
 
   - id: sweep-2023-admin-closure
@@ -533,18 +541,20 @@ entries:
       single-consumer, document as such. #49 drain-to-plain-offsets: building blocks
       exist (getOffsetHighestSequentialSucceeded vs getOffsetHighestSucceeded).
 
-  - id: sweep-2023-decline-candidates
+  - id: sweep-2023-small-items
     group: governance
-    summary: "Swept issues recommended for decline rather than carry: #53 exact encoding, #246 member sorting, #199 awaitility reason"
-    fork: {branches: [], prs: [], status: wontfix}
+    summary: "Small swept items: #53 exact offset encoding, #246 formatter member sorting, #199 awaitility failFast reason"
+    fork: {branches: [], prs: [], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [53, 246, 199], prs: [46], related: [47], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
-      Mirrored for completeness, recommended closed. #53 says on its face that #47 may
-      suffice, and #47 is what shipped (USED_PAYLOAD_THRESHOLD_MULTIPLIER 0.75); only
-      revisit if that margin is shown to cost throughput (draft PR #46 @25340f898).
-      #246 member sorting would rewrite most files on first run, destroying git blame
-      continuity -- which matters more than usual for a fork tracing divergence from
-      upstream; import-sorting only is the defensible subset. #199 is largely moot:
-      failFast(String, Callable) is used across the suite; only the reason-from-failure-
-      cause form is missing. Check current Awaitility before spending anything.
+      Tracked like the rest -- the cohort is mirrored in full so the cutoff is clean,
+      not filtered by our estimate of value. #53 says on its face that #47 may suffice,
+      and #47 is what shipped (USED_PAYLOAD_THRESHOLD_MULTIPLIER 0.75); the evidence
+      that would justify revisiting is a workload where that margin measurably costs
+      throughput (draft PR #46 @25340f898). #246 member sorting would rewrite most
+      files on first run, breaking git blame continuity -- higher cost than usual for a
+      fork that reasons about divergence from upstream; import-sorting only is the less
+      invasive form. #199 is largely satisfied: failFast(String, Callable) is used
+      across the suite, only the reason-from-failure-cause form is missing; check
+      current Awaitility before starting.
