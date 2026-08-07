@@ -62,4 +62,5 @@ a throwing-abort variant asserting `close` was still called on the producer fits
 That branch's scope boundary is explicit: a red test implicating main code is the deliverable, and the
 fix is a separate PR. It made one exception - astubbs#261 - and split it out precisely so the fix
 could be reviewed on its own evidence rather than buried under 5,000 lines of test. These two deserve
-the same treatment, and #1 in particular deserves a reviewer looking only at it.
+the same treatment, and the first of them - the `InvalidPidMappingException` hole - in particular
+deserves a reviewer looking only at it.
