@@ -28,13 +28,17 @@ organising idea, and it decides several things below that would otherwise go the
 | Genre | Reference | Evidence |
 | Fails when | The snippet is wrong | The reader is not convinced |
 
-Two consequences follow, and they are requirements rather than aspirations. **A demonstration a reader
-cannot run is a claim, not a demonstration** (R10) — so these examples must be executable outside their
-tests. And a completion criterion that only checks mechanics can be fully satisfied while the goal is
-unmet, so the Definition of Done carries an outcome check (DoD 10).
+**These examples carry that role in code, and only in code.** They stay simple: a readable file, a
+tagged region, a simulated dependency, logging, one basic test (R11). The *live* demonstration — a UI
+showing PC's performance in domain stakeholder terms — is a **single separate demonstration module**
+with its own plan, not a feature of any example module. Keeping them apart is what lets each stay good
+at its own job: an example you read, a demonstration you run.
 
 Evidence is not one of Diátaxis's four modes, and the earlier framing of these as how-to guides was
 wrong: a how-to serves someone who has already decided, which is precisely not this reader.
+
+A completion criterion that only checks mechanics can be fully satisfied while the goal is unmet, so
+the Definition of Done carries an outcome check (DoD 10).
 
 The streams module already has its version of this (card-payment fraud screening, on branch
 `feats/streams-state-store-enrichment-example`). This plan brings the other four up to the same bar.
@@ -66,18 +70,12 @@ The streams module already has its version of this (card-payment fraud screening
 - **R9** — Every summary figure a reader could mistake for a benchmark states what was simulated, what
   the partition count was, and what the ordering ceiling was, so the claim is falsifiable by arithmetic
   rather than trusted. No single speed-up multiplier is printed.
-- **R10** — Each new example is runnable by a reader against a broker, not only executable inside its
-  test: bootstrap servers and topic come from environment variables with sane defaults, and each README
-  section states how to run it. A demonstration that only ever runs inside a mock-consumer test is a
-  claim about the library, not evidence of it.
-- **R11** — Each module's two examples state their relationship: which one is the API reference and
-  which is the capability demonstration, in class-level javadoc on both and in the README section.
-- **R12** — The logistics example ships a **domain UI** — a parcel-tracking board showing consignments
-  moving through their scan states as they are processed — served from the example itself and opened
-  from the README instructions. The UI belongs to the *use case*, not to Parallel Consumer: it shows
-  what the workload achieved, complementing (not duplicating) the separate PC dashboard, which shows
-  what the engine is doing. One example carries this in this plan; see Scope Boundaries for why not
-  four.
+- **R10** — Each module's two examples state their relationship: which one is the API reference and
+  which is the worked industry use case, in class-level javadoc on both and in the README section.
+- **R11** — **The module examples stay simple.** Each is a readable source file, a tagged region, a
+  simulated dependency, logging, and one basic test. No UI, no embedded HTTP server, no run harness, no
+  second execution mode. Anything that would make an example a program to *operate* rather than a file
+  to *read* belongs in the separate demonstration module (see Scope Boundaries), not here.
 
 ### Key Decisions
 
@@ -507,14 +505,6 @@ stated business requirement.
    The distinct tag name is for template readability, not necessity: each `include::` names a file path
    as well as a tag, and `tag=example` already appears in five separate example files without conflict.
 
-6. **Ship the parcel-tracking UI (R12).** A single self-contained page served from the example over the
-   JDK's `com.sun.net.httpserver.HttpServer` — the same mechanism the metrics `CoreApp` already uses, so
-   no new dependency — polling one JSON endpoint that renders `RunSummary`'s state snapshot. It shows a
-   board of consignments moving through their scan states, with the in-flight count and partition count
-   visible, so a reader watches concurrency happen against one partition rather than reading that it
-   did. All UI code lives **outside** the tag region (KTD8); the tagged block stays about PC. Bind a
-   port distinct from the metrics example's and from `DashboardOptions.DEFAULT_PORT` (8080).
-
 **Patterns to follow** — `CoreApp` for module conventions; the metrics `CoreApp` constructor-injection
 seam and its javadoc explaining why; the metrics `CoreApp.setupPrometheusEndpoint()` for the embedded
 HTTP server, but **stop the server on close** — the existing one never does, which is why port 7001
@@ -780,9 +770,9 @@ unresolved `include::` directives.
     README section cold and can state in one sentence the problem the example solves and why the
     partition model made it hard. If they cannot, the section is rewritten before merge. Items 1-9 can
     all pass while the goal in the Goal Capsule is unmet; this is the item that notices.
-11. Each new example runs against a real broker from its README instructions, not only inside its test
-    (R10), and each module's two examples state which is the reference and which is the demonstration
-    (R11).
+11. Each module's two examples state which is the API reference and which is the worked use case (R10),
+    and no example gained a UI, an embedded server, a run harness or a second execution mode (R11) —
+    those belong to the separate demonstration module.
 
 ---
 
@@ -808,14 +798,12 @@ Recorded because the scoping confirmation was skipped in pipeline mode.
 
 ## Open Questions
 
-- **OQ1 — What scale does the *demonstration* run at, given the *test* wants small?** The two roles now
-  pull apart. The barrier-forced test wants tens of records and 4-8 keys to stay deterministic (A3).
-  But at that scale the printed throughput is dominated by PC's own startup cost, and a demonstration
-  whose headline number is mostly an artifact of when the clock started is worse than one with no
-  number. Timing from first `enter()` to last `exit()` (U1 step 3) narrows the gap but does not close
-  it. The likely answer is that the app supports two runs — a small deterministic one under test, and a
-  larger one a reader triggers via R10's entry point — but that touches KD5's separation of basic test
-  from load test, so it is the user's call rather than a silent re-settlement.
+- **OQ1 — RESOLVED by splitting the demonstration into its own module.** The scale tension (a
+  barrier-forced test wants tens of records; a persuasive demonstration wants a number not dominated by
+  startup cost) only existed while both roles lived in one artefact. They no longer do: the module
+  examples stay small and deterministic, and scale becomes the demonstration module's problem, where it
+  is unconstrained by a per-module unit test. KD5 is untouched — no load test is added to any example
+  module.
 - **OQ2 — How many interval samples does a meter reading expand into (U6)?** KTD6 now requires a
   multi-element `Flux` per record for `limitRate` to have anything to throttle. The sample count sets
   both the domain plausibility and the unit-lane time budget.
@@ -830,19 +818,34 @@ Recorded because the scoping confirmation was skipped in pipeline mode.
 ## Scope Boundaries
 
 ### Deferred to Follow-Up Work
-- **Domain UIs for the other three examples** (e-commerce ops console, flight-search results page,
-  smart-meter grid). Deliberately one-at-a-time: four HTML/JS surfaces in a Java library repo is four
-  maintenance surfaces, and the `tag::` region must stay *about PC* — getting that boundary wrong four
-  times would make the examples teach worse than they do today. U3 proves the pattern (R12) and
-  `RunSummary` is designed as a state snapshot a UI reads, so the other three are an addition rather
-  than a rewrite. The payments example on `feats/streams-state-store-enrichment-example` is the
-  natural next one once the pattern holds. Note the metrics example is a poor candidate — Prometheus
-  already is its UI.
-- **Wiring the `parallel-consumer-dashboard` into one or two examples.** Distinct from R12: the
-  dashboard shows the engine (in-flight, shards, offsets), a domain UI shows the outcome. They pair
-  rather than compete. It exists on branch `feats/web-gui` (astubbs#215) and is opt-in by design.
-  Deliberately out of scope here: it would stack this branch on an unmerged PR, and
-  `DashboardOptions.DEFAULT_PORT` is 8080, which the vertx example's stub target already uses.
+
+**One single demonstration module — its own plan, its own PR.** This is the showcase: a domain UI that
+renders PC's real performance in the units a *stakeholder in that domain* measures in, so the reaction
+is "that is much faster at the thing I care about" rather than "peak in-flight 128". It is not in this
+plan, and that separation is deliberate — this plan is docs-shaped with no dependencies and should
+ship on its own, while the demonstration has a UI, a run harness and open design questions that
+deserve their own planning pass.
+
+Design seeds worth not losing:
+
+- **A race is the honest form of "wow".** Two lanes over identical input — one vanilla consumer, one
+  PC — running side by side, in domain units ("parcels tracked", "orders dispatched"). This kills the
+  credibility problem the adversarial reviewer raised about implied speed-up figures: the serial arm is
+  *measured in the same run under the same conditions*, not computed as `records × latency` and
+  labelled "implied". You do not claim a multiple; you show both arms and let the viewer read it.
+- **One engine, one domain, deep.** Use the core engine. Which async framework PC composes with is
+  academic for this purpose — a stakeholder does not care that it works with Vert.x, and engine variety
+  is what the four module examples are already for.
+- **It has a natural predecessor to replace.** `README_TEMPLATE.adoc`'s `=== Illustrative Performance
+  Example` is a *static Google Sheets chart* backed by `VeryLargeMessageVolumeTest`. A live, runnable
+  demonstration is the same argument a reader can actually execute.
+- **Distinct from the PC dashboard** (`feats/web-gui`, astubbs#215): the dashboard shows the engine —
+  in-flight, shards, offsets. This shows the outcome, in domain terms. They pair. Mind
+  `DashboardOptions.DEFAULT_PORT` (8080), which the vertx example's stub target also uses.
+- Scale, record counts and the run-length question (former OQ1) belong to that plan, not this one.
+- **Wiring the `parallel-consumer-dashboard` in anywhere.** Out of scope for this plan on its own
+  merits: it would stack this branch on an unmerged PR (`feats/web-gui`, astubbs#215). Its natural home
+  is the demonstration module above, not an example module.
 - **BlockHound** in the reactor/vertx tests to make non-blocking a CI-enforced property rather than a
   claim. Attractive, but it needs `-XX:+AllowRedefinitionToAddDeleteMethods` on modern JDKs and is a
   new test dependency; worth its own change.
