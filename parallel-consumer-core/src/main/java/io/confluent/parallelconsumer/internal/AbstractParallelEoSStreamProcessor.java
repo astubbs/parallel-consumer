@@ -236,6 +236,38 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
+     * A real, state-backed health snapshot - overriding {@link ParallelConsumer#getHealth()}'s coarse
+     * {@link #isClosedOrFailed()}-derived default, so that a clean shutdown is distinguishable from a crash and the
+     * controller can be told apart from the broker poller.
+     * <p>
+     * Each field is read <em>exactly once</em> into a local and the snapshot is built from those locals, so it cannot
+     * contradict itself by re-reading a field that changed mid-construction. The failure cause is read first
+     * deliberately: a snapshot can then at worst report a failure alongside a slightly stale, healthy-looking state -
+     * never a healthy verdict for an instance that had already recorded a failure.
+     * <p>
+     * The two states are reported as they actually are, and are not folded together. Before {@link #poll} is ever
+     * called, for example, the controller reads {@link State#UNUSED} while the poller's field already reads
+     * {@link State#RUNNING}; {@link #pauseIfRunning()} likewise moves only the controller. Both divergences are
+     * reported rather than collapsed.
+     *
+     * @return the current health of this instance - never {@code null}
+     * @see PCHealth
+     */
+    @Override
+    public PCHealth getHealth() {
+        // read each volatile field exactly once, cause first - see Javadoc
+        final Exception failureCauseSnapshot = this.failureReason;
+        final State controllerStateSnapshot = this.state;
+        final State pollerStateSnapshot = brokerPollSubsystem.getRunState();
+
+        return PCHealth.builder()
+                .controllerState(controllerStateSnapshot)
+                .pollerState(pollerStateSnapshot)
+                .failureCause(failureCauseSnapshot)
+                .build();
+    }
+
+    /**
      * The run state of the controller.
      * <p>
      * {@code volatile} because it is written by at least three threads - the caller of {@link #poll} sets

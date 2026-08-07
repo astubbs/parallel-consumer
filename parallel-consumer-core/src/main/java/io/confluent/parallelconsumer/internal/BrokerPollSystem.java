@@ -51,6 +51,23 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private volatile State runState = RUNNING;
 
+    /**
+     * Reads the poller's current run state, for {@link AbstractParallelEoSStreamProcessor#getHealth()} to report
+     * alongside the controller's.
+     * <p>
+     * Package-scoped: this is an internal read for the health snapshot, not user API - users reach it through
+     * {@link io.confluent.parallelconsumer.PCHealth#getPollerState()}. The field is already {@code volatile}, so this
+     * returns the most recently written value.
+     * <p>
+     * Note this is a plain read of the existing field - it neither changes the field's initial value nor adds a
+     * transition, so the {@code pc.poller.status} gauge is unaffected.
+     *
+     * @return the poller's run state right now
+     */
+    State getRunState() {
+        return runState;
+    }
+
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
 
     /**

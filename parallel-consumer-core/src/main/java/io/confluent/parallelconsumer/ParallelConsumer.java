@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
@@ -31,6 +32,50 @@ public interface ParallelConsumer<K, V> extends DrainingCloseable {
      * @return true if the system has either closed, or has crashed
      */
     boolean isClosedOrFailed();
+
+    /**
+     * A snapshot of the health of this instance, taken now - the cast-free way to ask whether this consumer needs
+     * restarting.
+     * <p>
+     * Unlike {@link #isClosedOrFailed()}, which collapses a clean shutdown and a crash into one boolean, the snapshot
+     * reports the controller's run {@link State}, the broker poller's run {@link State}, and the failure cause
+     * separately, plus a single derived verdict in {@link PCHealth#isHealthy()}.
+     * <p>
+     * <strong>A healthy verdict means "not shut down and not failed" - it does not mean the instance is making
+     * progress.</strong> See {@link PCHealth} for what the verdict does and does not claim, and for the {@code pc.*}
+     * Micrometer meters that show progress.
+     *
+     * <h2>This default implementation is a coarse fallback</h2>
+     * <p>
+     * The default exists purely so that adding this method does not break third-party implementors of this interface,
+     * and it derives everything it can from the one health-adjacent method every implementor already provides,
+     * {@link #isClosedOrFailed()}: not closed is reported as {@link State#RUNNING}, closed as {@link State#CLOSED},
+     * for both the controller and the poller state.
+     * <p>
+     * <strong>Those state values are derived, not observed.</strong> This implementation has no access to a real run
+     * state, so it cannot report {@link State#UNUSED}, {@link State#PAUSED}, {@link State#DRAINING} or
+     * {@link State#CLOSING} at all, and it reports the same value for both subsystems because it cannot tell them
+     * apart.
+     * <p>
+     * <strong>Equally, the empty failure cause it returns carries no clean-versus-crash meaning.</strong>
+     * {@link #isClosedOrFailed()} is true for both outcomes and the default has nothing else to consult, so a crashed
+     * instance is reported here exactly as a cleanly closed one - {@link PCHealth#getFailureCause()} empty. Only an
+     * implementation that overrides this method with a real, state-backed snapshot - as
+     * {@link AbstractParallelEoSStreamProcessor} does - can distinguish the two.
+     *
+     * @return the current health of this instance - never {@code null}
+     * @see PCHealth
+     * @see State
+     */
+    default PCHealth getHealth() {
+        State derived = isClosedOrFailed()
+                ? State.CLOSED
+                : State.RUNNING;
+        return PCHealth.builder()
+                .controllerState(derived)
+                .pollerState(derived)
+                .build();
+    }
 
     /**
      * @see KafkaConsumer#subscribe(Collection)
