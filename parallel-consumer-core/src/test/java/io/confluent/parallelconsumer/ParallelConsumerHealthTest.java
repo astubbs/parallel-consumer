@@ -87,8 +87,12 @@ class ParallelConsumerHealthTest extends ParallelEoSStreamProcessorTestBase {
 
         parallelConsumer.poll(context -> log.debug("Processing {}", context));
 
+        // Wait for the instance to reach its terminal state, not merely for the cause to be recorded. The cause is
+        // written before the close transition, so awaiting only that leaves the close still in flight - and the test
+        // base deliberately skips closing an already-errored PC, so a half-closed one gets closed in @AfterEach and
+        // rethrows the recorded failure out of teardown.
         await().atMost(defaultTimeout)
-                .untilAsserted(() -> assertThat(parallelConsumer.getFailureCause()).isNotNull());
+                .untilAsserted(() -> assertThat(parallelConsumer.isClosedOrFailed()).isTrue());
 
         PCHealth health = pc.getHealth();
 
