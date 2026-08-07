@@ -386,3 +386,10 @@ alone does not reprocess test resources, so the logging change never reached `ta
 Either both paths do not in fact both fire, or an exception is being swallowed somewhere a test would
 not notice. Worth a look on its own, independently of this fix — it is unrelated to the flake and the
 fix does not depend on the answer.
+
+**Answered (2026-08-07): both paths fire, and the exception was being swallowed.** The second guess in
+the paragraph above was the right one. `ProducingLock#unlock()` logs *after* the unlock, so a release
+that threw left no line in the log and a later acquire-versus-release count read a clean 1:1 while
+half the releases were failing; the `IllegalMonitorStateException` itself went into the worker's
+`Future`, which nothing in main ever reads. Under `batchSize >= 2` it was a live defect, not just
+noise — see `ProduceLockReleaseTest`. `cleanUpContext` is now the single release point.

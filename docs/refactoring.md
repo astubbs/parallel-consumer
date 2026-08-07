@@ -242,19 +242,6 @@ Do not start one casually.
   `DEFAULT_TIMEOUT` into the timeout message, so every such error misstates the wait
   (reports `PT30S` for an actual 10s). Tiny standalone fix + unit test.
 
-### Double-release of the produce lock (transactional poll-and-produce) - OPEN QUESTION
-- `WorkContainer#onPostAddToMailBox` (via `finishProducing`) and
-  `AbstractParallelEoSStreamProcessor#cleanUpContext` (L1419) both unconditionally
-  unlock the *same* `PollContextInternal#producingLock`, and nothing resets that
-  `Optional` between them - `cleanUpContext` runs in the enclosing `finally`
-  immediately after the success path already released it. By JDK contract a
-  same-thread second `unlock()` on a `ReentrantReadWriteLock.ReadLock` with zero held
-  read locks throws `IllegalMonitorStateException` - yet no such exception appears in
-  any run, so *something* prevents it and **we do not know what**. Pre-existing, but
-  astubbs#110's fix now drives this path for real (the old mock-context test never did), so
-  it is more exposed than before. Establish which release actually fires and why the
-  second is harmless - or, if it is not, what is swallowing it.
-
 ### internal/ProducerManager.java
 - L162: `syncBeginTransaction()` is `private synchronized` (locks on `this`) -
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`

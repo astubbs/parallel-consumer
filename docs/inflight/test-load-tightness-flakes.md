@@ -12,6 +12,18 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `DbTest` | 2/20 | postgres container start under contention |
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
+| `ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown[1]` | 1/15 (2026-08-07) | `assertCommits(of(1))`, "1 record completed during shutdown", in the transactional arm |
+
+**On that last one - read the parameter index before deciding it is unrelated.** `[1]` is
+`PERIODIC_TRANSACTIONAL_PRODUCER`, not the consumer-commit arm, so it lands on whatever transactional
+change is in flight and looks like a regression. It was seen once, in a full-suite run on
+astubbs/parallel-consumer's produce-lock double-release branch, and did not reproduce: 6/6 in
+isolation, 1 failure in 15 runs on that branch overall, and 0/4 on unmodified `master` in a
+same-magnitude sequential control. Zero-in-four cannot rule out a ~7% flake, so the control shows only
+that there is no *elevated* rate - it is not a clean bill of health for `master`, and nobody should
+cite it as one. The branch was cleared on mechanism instead: the test uses `poll()`, which never
+reaches `processAndProduceResults`, so no produce lock is ever set on its contexts and both the old and
+new release paths are no-ops for it.
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
 `TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,
