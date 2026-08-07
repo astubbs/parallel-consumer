@@ -51,16 +51,18 @@ class MockConsumerEarlyCloseTest {
     void mockConsumer() {
         final AtomicLong startFail = new AtomicLong(System.currentTimeMillis() + 2000L); // start failing after 2 seconds
         final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 200000000L); // never recover
-        // counts the auth failures PC has actually been served - the observable that says PC is in the
-        // retrying-a-failing-broker state we want to close it from
-        final AtomicInteger authFailuresServed = new AtomicInteger();
+        // Counts the auth failures served on the POLL path specifically. Poll-only on purpose: the commit
+        // path fails too, from a different thread, so a combined counter reaching two proves only that two
+        // calls failed somewhere - possibly one of each, concurrently, with no retry in between. It is the
+        // second POLL failure that can only follow a completed poll retry back-off.
+        final AtomicInteger pollAuthFailures = new AtomicInteger();
         var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized ConsumerRecords<String, String> poll(Duration timeout) {
                 long now = System.currentTimeMillis();
                 if(now > startFail.get() && now < failUntil.get()) {
                     log.info("Mocking failure before 20 seconds");
-                    authFailuresServed.incrementAndGet();
+                    pollAuthFailures.incrementAndGet();
                     throw new SaslAuthenticationException("Invalid username or password");
                 }
                 return super.poll(timeout);
@@ -70,7 +72,6 @@ class MockConsumerEarlyCloseTest {
             public synchronized void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
                 long now = System.currentTimeMillis();
                 if(now > startFail.get() && now < failUntil.get()) {
-                    authFailuresServed.incrementAndGet();
                     throw new SaslAuthenticationException("Invalid username or password");
                 }
                 super.commitSync(offsets);
@@ -114,10 +115,11 @@ class MockConsumerEarlyCloseTest {
             });
             // Close from the state the test is about: the broker is failing every call and PC is retrying.
             // Waiting for failures to actually have been served beats sleeping for a duration in which we
-            // hope some were. Two, not one: the second failure can only follow a completed retry back-off,
-            // so by then the poll loop is demonstrably retrying - and close lands mid-back-off, which is
-            // where the 5s sleep used to (accidentally) put it.
-            Awaitility.await().atMost(Duration.ofSeconds(60)).until(() -> authFailuresServed.get() >= 2);
+            // hope some were. Two POLL failures, not one, and not two failures of any kind: only a second
+            // failure on the same path can be behind a completed retry back-off, so by then the poll loop is
+            // demonstrably retrying - and close lands mid-back-off, which is where the 5s sleep used to
+            // (accidentally) put it.
+            Awaitility.await().atMost(Duration.ofSeconds(60)).until(() -> pollAuthFailures.get() >= 2);
 
             log.info("Trying to close...");
             parallelConsumer.close(); // request close while the consumer is failing every call

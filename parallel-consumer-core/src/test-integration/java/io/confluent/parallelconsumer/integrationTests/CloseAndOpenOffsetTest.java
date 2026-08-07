@@ -1,6 +1,7 @@
 package io.confluent.parallelconsumer.integrationTests;
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.Range;
@@ -20,6 +21,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -160,6 +162,16 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
             // The work manager is "dirty" from the moment a record succeeds until the offsets covering it
             // have been committed, so !isDirty() IS the commit-happened event - no need to decode the
             // offsets topic or touch the (not thread safe) Consumer#committed.
+            //
+            // The last success has to be established FIRST, though: a work manager with nothing succeeded
+            // yet is also not dirty, and setDirty only fires downstream of the success
+            // (WorkManager.onSuccessResult -> PartitionState.onSuccess). Waiting on !isDirty() alone can
+            // therefore pass before offset 5 has even been processed, let alone committed.
+            var rebalancePartition = new TopicPartition(rebalanceTopic, 0);
+            await().alias("the last successful record (offset 5) has been registered as succeeded")
+                    .atMost(normalTimeout)
+                    .until(() -> asyncOne.getWm().getPm().getPartitionState(rebalancePartition)
+                            .getOffsetHighestSucceeded() >= 5L);
             await().alias("completed work has been committed")
                     .atMost(normalTimeout)
                     .until(() -> !asyncOne.getWm().isDirty());

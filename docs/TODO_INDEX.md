@@ -3,7 +3,7 @@
 **Generated file - do not edit by hand.** Regenerate with `bin/todo-index.sh`
 (`bin/todo-index.sh --check` fails if this file is stale).
 
-Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **87 marker(s)** at
+Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **86 marker(s)** at
 the time of generation.
 
 ## Prioritised? See the refactoring backlog
@@ -155,7 +155,6 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/CloseAndOpenOffsetTest.java`**
 
 - todo remove - not even relevant to this test? smelly
-- TODO test for event/trigger instead - could consume offsets topic but have to decode the binary
 - TODO: fatal vs retriable exceptions. Retry limits particularly for draining state?
 
 **`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/KafkaSanityTests.java`**

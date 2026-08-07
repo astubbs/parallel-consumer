@@ -765,8 +765,7 @@ public class WorkManagerTest {
 
 
         // advance clock to make delay pass - the mock clock is the only time source the retry path reads,
-        // so there is nothing to wait for. This used to also sleep a real second and hope; the same idiom
-        // appears twice above without one.
+        // so there is nothing to wait for. This used to also sleep a real second and hope.
         advanceClockByDelay();
 
         // work should now be ready to take
