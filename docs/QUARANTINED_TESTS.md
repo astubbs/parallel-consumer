@@ -48,5 +48,5 @@ Rules (full discipline in `AGENTS.md` → Testing, and the `@Quarantined` javado
 
 ## Currently quarantined
 
-(none - both #80-family quarantines were re-enabled when PR #80 landed its drain-zombie and
+(none - both astubbs#80-family quarantines were re-enabled when PR astubbs#80 landed its drain-zombie and
 nudge-race fixes)

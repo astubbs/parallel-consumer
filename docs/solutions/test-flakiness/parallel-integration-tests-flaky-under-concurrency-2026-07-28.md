@@ -94,7 +94,7 @@ weakness into a 28-failure catastrophe via CPU starvation).
    `-Dparallel-tests=true`), where the ~7-10× speedup is real. Expect ~2/run flakes until (3).
 3. **The actual fix is test hardening** - loosen or make-relative the tight per-op timeouts, and isolate
    per-test broker/topic state so tests don't race under concurrent load. Track the offenders as they
-   surface (they rotate). Related in-flight flaky-test work: #63 (topic-creation consolidation),
+   surface (they rotate). Related in-flight flaky-test work: astubbs#63 (topic-creation consolidation),
    `fix/flaky-ensure-topic-timeout`.
 
 ### Verified: sequential-on-runner is offload-only; the real win is parallel-after-hardening (2026-07-28)
@@ -105,7 +105,7 @@ sequential:
 
 | Integration (sequential) | Duration |
 |---|---|
-| GitHub-hosted, 2-core (PR #68) | 11m38s (698s) |
+| GitHub-hosted, 2-core (PR astubbs#68) | 11m38s (698s) |
 | `mac-laptop`, 12-core | 12m00s (720s) |
 
 **The laptop is ~3% *slower*, not faster** - and both pass. Sequential is I/O-bound (one Kafka
@@ -146,21 +146,21 @@ today's single-fork behaviour, so builds that don't pass it are unchanged. Memor
 contended/slow broker is a real production condition and **"contended brokers must not cause failures"**
 is the real bar. Triaging the contended failures showed most were **test-tightness** (e.g.
 `TransactionTimeoutsTest`'s intentional 1s/2s lock timeouts firing under load), **but**
-`RebalanceEoSDeadlockTest.noDeadlockOnRevoke` maps to a **genuine main-code deadlock — #857**
-(`onPartitionsRevoked` blocking on `synchronized(commitCommand)`), already being fixed in PR #29 with
+`RebalanceEoSDeadlockTest.noDeadlockOnRevoke` maps to a **genuine main-code deadlock — confluentinc#857**
+(`onPartitionsRevoked` blocking on `synchronized(commitCommand)`), already being fixed in PR astubbs#29 with
 `ReentrantLock.tryLock()`. So the contention was *exposing a real bug*, not just flaky tests — which is
 exactly why we did **not** loosen timeouts to go green (see AGENTS.md "Be EXTREMELY careful modifying
 tests").
 
 **The road (two steps):**
 1. **(done)** Adopt forked/per-broker parallelism for a reliable, fast functional suite.
-2. **(DEFERRED — do not start yet)** Once #857/#29 is actually finished and merged **on its own merits**,
+2. **(DEFERRED — do not start yet)** Once confluentinc#857/#29 is actually finished and merged **on its own merits**,
    retry **full thread-parallelism on a shared broker** — the deliberate contended-broker stress test — to
-   *validate* the deadlock is gone rather than avoided. Deferred because #29 is a ~454-line WIP concurrency
+   *validate* the deadlock is gone rather than avoided. Deferred because astubbs#29 is a ~454-line WIP concurrency
    refactor (new `ThreadConfinedConsumer`, "root cause still open", chaos test 9/10) on a different base
    with merge conflicts — merging unfinished main code just to test parallel would violate the "be
    extremely careful modifying tests/main code under stress" rule. `-Dparallel-tests=true` (thread-parallel
-   on one broker) is the reproducer to re-run **after** #857 lands.
+   on one broker) is the reproducer to re-run **after** confluentinc#857 lands.
 
 ## Prevention
 
@@ -173,6 +173,6 @@ tests").
 
 ## Related
 
-- Experiment PR that produced the GitHub-hosted numbers: #66 (`ci/reenable-parallel-tests`, do-not-merge).
+- Experiment PR that produced the GitHub-hosted numbers: astubbs#66 (`ci/reenable-parallel-tests`, do-not-merge).
 - Self-hosted runner setup + speedup context: [`docs/SELF_HOSTED_RUNNER.md`](../../SELF_HOSTED_RUNNER.md).
-- In-flight flaky-test fixes: #63, `fix/flaky-ensure-topic-timeout`.
+- In-flight flaky-test fixes: astubbs#63, `fix/flaky-ensure-topic-timeout`.

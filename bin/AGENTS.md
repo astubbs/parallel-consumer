@@ -9,7 +9,7 @@ commands (`--allowedTools`). It is not a glob, and there is no automated check t
 with this directory - so a new script is invisible to the reviewer until someone adds it by hand.
 
 That gap is not theoretical. `bin/test-check-review-posted.sh` went ungranted while its sibling
-`bin/test-check-copyright-headers.sh` was granted, so when PR #210 changed the review gate, the
+`bin/test-check-copyright-headers.sh` was granted, so when PR astubbs#210 changed the review gate, the
 reviewer could not run the gate's own self-test and had to reason about the fix statically instead -
 on a PR whose whole subject was that gate misreporting.
 
@@ -56,7 +56,7 @@ Two structural guards exist and are worth copying into any new checker's self-te
   the anti-pattern as data. Anything else it skipped would be a violation in hiding.
 - **Fixtures big enough to reach the failure.** The review gate's self-test has cases for a match
   buried mid-body and a match at the very end, and neither can trigger the bug - the first is small,
-  the second has nothing following it. A case that reaches it is added in #210.
+  the second has nothing following it. A case that reaches it is added in astubbs#210.
 
 ## Workflows
 

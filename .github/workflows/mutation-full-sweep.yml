@@ -23,7 +23,7 @@
 # survivor is a real gap you can act on, and high stakes, since a silent bug there means lost or
 # duplicated records. The scope walks SIDEWAYS, to where mutants are decidable, not up to everything.
 #
-# MEASURED, run #1 on 2026-08-05, against master at 58991506. `offsets.*` is not obviously cheap -
+# MEASURED, first run on 2026-08-05, against master at 58991506. `offsets.*` is not obviously cheap -
 # `RunLengthEncoderTest` alone is ~140s, re-run per mutant - so the first real question was whether this
 # completes at all. It does: 21m55s, scoring 83% (185 mutants generated, 153 killed, 19 with no coverage),
 # 92% test strength, 1392 tests at 7.52 per mutation. A `schedule:` trigger and a history file are
@@ -46,7 +46,7 @@
 #   gh workflow run mutation-full-sweep                      # against master (what you usually want)
 #   gh workflow run mutation-full-sweep --ref <branch>       # against a branch's code AND its version of this file
 # Note that `workflow_dispatch` requires this file to be on the DEFAULT BRANCH before it can be
-# dispatched at all - even when dispatching a different ref. It has been on master since #111; if you
+# dispatched at all - even when dispatching a different ref. It has been on master since astubbs#111; if you
 # rename or move it on a branch, dispatching that branch fails with "could not find any workflows named
 # mutation-full-sweep" until the rename reaches master. That is GitHub's rule, not a typo.
 #

@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
@@ -19,7 +20,7 @@ class CustomConsumersTest extends BrokerIntegrationTest {
     /**
      * Tests that extended consumer can be used with a custom consumer with PC.
      * <p>
-     * Test for issue #195 - https://github.com/confluentinc/parallel-consumer/issues/195
+     * Test for issue confluentinc#195 - https://github.com/confluentinc/parallel-consumer/issues/195
      *
      * @see io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor#checkAutoCommitIsDisabled
      */

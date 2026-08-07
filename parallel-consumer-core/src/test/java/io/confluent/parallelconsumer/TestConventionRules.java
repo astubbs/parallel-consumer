@@ -105,7 +105,7 @@ public class TestConventionRules {
      * {@code Test*.java}, {@code *Test.java}, {@code *Tests.java}, {@code *TestCase.java}. A test class named
      * anything else is never run - and, worse, never reported as missing: the suite is simply green without it.
      * That is exactly how {@code MockConsumerTestWith{CommitTimeout,SaslAuthentication}Exception} and
-     * {@code MockConsumerTestWithEarlyClose} sat dormant, and how a regression test added in PR #100 would have
+     * {@code MockConsumerTestWithEarlyClose} sat dormant, and how a regression test added in PR astubbs#100 would have
      * been a permanent no-op had this rule existed to catch it (it was renamed instead).
      * <p>
      * Exempt: {@code @Nested} classes (JUnit finds them via their enclosing class, so the patterns do not

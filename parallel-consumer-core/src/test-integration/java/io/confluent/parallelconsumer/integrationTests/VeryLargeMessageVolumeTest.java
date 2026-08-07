@@ -50,7 +50,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * </pre>
  * https://github.com/confluentinc/parallel-consumer/issues/35
  * <p>
- * RuntimeException when running with very high options in 0.2.0.0 (Bitset too long to encode) #35
+ * RuntimeException when running with very high options in 0.2.0.0 (Bitset too long to encode) confluentinc#35
  */
 @Slf4j
 @Tag("performance")
@@ -65,7 +65,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
 
     /**
-     * See #35 RuntimeException when running with very high options in 0.2.0.0 (Bitset too long to encode)
+     * See confluentinc#35 RuntimeException when running with very high options in 0.2.0.0 (Bitset too long to encode)
      * <p>
      * https://github.com/confluentinc/parallel-consumer/issues/35
      *
