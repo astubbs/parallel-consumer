@@ -57,6 +57,7 @@ parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/co
 parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerCommitTimeoutTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithCommitTimeoutException.java
 parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerSaslAuthenticationTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithSaslAuthenticationException.java
 parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerEarlyCloseTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithEarlyClose.java
+parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/State.java|parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/State.java
 ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 "
 

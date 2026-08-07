@@ -2,10 +2,11 @@ package io.confluent.parallelconsumer.metrics;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumer;
-import io.confluent.parallelconsumer.internal.State;
+import io.confluent.parallelconsumer.State;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import lombok.Getter;

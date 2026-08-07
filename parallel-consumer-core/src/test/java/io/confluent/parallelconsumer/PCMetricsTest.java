@@ -24,8 +24,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.parallelconsumer.internal.State.PAUSED;
-import static io.confluent.parallelconsumer.internal.State.RUNNING;
+import static io.confluent.parallelconsumer.State.PAUSED;
+import static io.confluent.parallelconsumer.State.RUNNING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
