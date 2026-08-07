@@ -122,10 +122,13 @@ bin/ci-build.sh 3.9.1
 bin/performance-test.sh
 
 # The embedded web dashboard, live, with a workload deliberately made to misbehave
-# (requires Docker; prints the URL and loops until Ctrl-C). `--once` runs a single
-# sweep and exits non-zero if a scenario phase failed to produce what it declared.
+# (requires Docker; opens a browser on the URL and loops until Ctrl-C). `--once` runs
+# a single sweep, opens nothing, and exits non-zero if a scenario phase failed to
+# produce what it declared. Maven runs only when the compiled output is out of date;
+# `--rebuild` forces it, `--no-open` suppresses the browser.
 bin/dashboard-demo.sh
 bin/dashboard-demo.sh --once
+bin/dashboard-demo.sh --rebuild --no-open
 ```
 
 ## Module Structure

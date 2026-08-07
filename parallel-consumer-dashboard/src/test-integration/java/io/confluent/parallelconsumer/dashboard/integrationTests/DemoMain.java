@@ -25,11 +25,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.testcontainers.containers.KafkaContainer;
 
+import java.io.File;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -48,6 +51,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code LOOP} (the default) repeats the phase list until interrupted - the thing you watch. {@code --once}
  * performs a single sweep and exits non-zero if any phase's postcondition failed - the thing CI runs. Both go
  * through the same wiring, so the demo cannot drift away from the test that guards it.
+ * <p>
+ * {@code LOOP} also opens a browser on the dashboard the moment the server is bound - see
+ * {@link #openBrowser}. {@code ONCE} never does, and {@code --no-open} turns it off.
  *
  * <h2>No new broker or client plumbing</h2>
  * The broker is {@link BrokerIntegrationTest}'s Testcontainers singleton and the clients are
@@ -73,6 +79,12 @@ public final class DemoMain {
     private static final int MAX_CONCURRENCY = 32;
     private static final Duration PC_START_TIMEOUT = Duration.ofSeconds(60);
 
+    private static final String OS_NAME = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+    private static final boolean MAC = OS_NAME.contains("mac");
+    private static final boolean WINDOWS = OS_NAME.contains("win");
+    /** Tried in order on Linux and the BSDs; all three take the URL as their single argument. */
+    private static final String[] UNIX_OPENERS = {"xdg-open", "sensible-browser", "x-www-browser"};
+
     private DemoMain() {
     }
 
@@ -81,15 +93,23 @@ public final class DemoMain {
         private final ScenarioRunner.Mode mode;
         private final long seed;
         private final int port;
+        private final boolean openBrowser;
 
+        /** Browser opening left on, matching the command line's default; {@code LOOP} mode still gates it. */
         public Options(ScenarioRunner.Mode mode, long seed, int port) {
+            this(mode, seed, port, true);
+        }
+
+        public Options(ScenarioRunner.Mode mode, long seed, int port, boolean openBrowser) {
             this.mode = mode == null ? ScenarioRunner.Mode.LOOP : mode;
             this.seed = seed;
             this.port = port;
+            this.openBrowser = openBrowser;
         }
 
+        /** Never opens a browser: {@code --once} is the scripted path, and nobody is watching it. */
         public static Options once(long seed) {
-            return new Options(ScenarioRunner.Mode.ONCE, seed, DashboardOptions.DEFAULT_PORT);
+            return new Options(ScenarioRunner.Mode.ONCE, seed, DashboardOptions.DEFAULT_PORT, false);
         }
 
         public ScenarioRunner.Mode getMode() {
@@ -98,6 +118,10 @@ public final class DemoMain {
 
         public long getSeed() {
             return seed;
+        }
+
+        public boolean isOpenBrowser() {
+            return openBrowser;
         }
     }
 
@@ -162,9 +186,17 @@ public final class DemoMain {
         ScenarioRunner.Mode mode = ScenarioRunner.Mode.LOOP;
         long seed = new Random().nextLong();
         int port = DashboardOptions.DEFAULT_PORT;
+        boolean openBrowser = true;
         for (String arg : args) {
             if ("--once".equals(arg)) {
                 mode = ScenarioRunner.Mode.ONCE;
+            } else if ("--no-open".equals(arg)) {
+                openBrowser = false;
+            } else if ("--rebuild".equals(arg)) {
+                // bin/dashboard-demo.sh owns this one and strips it before starting the JVM. Accepted
+                // and ignored here so that hand-running this class with the script's own argument list
+                // is not an error - the alternative is a usage failure that blames the wrong layer.
+                log.debug("--rebuild is handled by bin/dashboard-demo.sh; ignoring it here");
             } else if (arg.startsWith("--seed=")) {
                 seed = parseNumber(arg, "--seed=");
             } else if (arg.startsWith("--port=")) {
@@ -173,7 +205,7 @@ public final class DemoMain {
                 throw new IllegalArgumentException("unrecognised argument '" + arg + "'");
             }
         }
-        return new Options(mode, seed, port);
+        return new Options(mode, seed, port, openBrowser);
     }
 
     private static long parseNumber(String arg, String prefix) {
@@ -186,10 +218,12 @@ public final class DemoMain {
     }
 
     static String usage() {
-        return "usage: dashboard-demo.sh [--once] [--seed=<long>] [--port=<int>]\n"
+        return "usage: dashboard-demo.sh [--once] [--seed=<long>] [--port=<int>] [--no-open] [--rebuild]\n"
                 + "  --once     one deterministic sweep; exits non-zero if a phase's postcondition failed\n"
                 + "  --seed=N   replay a run exactly (the seed of every run is logged)\n"
-                + "  --port=N   first port to try for the dashboard (it walks upward from there)";
+                + "  --port=N   first port to try for the dashboard (it walks upward from there)\n"
+                + "  --no-open  do not open a browser (loop mode opens one on the URL by default)\n"
+                + "  --rebuild  force the Maven build even when nothing changed (the script acts on this)";
     }
 
     /**
@@ -251,7 +285,10 @@ public final class DemoMain {
             watcher.start();
 
             Scenario scenario = ShowcaseScenario.declare(watcher);
-            announce(url, scenario, seed, options.mode, replayCommand);
+            // Here, and nowhere earlier: the server is bound and the URL is real only once start()
+            // has returned. The banner then says what happened to the browser, so a page that does
+            // not appear is explained rather than mysterious.
+            announce(url, scenario, seed, options.mode, replayCommand, openBrowser(url, options));
 
             workload.start();
 
@@ -385,10 +422,98 @@ public final class DemoMain {
     }
 
     /**
+     * Put the page in front of the person who ran the demo, and never at the cost of the demo. Printing a URL
+     * is not the same as being on it, and "run one command and watch" is the whole promise.
+     * <p>
+     * Every path returns a line rather than throwing, and the catch is {@link Throwable} on purpose: a machine
+     * with no display, no opener binary or a wedged desktop session is a perfectly normal machine to run this
+     * on, and a working demo must not be taken down by a browser that would not start.
+     * <p>
+     * The platform opener is used rather than {@code Desktop.browse}, which pulls in AWT and brings its
+     * headless failure modes with it - on a server that is an exception thrown from a class initialiser, for a
+     * convenience.
+     *
+     * @return one line for the banner: what happened, and when nothing did, why
+     */
+    private static String openBrowser(String url, Options options) {
+        try {
+            if (options.mode != ScenarioRunner.Mode.LOOP) {
+                return "not opened (--once is the scripted path)";
+            }
+            if (!options.openBrowser) {
+                return "not opened (--no-open)";
+            }
+            if (Boolean.getBoolean("java.awt.headless")) {
+                return "not opened (headless JVM) - open the URL above yourself";
+            }
+            // On anything but macOS and Windows, a session to open into is the difference between a desktop
+            // and a CI container. Without it xdg-open just fails, slowly, into the demo's own output.
+            if (!MAC && !WINDOWS && isBlank(System.getenv("DISPLAY")) && isBlank(System.getenv("WAYLAND_DISPLAY"))) {
+                return "not opened (no DISPLAY - headless machine) - open the URL above yourself";
+            }
+            List<String> command = browserCommand(url);
+            if (command == null) {
+                return "not opened (no browser opener found on this machine) - open the URL above yourself";
+            }
+            // Not waited on: xdg-open under some desktops does not return until the browser exits, and the
+            // demo must not be held behind that. Output is discarded rather than inherited so an opener that
+            // is chatty cannot scribble over the banner it was launched from.
+            new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .redirectOutput(new File(WINDOWS ? "NUL" : "/dev/null"))
+                    .start();
+            return "opening it for you now (--no-open to stop this)";
+        } catch (Throwable couldNotOpen) {
+            log.debug("Could not open a browser on {}", url, couldNotOpen);
+            return "could not be opened (" + couldNotOpen + ") - open the URL above yourself";
+        }
+    }
+
+    /** @return the platform's opener invocation, or {@code null} if this machine has none */
+    private static List<String> browserCommand(String url) {
+        if (MAC) {
+            return onPath("open") ? Arrays.asList("open", url) : null;
+        }
+        if (WINDOWS) {
+            // The empty argument is the window title, which `start` would otherwise take the URL to be.
+            return Arrays.asList("cmd", "/c", "start", "", url);
+        }
+        for (String opener : UNIX_OPENERS) {
+            if (onPath(opener)) {
+                return Arrays.asList(opener, url);
+            }
+        }
+        return null;
+    }
+
+    /** Walks {@code PATH} directly: shelling out to {@code which} to decide whether to shell out is one too many. */
+    private static boolean onPath(String executable) {
+        String path = System.getenv("PATH");
+        if (path == null) {
+            return false;
+        }
+        for (String directory : path.split(File.pathSeparator)) {
+            if (directory.isEmpty()) {
+                continue;
+            }
+            File candidate = new File(directory, executable);
+            if (candidate.isFile() && candidate.canExecute()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    /**
      * The banner. A demo whose URL scrolls past in a wall of Kafka client logging is a demo nobody watches, so
      * this goes to stdout, framed, with the running order underneath it.
      */
-    private static void announce(String url, Scenario scenario, long seed, ScenarioRunner.Mode mode, String replay) {
+    private static void announce(String url, Scenario scenario, long seed, ScenarioRunner.Mode mode, String replay,
+                                 String browserOutcome) {
         StringBuilder out = new StringBuilder();
         out.append('\n').append(rule()).append('\n');
         out.append("  PARALLEL CONSUMER DASHBOARD\n\n");
@@ -396,6 +521,7 @@ public final class DemoMain {
         out.append("  scenario : ").append(scenario.getName()).append("  (mode ").append(mode).append(")\n");
         out.append("  seed     : ").append(seed).append("\n");
         out.append("  replay   : ").append(replay).append('\n');
+        out.append("  browser  : ").append(browserOutcome).append('\n');
         out.append(rule()).append('\n');
         out.append("  What you are about to be shown, in order:\n");
         int n = 1;
