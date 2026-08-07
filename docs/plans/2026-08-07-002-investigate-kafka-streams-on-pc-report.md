@@ -42,6 +42,24 @@ the whole idea. Once forking is admitted as an option, the question stops being 
 and becomes "what is the minimal change set?" - which is a much more useful question and is what §4
 answers.
 
+> ## This document has since been tested
+>
+> Everything below is **analysis**. A spike has since run it, and the outcome is written up in
+> [**`2026-08-08-002-ks-on-pc-spike-result.md`**](2026-08-08-002-ks-on-pc-spike-result.md).
+>
+> Short version: **route B works.** PC's `WorkManager` selects records and a worker pool executes the
+> processor chain; output matches a provably-external stock baseline for a stateless topology *and* for
+> a non-windowed aggregation over a state store; Apache Kafka's own 188 tests pass against the patched
+> classes. The change set is 530 lines of patch across the 4 classes §4 predicted, and needed no new PC
+> API. §4.4's "one load-bearing field pair" is now **proven** by a control arm, not merely asserted -
+> reverting only that confinement mis-stamps 25 of 30 changelog records with another record's
+> timestamp, exactly the silent corruption §4.4 predicts.
+>
+> Read the result document before acting on §4 or §6.2: it prices what a green result *commits to*
+> (re-deriving the patch on every Kafka bump, the DSL emission-semantics change, and an unfunded
+> distribution problem), and it quantifies the remaining semantic gap as 33 named failures in Kafka's
+> own `StreamTaskTest`.
+
 ---
 
 ## 1. Four routes, not one
@@ -583,10 +601,16 @@ Real costs, not hidden: punctuators, stream-stream joins and windowed operators 
 caching is off on the parallel path, changing DSL emission semantics (§4.5); and it is a fork to
 maintain against upstream.
 
-Not started. Tracked by **astubbs#255**, which proposes a spike - Tier 1 plus the thread-local change -
-to establish whether it runs at all before anything larger is committed to. That issue also carries a
-stretch goal: extend the Web GUI (astubbs#215) to show which source-node DAGs were tagged
-parallel-safe versus left serial, once both have landed.
+Tracked by **astubbs#255**, which proposed a spike - Tier 1 plus the thread-local change - to establish
+whether it runs at all before anything larger is committed to. That issue also carries a stretch goal:
+extend the Web GUI (astubbs#215) to show which source-node DAGs were tagged parallel-safe versus left
+serial, once both have landed.
+
+**The spike has since run, and this verdict held.** See
+[`2026-08-08-002-ks-on-pc-spike-result.md`](2026-08-08-002-ks-on-pc-spike-result.md) for the evidence,
+the measured change-set size, the proof that §4.4's field pair is load-bearing, and - importantly - what
+a green result commits to. The bounded-diff claim survived contact; the distribution problem it creates
+was not in scope here and is not solved.
 
 ### 6.3 Route C - PC-native DSL - viable stateless, a rewrite beyond
 
