@@ -346,7 +346,7 @@ Only the items needing a decision are listed here - do not restate the inventory
   (`log.error` dump on every run).
 - **`LargeVolumeInMemoryTests` runs 500 messages, not 1,000,000 - and restoring it is real work, not
   a value change.** The 1M line is commented out directly above, `git blame`d to 2020 and untouched
-  since. Previously recorded as fixed by PR #49; that PR never touched the file. **The OOM
+  since. Previously recorded as fixed by astubbs#49; that PR never touched the file. **The OOM
   diagnostics are now salvaged** into
   [`docs/test-hardening/large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md`](test-hardening/large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md)
   (they existed only on `origin/refactor/test-hardening`, which is on the safe-to-delete list). They
