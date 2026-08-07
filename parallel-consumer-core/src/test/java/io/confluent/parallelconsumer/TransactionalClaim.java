@@ -228,21 +228,21 @@ public enum TransactionalClaim {
      */
     RESULTS_EXACTLY_ONCE_UNDER_FAILURE(Source.README_TEMPLATE,
             "This means that even under failure, the results will exist exactly once in the Kafka output topic.",
-            Status.REFUTED, "REFUTED AT batchSize >= 2, holds at batchSize = 1. "
+            Status.PROVED, "Proved at BOTH batch sizes, but only after a real defect was found and fixed - the "
+            + "RED and the GREEN were each observed rather than argued. "
             + "TransactionalCrashReplayIT#outputHoldsEachResultExactlyOnceAcrossTheReplay passes 4/4 at "
             + "batchSize=1 across a real crash and replay (200 payload records, every input key demonstrably "
-            + "reprocessed, each result present exactly once). The sibling arm "
-            + "#outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching fails 5/5 at batchSize=3, same volume "
-            + "and machine, unloaded - and the refutation is by LIVENESS, not duplication: the produce lock is "
-            + "acquired per PollContextInternal but released per WorkContainer, so every batch fails, only a "
+            + "reprocessed, each result present exactly once). Its sibling "
+            + "#outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching was RED 5/5 at batchSize=3, same "
+            + "volume and machine, unloaded - refuted by LIVENESS rather than duplication: the produce lock was "
+            + "acquired per PollContextInternal but released per WorkContainer, so every batch failed, only a "
             + "success sets a partition dirty (PartitionState#onFailure is a no-op), the commit gate ANDs "
-            + "wm.isDirty(), and the instance therefore stops committing entirely - the replacement's source "
-            + "offset froze at 3 of 201 for the whole await against a 200ms commit interval, with no commit-path "
-            + "error, i.e. commits were never attempted rather than attempted and failing. The promised results "
-            + "never come to exist. That arm ships @Disabled because this class runs in the gating lane; the fix "
-            + "is d95a21d4 on fix/produce-lock-double-release. Full evidence, alternatives ruled out and the "
-            + "n/N in docs/inflight/bug-producing-lock-double-release.md. Triage - correct the README or land the "
-            + "fix - is a decision for the maintainer, not this register");
+            + "wm.isDirty(), and the instance stopped committing entirely - the source offset froze at 3 of 201 "
+            + "against a 200ms commit interval with no commit-path error, i.e. commits were never attempted. "
+            + "astubbs#257 fixes it and is merged into this branch: that arm now passes, whole class 5/5 in 72s "
+            + "where it previously took 178s to fail. The defect IS the negative control - it was found before the "
+            + "fix landed, not injected afterwards. Write-up in "
+            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md");
 
     /**
      * Where a claim is published, and how to find the text that must still contain it.
