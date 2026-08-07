@@ -31,6 +31,15 @@
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
+        <!-- ExampleMockConsumers - the mock consumer every example test drives its app with, built once
+             there instead of copy-pasted into each module's test. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-example-support</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>

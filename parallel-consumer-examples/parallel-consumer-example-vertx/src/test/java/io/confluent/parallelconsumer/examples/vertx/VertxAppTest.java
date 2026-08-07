@@ -2,26 +2,25 @@ package io.confluent.parallelconsumer.examples.vertx;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import io.confluent.csid.utils.KafkaTestUtils;
 import io.confluent.csid.utils.LongPollingMockConsumer;
 import io.confluent.csid.utils.WireMockUtils;
+import io.confluent.parallelconsumer.examples.support.ExampleMockConsumers;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.TopicPartition;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.mockito.Mockito;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -61,14 +60,13 @@ class VertxAppTest {
 
         private final int port;
 
-        LongPollingMockConsumer<String, String> mockConsumer = Mockito.spy(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
+        LongPollingMockConsumer<String, String> mockConsumer = ExampleMockConsumers.spiedLongPollingMockConsumer();
 
         @Override
         Consumer<String, String> getKafkaConsumer() {
             HashMap<TopicPartition, Long> beginningOffsets = new HashMap<>();
             beginningOffsets.put(tp, 0L);
             mockConsumer.updateBeginningOffsets(beginningOffsets);
-            Mockito.when(mockConsumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("groupid")); // todo fix AK mock consumer
             return mockConsumer;
         }
 

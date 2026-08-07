@@ -298,13 +298,13 @@ Do not start one casually.
   CI coverage ever looks wrong, this is the first suspect - give each fork its own exec
   file (`destFile` with `${surefire.forkNumber}`) and add `jacoco:merge` before the report.
 
-### `MockConsumer.groupMetadata()` workaround, duplicated x4
+### `MockConsumer.groupMetadata()` workaround - DONE
 
-- `CoreAppTest`, `CoreAppMetricsIntegrationTest`, `ReactorAppTest` and `VertxAppTest` each stub
+- `CoreAppTest`, `CoreAppMetricsIntegrationTest`, `ReactorAppTest` and `VertxAppTest` used to each stub
   `mockConsumer.groupMetadata()` with the same `// todo fix AK mock consumer` note - one Apache Kafka
-  defect, copy-pasted four times. Not ours to fix, but the duplication is: fold it into one shared
-  test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
-  the behaviour may already have changed.
+  defect, copy-pasted four times. Now folded into `ExampleMockConsumers` in the
+  `parallel-consumer-example-support` test-jar, so the workaround has one home and disappears in one
+  edit. Still worth re-checking on the Kafka 4.x upgrade - the behaviour may already have changed.
 
 ## Abandoned draft branches (idea bank)
 
