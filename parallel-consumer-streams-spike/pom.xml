@@ -33,8 +33,14 @@
         <maven.install.skip>true</maven.install.skip>
         <gpg.skip>true</gpg.skip>
 
-        <!-- Where the unpacked-then-patched Kafka sources land. Generated, gitignored, never tracked. -->
-        <kafka.patched.dir>${project.build.directory}/generated-sources/kafka-patched</kafka.patched.dir>
+        <!-- Where the unpacked-then-patched Kafka sources land. Generated, gitignored, never tracked.
+
+             Deliberately NOT under target/generated-sources: the root pom adds that whole directory as an
+             *integration-test* source root for every module (see its build-helper add-integration-test-source
+             execution). Generating there compiles these four classes a second time into target/test-classes,
+             which then precedes target/classes on the surefire classpath - two copies of the same patched
+             Kafka classes, and the one that wins is an accident of classpath order rather than a decision. -->
+        <kafka.patched.dir>${project.build.directory}/kafka-patched</kafka.patched.dir>
         <kafka.pristine.dir>${project.build.directory}/kafka-pristine</kafka.pristine.dir>
 
         <!-- The classes this spike patches. Named deliberately, not discovered: RecordCollectorImpl is

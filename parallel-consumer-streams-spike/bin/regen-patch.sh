@@ -8,8 +8,8 @@
 #
 #   1. ./mvnw -pl parallel-consumer-streams-spike generate-sources
 #        -> unpacks pristine Kafka sources into target/kafka-pristine
-#        -> unpacks + patches a working copy into target/generated-sources/kafka-patched
-#   2. edit the files under target/generated-sources/kafka-patched/ like normal Java
+#        -> unpacks + patches a working copy into target/kafka-patched
+#   2. edit the files under target/kafka-patched/ like normal Java
 #   3. bin/regen-patch.sh
 #        -> diffs pristine against your edits and rewrites the tracked patch
 #   4. commit the patch. The generated trees are gitignored and never committed.
@@ -25,7 +25,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 module_dir="$(dirname "$here")"
 
 pristine="$module_dir/target/kafka-pristine"
-patched="$module_dir/target/generated-sources/kafka-patched"
+patched="$module_dir/target/kafka-patched"
 patch_file="$module_dir/src/main/patch/pcspike.patch"
 
 for d in "$pristine" "$patched"; do
@@ -38,7 +38,7 @@ done
 
 # diff exits 1 when files differ, which is the normal case here - so don't let set -e kill us.
 set +e
-(cd "$module_dir/target" && diff -ruN "kafka-pristine" "generated-sources/kafka-patched") >"$patch_file.tmp"
+(cd "$module_dir/target" && diff -ruN "kafka-pristine" "kafka-patched") >"$patch_file.tmp"
 diff_status=$?
 set -e
 
@@ -51,7 +51,7 @@ fi
 # diff -ruN prefixes paths with the two directory names; strip them so the patch applies with -p1 from
 # inside the generated directory, which is what apply-patch.sh does.
 sed -e 's|^--- kafka-pristine/|--- a/|' \
-    -e 's|^+++ generated-sources/kafka-patched/|+++ b/|' \
+    -e 's|^+++ kafka-patched/|+++ b/|' \
     "$patch_file.tmp" >"$patch_file"
 rm -f "$patch_file.tmp"
 
