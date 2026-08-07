@@ -7,6 +7,7 @@ import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -25,6 +26,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the DOM, where a test can see it, rather than only in a sentence a reader might notice.
  */
 @Execution(ExecutionMode.SAME_THREAD)
+// SAME_THREAD only serialises this class's own methods; the lock is what serialises it against the OTHER UI suite,
+// which shares the same JVM-wide ChromeDriver. See DashboardUiTestBase#BROWSER_RESOURCE.
+@ResourceLock(DashboardUiTestBase.BROWSER_RESOURCE)
 class PageShellUiIT extends DashboardUiTestBase {
 
     /**

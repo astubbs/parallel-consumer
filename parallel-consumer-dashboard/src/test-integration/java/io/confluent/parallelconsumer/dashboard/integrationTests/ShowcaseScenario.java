@@ -104,9 +104,12 @@ public final class ShowcaseScenario {
                         context -> context.workload().setPublishRatePerSecond(STARTING_RATE),
                         weights(WorkloadActions.scalePublishRate(1.8, STARTING_RATE, PEAK_RATE), 3,
                                 WorkloadActions.publishAt(PEAK_RATE), 1),
-                        () -> watcher.getPeakProcessedRecords() > 0
+                        // phase-scoped, deliberately: getPeakProcessedRecords() is a monotonic RUN total, so in LOOP
+                        // mode "> 0" would be true from pass two onward even with the producer dead
+                        () -> watcher.getPhaseProcessedRecords() > 0
                                 ? null
-                                : "no records were processed at all, so nothing could have moved on the page"),
+                                : "no records were processed during this phase, so nothing could have moved on the "
+                                + "page while the rate was ramping"),
 
                 phase("hold at full rate across many keys, so the shard view fills up",
                         Duration.ofSeconds(12), watcher,

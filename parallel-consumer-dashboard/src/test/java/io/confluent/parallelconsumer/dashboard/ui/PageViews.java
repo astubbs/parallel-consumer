@@ -74,6 +74,21 @@ final class PageViews {
     }
 
     /**
+     * A partition whose commit has caught up with its processing - the shape a real Parallel Consumer produces once
+     * everything assigned to it is done.
+     * <p>
+     * <strong>The committed offset is {@code highestDone + 1}, not {@code highestDone}.</strong> Kafka's committed
+     * offset is the next offset to consume, and {@code PartitionState.getOffsetToCommit()} publishes
+     * {@code highestSequentialSucceeded + 1} to the gauge the dashboard samples. A fixture that sets
+     * {@code committed == sequential} therefore never exercises the caught-up path at all: it is a partition state no
+     * running instance can produce, and it hid an off-by-one in both the Java invariant and the page's model.
+     */
+    static JsonObject caughtUpPartition(String topic, int partition, String highestDone) {
+        String committed = new java.math.BigInteger(highestDone).add(java.math.BigInteger.ONE).toString();
+        return partition(topic, partition, committed, highestDone, highestDone, highestDone, 0L);
+    }
+
+    /**
      * The same as {@link #partition} but declaring that the four markers were not read in one consistent instant, so
      * their order cannot be relied on.
      */

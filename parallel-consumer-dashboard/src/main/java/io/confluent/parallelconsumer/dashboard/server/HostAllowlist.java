@@ -90,6 +90,22 @@ public final class HostAllowlist implements Handler<RoutingContext> {
 
     @Override
     public void handle(RoutingContext ctx) {
+        // RFC 7230 s5.4: more than one Host field is a 400, unconditionally. It matters here for a second reason -
+        // getHeader() returns the FIRST value, so a request carrying an allowed Host followed by an attacker's would
+        // be checked against the one it was not going to be routed by if anything downstream read the last. A header
+        // this check rests on must have exactly one value or the request is not answerable at all.
+        if (isDuplicated(ctx, "Host")) {
+            reject(ctx, 400, "The request carries more than one Host header. RFC 7230 s5.4 requires exactly one, and "
+                    + "this dashboard's allowlist is checked against it, so an ambiguous authority is refused rather "
+                    + "than resolved by guessing which one counts.");
+            return;
+        }
+        if (isDuplicated(ctx, "Origin")) {
+            reject(ctx, 400, "The request carries more than one Origin header. Exactly one origin can have made a "
+                    + "request, so this is either a broken client or an attempt to have this server check one value "
+                    + "and the browser enforce another.");
+            return;
+        }
         String host = ctx.request().getHeader("Host");
         if (!isAllowedHost(host)) {
             reject(ctx, "Host header " + describe(host) + " is not in this dashboard's allowlist " + allowedHosts
@@ -200,12 +216,26 @@ public final class HostAllowlist implements Handler<RoutingContext> {
     /**
      * Removes an IPv6 scope id and the trailing dot of a fully-qualified name, both of which denote the same host as
      * the bare form. Without this, {@code localhost.} - which a browser will happily send - reads as a different name.
+     *
+     * <h2>The scope-id strip is confined to IP literals, and that confinement is the security property</h2>
+     * <p>
+     * A scope id is an IPv6 concept: it only ever appears on a link-local literal ({@code fe80::1%eth0}, RFC 6874).
+     * Stripping at {@code %} unconditionally truncates a <em>registered name</em> too, and this method feeds the
+     * allowlist comparison - so {@code Host: localhost%evil.example} would be compared as {@code localhost} and
+     * accepted. That is a bypass of the exact control this class exists to be, and the exact attack it cites: an
+     * attacker-chosen name that resolves to loopback, matching by truncation.
+     * <p>
+     * The guard is a colon, because an authority that reached here without one cannot be an IPv6 literal, and a
+     * {@code %} in a registered name is either percent-encoding or an attempt at this. Both must be preserved so the
+     * comparison sees the whole name and fails it.
      */
     private static String strip(String host) {
         String value = host;
-        int scope = value.indexOf('%');
-        if (scope >= 0) {
-            value = value.substring(0, scope);
+        if (value.indexOf(':') >= 0) {
+            int scope = value.indexOf('%');
+            if (scope >= 0) {
+                value = value.substring(0, scope);
+            }
         }
         while (value.endsWith(".")) {
             value = value.substring(0, value.length() - 1);
@@ -213,12 +243,20 @@ public final class HostAllowlist implements Handler<RoutingContext> {
         return value.toLowerCase(Locale.ROOT);
     }
 
+    private static boolean isDuplicated(RoutingContext ctx, String header) {
+        return ctx.request().headers().getAll(header).size() > 1;
+    }
+
     private static void reject(RoutingContext ctx, String reason) {
+        reject(ctx, 403, reason);
+    }
+
+    private static void reject(RoutingContext ctx, int statusCode, String reason) {
         ctx.response()
-                .setStatusCode(403)
+                .setStatusCode(statusCode)
                 .putHeader("Content-Type", "text/plain; charset=utf-8")
                 .putHeader("X-Content-Type-Options", "nosniff")
-                .end("403 Forbidden. " + reason);
+                .end(statusCode + (statusCode == 400 ? " Bad Request. " : " Forbidden. ") + reason);
     }
 
     private static String describe(String value) {

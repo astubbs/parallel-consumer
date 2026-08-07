@@ -301,6 +301,54 @@ class SnapshotPublisherTest {
     }
 
     /**
+     * The callback cannot be removed - core has no {@code removeLoopEndCallBack} - so the only thing that can stop a
+     * closed dashboard from sampling forever on the user's control loop is this flag.
+     * <p>
+     * Asserted by running the CAPTURED callback, which is exactly what the control loop does with it. Without the
+     * guard, every iteration after a close would still walk the whole meter registry and allocate a snapshot, and
+     * every start/stop cycle would add another sampler to the loop.
+     */
+    @Test
+    void stoppingSamplingMakesTheControlLoopCallbackFree() {
+        AbstractParallelEoSStreamProcessor<?, ?> pc = mock(AbstractParallelEoSStreamProcessor.class);
+        SnapshotPublisher publisher = publisherOverFullyPopulatedRegistry();
+        publisher.registerWith(pc);
+        ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+        verify(pc).addLoopEndCallBack(captor.capture());
+        Runnable controlLoopCallback = captor.getValue();
+
+        controlLoopCallback.run();
+        controlLoopCallback.run();
+        long sequenceBeforeStopping = publisher.getCurrent().getSampleSequence();
+        assertThat(sequenceBeforeStopping).isEqualTo(2L);
+
+        publisher.stopSampling();
+        for (int i = 0; i < 20; i++) {
+            controlLoopCallback.run();
+        }
+
+        assertThat(publisher.isSamplingStopped()).isTrue();
+        assertThat(publisher.getCurrent().getSampleSequence())
+                .as("no further sample may be taken once sampling is stopped")
+                .isEqualTo(sequenceBeforeStopping);
+        assertThat(publisher.getCurrent())
+                .as("the last good reading is left in place, so a reader sees it ageing rather than a null")
+                .isNotNull();
+    }
+
+    @Test
+    void stoppingSamplingIsIdempotentAndDoesNotUnstop() {
+        SnapshotPublisher publisher = publisherOverFullyPopulatedRegistry();
+
+        publisher.stopSampling();
+        publisher.stopSampling();
+        publisher.sampleOnce();
+
+        assertThat(publisher.isSamplingStopped()).isTrue();
+        assertThat(publisher.getCurrent()).isNull();
+    }
+
+    /**
      * Readers on other threads must never see a half-built snapshot, and must never see a current from one tick
      * beside a previous from another - every rate the page derives is computed from that pair, so an inconsistent
      * pair is a wrong chart rather than a crash.

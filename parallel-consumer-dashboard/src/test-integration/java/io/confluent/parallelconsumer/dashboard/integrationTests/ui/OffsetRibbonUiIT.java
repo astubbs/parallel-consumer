@@ -8,6 +8,7 @@ import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -28,6 +29,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code BigInt}-in-the-page design exists to close, and this is where it is closed end to end.
  */
 @Execution(ExecutionMode.SAME_THREAD)
+// SAME_THREAD only serialises this class's own methods; the lock is what serialises it against the OTHER UI suite,
+// which shares the same JVM-wide ChromeDriver. See DashboardUiTestBase#BROWSER_RESOURCE.
+@ResourceLock(DashboardUiTestBase.BROWSER_RESOURCE)
 class OffsetRibbonUiIT extends DashboardUiTestBase {
 
     /**
@@ -79,7 +83,7 @@ class OffsetRibbonUiIT extends DashboardUiTestBase {
         Map<String, Object> huge = valuesOf(rowNamed(rows, HUGE_PARTITION));
         assertThat(huge.get(COMMITTED))
                 .as("an offset one above Number.MAX_SAFE_INTEGER must reach the screen with every digit intact")
-                .isEqualTo(Long.toString(ABOVE_SAFE_INTEGER));
+                .isEqualTo(Long.toString(ABOVE_SAFE_INTEGER + 1));
         assertThat(huge.get(COMPLETED)).isEqualTo(Long.toString(HUGE_COMPLETED));
         assertThat(huge.get(SEEN)).isEqualTo(Long.toString(HUGE_SEEN));
         assertThat(huge.get(INCOMPLETE)).isEqualTo("7");
@@ -134,6 +138,51 @@ class OffsetRibbonUiIT extends DashboardUiTestBase {
         assertThat(listOf(caughtUp, "spans")).as("a zero-width axis has no spans to draw").isEmpty();
         assertThat(listOf(caughtUp, "markers")).containsExactly("committed");
         assertThat(String.valueOf(caughtUp.get("won"))).isEqualTo("nothing won past the block");
+    }
+
+    /**
+     * The committed gauge is the NEXT offset to consume, so on a caught-up partition it reads one above the other
+     * three markers. The page has to hold both facts at once: the cell prints the raw wire value, because that is the
+     * number the broker holds and the offset a restart resumes from, while the drawn axis starts at the highest
+     * offset actually committed - and prints THAT, so the label and the bar cannot disagree.
+     * <p>
+     * With the earlier fixtures - every marker equal - this row could not exist, and neither the caught-up sentence
+     * nor the degenerate-axis branch was reachable at all.
+     */
+    @Test
+    void theCommittedCellShowsTheBrokersOffsetWhileTheAxisShowsWhereTheBarStarts() {
+        String url = serve(busyInstance());
+        openPage(url);
+
+        Map<String, Object> caughtUp = rowNamed(partitionRows(), CAUGHT_UP_PARTITION);
+
+        assertThat(valuesOf(caughtUp).get(COMMITTED))
+                .as("the cell prints the raw committed gauge: the next offset to consume")
+                .isEqualTo(Long.toString(CAUGHT_UP_OFFSET + 1));
+        assertThat(String.valueOf(caughtUp.get("axis")))
+                .as("the axis is labelled with the position the bar is actually drawn from")
+                .contains(Long.toString(CAUGHT_UP_OFFSET))
+                .doesNotContain(Long.toString(CAUGHT_UP_OFFSET + 1));
+        assertThat(listOf(caughtUp, "spans"))
+                .as("nothing is waiting to be committed, so there is no ready span")
+                .doesNotContain("ready");
+    }
+
+    /**
+     * The other side of the same off-by-one: a commit that is BEHIND the processing must draw the ready span, and it
+     * must count from the committed gauge inclusive - offsets 50 through 55 are six records, not five.
+     */
+    @Test
+    void aCommitBehindTheProcessingDrawsTheReadySpan() {
+        String url = serve(busyInstance());
+        openPage(url);
+
+        Map<String, Object> ordinary = rowNamed(partitionRows(), ORDINARY_PARTITION);
+
+        assertThat(listOf(ordinary, "spans")).contains("ready");
+        assertThat(String.valueOf(ordinary.get("axis")))
+                .as("the axis starts at 49, the highest offset actually committed, not at the gauge's 50")
+                .contains("49");
     }
 
     /**

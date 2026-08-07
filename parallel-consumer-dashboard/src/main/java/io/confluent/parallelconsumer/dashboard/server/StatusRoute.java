@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer.dashboard.server;
  */
 
 import io.confluent.parallelconsumer.dashboard.DashboardOptions;
+import io.confluent.parallelconsumer.dashboard.DashboardServer;
 import io.confluent.parallelconsumer.dashboard.json.SnapshotJson;
 import io.confluent.parallelconsumer.dashboard.snapshot.PcSnapshot;
 import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
@@ -55,11 +56,17 @@ public final class StatusRoute implements Handler<RoutingContext> {
      * Classpath resources the page shell needs. Absent means the module's jar was repackaged in a way that dropped
      * its resources - a shaded uber-jar with a resource filter is the usual culprit - and the dashboard will serve a
      * 404 for its own page while otherwise looking healthy.
+     * <p>
+     * <strong>Built from {@link DashboardServer}'s own mount constants, never restated.</strong> These paths were
+     * written out here once, uPlot version and all, which turned {@link DashboardServer#UPLOT_VERSION}'s promise that
+     * "a version bump is one edit" into a lie with a nasty failure mode: the bump would move the served asset and
+     * leave this list pointing at the old path, so {@code /status} - the page whose entire job is diagnosing missing
+     * assets - would report a failure for assets that are present and correct.
      */
     public static final List<String> DEFAULT_REQUIRED_ASSETS = Collections.unmodifiableList(Arrays.asList(
-            "web/index.html",
-            "META-INF/resources/webjars/uplot/1.6.30/dist/uPlot.iife.min.js",
-            "META-INF/resources/webjars/uplot/1.6.30/dist/uPlot.min.css"));
+            DashboardServer.PAGE_CLASSPATH_ROOT + "/index.html",
+            DashboardServer.UPLOT_CLASSPATH_ROOT + "/uPlot.iife.min.js",
+            DashboardServer.UPLOT_CLASSPATH_ROOT + "/uPlot.min.css"));
 
     /**
      * A sample older than this many update intervals means the control loop is not running the callback any more.

@@ -71,18 +71,23 @@ class ShowcaseScenarioIT {
                 band, watcher.getHighestCommittedOnStrandedPartition(), replay)
                 .that(watcher.getRecoveredStrandedBand()).isNotNull();
 
-        // 3. in-flight rises under the slow-function phase
-        assertWithMessage("in-flight records must climb while the user function is slowed (replay: %s)", replay)
+        // The three below read RUN-SCOPED peaks, and say so. The phase-scoped versions - "in flight climbed WHILE
+        // the function was slowed", "the epoch changed WHILE an instance was joining" - are what the postconditions
+        // assert, and the first assertion in this method is what makes those binding. Restating them here as though
+        // they were phase-scoped would claim more than these figures can support: a run peak cannot tell which phase
+        // produced it.
+        assertWithMessage("in-flight records must reach %s at some point in the run - the phase postconditions are "
+                        + "what tie that to the slow-function phase (replay: %s)",
+                ShowcaseScenario.MIN_INFLIGHT_UNDER_SLOW_FUNCTION, replay)
                 .that(watcher.getPeakInflight())
                 .isAtLeast((long) ShowcaseScenario.MIN_INFLIGHT_UNDER_SLOW_FUNCTION);
 
-        // 4. the assignment epoch changes when a second instance joins
-        assertWithMessage("the assignment epoch must change when another instance joins the group (replay: %s)",
-                replay)
+        assertWithMessage("some partition must change assignment epoch during the run - the phase postconditions "
+                + "are what tie that to an instance joining (replay: %s)", replay)
                 .that(watcher.getAssignmentEpochChanges()).isGreaterThan(0L);
 
         // the shard view has to have had something in it, or the key spread never reached the panels
-        assertWithMessage("work must spread across key shards (replay: %s)", replay)
+        assertWithMessage("work must spread across key shards at some point in the run (replay: %s)", replay)
                 .that(watcher.getPeakShards()).isAtLeast((long) ShowcaseScenario.MIN_SHARDS);
     }
 }

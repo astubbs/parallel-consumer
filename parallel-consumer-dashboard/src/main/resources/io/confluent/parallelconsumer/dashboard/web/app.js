@@ -108,6 +108,17 @@ let pollInFlight = false;
 let consecutiveFailures = 0;
 let consecutiveStreamErrors = 0;
 
+/**
+ * Set immediately before WE abort the in-flight poll, and cleared when the next poll starts.
+ *
+ * An abort raised by `stopTransport()` is a deliberate transport switch - a cadence change, a transport-retry click,
+ * the tab being hidden - and reporting it as a network failure would be a lie AND a penalty: it would print "Could
+ * not read /api/state.json" over a working instance and replace the immediate re-poll `startPolling()` just
+ * scheduled with a multi-second backoff. Distinguishing it by `document.hidden` only covers the hidden-tab case, and
+ * every visible-tab trigger falls through to the error path.
+ */
+let intentionalAbort = false;
+
 /** Set when a new document arrives, so the render loop can idle once everything has settled. */
 let dirty = true;
 let renderedSettled = false;
@@ -161,6 +172,8 @@ function stopTransport() {
         pollTimerId = null;
     }
     if (pollAbortController) {
+        // flagged BEFORE the abort, because the rejection can be delivered synchronously
+        intentionalAbort = true;
         pollAbortController.abort();
         pollAbortController = null;
     }
@@ -194,25 +207,36 @@ function applyTransport() {
 function startStream() {
     feed.transport = 'stream';
     consecutiveStreamErrors = 0;
-    eventSource = new EventSource(STREAM_PATH);
+    // Captured, and every listener checks it is still the current one. `close()` does not guarantee no further
+    // event is dispatched for an already-queued one, and `applyTransport` can supersede a stream at any moment - so
+    // without this guard a trailing event from an abandoned generation resets the live generation's error counter,
+    // clears its error text, or trips its fall-back-to-polling on a connection nobody is using any more.
+    const source = new EventSource(STREAM_PATH);
+    eventSource = source;
 
-    eventSource.addEventListener(SNAPSHOT_EVENT, event => {
+    source.addEventListener(SNAPSHOT_EVENT, event => {
+        if (source !== eventSource) {
+            return;
+        }
         consecutiveStreamErrors = 0;
         consecutiveFailures = 0;
         feed.errorText = null;
         acceptDocument(event.data, 'the event stream');
     });
 
-    eventSource.addEventListener('open', () => {
+    source.addEventListener('open', () => {
+        if (source !== eventSource) {
+            return;
+        }
         consecutiveStreamErrors = 0;
         feed.errorText = null;
     });
 
-    eventSource.addEventListener('error', () => {
-        if (!eventSource) {
+    source.addEventListener('error', () => {
+        if (source !== eventSource) {
             return;
         }
-        if (eventSource.readyState === EventSource.CLOSED) {
+        if (source.readyState === EventSource.CLOSED) {
             // The browser only gives up permanently when the response was not an event stream at all - which is
             // exactly the 503-past-the-cap answer, and exactly what a proxy that strips the content type produces.
             fallBackToPolling('The instance would not open an event stream, so this page is polling instead. It '
@@ -260,6 +284,7 @@ async function poll() {
         return;
     }
     pollInFlight = true;
+    intentionalAbort = false;
     pollAbortController = new AbortController();
     const abortTimerId = window.setTimeout(() => pollAbortController.abort(),
         Math.max(5000, pollIntervalMillis() * 2));
@@ -278,8 +303,11 @@ async function poll() {
         feed.errorText = null;
         scheduleNextPoll(pollIntervalMillis());
     } catch (failure) {
-        if (failure && failure.name === 'AbortError' && document.hidden) {
-            // we aborted it ourselves on the way to being hidden; nothing to report
+        if (failure && failure.name === 'AbortError' && intentionalAbort) {
+            // WE aborted it, on the way to a different transport - not a failure of the instance, and the transport
+            // we switched to has already scheduled its own first request. Reporting this would both invent a network
+            // error and cancel that request in favour of a backoff. The timeout abort below is a real failure and
+            // does NOT set the flag, so it still reports.
             return;
         }
         consecutiveFailures += 1;
@@ -590,7 +618,27 @@ function renderChrome(view) {
         + ' · every asset on this page is served by this instance; it makes no request to any other host.');
 }
 
+/**
+ * The render loop, and the ONE place that must never stop.
+ *
+ * `requestAnimationFrame` schedules a single callback: a throw out of the frame body means the loop is never
+ * re-armed, and the page freezes on whatever it last painted. That is the worst failure this page has, because it is
+ * invisible - the numbers on screen are a real reading from a real instance, they simply stopped being current, and
+ * every one of the explicit error and stale states below exists precisely so that cannot happen silently. So the
+ * body is wrapped and the loop is re-armed unconditionally, in a `finally`.
+ */
 function frame(nowMonotonicMillis) {
+    try {
+        renderFrame(nowMonotonicMillis);
+        clearFrameFailure();
+    } catch (failure) {
+        reportFrameFailure(failure);
+    } finally {
+        window.requestAnimationFrame(frame);
+    }
+}
+
+function renderFrame(nowMonotonicMillis) {
     const view = buildView(nowMonotonicMillis);
     renderStatus(view);
     if (view && (dirty || !renderedSettled)) {
@@ -601,7 +649,39 @@ function frame(nowMonotonicMillis) {
         dirty = false;
         renderedSettled = view.settled;
     }
-    window.requestAnimationFrame(frame);
+}
+
+/** The frame failure currently being shown, so it can be cleared when drawing starts working again. */
+let frameFailureText = null;
+
+/**
+ * Surfaces a render failure through the page's existing error state rather than inventing a second one - `error` is
+ * already a first-class phase with a label, a detail sentence and a tooltip.
+ *
+ * `dirty` is deliberately left alone: whatever set it stays set, so a transient failure retries on the next frame and
+ * recovers on its own, while a permanent one is reported once to the console instead of sixty times a second.
+ */
+function reportFrameFailure(failure) {
+    const text = 'The page failed while drawing - ' + describeFailure(failure) + '. What is on screen may be from an '
+        + 'earlier sample even though the status above says otherwise. Reload the page; if it happens again, the '
+        + 'browser console has the detail.';
+    if (text !== frameFailureText) {
+        // eslint-disable-next-line no-console
+        console.error('Parallel Consumer dashboard: a render frame threw. The loop is still running.', failure);
+    }
+    frameFailureText = text;
+    feed.errorText = text;
+}
+
+function clearFrameFailure() {
+    if (frameFailureText === null) {
+        return;
+    }
+    if (feed.errorText === frameFailureText) {
+        // only OUR message is cleared - a transport error that arrived meanwhile is still true
+        feed.errorText = null;
+    }
+    frameFailureText = null;
 }
 
 /* ------------------------------------------------------------------- start */

@@ -11,6 +11,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -112,5 +116,49 @@ class StaticAssetTest {
 
         assertThat(response.statusCode).isNotEqualTo(200);
         assertThat(response.body).doesNotContain("uPlot.iife.min.js");
+    }
+
+    /**
+     * The page's assets are mounted from a PACKAGE-QUALIFIED classpath root, so a file that some other jar - or a
+     * {@code ./web} directory beside the process - contributes at the unqualified {@code web/} cannot be reached
+     * through this module's public {@code /assets/*} mount.
+     * <p>
+     * A classpath is a flat, shared, merged namespace and this module is a library inside somebody else's
+     * application. Mounted at {@code web}, whichever jar came first on the classpath would decide what
+     * {@code /assets/app.js} returns - a broken dashboard in one direction, and this module serving a stranger's file
+     * in the other. The file is planted for real rather than argued about, because the whole failure mode is that it
+     * looks fine from the source.
+     */
+    @Test
+    void aFileAtTheUnqualifiedWebRootIsNotServedThroughTheAssetMount() throws IOException {
+        Path planted = Paths.get("target", "test-classes", "web", "planted.txt");
+        Files.createDirectories(planted.getParent());
+        Files.write(planted, "shadowed-by-another-jar".getBytes(StandardCharsets.UTF_8));
+        try {
+            RawHttp.Response response = RawHttp.get(server.getPort(), DashboardServer.ASSETS_PREFIX + "/planted.txt");
+
+            assertThat(response.statusCode)
+                    .as("a file at the unqualified web/ root must not be reachable through /assets")
+                    .isEqualTo(404);
+            assertThat(response.body).doesNotContain("shadowed-by-another-jar");
+        } finally {
+            Files.deleteIfExists(planted);
+        }
+    }
+
+    /**
+     * The other half: the mount root really is the package-qualified one, so the test above is not passing merely
+     * because static serving is broken altogether.
+     */
+    @Test
+    void thePageAssetsAreServedFromThePackageQualifiedRoot() throws IOException {
+        assertThat(DashboardServer.PAGE_CLASSPATH_ROOT)
+                .as("an unqualified root shares a namespace with every other jar on the classpath")
+                .isEqualTo("io/confluent/parallelconsumer/dashboard/web");
+
+        RawHttp.Response response = RawHttp.get(server.getPort(), DashboardServer.ASSETS_PREFIX + "/app.js");
+
+        assertThat(response.statusCode).isEqualTo(200);
+        assertThat(response.body).isNotEmpty();
     }
 }

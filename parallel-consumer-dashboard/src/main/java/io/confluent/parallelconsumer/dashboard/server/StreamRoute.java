@@ -227,9 +227,18 @@ public final class StreamRoute implements Handler<RoutingContext>, SnapshotPubli
         long now = System.currentTimeMillis();
         long sinceLastSend = now - lastSendMillis;
         if (sinceLastSend < minSendIntervalMillis) {
-            // setTimer inside a context handler binds to that context, so the deferred flush lands back on
-            // this same thread
-            vertx.setTimer(minSendIntervalMillis - sinceLastSend, id -> flush());
+            try {
+                // setTimer inside a context handler binds to that context, so the deferred flush lands back on
+                // this same thread
+                vertx.setTimer(minSendIntervalMillis - sinceLastSend, id -> flush());
+            } catch (RuntimeException | Error e) {
+                // if the timer was never armed, nothing will ever release the claim, and this route stops sending
+                // for the life of the process. That is currently unreachable only because close() sets `closed`
+                // before closing Vert.x - an invariant that lives in another class's call ordering, which is not
+                // where a silent permanent stall should have its only guard
+                flushClaimed.set(false);
+                throw e;
+            }
             return;
         }
         // released BEFORE the snapshot is read, so a sample published during this send re-arms rather than being
@@ -266,17 +275,52 @@ public final class StreamRoute implements Handler<RoutingContext>, SnapshotPubli
         response.putHeader("X-Accel-Buffering", "no");
 
         Subscription subscription = new Subscription(new ResponseEventSink(response), System.currentTimeMillis());
-        subscriptions.add(subscription);
         response.closeHandler(v -> release(subscription));
         response.endHandler(v -> release(subscription));
 
-        long now = System.currentTimeMillis();
-        // the reconnect hint the EventSource API honours natively, so the client needs no reconnect bookkeeping.
-        // Floored: this is how hard a client hammers a server that has GONE, which is not the same question as how
-        // fast a healthy server may send.
-        deliver(subscription, "retry: " + Math.max(MINIMUM_RETRY_HINT_MILLIS, minSendIntervalMillis) + "\n\n", now);
-        // and the current state at once, so a tab opened between ticks is not blank until the next one
-        sendCurrent(subscription, now);
+        // REGISTRATION AND THE OPENING FRAMES RUN ON THE FLUSH CONTEXT, NOT THIS REQUEST'S.
+        //
+        // This handler runs on the connection's own event loop, which is not the context flush() runs on. Registering
+        // here and then writing here opened a window between the add and the first write in which a published sample
+        // could reach flush(), find this brand-new subscription with lastSentSequence == NOTHING_SENT_YET, and write
+        // to the same response from the other loop - so the retry hint, the opening state and a live sample could be
+        // emitted in any order, and the sequence bookkeeping could double-send. Everything that touches
+        // `subscriptions` or writes an event now happens on one thread, which is what the rest of this class already
+        // assumes.
+        onFlushContext(() -> {
+            if (closed.get()) {
+                // the route was closed between the slot acquisition and this task, so this subscription would never
+                // be torn down by close()'s sweep - it must not be registered at all
+                closeQuietly(subscription);
+                release(subscription);
+                return;
+            }
+            subscriptions.add(subscription);
+            long now = System.currentTimeMillis();
+            // the reconnect hint the EventSource API honours natively, so the client needs no reconnect bookkeeping.
+            // Floored: this is how hard a client hammers a server that has GONE, which is not the same question as
+            // how fast a healthy server may send.
+            deliver(subscription, "retry: " + Math.max(MINIMUM_RETRY_HINT_MILLIS, minSendIntervalMillis) + "\n\n",
+                    now);
+            // and the current state at once, so a tab opened between ticks is not blank until the next one
+            sendCurrent(subscription, now);
+        });
+    }
+
+    /**
+     * Runs {@code action} on the same context every flush runs on, so everything that touches a subscription or
+     * writes an event is serialised onto one thread.
+     * <p>
+     * Falls back to running inline when {@link #start(Vertx)} has not been called: with no context there is no flush
+     * that could be running, so there is nothing to serialise against - and that is the shape the unit tests drive.
+     */
+    private void onFlushContext(Runnable action) {
+        Context loop = this.context;
+        if (loop == null) {
+            action.run();
+            return;
+        }
+        loop.runOnContext(v -> action.run());
     }
 
     /**
@@ -413,6 +457,13 @@ public final class StreamRoute implements Handler<RoutingContext>, SnapshotPubli
     }
 
     private void deliver(Subscription subscription, String frame, long nowMillis) {
+        if (subscription.sink.isWriteQueueFull()) {
+            // DROPPED, NOT QUEUED - which is this class's stated contract for an intermediate sample, applied to the
+            // one case that was violating it. Testing fullness only AFTER the write meant every broadcast in the
+            // window between a client going quiet and the reaper's idle timeout expiring buffered another whole
+            // document on the heap of the user's consumer, for a peer that had already stopped reading.
+            return;
+        }
         try {
             subscription.sink.write(frame);
             if (!subscription.sink.isWriteQueueFull()) {

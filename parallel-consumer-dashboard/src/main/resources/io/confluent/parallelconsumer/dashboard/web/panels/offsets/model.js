@@ -44,7 +44,14 @@ export function totalWonRecords(models) {
 }
 
 function buildPartitionModel(partition) {
-    const committed = toBigInt(partition.offsets.committed);
+    // THE COMMITTED OFFSET IS EXCLUSIVE AND THE OTHER THREE ARE NOT. Kafka commits the NEXT offset to consume, so the
+    // wire's `committed` reads one ABOVE the highest offset actually done - on a caught-up partition it sits one past
+    // sequential, completed and seen. Comparing it raw against the other three makes "caught up" look like an
+    // inversion and makes the ready span negative, so it is converted here, once, at the model boundary. Every LABEL
+    // below keeps `partition.offsets.committed`, the raw wire value: that is the number the broker holds and the
+    // offset a restart resumes from, and it is what the reader should be shown.
+    const committedRaw = toBigInt(partition.offsets.committed);
+    const committed = committedRaw === null ? null : committedRaw - 1n;
     const sequential = toBigInt(partition.offsets.sequential);
     const completed = toBigInt(partition.offsets.completed);
     const seen = toBigInt(partition.offsets.seen);
@@ -59,7 +66,9 @@ function buildPartitionModel(partition) {
     // the highest contiguous success by definition, and it is computed with BigInt like everything else.
     const stopOffset = hasIncomplete && sequential !== null ? sequential + 1n : null;
 
-    const positions = geometryPositions(partition.geometry);
+    // the drawn axis uses the same inclusive committed position the spans are computed from, so the picture and the
+    // arithmetic cannot disagree about where the bar starts
+    const positions = geometryPositions(inclusiveGeometry(partition.geometry));
 
     return {
         key: partition.key,
@@ -69,6 +78,12 @@ function buildPartitionModel(partition) {
 
         // exact, for display
         offsets: partition.offsets,
+        /**
+         * The committed marker as an inclusive offset - the highest offset actually committed, one below the wire
+         * value. Only the axis end and the caught-up sentence use it, because those two label the DRAWN axis rather
+         * than the broker's number; everything that reports "last committed" prints `offsets.committed`.
+         */
+        committedInclusiveText: committed === null ? null : committed.toString(),
         stopOffsetText: stopOffset === null ? null : stopOffset.toString(),
         wonCount: wonSpan,
         wonCountText: formatBigCount(wonSpan),
@@ -120,6 +135,24 @@ function allKnownEqual(values) {
         return false;
     }
     return known.every(value => value === known[0]);
+}
+
+/**
+ * The geometry numbers with the committed marker moved to its inclusive position, so the bar is drawn from the same
+ * point the exact arithmetic above measures from. Pixels only - see the header for why these never mix with the
+ * BigInt values.
+ */
+function inclusiveGeometry(geometry) {
+    const committed = geometry.committed;
+    if (committed === null || committed === undefined) {
+        return geometry;
+    }
+    return {
+        committed: committed - 1,
+        sequential: geometry.sequential,
+        completed: geometry.completed,
+        seen: geometry.seen
+    };
 }
 
 /**

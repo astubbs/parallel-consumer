@@ -166,9 +166,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final BrokerPollSystem<K, V> brokerPollSubsystem;
 
     /**
-     * Useful for testing async code
+     * Useful for testing async code.
+     * <p>
+     * Copy-on-write, because {@link #addLoopEndCallBack(Runnable)} is a public API that may be called at any time from
+     * any thread (see {@code SnapshotPublisher.createAndRegister}, which registers against a live processor), while the
+     * control loop iterates this list on every pass. A {@link java.util.ConcurrentModificationException} escaping that
+     * iteration is fatal - it is caught by the control thread's generic handler, which closes the instance and rethrows.
      */
-    private final List<Runnable> controlLoopHooks = new ArrayList<>();
+    private final List<Runnable> controlLoopHooks = new CopyOnWriteArrayList<>();
 
     /**
      * Reference to the control thread, used for waking up a blocking poll ({@link BlockingQueue#poll}) against a

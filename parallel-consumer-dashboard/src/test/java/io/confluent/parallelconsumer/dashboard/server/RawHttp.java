@@ -59,6 +59,28 @@ final class RawHttp {
     }
 
     /**
+     * One request whose header lines are written <em>exactly</em> as given - no defaults added, not even {@code Host}.
+     * <p>
+     * The {@link Map}-based form structurally cannot send a header twice, which is precisely the request RFC 7230
+     * s5.4 is about and precisely the request an ambiguous-authority check has to be tested against.
+     */
+    static Response requestWithRawHeaders(String method, int port, String path, List<String> headerLines)
+            throws IOException {
+        try (Socket socket = connect(port)) {
+            StringBuilder request = new StringBuilder();
+            request.append(method).append(' ').append(path).append(" HTTP/1.1\r\n");
+            for (String line : headerLines) {
+                request.append(line).append("\r\n");
+            }
+            request.append("Connection: close\r\n\r\n");
+            OutputStream out = socket.getOutputStream();
+            out.write(request.toString().getBytes(StandardCharsets.ISO_8859_1));
+            out.flush();
+            return readResponse(socket.getInputStream());
+        }
+    }
+
+    /**
      * Opens a server-sent-events stream and leaves it open for the caller to read from.
      */
     static SseStream openSse(int port, String path) throws IOException {

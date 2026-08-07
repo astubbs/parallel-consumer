@@ -164,6 +164,42 @@ class StatusRouteTest {
         }
     }
 
+    /**
+     * The asset list must be DERIVED from the server's mount constants, not restated.
+     * <p>
+     * Written out by hand it carried its own copy of the uPlot version, so bumping
+     * {@link DashboardServer#UPLOT_VERSION} - which the constant's own comment promises is a single edit - would move
+     * the served file and leave this list pointing at the previous path. The page whose entire purpose is telling an
+     * operator which asset is missing would then report a failure for assets that are present, and send them looking
+     * for a packaging problem that does not exist. Asserting the prefixes rather than the literal strings is what
+     * makes the version bump actually be one edit.
+     */
+    @Test
+    void theRequiredAssetListIsBuiltFromTheServersOwnMountConstants() {
+        assertThat(StatusRoute.DEFAULT_REQUIRED_ASSETS)
+                .containsExactly(
+                        DashboardServer.PAGE_CLASSPATH_ROOT + "/index.html",
+                        DashboardServer.UPLOT_CLASSPATH_ROOT + "/uPlot.iife.min.js",
+                        DashboardServer.UPLOT_CLASSPATH_ROOT + "/uPlot.min.css");
+
+        assertThat(StatusRoute.DEFAULT_REQUIRED_ASSETS)
+                .as("nothing in this list may restate the uPlot version - that is what would silently desync")
+                .noneMatch(asset -> asset.contains(DashboardServer.UPLOT_VERSION)
+                        && !asset.startsWith(DashboardServer.UPLOT_CLASSPATH_ROOT));
+    }
+
+    /**
+     * And the derived paths must actually resolve, so the test above cannot pass by both sides being wrong together.
+     */
+    @Test
+    void everyRequiredAssetIsReallyOnTheClasspath() {
+        for (String asset : StatusRoute.DEFAULT_REQUIRED_ASSETS) {
+            assertThat(StatusRouteTest.class.getClassLoader().getResource(asset))
+                    .as("%s must resolve, or /status reports a failure that is its own fault", asset)
+                    .isNotNull();
+        }
+    }
+
     private static StatusRoute.Outcome outcome(List<StatusRoute.Check> checks, String name) {
         return find(checks, name).getOutcome();
     }

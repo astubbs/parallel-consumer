@@ -6,11 +6,14 @@ package io.confluent.parallelconsumer.dashboard.server;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import io.confluent.parallelconsumer.dashboard.DashboardOptions;
 import io.confluent.parallelconsumer.dashboard.DashboardServer;
+import io.confluent.parallelconsumer.dashboard.snapshot.PcMeterFixture;
 import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
 import io.confluent.parallelconsumer.dashboard.snapshot.StateSampler;
 import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -229,6 +232,87 @@ class DashboardServerTest {
         try (ServerSocket reclaimed = new ServerSocket()) {
             reclaimed.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), port));
             assertThat(reclaimed.getLocalPort()).isEqualTo(port);
+        }
+    }
+
+    /**
+     * Closing the dashboard must take the sampler off the user's control loop.
+     * <p>
+     * It cannot be deregistered - core has no {@code removeLoopEndCallBack} - so {@code close()} stops it through the
+     * publisher's own flag. Without that, a closed dashboard keeps walking the whole meter registry and allocating a
+     * snapshot on the control thread for the life of the consumer, and every start/stop cycle adds another one. The
+     * assertion runs the CAPTURED callback, because that is exactly what the control loop does with it.
+     */
+    @Test
+    void closingStopsTheSamplerItPutOnTheControlLoop() {
+        AbstractParallelEoSStreamProcessor<?, ?> pc = Mockito.mock(AbstractParallelEoSStreamProcessor.class);
+        ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+
+        DashboardServer server = DashboardServer.startFor(pc, PcMeterFixture.fullyPopulated().getRegistry(),
+                DashboardTestSupport.testOptions().build());
+        try {
+            Mockito.verify(pc).addLoopEndCallBack(captor.capture());
+            Runnable controlLoopCallback = captor.getValue();
+            SnapshotPublisher publisher = server.getPublisher();
+
+            controlLoopCallback.run();
+            controlLoopCallback.run();
+            long sequenceBeforeClose = publisher.getCurrent().getSampleSequence();
+            assertThat(sequenceBeforeClose).isEqualTo(2L);
+
+            server.close();
+            for (int i = 0; i < 20; i++) {
+                controlLoopCallback.run();
+            }
+
+            assertThat(publisher.isSamplingStopped()).isTrue();
+            assertThat(publisher.getCurrent().getSampleSequence())
+                    .as("a closed dashboard must not keep sampling on the consumer's control loop")
+                    .isEqualTo(sequenceBeforeClose);
+        } finally {
+            server.close();
+        }
+    }
+
+    /**
+     * The other side of the ownership rule: a publisher handed in through the public constructor belongs to the
+     * caller, who may be sharing it, so closing a dashboard must not silently stop somebody else's sampling.
+     */
+    @Test
+    void closingDoesNotStopAPublisherItWasMerelyGiven() {
+        SnapshotPublisher publisher = DashboardTestSupport.populatedPublisher();
+
+        DashboardServer server = new DashboardServer(publisher, null,
+                DashboardTestSupport.testOptions().build()).start();
+        server.close();
+
+        assertThat(publisher.isSamplingStopped())
+                .as("this server did not create it, so it is not this server's to stop")
+                .isFalse();
+        publisher.sampleOnce();
+        assertThat(publisher.getCurrent()).isNotNull();
+    }
+
+    /**
+     * A dashboard that could not bind must leave nothing behind on the consumer.
+     * <p>
+     * {@code startFor} constructs the server inline, so a caller of the throwing path never receives a handle: a
+     * callback registered before the bind could never be removed, and the {@link io.vertx.core.Vertx} instance -
+     * event-loop threads and all - could never be closed. So registration happens only after a successful bind, and
+     * the Vertx instance is closed by {@code start()} itself on the way out.
+     */
+    @Test
+    void aFailedStartRegistersNothingOnTheConsumer() throws IOException {
+        AbstractParallelEoSStreamProcessor<?, ?> pc = Mockito.mock(AbstractParallelEoSStreamProcessor.class);
+        int port = DashboardTestSupport.freePort();
+        try (ServerSocket occupied = new ServerSocket()) {
+            occupied.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), port));
+
+            assertThatThrownBy(() -> DashboardServer.startFor(pc, PcMeterFixture.fullyPopulated().getRegistry(),
+                    DashboardOptions.builder().port(port).maxPortAttempts(1).build()))
+                    .isInstanceOf(IllegalStateException.class);
+
+            Mockito.verify(pc, Mockito.never()).addLoopEndCallBack(Mockito.any());
         }
     }
 

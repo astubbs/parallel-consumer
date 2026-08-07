@@ -46,10 +46,23 @@ import static com.google.common.truth.Truth.assertWithMessage;
  */
 class PlanSourceSeedStabilityTest {
 
-    private static final Duration W1_MIN = Duration.ofMillis(500);
-    private static final Duration W1_MAX = Duration.ofMillis(1500);
-    private static final Duration W4_MIN = Duration.ofMillis(300);
-    private static final Duration W4_MAX = Duration.ofMillis(1000);
+    /**
+     * The bounds are READ FROM THE LIVE SCENARIOS, never restated here.
+     * <p>
+     * This is the same defect class the goldens exist to catch, one level up. Hardcoding 500..1500 in the test would
+     * pin the draw order against a schedule the suite no longer runs: recalibrating {@link ChaosScenarios#churnStorm()}
+     * to a different tick range would leave every golden below green while every recorded seed replayed a different
+     * schedule - which is exactly the silent failure this file was written to make impossible. Reading them here means
+     * moving a bound in the scenario turns this test red, and the scenario is what has to move back.
+     */
+    private static final ScenarioPhase W1_PHASE = ChaosScenarios.churnStorm().getPhases().get(0);
+
+    private static final ScenarioPhase W4_PHASE = ChaosScenarios.revokeUnderWork().getPhases().get(0);
+
+    private static final Duration W1_MIN = W1_PHASE.getMinTick();
+    private static final Duration W1_MAX = W1_PHASE.getMaxTick();
+    private static final Duration W4_MIN = W4_PHASE.getMinTick();
+    private static final Duration W4_MAX = W4_PHASE.getMaxTick();
 
     /** Seed corpus for the digest. Includes the seed from the W4 calibration diagnosis in the suite docs. */
     private static final long[] DIGEST_SEEDS = {0L, 1L, 42L, 43L, 999L, -1L, 7612284256787897904L};
@@ -171,6 +184,44 @@ class PlanSourceSeedStabilityTest {
         }
     }
 
+    /**
+     * The follow-on bias is a SCHEDULE INPUT, not a scenario flavour, and it is pinned here for the same reason the
+     * tick bounds and the weight maps are.
+     * <p>
+     * {@code ScenarioRunner} substitutes {@code followOnAction} for the drawn action whenever the previous action
+     * armed the bias and the tick's bias roll falls under {@code followOnProbability}. Move either value and the same
+     * seed, drawing the same four numbers per tick, executes a different sequence of actions - the goldens above stay
+     * green because the DRAWS are unchanged, and every recorded chaos seed silently stops reproducing its run. That is
+     * precisely the failure mode this file exists to make loud, so the two values that the draw stream cannot see are
+     * asserted directly.
+     */
+    @Test
+    void theFollowOnBiasIsPinnedBecauseTheDrawStreamCannotSeeIt() {
+        assertWithMessage("W1's join-after-stopDrain bias is the chaos suite's calibration knob: the zombie-drain "
+                + "defect class bites hardest when a member joins while another is mid-drain. Changing it re-maps "
+                + "every recorded W1 seed onto a different run without moving a single draw.")
+                .that(W1_PHASE.getFollowOnAction()).isEqualTo(MembershipAction.JOIN_NEW);
+        assertThat(W1_PHASE.getFollowOnProbability()).isEqualTo(0.9d);
+
+        assertWithMessage("W4 has no drains to bias after, so it must have no follow-on action at all - giving it "
+                + "one would inject an action the weight map deliberately excludes")
+                .that(W4_PHASE.getFollowOnAction()).isNull();
+        assertThat(W4_PHASE.getFollowOnProbability()).isEqualTo(0.0d);
+    }
+
+    /**
+     * The tick bounds the goldens were captured against. Stated as values HERE and read from the scenarios ABOVE, so
+     * the two are cross-checked: this is the assertion that names what moved when a recalibration turns the goldens
+     * red, instead of leaving the reader with an unexplained digest mismatch.
+     */
+    @Test
+    void theTickBoundsTheGoldensWereCapturedAgainstAreUnchanged() {
+        assertThat(W1_MIN).isEqualTo(Duration.ofMillis(500));
+        assertThat(W1_MAX).isEqualTo(Duration.ofMillis(1500));
+        assertThat(W4_MIN).isEqualTo(Duration.ofMillis(300));
+        assertThat(W4_MAX).isEqualTo(Duration.ofMillis(1000));
+    }
+
     /** The declaration order the EnumMap-backed weight maps depend on. */
     @Test
     void membershipActionDeclarationOrderIsUnchanged() {
@@ -270,7 +321,18 @@ class PlanSourceSeedStabilityTest {
         }
     }
 
-    /** Records which RNG methods were called, with their bounds, in order. */
+    /**
+     * Records which RNG methods were called, with their bounds, in order - and <b>refuses every other draw</b>.
+     * <p>
+     * Recording only the two methods the contract names would leave the same hole the goldens exist to close: a
+     * refactor that added a {@code nextLong()} or a {@code nextGaussian()} would consume the shared stream, re-map
+     * every recorded seed, and still satisfy a test called
+     * {@link #everyTickConsumesExactlyFourDrawsInTheContractedOrder()} - because the added draw would simply not be
+     * recorded. Throwing makes the contract test enforce what its name claims.
+     * <p>
+     * {@code next(int)} is deliberately NOT overridden: it is the protected primitive that {@code nextInt(int)} and
+     * {@code nextDouble()} funnel through, so refusing it would break the two draws that are allowed.
+     */
     private static class RecordingRandom extends Random {
         private final List<String> calls = new java.util.ArrayList<>();
 
@@ -288,6 +350,103 @@ class PlanSourceSeedStabilityTest {
         public double nextDouble() {
             calls.add("nextDouble()");
             return super.nextDouble();
+        }
+
+        @Override
+        public int nextInt() {
+            throw refused("nextInt()");
+        }
+
+        @Override
+        public long nextLong() {
+            throw refused("nextLong()");
+        }
+
+        @Override
+        public boolean nextBoolean() {
+            throw refused("nextBoolean()");
+        }
+
+        @Override
+        public float nextFloat() {
+            throw refused("nextFloat()");
+        }
+
+        @Override
+        public synchronized double nextGaussian() {
+            throw refused("nextGaussian()");
+        }
+
+        @Override
+        public void nextBytes(byte[] bytes) {
+            throw refused("nextBytes(byte[])");
+        }
+
+        @Override
+        public java.util.stream.IntStream ints() {
+            throw refused("ints()");
+        }
+
+        @Override
+        public java.util.stream.IntStream ints(long streamSize) {
+            throw refused("ints(long)");
+        }
+
+        @Override
+        public java.util.stream.IntStream ints(int origin, int bound) {
+            throw refused("ints(int,int)");
+        }
+
+        @Override
+        public java.util.stream.IntStream ints(long streamSize, int origin, int bound) {
+            throw refused("ints(long,int,int)");
+        }
+
+        @Override
+        public java.util.stream.LongStream longs() {
+            throw refused("longs()");
+        }
+
+        @Override
+        public java.util.stream.LongStream longs(long streamSize) {
+            throw refused("longs(long)");
+        }
+
+        @Override
+        public java.util.stream.LongStream longs(long origin, long bound) {
+            throw refused("longs(long,long)");
+        }
+
+        @Override
+        public java.util.stream.LongStream longs(long streamSize, long origin, long bound) {
+            throw refused("longs(long,long,long)");
+        }
+
+        @Override
+        public java.util.stream.DoubleStream doubles() {
+            throw refused("doubles()");
+        }
+
+        @Override
+        public java.util.stream.DoubleStream doubles(long streamSize) {
+            throw refused("doubles(long)");
+        }
+
+        @Override
+        public java.util.stream.DoubleStream doubles(double origin, double bound) {
+            throw refused("doubles(double,double)");
+        }
+
+        @Override
+        public java.util.stream.DoubleStream doubles(long streamSize, double origin, double bound) {
+            throw refused("doubles(long,double,double)");
+        }
+
+        private static AssertionError refused(String method) {
+            return new AssertionError("the tick draw contract is nextInt(1000), nextDouble(), nextInt(total), "
+                    + "nextInt(Integer.MAX_VALUE) and nothing else - but " + method + " was called. An extra draw "
+                    + "from the shared stream re-maps every chaos seed recorded before this change onto a different "
+                    + "schedule, and voids the Chaos Pain Suite's probe calibration.");
         }
     }
 }

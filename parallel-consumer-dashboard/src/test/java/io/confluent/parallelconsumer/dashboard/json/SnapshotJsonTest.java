@@ -299,7 +299,7 @@ class SnapshotJsonTest {
         assertThat(rendered).doesNotContain("NaN").doesNotContain("Infinity");
         assertThat(SnapshotJson.document(sampled).getJsonArray("partitions")).hasSize(3);
         // offsets from a live registry are strings too - the rule is per-field, not per-magnitude
-        assertThat(rendered).contains("\"lastCommittedOffset\":\"100\"");
+        assertThat(rendered).contains("\"lastCommittedOffset\":\"101\"");
     }
 
     // ----------------------------------------------------------------------------------------------------

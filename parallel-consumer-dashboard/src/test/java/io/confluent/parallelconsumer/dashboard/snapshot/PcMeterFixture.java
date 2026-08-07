@@ -81,6 +81,12 @@ public class PcMeterFixture {
 
     /**
      * Registers the six offset gauges for one partition, in an order that satisfies the ribbon invariant.
+     * <p>
+     * {@code committed} is the value the {@code pc.partition.latest.committed.offset} gauge carries, which is the
+     * <strong>next offset to consume</strong> - {@code PartitionState.getOffsetToCommit()} publishes
+     * {@code highestSequentialSucceeded + 1}. So a caught-up partition has {@code committed == sequentialSucceeded + 1},
+     * and a fixture that passes {@code committed == sequentialSucceeded} is describing a state no running instance
+     * produces.
      */
     PcMeterFixture partitionOffsets(String topic,
                                     int partition,
@@ -177,14 +183,22 @@ public class PcMeterFixture {
     /**
      * The registry a fully-populated PC would look like: two partitions on one topic, one on another, plus every
      * aggregate, lifecycle and encoding meter.
+     * <p>
+     * The three partitions deliberately cover the three commit positions a real instance produces: a commit level with
+     * the sequential marker while work runs ahead of it (orders-0), a commit lagging behind processing that has
+     * already succeeded (orders-1), and a partition completely caught up (payments-7). Every committed value is one
+     * above the highest offset it represents - see {@link #partitionOffsets}.
      */
     public static PcMeterFixture fullyPopulated() {
         return new PcMeterFixture()
-                .partitionOffsets("orders", 0, 100, 100, 140, 150, 12, 3)
+                // committed up to 100, succeeded out of order as far as 140, seen to 150
+                .partitionOffsets("orders", 0, 101, 100, 140, 150, 12, 3)
                 .partitionCounters("orders", 0, 100, 2, 1)
+                // the last commit recorded offset 49, so 50..55 are done and waiting for the next commit
                 .partitionOffsets("orders", 1, 50, 55, 55, 60, 4, 3)
                 .partitionCounters("orders", 1, 55, 0, 0)
-                .partitionOffsets("payments", 7, 0, 0, 0, 0, 0, 1)
+                // completely caught up: everything through 900 done and committed, nothing outstanding
+                .partitionOffsets("payments", 7, 901, 900, 900, 900, 0, 1)
                 .partitionCounters("payments", 7, 0, 0, 0)
                 .aggregates(9, 31, 4, 40, 16, 2.5d, 1, 3)
                 .lifecycle(1, 1)

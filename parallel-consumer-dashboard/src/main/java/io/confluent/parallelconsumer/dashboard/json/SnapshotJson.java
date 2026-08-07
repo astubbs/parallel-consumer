@@ -36,6 +36,20 @@ import java.util.Map;
  * <p>
  * Counts, ratios, timestamps and anything destined for a chart series stay numbers: they are consumed as numbers,
  * they are nowhere near 2<sup>53</sup>, and stringifying them would only force the page to parse them back.
+ *
+ * <h3>What the string encoding does and does not buy, today</h3>
+ * <p>
+ * <strong>The offsets in this document are exact up to 2<sup>53</sup>, not up to 2<sup>63</sup>.</strong> They reach
+ * this class through Micrometer gauges, and {@code Gauge.value()} returns a {@code double} - so
+ * {@code MeterSource#gaugePerPartition} narrows back to {@code long} from a value that has already been through 53
+ * bits of mantissa. Nothing downstream can restore what was lost there, and no amount of string encoding on this side
+ * of it can either.
+ * <p>
+ * The string encoding is still the right rule and still load-bearing: it removes the <em>second</em> lossy step, the
+ * one in the browser, which is the one nothing would have reported. Closing the remaining gap means reading the
+ * offsets from {@code DirectStateSource} - straight off Parallel Consumer's own {@code long} state on the control
+ * thread - instead of from the registry. That is the follow-on; it is not done, and this note exists so the guarantee
+ * above is not read as stronger than it is.
  * <table>
  *   <caption>Field encoding by kind</caption>
  *   <tr><th>Kind</th><th>Encoding</th><th>Fields</th></tr>

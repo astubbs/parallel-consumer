@@ -95,7 +95,10 @@ function createRibbonSurface(surfaceElement) {
             // ahead of its commit cannot silently squash the informative spans of every other row.
             setAttribute(axis, 'title', 'This row has its own offset axis, so its width is not comparable with '
                 + 'another row. The ends are the exact offsets below.');
-            axisLow.textContent = 'axis from ' + formatOffset(model.offsets.committed);
+            // the INCLUSIVE committed offset, because that is the position the track is actually drawn from - the
+            // wire's committed value is one above it, and printing that would label the axis with a number the bar
+            // does not start at
+            axisLow.textContent = 'axis from ' + formatOffset(model.committedInclusiveText);
             axisHigh.textContent = 'to ' + formatOffset(model.offsets.seen);
 
             if (model.degenerateAxis) {
@@ -107,8 +110,12 @@ function createRibbonSurface(surfaceElement) {
                 hide(stopMarker);
                 hide(seenMarker);
                 show(committedMarker, 0.5);
+                // the inclusive value again: this sentence CLAIMS the four markers are equal, and they are equal at
+                // the committed offset's inclusive position, not at the exclusive one the wire carries
                 setAttribute(committedMarker, 'title', 'Committed, succeeded and seen are all offset '
-                    + formatOffset(model.offsets.committed) + ' - this partition is completely caught up.');
+                    + formatOffset(model.committedInclusiveText) + ' - this partition is completely caught up. The '
+                    + 'next offset to consume, which is what is committed to the broker, is '
+                    + formatOffset(model.offsets.committed) + '.');
                 return;
             }
 

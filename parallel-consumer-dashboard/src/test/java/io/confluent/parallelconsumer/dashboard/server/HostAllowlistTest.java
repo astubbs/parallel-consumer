@@ -11,6 +11,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -59,6 +60,47 @@ class HostAllowlistTest {
         HostAllowlist allowlist = new HostAllowlist(DashboardOptions.defaults());
 
         assertThat(allowlist.isAllowedHost(host)).isFalse();
+    }
+
+    /**
+     * A registered name must never be truncated at {@code %}.
+     * <p>
+     * A scope id is an IPv6 concept (RFC 6874) and appears only on a link-local literal. Stripping at {@code %}
+     * unconditionally makes {@code localhost%evil.example} compare equal to {@code localhost} - an attacker registers
+     * that name, points it at loopback, and the allowlist that this whole class exists to be waves it through. The
+     * DNS-rebinding CVEs cited in {@link HostAllowlist}'s javadoc are exactly this attack; a truncation bypass in the
+     * mitigation is the mitigation not existing.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "localhost%evil.example",
+            "localhost%evil.example:8080",
+            "127.0.0.1%evil.example",
+            "[localhost%evil.example]",
+            "localhost%",
+            "localhost%25evil.example"})
+    void aNameIsNeverTruncatedAtAPercentSign(String host) {
+        assertThat(new HostAllowlist(DashboardOptions.defaults()).isAllowedHost(host))
+                .as("%s must not match by truncation", host)
+                .isFalse();
+    }
+
+    /**
+     * The other half: a genuine IPv6 scope id still resolves to the scopeless literal, which is what the strip is for.
+     * Without this assertion the fix above could be "delete the strip", and a link-local literal would stop matching.
+     */
+    @Test
+    void anIpv6ScopeIdStillResolvesToTheScopelessLiteral() {
+        DashboardOptions options = DashboardOptions.builder()
+                .extraAllowedHosts(Collections.singleton("fe80::1"))
+                .build();
+        HostAllowlist allowlist = new HostAllowlist(options);
+
+        assertThat(allowlist.isAllowedHost("[fe80::1%eth0]")).isTrue();
+        assertThat(allowlist.isAllowedHost("[fe80::1%eth0]:8080")).isTrue();
+        assertThat(allowlist.isAllowedHost("[::1%lo0]"))
+                .as("the loopback literal carries a scope id too")
+                .isTrue();
     }
 
     @Test
@@ -120,6 +162,55 @@ class HostAllowlistTest {
 
         assertThat(response.statusCode).isEqualTo(403);
         assertThat(response.body).contains("cross-origin");
+    }
+
+    /**
+     * RFC 7230 s5.4: more than one {@code Host} field is a 400.
+     * <p>
+     * It matters for a second reason here. {@code getHeader()} returns the first value, so a request that carries an
+     * allowed authority followed by an attacker's would be checked against one value while anything downstream that
+     * read the last would see the other. A header the allowlist rests on has to be unambiguous or the request is not
+     * answerable at all - and the answer must not be "pick one".
+     */
+    @Test
+    void aRequestCarryingTwoHostHeadersIsRefused() throws IOException {
+        startServer();
+
+        RawHttp.Response response = RawHttp.requestWithRawHeaders("GET", server.getPort(), "/api/state.json",
+                Arrays.asList("Host: 127.0.0.1:" + server.getPort(), "Host: evil.example.com"));
+
+        assertThat(response.statusCode).isEqualTo(400);
+        assertThat(response.body)
+                .as("the answer has to be about the ambiguity, not about the allowlist")
+                .contains("more than one Host");
+    }
+
+    @Test
+    void aRequestCarryingTwoOriginHeadersIsRefused() throws IOException {
+        startServer();
+
+        RawHttp.Response response = RawHttp.requestWithRawHeaders("GET", server.getPort(), "/api/state.json",
+                Arrays.asList("Host: 127.0.0.1:" + server.getPort(),
+                        "Origin: http://127.0.0.1:" + server.getPort(),
+                        "Origin: http://evil.example.com"));
+
+        assertThat(response.statusCode).isEqualTo(400);
+        assertThat(response.body).contains("more than one Origin");
+    }
+
+    /**
+     * The control arm: the same request shape with one of each is accepted, so the two assertions above are about the
+     * duplication and not about the raw-header path being broken.
+     */
+    @Test
+    void aRequestCarryingExactlyOneOfEachIsStillAccepted() throws IOException {
+        startServer();
+
+        RawHttp.Response response = RawHttp.requestWithRawHeaders("GET", server.getPort(), "/api/state.json",
+                Arrays.asList("Host: 127.0.0.1:" + server.getPort(),
+                        "Origin: http://127.0.0.1:" + server.getPort()));
+
+        assertThat(response.statusCode).isEqualTo(200);
     }
 
     @Test

@@ -8,6 +8,7 @@ import io.confluent.parallelconsumer.dashboard.server.StateRoute;
 import io.confluent.parallelconsumer.dashboard.server.StatusRoute;
 import io.confluent.parallelconsumer.dashboard.server.StreamRoute;
 import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
+import io.confluent.parallelconsumer.dashboard.snapshot.StateSampler;
 import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.vertx.core.Future;
@@ -85,7 +86,7 @@ public class DashboardServer implements AutoCloseable {
     public static final String STATUS_PATH = "/status";
 
     /**
-     * URL prefix for the page's own assets, served from {@code web/} on the classpath.
+     * URL prefix for the page's own assets, served from {@link #PAGE_CLASSPATH_ROOT} on the classpath.
      */
     public static final String ASSETS_PREFIX = "/assets";
 
@@ -106,8 +107,21 @@ public class DashboardServer implements AutoCloseable {
 
     /**
      * Classpath directory holding the page shell.
+     *
+     * <h2>Why it is package-qualified, and why an unqualified {@code web} was a real hole</h2>
+     * <p>
+     * This module is a library embedded in somebody else's application, and a classpath is a flat, shared, merged
+     * namespace. An unqualified root means <em>any</em> other jar contributing {@code web/**} - or a plain
+     * {@code ./web} directory beside the process - lands in the same resolution space, so which file
+     * {@code /assets/app.js} returns depends on classpath order rather than on this module. That is both a broken
+     * dashboard (someone else's file shadows the page) and a disclosure surface (this module's public
+     * {@code /assets/*} mount serves someone else's file). Qualifying by package is the ordinary Java answer, and the
+     * one every well-behaved resource-bearing library uses.
+     * <p>
+     * The public URL prefix is unchanged: {@link #ASSETS_PREFIX} is what the browser asks for, and this is only where
+     * the bytes are found.
      */
-    public static final String PAGE_CLASSPATH_ROOT = "web";
+    public static final String PAGE_CLASSPATH_ROOT = "io/confluent/parallelconsumer/dashboard/web";
 
     /**
      * How long to wait for a bind or a shutdown before deciding the event loop is wedged. Generous; it only exists so
@@ -115,6 +129,13 @@ public class DashboardServer implements AutoCloseable {
      */
     private static final long LIFECYCLE_TIMEOUT_SECONDS = 30;
 
+    /**
+     * The snapshot source this server serves from. Exposed because a caller that used {@link #startFor} has no other
+     * handle on the publisher it created for them - and the publisher is where the sampling failure counts and the
+     * stop switch live, both of which are operational facts about a running dashboard. May be null: a server with no
+     * publisher is one of the misconfigurations {@code /status} exists to name.
+     */
+    @Getter
     private final SnapshotPublisher publisher;
 
     private final MeterRegistry registry;
@@ -132,6 +153,13 @@ public class DashboardServer implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private final AtomicBoolean started = new AtomicBoolean();
+
+    /**
+     * True when this server created the publisher itself - the {@link #startFor} path - and is therefore the thing
+     * responsible for stopping it. A publisher handed in through the public constructor belongs to the caller, who may
+     * be sharing it with something else, and closing a dashboard must not silently stop somebody else's sampling.
+     */
+    private boolean ownsPublisher;
 
     /**
      * The route table. Deliberately <em>not</em> exposed: Vert.x matches routes in registration order and evaluates
@@ -177,8 +205,16 @@ public class DashboardServer implements AutoCloseable {
     public static DashboardServer startFor(AbstractParallelEoSStreamProcessor<?, ?> pc,
                                            MeterRegistry registry,
                                            DashboardOptions options) {
-        SnapshotPublisher publisher = SnapshotPublisher.createAndRegister(pc, registry);
-        return new DashboardServer(publisher, registry, options).start();
+        SnapshotPublisher publisher = new SnapshotPublisher(new StateSampler(pc, registry));
+        DashboardServer server = new DashboardServer(publisher, registry, options);
+        server.ownsPublisher = true;
+        server.start();
+        // REGISTERED AFTER THE BIND, DELIBERATELY. start() is documented to throw - a port range that is entirely
+        // busy, an address that is not on this host - and there is no removeLoopEndCallBack in core, so a callback
+        // registered before it would be permanent: a failed dashboard start would leave a sampler walking the whole
+        // meter registry on the user's control loop for the life of the consumer, with no handle to stop it.
+        publisher.registerWith(pc);
+        return server;
     }
 
     /**
@@ -200,45 +236,68 @@ public class DashboardServer implements AutoCloseable {
             throw new IllegalStateException("This DashboardServer is already started, on " + url);
         }
         this.vertx = Vertx.vertx(new VertxOptions().setFileSystemOptions(fileSystemOptions()));
-        this.router = buildRouter();
+        // EVERYTHING AFTER THE Vertx CREATION IS GUARDED. A Vertx instance owns event-loop and worker threads, and
+        // bindWalkingUpward throws on both the non-retryable failure and the exhausted-range one. startFor()
+        // constructs this server inline, so a caller of the throwing path never gets a handle and could not close it
+        // even if it wanted to - the instance would simply be leaked, threads and all, for the life of the process.
+        try {
+            this.router = buildRouter();
 
-        HttpServerOptions serverOptions = new HttpServerOptions()
-                .setHost(options.getBindHostForSocket())
-                .setCompressionSupported(true);
+            HttpServerOptions serverOptions = new HttpServerOptions()
+                    .setHost(options.getBindHostForSocket())
+                    .setCompressionSupported(true);
 
-        this.httpServer = bindWalkingUpward(serverOptions);
-        this.url = options.url(port);
+            this.httpServer = bindWalkingUpward(serverOptions);
+            this.url = options.url(port);
 
-        // THE line. One, after the search, carrying a URL a terminal will linkify - see the class javadoc.
-        log.info("Parallel Consumer dashboard (EXPERIMENTAL, read-only, unauthenticated) is at {}", url);
+            // THE line. One, after the search, carrying a URL a terminal will linkify - see the class javadoc.
+            log.info("Parallel Consumer dashboard (EXPERIMENTAL, read-only, unauthenticated) is at {}", url);
 
-        if (!options.isLoopbackBind()) {
-            log.warn("The Parallel Consumer dashboard is bound to the NON-LOOPBACK address {}, so anything that can "
-                            + "reach this host can reach it. It is unauthenticated and has no access control. It "
-                            + "discloses: the consumer group id, the topic names, this instance's partition "
-                            + "assignments, and its committed, completed and seen offsets. Bind a loopback address "
-                            + "(the default) or put it behind something that authenticates.",
-                    options.getBindHostLiteral());
+            if (!options.isLoopbackBind()) {
+                log.warn("The Parallel Consumer dashboard is bound to the NON-LOOPBACK address {}, so anything that "
+                                + "can reach this host can reach it. It is unauthenticated and has no access "
+                                + "control. It discloses: the consumer group id, the topic names, this instance's "
+                                + "partition assignments, and its committed, completed and seen offsets. Bind a "
+                                + "loopback address (the default) or put it behind something that authenticates.",
+                        options.getBindHostLiteral());
+            }
+
+            streamRoute.start(vertx);
+            return this;
+        } catch (RuntimeException | Error failure) {
+            Vertx orphan = this.vertx;
+            this.vertx = null;
+            awaitQuietly(orphan.close(), "closing the Vertx instance of a dashboard that failed to start");
+            throw failure;
         }
-
-        streamRoute.start(vertx);
-        return this;
     }
 
     /**
-     * Stops serving, releases the port, and closes the {@link Vertx} instance this server created. Idempotent.
+     * Stops serving, releases the port, closes the {@link Vertx} instance this server created, and - if this server
+     * created the publisher - stops it sampling. Idempotent.
+     * <p>
+     * <strong>Stopping the sampling is not optional tidiness.</strong> Core has no {@code removeLoopEndCallBack}, so
+     * the callback {@link #startFor} registers cannot be taken off the control loop; without
+     * {@link SnapshotPublisher#stopSampling()} a closed dashboard would keep walking the whole meter registry and
+     * allocating a snapshot on the user's control thread forever, and every start/stop cycle would add another one.
+     * <p>
+     * Shutdown failures are logged at WARN rather than swallowed: this method returns {@code void}, so the log line is
+     * the only way a caller learns that a port or an event-loop thread is still held.
      */
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        if (ownsPublisher && publisher != null) {
+            publisher.stopSampling();
+        }
         streamRoute.close();
         if (httpServer != null) {
-            awaitQuietly(httpServer.close(), "closing the dashboard HTTP server");
+            awaitOrWarn(httpServer.close(), "closing the dashboard HTTP server");
         }
         if (vertx != null) {
-            awaitQuietly(vertx.close(), "closing the dashboard Vertx instance");
+            awaitOrWarn(vertx.close(), "closing the dashboard Vertx instance");
         }
     }
 
@@ -496,13 +555,34 @@ public class DashboardServer implements AutoCloseable {
         }
     }
 
+    /**
+     * For failures that are expected and uninteresting - closing a server that already failed to bind, during a port
+     * search that logs nothing by design.
+     */
     private static void awaitQuietly(Future<Void> future, String what) {
+        awaitLogging(future, what, false);
+    }
+
+    /**
+     * For shutdown. {@link #close()} returns {@code void}, so a failure that only reaches DEBUG is a failure the
+     * caller has no way at all to learn about - and "the port is still held" is precisely the thing they need to know.
+     */
+    private static void awaitOrWarn(Future<Void> future, String what) {
+        awaitLogging(future, what, true);
+    }
+
+    private static void awaitLogging(Future<Void> future, String what, boolean warn) {
         try {
             await(future);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            log.debug("Ignoring a failure while {}.", what, e);
+            if (warn) {
+                log.warn("The Parallel Consumer dashboard failed while {}. Its shutdown did not complete cleanly, so "
+                        + "the port or an event-loop thread may still be held.", what, e);
+            } else {
+                log.debug("Ignoring a failure while {}.", what, e);
+            }
         }
     }
 }

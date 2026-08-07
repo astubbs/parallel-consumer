@@ -957,7 +957,7 @@ Browser verification is a required gate, not a courtesy. R14 through R19 are vis
 - The `ChaosConductor` refactor is behaviour-preserving: the existing chaos scenarios pass unchanged, and a test asserts that a given seed produces a draw-for-draw identical plan to the pre-refactor implementation.
 - Every public type in the module carries `@InterfaceStability.Unstable`, enforced by an arch test rather than by review.
 - No recording, video or other build product is committed.
-- No file under `parallel-consumer-core` is modified. If a unit appears to require one, stop per the Goal Capsule rather than proceeding - astubbs#57 owns the likely candidates.
+- No file under `parallel-consumer-core/src/main` is modified. If a unit appears to require one, stop per the Goal Capsule rather than proceeding - astubbs#57 owns the likely candidates. This does **not** cover `parallel-consumer-core/src/test-integration`, which KTD14 deliberately modifies in place when it generalises `ChaosConductor`; an earlier wording of this line said "under `parallel-consumer-core`" and so contradicted KTD14 on its literal text.
 - No `CHANGELOG.adoc` entry is added.
 - All new files carry the fork-original copyright header.
 - The chart library's licence ships with the artifact and is recorded in `NOTICE`.

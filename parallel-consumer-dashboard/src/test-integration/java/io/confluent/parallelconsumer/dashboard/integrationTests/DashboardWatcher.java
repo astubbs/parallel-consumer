@@ -134,6 +134,14 @@ public class DashboardWatcher implements AutoCloseable {
     private volatile long phaseMinPartitions = Long.MAX_VALUE;
     private volatile long phaseEpochChangeBaseline;
     private volatile long phaseSampleBaseline;
+    /**
+     * The processed-records total when the phase began, so a phase can assert what IT produced.
+     * <p>
+     * {@link #peakProcessedRecords} is a monotonic run-scoped high-water mark, so {@code > 0} is true forever after
+     * the first record of the run. In {@code LOOP} mode that made the ramp phase's postcondition vacuous from the
+     * second pass onward: it would have held with the producer dead and the consumer idle.
+     */
+    private volatile long phaseProcessedBaseline;
 
     public DashboardWatcher(Supplier<PcSnapshot> source) {
         if (source == null) throw new IllegalArgumentException("a watcher needs a snapshot source to read");
@@ -172,6 +180,7 @@ public class DashboardWatcher implements AutoCloseable {
         this.phaseMinPartitions = Long.MAX_VALUE;
         this.phaseEpochChangeBaseline = assignmentEpochChanges.get();
         this.phaseSampleBaseline = samplesTaken.get();
+        this.phaseProcessedBaseline = peakProcessedRecords.get();
     }
 
     private void pollLoop() {
@@ -241,9 +250,16 @@ public class DashboardWatcher implements AutoCloseable {
      * immediately and reports recovery in the very phase that is supposed to be BLOCKING it. Measured: a band
      * of 129 offsets above floor 1990 reported "committed 1991" while the key was still failing. Requiring the
      * commit to clear the top offset is the only version that means the stranded work actually got committed.
+     * <p>
+     * <strong>And it may only run once the band is FROZEN.</strong> The top-offset rule fixed the comparison but not
+     * the timing: while the stranding phase is still running, {@link #widestBand} is whatever transient band a busy
+     * partition happens to be holding, usually on a partition nothing is blocking - and its commit clears that band's
+     * top within seconds. So the latch fired during the phase that exists to prevent it, and the recovery phase's
+     * postcondition - the headline assertion of the whole showcase - was satisfied before a single retry had drained.
+     * The band is only a stable target after {@link #freezeStrandedBandCapture()}, so that is when this may look.
      */
     private void latchRecoveryIfCommitPassedTheBand() {
-        if (recoveredBand != null) return;
+        if (!strandedBandCaptureFrozen || recoveredBand != null) return;
         StrandedBand band = widestBand;
         if (band == null) return;
         Long committed = highestCommitted.get(band.getPartitionKey());
@@ -281,6 +297,9 @@ public class DashboardWatcher implements AutoCloseable {
      * recovery phase has one fixed thing to prove the commit cleared.
      */
     public void freezeStrandedBandCapture() {
+        // cleared as part of the freeze: any latch recorded before this point was against a band that was still
+        // moving, so it is not evidence about the band the recovery phase is now aiming at
+        this.recoveredBand = null;
         this.strandedBandCaptureFrozen = true;
         log.info("Stranded-band capture frozen at: {}", widestBand);
     }
@@ -354,6 +373,17 @@ public class DashboardWatcher implements AutoCloseable {
         return phasePeakInflight;
     }
 
+    /**
+     * Records processed <em>during this phase</em> - the run total now, minus what it was when the phase began.
+     * <p>
+     * Every other phase asks a phase-scoped question; this is the one that was asking a run-scoped one. Use this,
+     * never {@link #getPeakProcessedRecords()}, in a postcondition: the run-scoped figure is monotonic and cannot
+     * distinguish "this phase moved records" from "some earlier phase did".
+     */
+    public long getPhaseProcessedRecords() {
+        return peakProcessedRecords.get() - phaseProcessedBaseline;
+    }
+
     /** Most shards seen holding work at one instant during this phase - occupancy, not a running total. */
     public long getPhasePeakShards() {
         return phasePeakShards;
@@ -383,6 +413,7 @@ public class DashboardWatcher implements AutoCloseable {
         lines.add("band the commit cleared:     " + (recovered == null
                 ? "none - the commit never got above a stranded band's top offset"
                 : recovered + ", highest committed there: " + highestCommitted.get(recovered.getPartitionKey())));
+        lines.add("stranded-band capture:       " + (strandedBandCaptureFrozen ? "frozen" : "still moving"));
         lines.add("last phase entered:          " + phaseDescription);
         return lines;
     }

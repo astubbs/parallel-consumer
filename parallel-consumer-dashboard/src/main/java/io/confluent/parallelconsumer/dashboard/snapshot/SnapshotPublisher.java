@@ -103,6 +103,21 @@ public class SnapshotPublisher {
             "A dashboard snapshot listener threw and was suppressed - the snapshot was still published, the other "
                     + "listeners still ran, and the consumer is unaffected.");
 
+    /**
+     * Set by {@link #stopSampling()}; checked at the top of {@link #sampleOnce()}.
+     * <p>
+     * <strong>This is the only way sampling can be stopped, because core has no {@code removeLoopEndCallBack}.</strong>
+     * A registered callback lives as long as the {@link AbstractParallelEoSStreamProcessor} does, so without this flag
+     * a closed dashboard would keep walking every meter in the registry and allocating a snapshot on the user's
+     * control loop, forever - and every start/stop cycle would add another one. Making the callback a cheap
+     * volatile-read-and-return is the most this module can do from outside core; adding
+     * {@code removeLoopEndCallBack} there is the durable fix and would let the callback be deregistered outright.
+     * <p>
+     * Volatile because {@link #stopSampling()} is called from whichever thread closes the server and the flag is read
+     * on the control thread.
+     */
+    private volatile boolean samplingStopped;
+
     public SnapshotPublisher(StateSampler sampler) {
         this.sampler = sampler;
     }
@@ -134,6 +149,10 @@ public class SnapshotPublisher {
      * move) instead of going blank.
      */
     public void sampleOnce() {
+        if (samplingStopped) {
+            // the callback cannot be deregistered from here, so this is where it becomes free - see samplingStopped
+            return;
+        }
         PcSnapshot fresh;
         try {
             fresh = sampler.sample();
@@ -147,6 +166,28 @@ public class SnapshotPublisher {
         // AFTER the publish, never before: a listener that reacts by reading getSnapshots() must find the sample it
         // was told about, not the one before it
         notifyListeners();
+    }
+
+    /**
+     * Stops sampling permanently. Idempotent, and safe to call from any thread.
+     * <p>
+     * After this returns, the loop-end callback registered by {@link #registerWith} does a volatile read and returns.
+     * The last published pair is left in place, so a reader that still holds this publisher sees the final reading
+     * ageing rather than a null.
+     * <p>
+     * There is no {@code startSampling()} counterpart on purpose: this is a shutdown, and a publisher that could be
+     * resumed would need to answer what happens to the gap in the middle. Construct a new one.
+     */
+    public void stopSampling() {
+        samplingStopped = true;
+    }
+
+    /**
+     * Whether {@link #stopSampling()} has been called. Exists so a shutdown can be asserted to have actually taken
+     * effect - the alternative is counting samples and waiting, which proves nothing about a slow control loop.
+     */
+    public boolean isSamplingStopped() {
+        return samplingStopped;
     }
 
     /**

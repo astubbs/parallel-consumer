@@ -106,6 +106,18 @@ abstract class DashboardUiTestBase {
      * suite navigates afresh anyway, so per-test browsers would buy isolation the tests do not need at a cost they
      * would feel.
      */
+    /**
+     * The exclusive resource every UI suite must take, because the driver above is shared across the whole JVM.
+     * <p>
+     * {@code @Execution(SAME_THREAD)} serialises the methods WITHIN one class; it says nothing about two classes
+     * running at the same time, and this repository executes tests concurrently outside the {@code ci} profile. So
+     * {@code OffsetRibbonUiIT} and {@code PageShellUiIT} could drive one {@code ChromeDriver} from two threads at
+     * once - which is not thread-safe, and whose symptom is a navigation landing in the middle of another test's
+     * assertions. It would flake on a developer's {@code mvn verify} and never in CI, which is the worst place for a
+     * race to live. A named resource lock is what actually serialises them against each other.
+     */
+    static final String BROWSER_RESOURCE = "dashboard-ui-shared-chrome-driver";
+
     private static volatile ChromeDriver sharedDriver;
 
     private static volatile boolean browserUnavailable;
@@ -304,6 +316,7 @@ abstract class DashboardUiTestBase {
                 + "    note: row.querySelector('.pt-note').textContent.trim(),"
                 + "    order: row.style.order,"
                 + "    collapsed: row.getAttribute('data-collapsed'),"
+                + "    axis: row.querySelector('.pt-axis').textContent.trim(),"
                 + "    caveatHidden: row.querySelector('.badge-caveat').hasAttribute('hidden'),"
                 + "    spans: Array.from(row.querySelectorAll('.pt-span'))"
                 + "      .filter(span => span.style.display !== 'none')"
@@ -454,9 +467,16 @@ abstract class DashboardUiTestBase {
     static final String ORDINARY_PARTITION = "orders-1";
 
     /**
-     * The caught-up one: every marker on the same offset, which must read as healthy rather than as an error.
+     * The caught-up one: everything seen has been processed and committed, which must read as healthy rather than as
+     * an error. See {@link #caughtUpPartition} for why its committed offset is not equal to the other three.
      */
     static final String CAUGHT_UP_PARTITION = "payments-7";
+
+    /**
+     * The offset every marker on {@link #CAUGHT_UP_PARTITION} sits at - except the committed gauge, which reads one
+     * above it.
+     */
+    static final long CAUGHT_UP_OFFSET = 900L;
 
     static final String INSTANCE_ID = "pc-ui-fixture-1";
 
@@ -476,9 +496,9 @@ abstract class DashboardUiTestBase {
                         .numberOfPartitions(3L)
                         .dynamicLoadFactor(2.5d)
                         .build(),
-                partition("orders", 0, ABOVE_SAFE_INTEGER, ABOVE_SAFE_INTEGER, HUGE_COMPLETED, HUGE_SEEN, 7L),
+                partition("orders", 0, ABOVE_SAFE_INTEGER + 1, ABOVE_SAFE_INTEGER, HUGE_COMPLETED, HUGE_SEEN, 7L),
                 partition("orders", 1, 50L, 55L, 60L, 64L, 4L),
-                partition("payments", 7, 900L, 900L, 900L, 900L, 0L));
+                caughtUpPartition("payments", 7, 900L));
     }
 
     /**
@@ -497,7 +517,7 @@ abstract class DashboardUiTestBase {
                         .pausedPartitions(0L)
                         .numberOfPartitions(1L)
                         .build(),
-                partition("payments", 7, 900L, 900L, 900L, 900L, 0L));
+                caughtUpPartition("payments", 7, 900L));
     }
 
     private static PcSnapshot snapshot(WorkSnapshot work, PartitionSnapshot... partitions) {
@@ -516,6 +536,19 @@ abstract class DashboardUiTestBase {
                 .work(work)
                 .partitions(Arrays.asList(partitions))
                 .build();
+    }
+
+    /**
+     * A partition whose commit has caught up with its processing - the shape a real instance produces, and the one no
+     * fixture here used to have.
+     * <p>
+     * <strong>Its committed gauge reads {@code highestDone + 1}.</strong> Kafka's committed offset is the next offset
+     * to consume, and core publishes {@code highestSequentialSucceeded + 1} into the gauge the dashboard samples. A
+     * fixture setting all four markers equal describes a state no running instance produces, and it is what let an
+     * off-by-one survive in both the ordering invariant and the page's model.
+     */
+    private static PartitionSnapshot caughtUpPartition(String topic, int number, long highestDone) {
+        return partition(topic, number, highestDone + 1, highestDone, highestDone, highestDone, 0L);
     }
 
     private static PartitionSnapshot partition(String topic,

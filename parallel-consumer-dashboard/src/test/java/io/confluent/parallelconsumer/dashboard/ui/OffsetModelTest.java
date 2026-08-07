@@ -50,9 +50,14 @@ class OffsetModelTest {
      * The row the precision assertions are about. Its committed and sequential markers sit one above
      * {@code Number.MAX_SAFE_INTEGER}, where {@code double} arithmetic starts stepping in twos.
      */
-    private static final String HUGE_COMMITTED = PageViews.ABOVE_SAFE_INTEGER;
-
     private static final String HUGE_SEQUENTIAL = PageViews.ABOVE_SAFE_INTEGER;
+
+    /**
+     * One ABOVE {@link #HUGE_SEQUENTIAL}, because the committed gauge carries the next offset to consume rather than
+     * the last one done - see {@link PageViews#caughtUpPartition}. Fixtures that made this equal to the sequential
+     * marker are what let the off-by-one in the ordering invariant and the ready span survive.
+     */
+    private static final String HUGE_COMMITTED = "9007199254740994";
 
     private static final String HUGE_COMPLETED = "9007199254741999";
 
@@ -169,12 +174,53 @@ class OffsetModelTest {
         Value ordinary = byLabel(buildModels(threePartitionView()), "orders-1");
         Value positions = ordinary.getMember("positions");
 
-        // committed 50, sequential 55, completed 60, seen 64 - an axis 14 wide
-        assertThat(positions.getMember("axisWidth").asDouble()).isEqualTo(14d);
+        // the committed gauge reads 50, so the highest offset actually committed is 49 - which is where the bar
+        // starts. sequential 55, completed 60, seen 64: an axis 15 wide.
+        assertThat(positions.getMember("axisWidth").asDouble()).isEqualTo(15d);
         assertThat(positions.getMember("committed").asDouble()).isEqualTo(0d);
-        assertThat(positions.getMember("sequential").asDouble()).isCloseTo(5d / 14d, within());
-        assertThat(positions.getMember("completed").asDouble()).isCloseTo(10d / 14d, within());
+        assertThat(positions.getMember("sequential").asDouble()).isCloseTo(6d / 15d, within());
+        assertThat(positions.getMember("completed").asDouble()).isCloseTo(11d / 15d, within());
         assertThat(positions.getMember("seen").asDouble()).isEqualTo(1d);
+    }
+
+    /**
+     * The committed gauge is the NEXT offset to consume, so the run of successes waiting to be committed starts AT it,
+     * not above it. Reading it as inclusive makes this span one short, and makes it negative - clamped to zero, and so
+     * invisible - on a partition whose commit has caught up.
+     */
+    @Test
+    void theReadySpanCountsFromTheCommittedGaugeInclusive() {
+        Value ordinary = byLabel(buildModels(threePartitionView()), "orders-1");
+
+        // offsets 50, 51, 52, 53, 54, 55 are done and sitting above the commit point
+        assertThat(page.stringify(ordinary.getMember("readyCount"))).isEqualTo("6");
+        assertThat(ordinary.getMember("committedInclusiveText").asString())
+                .as("the axis is drawn from the highest offset actually committed")
+                .isEqualTo("49");
+        assertThat(ordinary.getMember("offsets").getMember("committed").asString())
+                .as("but the reader is still shown the raw wire value, which is what the broker holds")
+                .isEqualTo("50");
+    }
+
+    /**
+     * The shape a real instance produces once it is caught up - committed one above every other marker - which is
+     * exactly the shape every fixture in this suite used to avoid. If the model treats the committed offset as
+     * inclusive, this row is not collapsed, its ready span is a phantom, and the "Caught up" sentence, the
+     * degenerate-axis branch and the ordering badge are all unreachable or permanently wrong.
+     */
+    @Test
+    void aCommitThatHasCaughtUpReadsAsCaughtUpRatherThanAsAnInversion() {
+        Value caughtUp = byLabel(buildModels(threePartitionView()), "payments-7");
+
+        assertThat(caughtUp.getMember("offsets").getMember("committed").asString())
+                .as("the fixture must be the shape a real consumer produces, or it proves nothing")
+                .isEqualTo("901");
+        assertThat(caughtUp.getMember("collapsed").asBoolean()).isTrue();
+        assertThat(caughtUp.getMember("degenerateAxis").asBoolean()).isTrue();
+        assertThat(page.stringify(caughtUp.getMember("readyCount")))
+                .as("nothing is waiting to be committed on a partition whose commit has caught up")
+                .isEqualTo("0");
+        assertThat(caughtUp.getMember("committedInclusiveText").asString()).isEqualTo("900");
     }
 
     /**
@@ -212,9 +258,11 @@ class OffsetModelTest {
 
     private static JsonObject threePartitionView() {
         return PageViews.view(
-                // deliberately not in the order they should come out in
+                // deliberately not in the order they should come out in.
+                // orders-1 has a commit that is BEHIND its processing: the last commit recorded offset 49, so the
+                // gauge reads 50, and offsets 50..55 are done and waiting to be committed.
                 PageViews.partition("orders", 1, "50", "55", "60", "64", 4L),
-                PageViews.partition("payments", 7, "900", "900", "900", "900", 0L),
+                PageViews.caughtUpPartition("payments", 7, "900"),
                 PageViews.partition("orders", 0, HUGE_COMMITTED, HUGE_SEQUENTIAL, HUGE_COMPLETED, HUGE_SEEN, 7L));
     }
 

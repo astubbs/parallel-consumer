@@ -50,6 +50,13 @@ public class PartitionSnapshot {
 
     /**
      * {@code pc.partition.latest.committed.offset} - what has actually been committed to the broker.
+     * <p>
+     * <strong>This is the NEXT offset to consume, not the last one done.</strong> Kafka's commit is exclusive, and
+     * {@code PartitionState.getOffsetToCommit()} publishes {@code highestSequentialSucceeded + 1}, so on a partition
+     * that is completely caught up this reads one <em>above</em> every other marker here. Carried on the wire exactly
+     * as the gauge reports it - it is the number the broker holds and the offset a restart resumes from - and
+     * converted to its inclusive form only where it is compared against the other three. See
+     * {@link #isOffsetOrderingConsistent()}.
      */
     Long lastCommittedOffset;
 
@@ -119,16 +126,30 @@ public class PartitionSnapshot {
      * This is the invariant the offset ribbon is drawn from - if it can be violated the graphic is meaningless, so
      * it is asserted rather than assumed. Markers that are absent are skipped rather than treated as zero: a missing
      * meter must not be able to report a false violation.
+     * <p>
+     * The committed marker is normalised to {@link #committedInclusive()} first. The other three are inclusive
+     * positions - the highest offset that is seen, succeeded, sequentially succeeded - while the committed gauge is
+     * exclusive, so comparing them raw reports every <em>caught-up</em> partition as violating the invariant, which is
+     * the one partition state that is unambiguously healthy.
      */
     public boolean isOffsetOrderingConsistent() {
-        return notAbove(lastCommittedOffset, highestSequentialSucceededOffset)
+        Long committed = committedInclusive();
+        return notAbove(committed, highestSequentialSucceededOffset)
                 && notAbove(highestSequentialSucceededOffset, highestCompletedOffset)
                 && notAbove(highestCompletedOffset, highestSeenOffset)
                 // also check the pairs that skip an absent middle marker, so one missing meter does not hide a
                 // genuine inversion between the markers either side of it
-                && notAbove(lastCommittedOffset, highestCompletedOffset)
-                && notAbove(lastCommittedOffset, highestSeenOffset)
+                && notAbove(committed, highestCompletedOffset)
+                && notAbove(committed, highestSeenOffset)
                 && notAbove(highestSequentialSucceededOffset, highestSeenOffset);
+    }
+
+    /**
+     * {@link #lastCommittedOffset} as an inclusive position - the highest offset actually committed - so it is
+     * comparable with the other three markers. Null in, null out: an absent meter stays absent.
+     */
+    private Long committedInclusive() {
+        return lastCommittedOffset == null ? null : lastCommittedOffset - 1;
     }
 
     private static boolean notAbove(Long lower, Long upper) {

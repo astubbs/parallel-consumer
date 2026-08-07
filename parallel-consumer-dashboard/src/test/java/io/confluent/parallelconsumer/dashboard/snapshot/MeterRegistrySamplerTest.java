@@ -74,7 +74,8 @@ class MeterRegistrySamplerTest {
         PartitionSnapshot orders0 = snapshot.getPartitions().get(0);
         assertThat(orders0.getTopic()).isEqualTo("orders");
         assertThat(orders0.getPartition()).isEqualTo(0);
-        assertThat(orders0.getLastCommittedOffset()).isEqualTo(100L);
+        // the gauge carries the next offset to consume, so a commit that has taken offset 100 reads 101
+        assertThat(orders0.getLastCommittedOffset()).isEqualTo(101L);
         assertThat(orders0.getHighestSequentialSucceededOffset()).isEqualTo(100L);
         assertThat(orders0.getHighestCompletedOffset()).isEqualTo(140L);
         assertThat(orders0.getHighestSeenOffset()).isEqualTo(150L);
@@ -88,6 +89,9 @@ class MeterRegistrySamplerTest {
     /**
      * The invariant the offset ribbon is drawn from. If it can be violated the graphic is meaningless, so it is
      * asserted here rather than assumed downstream.
+     * <p>
+     * The committed marker is compared as {@code committed - 1}, because the gauge is exclusive and the other three
+     * are not. Comparing it raw is what made this invariant read as violated on every caught-up partition.
      */
     @Test
     void offsetMarkersAreNonDecreasing() {
@@ -98,8 +102,8 @@ class MeterRegistrySamplerTest {
             assertThat(row.isOffsetOrderingConsistent())
                     .as("offset markers must be non-decreasing for %s", row.getKey())
                     .isTrue();
-            assertThat(row.getLastCommittedOffset())
-                    .as("committed <= sequential-succeeded for %s", row.getKey())
+            assertThat(row.getLastCommittedOffset() - 1)
+                    .as("highest committed offset <= sequential-succeeded for %s", row.getKey())
                     .isLessThanOrEqualTo(row.getHighestSequentialSucceededOffset());
             assertThat(row.getHighestSequentialSucceededOffset())
                     .as("sequential-succeeded <= completed for %s", row.getKey())
@@ -108,6 +112,41 @@ class MeterRegistrySamplerTest {
                     .as("completed <= seen for %s", row.getKey())
                     .isLessThanOrEqualTo(row.getHighestSeenOffset());
         }
+    }
+
+    /**
+     * The other half of the detector: a partition whose commit has caught up is the shape a real instance spends most
+     * of its life in, and the committed gauge then sits one <em>above</em> every other marker. Compared raw it looks
+     * like an inversion, which would un-hide the "markers sampled out of order" badge permanently and make the page's
+     * whole caught-up path unreachable.
+     */
+    @Test
+    void aCommitThatHasCaughtUpIsConsistentRatherThanInverted() {
+        PcMeterFixture fixture = new PcMeterFixture()
+                // everything through 900 done and committed, so the gauge reads 901
+                .partitionOffsets("orders", 0, 901, 900, 900, 900, 0, 3);
+
+        PcSnapshot snapshot = samplerOver(fixture.getRegistry()).sample();
+
+        PartitionSnapshot row = snapshot.getPartitions().get(0);
+        assertThat(row.getLastCommittedOffset())
+                .as("the wire keeps the raw gauge value - it is the offset a restart resumes from")
+                .isEqualTo(901L);
+        assertThat(row.isOffsetOrderingConsistent()).isTrue();
+    }
+
+    /**
+     * One past caught up is still a genuine inversion and must still be reported: the normalisation subtracts exactly
+     * one, it does not grant the committed marker a free pass.
+     */
+    @Test
+    void aCommittedOffsetTwoAboveTheSequentialMarkerIsStillInconsistent() {
+        PcMeterFixture fixture = new PcMeterFixture()
+                .partitionOffsets("orders", 0, 902, 900, 900, 900, 0, 3);
+
+        PcSnapshot snapshot = samplerOver(fixture.getRegistry()).sample();
+
+        assertThat(snapshot.getPartitions().get(0).isOffsetOrderingConsistent()).isFalse();
     }
 
     /**
