@@ -1416,8 +1416,27 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return intermediateResults;
     }
 
+    /**
+     * The single release point for a context's produce lock.
+     * <p>
+     * Only unlock our producing lock once every {@link WorkContainer} of this context has been safely returned to the
+     * controller's inbound queue, so we know they'll all be included properly before the next commit as succeeded
+     * offsets. As in order for the controller to perform the transaction commit, it will be blocked from acquiring its
+     * commit lock until all produce locks have been returned, inbound queue processed, and thus their representative
+     * offsets placed into the commit payload (offset map).
+     * <p>
+     * This runs in the {@code finally} of {@link #runUserFunction}, which is strictly after the whole batch has been
+     * added to the mailbox on the success path, after the failure handler's re-add on the error path, and is the only
+     * release for work handed to an external engine ({@link ExternalEngine}) that never reaches the mailbox here at
+     * all. Releasing per-{@link WorkContainer} instead would release after the *first* record of a batch, leaving the
+     * rest of it exposed to exactly the commit window this lock exists to close - and would owe one release per record
+     * against a lock acquired once per context.
+     */
     private void cleanUpContext(final PollContextInternal<K, V> context) {
-        context.getProducingLock().ifPresent(ProducerManager.ProducingLock::unlock);
+        context.takeProducingLock().ifPresent(lock -> producerManager
+                // a lock can only exist because a ProducerManager handed it out
+                .orElseThrow(() -> new InternalRuntimeException("Produce lock held, but there is no producer manager to return it to"))
+                .finishProducing(lock));
     }
 
     protected void addToMailBoxOnUserFunctionSuccess(PollContextInternal<K, V> context, WorkContainer<K, V> wc, List<?> resultsFromUserFunction) {
@@ -1433,8 +1452,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         String state = wc.isUserFunctionSucceeded() ? "succeeded" : "FAILED";
         log.trace("Adding {} {} to mailbox...", state, wc);
         workMailBox.add(ControllerEventMessage.of(wc));
-
-        wc.onPostAddToMailBox(pollContext, producerManager);
     }
 
     public void registerWork(EpochAndRecordsMap<K, V> polledRecords) {

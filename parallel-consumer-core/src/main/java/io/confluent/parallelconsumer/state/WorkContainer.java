@@ -5,10 +5,8 @@ package io.confluent.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.PollContextInternal;
 import io.confluent.parallelconsumer.RecordContext;
 import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.ProducerManager;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NonNull;
@@ -261,17 +259,4 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         return isNotInFlight() && !isUserFunctionSucceeded() && isDelayPassed();
     }
 
-    /**
-     * Only unlock our producing lock, when we've had the {@link WorkContainer} state safely returned to the controllers
-     * inbound queue, so we know it'll be included properly before the next commit as a succeeded offset. As in order
-     * for the controller to perform the transaction commit, it will be blocked from acquiring its commit lock until all
-     * produce locks have been returned, inbound queue processed, and thus their representative offsets placed into the
-     * commit payload (offset map).
-     */
-    public void onPostAddToMailBox(PollContextInternal<K, V> context, Optional<ProducerManager<K, V>> producerManager) {
-        producerManager.ifPresent(pm -> {
-            var producingLock = context.getProducingLock();
-            producingLock.ifPresent(pm::finishProducing);
-        });
-    }
 }
