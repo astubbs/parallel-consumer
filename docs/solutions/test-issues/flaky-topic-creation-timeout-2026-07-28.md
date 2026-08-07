@@ -30,7 +30,7 @@ tags:
 
 ## Context
 
-The required `Integration Tests` CI check failed intermittently on PRs that changed **no production code** (e.g. docs-only PRs #56 and #61). The failure was always the same:
+The required `Integration Tests` CI check failed intermittently on PRs that changed **no production code** (e.g. docs-only PRs astubbs#56 and astubbs#61). The failure was always the same:
 
 ```
 java.lang.RuntimeException: java.util.concurrent.TimeoutException

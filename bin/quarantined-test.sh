@@ -7,7 +7,7 @@
 # tests excluded from the gating suites. Red here is EXPECTED while the owning fix PR is open; the
 # point of running them anyway is to see when they start passing (fix landed), when they get worse,
 # and to keep their signal alive (a "known flake" can be a real product bug - see
-# docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md - lands with PR #80).
+# docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md - lands with PR astubbs#80).
 #
 # Usage: bin/quarantined-test.sh [extra-maven-args...]
 #

@@ -51,7 +51,7 @@ run_checker() { # <stdin-text> <run-id> <outcome>
 POSTED_COMMENT='**Claude finished @astubbs'"'"'s task in 1m 52s** —— [View job](https://github.com/astubbs/parallel-consumer/actions/runs/30965089954)
 
 ---
-### Reviewing PR #124
+### Reviewing PR astubbs#124
 Looks good to me.'
 
 OTHER_BOT_COMMENTS='## Duplicate Code Report

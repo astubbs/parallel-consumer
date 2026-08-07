@@ -1,10 +1,10 @@
 # Mutation testing: what we have, why it under-delivers, and what to change
 
-**Status:** the plumbing and the retarget are DONE (shipped in PR #111, marked inline below). What is
+**Status:** the plumbing and the retarget are DONE (shipped in PR astubbs#111, marked inline below). What is
 still parked is the **measurement**: no sweep has completed under the new target, so no mutation score
 should be quoted for this project yet.
 **Written:** 2026-08-03 (status and corrections updated 2026-08-04)
-**Context:** written while fixing the `ProducerManagerTest` flake (PR #110) that had been aborting the
+**Context:** written while fixing the `ProducerManagerTest` flake (PR astubbs#110) that had been aborting the
 PIT lane. That fix restores the lane; this document is about whether the lane is pointed anywhere
 useful once it runs.
 
@@ -17,7 +17,7 @@ pitest's own source rather than its documentation, one because the automated rev
 They are recorded in place below (§2, §3.4, §4.2) because a plan that quietly corrects itself teaches
 nothing.
 
-| Done in #111 | |
+| Done in astubbs#111 | |
 |---|---|
 | **Retargeted to `offsets.*`** | §4.3, the substantive one - in the sweep default *and* in the per-PR lane, which now mutates changed classes only within the decidable packages and names those it declined. |
 | Full sweep off PRs | Deleted from the highcpu matrix, now manual-only in `mutation-full-sweep.yml`. Not yet on a trigger - not because it cannot be (that reasoning was `internal.*`-specific and does not survive the retarget), but because at the time nothing had measured its runtime. Since measured at 22 minutes; wiring the trigger is now a cost decision. |
@@ -114,8 +114,8 @@ That has happened twice already, and both times the flake was somewhere unrelate
 
 | PR | Test | Effect |
 |---|---|---|
-| #101 | `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` | whole lane aborted |
-| #110 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | whole lane aborted |
+| astubbs#101 | `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` | whole lane aborted |
+| astubbs#110 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | whole lane aborted |
 
 Three consequences worth holding onto:
 
@@ -129,7 +129,7 @@ Three consequences worth holding onto:
   most often means "something, somewhere, is flaky" rather than anything about mutants. Check for the
   `did not pass without mutation` line before investigating mutation config.
 
-#### FIXED in #111: `skipFailingTests`
+#### FIXED in astubbs#111: `skipFailingTests`
 
 This one turned out to have a direct fix in pitest itself, which the original draft missed by reading
 the docs rather than the source: `skipFailingTests` makes PIT **drop a failing test's coverage instead
@@ -165,7 +165,7 @@ to be one.
 ### 3.1 The full sweep has never completed
 
 `bin/ci-mutation-test.sh` said so itself at the time: *"The full internal.* sweep is impractically slow
-(it has never completed on CI)."* Observed on PR #110: still running at 42 minutes on CI, and 83+
+(it has never completed on CI)."* Observed on PR astubbs#110: still running at 42 minutes on CI, and 83+
 minutes locally with minions dying on `MEMORY_ERROR` and `TIMED_OUT`. (That statement is about
 `internal.*`, which is no longer the target — but nothing has completed under the new one either yet,
 so it stands until a run proves otherwise.)
@@ -173,7 +173,7 @@ so it stands until a run proves otherwise.)
 An unbounded sweep that never finishes scores **zero** mutants. It is not a slow signal, it is no
 signal, and it costs high-CPU runner time on every PR to produce it.
 
-**Done in #111:** removed from the PR lane; now manual-only in `mutation-full-sweep.yml`, with
+**Done in astubbs#111:** removed from the PR lane; now manual-only in `mutation-full-sweep.yml`, with
 `target-classes` / `target-tests` as dispatch inputs so pointing it at a decidable package (§4.3) is a
 form field rather than a commit.
 
@@ -193,7 +193,7 @@ It was still worth removing, because it carried a hazard the others don't: that 
 sweep. A shallow checkout therefore silently promotes a scoped run into the sweep that has never
 completed - on a laptop. Re-enabling that trigger would have shipped the hazard with it.
 
-**Done in #111:** one lane, `maven.yml`, which checks out with `fetch-depth: 0`. The fallback is
+**Done in astubbs#111:** one lane, `maven.yml`, which checks out with `fetch-depth: 0`. The fallback is
 documented at the point of the fallback, because it is only dangerous in combination with a checkout
 setting in a different file.
 
@@ -248,7 +248,7 @@ Roughly in payoff order, with one deliberate exception: **4.2 is numbered here f
 belongs last** — see the reasoning in that section. **4.3 is the one that unblocks everything else**,
 and it is the only substantive item still outstanding.
 
-### 4.1 Move the full sweep off PRs ~~onto a schedule~~ — DONE in #111, but not onto a schedule
+### 4.1 Move the full sweep off PRs ~~onto a schedule~~ — DONE in astubbs#111, but not onto a schedule
 
 It has never completed, produces no signal, and burns runner time on every PR.
 
@@ -267,8 +267,8 @@ master did not move, and blames a date rather than a merge.
 
 **Correction (2026-08-04): this section had it wrong twice over**, and the repo already knew. It claimed
 the basic history file is free in OSS pitest and merely asked someone to "confirm which capability we
-want". The in-flight ledger recorded the opposite as an *already-verified* PR #69 finding: pitest 1.25.x
-(we bumped 1.17.4 → 1.25.8 in #73) dropped the built-in file-based history entirely. Re-verified here
+want". The in-flight ledger recorded the opposite as an *already-verified* PR astubbs#69 finding: pitest 1.25.x
+(we bumped 1.17.4 → 1.25.8 in astubbs#73) dropped the built-in file-based history entirely. Re-verified here
 rather than picking between two documents - `-DwithHistory=true` on the current build:
 
 ```
@@ -281,7 +281,7 @@ obtaining and wiring a licence, not setting a flag. arcmutate is free for open-s
 needs the maintainer to sign up, and the licence is a file at the repo root - which on a *public* repo
 means committing a key or plumbing a CI secret. Kept short in
 [`docs/inflight/ci-mutation-testing.md`](../inflight/ci-mutation-testing.md); the longer shelved plan
-did not survive the ledger audit in #112, so this section is now the record of it.
+did not survive the ledger audit in astubbs#112, so this section is now the record of it.
 
 **The automated reviewer flagged this contradiction five times before it was fixed.** Worth recording as
 its own lesson: a repeated review finding that keeps being deferred is usually a real one, and this one
@@ -321,7 +321,7 @@ The non-obvious bit is cache-key design: key it per-SHA and you never get a hit;
 so PR runs inherit master's history, and schedule a periodic full invalidation so stale verdicts do not
 accumulate silently.
 
-### 4.3 Retarget from `internal.*` to `offsets.*` — APPLIED in #111, not yet measured
+### 4.3 Retarget from `internal.*` to `offsets.*` — APPLIED in astubbs#111, not yet measured
 
 The substantive change. The high-value target is the offset encoders/decoders: a silent bug there means
 **lost or duplicated records**, and the mutants are *decidable* — pure-ish logic with deterministic
@@ -335,7 +335,7 @@ The script's own posture — *"walk the scope back up as it proves fast enough"*
 suggestion is that it should walk **sideways**, to where mutants are decidable, rather than up to
 everything.
 
-**Done in #111, in both places.** `offsets.*` is the sweep default (`bin/ci-mutation-test.sh` and the
+**Done in astubbs#111, in both places.** `offsets.*` is the sweep default (`bin/ci-mutation-test.sh` and the
 `mutation-full-sweep.yml` input), *and* the per-PR lane now intersects its changed-class list with the
 same decidable set (`PIT_DECIDABLE_PACKAGES`, default `offsets.`), naming in the log and job summary any
 changed class it declined to mutate.
@@ -403,7 +403,7 @@ anything** — it prints `no core main-source classes changed vs origin/master -
 skipping` and exits green. A green mutation check means "nothing to do" at least as often as it means
 "all mutants killed".
 
-**Done in #111:** the advice used to be "read the log, not the tick", which requires knowing to be
+**Done in astubbs#111:** the advice used to be "read the log, not the tick", which requires knowing to be
 suspicious of a green tick in the first place - a caveat that only helps the people who already know it.
 Every exit path now writes to the GitHub job summary instead, so the check states its own meaning:
 

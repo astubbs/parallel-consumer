@@ -46,16 +46,19 @@ is the grouping.
   collides.
 - **No committed index.** An index file would be edited by every PR, which is the problem this
   directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/TODO_INDEX.md` is
-  the cautionary case: committed, generated, and stale until a reviewer caught it on #110.)
+  the cautionary case: committed, generated, and stale until a reviewer caught it on astubbs#110.)
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 
 ## Reference convention
 
-Same as `CHANGELOG.adoc` and `docs/refactoring.md`: a bare `#NN` is **this fork**
-(astubbs/parallel-consumer); upstream is written **`upstream #NN`** (confluentinc/parallel-consumer).
+Below `#1000`, **name the repo**: `astubbs#NNN` for this fork, `confluentinc#NNN` for the original.
+The fork's numbering sits entirely inside upstream's range, so a bare number is a coin flip - and one
+that resolves to the wrong issue looks fine. See
+[AGENTS.md, "Issue references"](../../AGENTS.md#issue-references) for the full rule;
+`.github/scripts/issue-ref-gate.js` enforces it on added lines, so a note written the old way fails CI.
 Fork branch names encode the *upstream* number (`bugs/857-...`, `fix/909-...`, `upstream-pr-905`), so
-a number in a branch name is upstream, never a fork issue.
+a number in a branch name is `confluentinc#NNN`, never a fork issue.
 
 ## Where other things live
 

@@ -58,7 +58,7 @@ and process-global resources. When JUnit runs methods as **threads in one JVM**,
 **share and race on** that static state:
 
 - `ParallelEoSStreamProcessorTest`'s shutdown/commit assertion (tracked separately as a possible real
-  concurrency bug, to be examined with the #857 locking work) fails only under thread parallelism - a
+  concurrency bug, to be examined with the confluentinc#857 locking work) fails only under thread parallelism - a
   shutdown-timing/commit race that a single-threaded run never exposes.
 - On GitHub's 2-core runners, factor-20 threads also **CPU-starve** (20 runnable threads, 2 cores), turning
   tight in-test deadlines into mass timeouts (~28 failures) - a *second*, resource failure mode on top of the

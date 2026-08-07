@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
@@ -311,14 +312,14 @@ public class ParallelConsumerOptions<K, V> {
      * A note on quotas - if your quota is expressed as maximum concurrent calls, this works well. If it's limited in
      * total requests / sec, this may still overload the system. See towards the distributed rate limiting feature for
      * this to be properly addressed: https://github.com/confluentinc/parallel-consumer/issues/24 Add distributed rate
-     * limiting support #24.
+     * limiting support confluentinc#24.
      * <p>
      * In the core module, this sets the number of threads to use in the core's thread pool.
      * <p>
      * It's recommended to set this quite high, much higher than core count, as it's expected that these threads will
      * spend most of their time blocked waiting for IO. For automatic setting of this variable, look out for issue
      * https://github.com/confluentinc/parallel-consumer/issues/21 Dynamic concurrency control with flow control or tcp
-     * congestion control theory #21.
+     * congestion control theory confluentinc#21.
      */
     @Builder.Default
     private final int maxConcurrency = DEFAULT_MAX_CONCURRENCY;
@@ -331,8 +332,12 @@ public class ParallelConsumerOptions<K, V> {
     public static final Duration SASL_AUTHENTICATION_EXCEPTION_RETRY_BACKOFF = Duration.ofSeconds(5);
 
     /**
-     * Error handling strategy to use when invalid offsets metadata is encountered. This could happen accidentally or
-     * deliberately if the user attempts to reuse an existing consumer group id.
+     * Error handling strategy to use when <em>recognisably Kafka Streams</em> offset metadata is encountered. This could
+     * happen accidentally or deliberately if the user attempts to reuse an existing consumer group id.
+     * <p>
+     * This policy applies only to metadata PC can positively identify as Kafka Streams'. Metadata it cannot decode at
+     * all - written by some other framework, by operator tooling, or simply corrupt - is never fatal under either
+     * policy: PC logs it, drops the offset map, and resumes from the committed offset.
      */
     public enum InvalidOffsetMetadataHandlingPolicy {
         /**
@@ -346,9 +351,11 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * Controls the error handling behaviour to use when invalid offsets metadata from a pre-existing consumer group is
-     * encountered. A potential scenario where this could occur is when a consumer group id from a Kafka Streams
-     * application is accidentally reused.
+     * Controls the error handling behaviour to use when Kafka Streams offset metadata from a pre-existing consumer group
+     * is encountered - the scenario where a consumer group id from a Kafka Streams application is reused.
+     * <p>
+     * Note this does not govern metadata PC cannot decode at all; that is always recovered from rather than being fatal.
+     * See {@link InvalidOffsetMetadataHandlingPolicy}.
      * <p>
      * Default is {@link InvalidOffsetMetadataHandlingPolicy#FAIL}
      */

@@ -39,11 +39,14 @@ actionable pointers.
   (`src/docs/development/upstream-map.yaml`), solved problems (`docs/solutions/`),
   or PR-specific review feedback (raise that on the PR).
 
-**Reference convention** (same as the changelog): bare `#NN` = this fork
-(astubbs/parallel-consumer); `upstream #NN` = confluentinc/parallel-consumer.
+**Reference convention**: below `#1000`, name the repo - `astubbs#NNN` for this fork,
+`confluentinc#NNN` for the original. A bare number is a coin flip, because the fork's
+numbering sits entirely inside upstream's range. See
+[AGENTS.md, "Issue references"](../AGENTS.md#issue-references) for the full rule and the
+threshold's expiry condition; `.github/scripts/issue-ref-gate.js` enforces it on added lines.
 Note that fork **branch names encode the upstream number** (`bugs/857-...`,
 `fix/909-...`), so a number seen in a branch name is the *upstream* issue, not a
-fork issue - spell those out as `upstream #NN` in prose to avoid the ambiguity.
+fork issue - write those as `confluentinc#NNN` in prose to avoid the ambiguity.
 Prior draft PRs (`upstream #NNN`) are astubbs's closed-unmerged upstream PRs, and
 `origin/<branch>` are abandoned fork drafts - both **design references, not code to
 resurrect** (they've bitrotted). Branch refs are pinned to the short SHA they point

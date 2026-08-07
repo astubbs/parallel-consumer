@@ -10,7 +10,7 @@ updates:
     # Collapse routine non-major bumps into ONE reviewable PR per run instead of
     # a swarm of one-PR-per-dependency. This is the "big dep upgrade PR" we thought
     # we already had - we never actually configured grouping, so every dep came in
-    # separately (that's how jackson-databind arrived as its own PR #76).
+    # separately (that's how jackson-databind arrived as its own PR astubbs#76).
     open-pull-requests-limit: 10
     groups:
       maven-non-major:
@@ -88,7 +88,7 @@ updates:
       # hand-managed decision tied to changes we make in those repos, not an upgrade to
       # take automatically.
       #
-      # This ignore is a WORKAROUND, not a policy: remove it once #212 is done and the
+      # This ignore is a WORKAROUND, not a policy: remove it once astubbs#212 is done and the
       # three reference immutable release tags, at which point they should be watched like
-      # any other action. See #212 for the per-fork state and what "done" looks like.
+      # any other action. See astubbs#212 for the per-fork state and what "done" looks like.
       - dependency-name: "astubbs/*"

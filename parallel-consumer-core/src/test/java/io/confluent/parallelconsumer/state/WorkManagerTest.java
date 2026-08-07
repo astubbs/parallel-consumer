@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
@@ -660,7 +661,7 @@ public class WorkManagerTest {
         var recs = new ConsumerRecords<>(m);
         registerWork(recs);
 
-//        // force ingestion of records - see refactor: Queue unification #219
+//        // force ingestion of records - see refactor: Queue unification confluentinc#219
 //        wm.tryToEnsureQuantityOfWorkQueuedAvailable(100);
 
         var workContainersOne = wm.getWorkIfAvailable(1);

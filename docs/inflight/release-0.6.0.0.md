@@ -35,19 +35,16 @@ survive the release.
    but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a
    caller's `trace_id` is lost crossing into the worker threads and the vert.x event loop. Raised by
    a user in the `confluentinc#907` thread (astubbs#195).
-5. **`OffsetEncoding` throws on an unknown magic byte *before* `invalidOffsetMetadataPolicy` is
-   consulted.** `OffsetEncoding:66` `throw new RuntimeException("Unexpected magic: " + magic)` is
-   reached from `EncodedOffsetPair.unwrap()`, while the policy is only honoured later at
-   `EncodedOffsetPair:123-130`. So if a future PC version introduces a new encoding, an older PC
-   reading that commit metadata dies **regardless of how the policy is configured** - and the fork
-   now owns this wire format. Forward-compatibility hazard, worth fixing before more encodings exist.
 
 ## Marked for 0.6.0.0
 
 - **astubbs#196** - fixes astubbs#167 (confluentinc#622): the README's retry-delay example used `multiplier = 0.5`, so
   `Math.pow(multiplier, attempts)` *halved* the wait on each failed attempt instead of growing it.
-  Reported upstream 2023-08-08, never fixed there, inherited by the fork. Fixed in `CoreApp.java`,
-  since the README embeds that snippet by asciidoc include, and `README.adoc` regenerated.
+  Reported upstream 2023-08-08 and patched there by confluentinc#864 - but only in the generated
+  `README.adoc`, not the `CoreApp.java` it is generated from, so upstream's source still reads `0.5`
+  and the patch reverts on the next regeneration. This fork inherited that patch and lost it exactly
+  that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
+  `README.adoc` regenerated.
 
 ## Do at release: one sweep over the upstream mirrors
 

@@ -1035,7 +1035,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
      * Explicit check for situation where thread size is much larger than key set size.
      * <p>
      * See <a href="https://github.com/confluentinc/parallel-consumer/issues/433">Different computational results
-     * obtained with different max concurrency configurations for the same parallel consumer #433</a>
+     * obtained with different max concurrency configurations for the same parallel consumer confluentinc#433</a>
      */
     @Test
     void lessKeysThanThreads() {

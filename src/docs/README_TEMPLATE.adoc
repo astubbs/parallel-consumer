@@ -281,7 +281,7 @@ without operational burden or harming the cluster's performance
 * Throttle control and broker liveliness management
 * Clean draining shutdown cycle
 * Manual global pause / resume of all partitions, without unsubscribing from topics (useful for implementing a simplistic https://en.wikipedia.org/wiki/Circuit_breaker_design_pattern[circuit breaker])
-** Circuit breaker patterns for individual paritions or keys can be done through throwing failure exceptions in the processing function (see https://github.com/confluentinc/parallel-consumer/pull/291[PR #291 Explicit terminal and retriable exceptions] for further refinement)
+** Circuit breaker patterns for individual paritions or keys can be done through throwing failure exceptions in the processing function (see https://github.com/confluentinc/parallel-consumer/pull/291[confluentinc PR #291 Explicit terminal and retriable exceptions] for further refinement)
 ** Note: Pausing of a partition is also automatic, whenever back pressure has built up on a given partition
 
 //image:https://codecov.io/gh/astubbs/parallel-consumer/branch/master/graph/badge.svg["Coverage",https://codecov.io/gh/astubbs/parallel-consumer]
@@ -466,7 +466,7 @@ After this setup, one then has the choice of interfaces:
 * `JStreamVertxParallelStreamProcessor`
 
 There is another interface: `ParallelConsumer` which is integrated, however there is currently no immediate implementation.
-See {base_confluent_url}/issues/12[issue #12], and the `ParallelConsumer` JavaDoc:
+See {base_confluent_url}/issues/12[confluentinc issue #12], and the `ParallelConsumer` JavaDoc:
 
 [source,java]
 ----
@@ -746,10 +746,10 @@ This is because in `PARTITION` ordering mode, records are always processed in or
 
 Improvements to this system are planned, see the following issues:
 
-* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic #65]
+* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic confluentinc#65]
 * https://github.com/confluentinc/parallel-consumer/issues/48[Support scheduled message processing (scheduled retry)]
-* https://github.com/confluentinc/parallel-consumer/issues/196[Provide option for max retires, and a call back when reached (potential DLQ) #196]
-* https://github.com/confluentinc/parallel-consumer/issues/34[Monitor for progress and optionally shutdown (leave consumer group), skip message or send to DLQ #34]
+* https://github.com/confluentinc/parallel-consumer/issues/196[Provide option for max retires, and a call back when reached (potential DLQ) confluentinc#196]
+* https://github.com/confluentinc/parallel-consumer/issues/34[Monitor for progress and optionally shutdown (leave consumer group), skip message or send to DLQ confluentinc#34]
 
 == Result Models
 
@@ -1049,7 +1049,7 @@ For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
 
 For what is planned, in progress, or known-broken, the {issues_link}[issue tracker on this repository]
 is the single place to look. We mirrored every open issue from the upstream tracker into it (all 78 of
-them, labelled `upstream-mirror` and titled `upstream #NNN: ...`), so an upstream report you are
+them, labelled `upstream-mirror` and titled `confluentinc#NNN: ...`), so an upstream report you are
 following has a counterpart here that reflects its real status on this fork. Please raise new issues
 here rather than upstream - see <<Support and Issues>>.
 
@@ -1168,7 +1168,7 @@ git bisect run ./bisect.sh
 
 Note::
 `mvn compile` - Due to a bug in Maven's handling of test-jar dependencies - running `mvn compile` fails, use `mvn test-compile` instead.
-See https://github.com/confluentinc/parallel-consumer/issues/162[issue #162]
+See https://github.com/confluentinc/parallel-consumer/issues/162[confluentinc issue #162]
 and this https://stackoverflow.com/questions/4786881/why-is-test-jar-dependency-required-for-mvn-compile[Stack Overflow question].
 
 === Build Scripts

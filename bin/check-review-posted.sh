@@ -14,7 +14,7 @@
 #   1. The workflow ran green for months while never posting a single review, because the
 #      plugin stops before commenting unless `--comment` is passed (see the note on the
 #      `prompt:` key in .github/workflows/claude-code-review.yml).
-#   2. PR #124 edited .github/workflows/claude-code-review.yml itself, which trips the
+#   2. PR astubbs#124 edited .github/workflows/claude-code-review.yml itself, which trips the
 #      action's workflow-validation guard - it refuses to run unless the workflow file is
 #      identical to the version on the default branch, so a PR cannot rewrite its own
 #      reviewer. The action logged "Exiting due to workflow validation skip", exited 0, and

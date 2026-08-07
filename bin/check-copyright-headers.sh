@@ -25,7 +25,7 @@
 # change (see AGENTS.md). This scanner IS the header enforcement. It replaced the
 # mycila license-maven-plugin, which knew only ONE header template - running its
 # format goal is what used to stamp Confluent headers onto fork-original files. That
-# plugin was skipped from PR #90 and removed outright once nothing invoked it.
+# plugin was skipped from PR astubbs#90 and removed outright once nothing invoked it.
 #
 # Usage: bin/check-copyright-headers.sh
 # Exit codes: 0 = conformant, 1 = violations found, 2 = cannot run (shallow clone).
@@ -40,7 +40,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # merge-base of the fork's master and confluentinc/parallel-consumer master:
-# "Migrate to V3 based sonatype secret (#916)", 2026-03-24.
+# "Migrate to V3 based sonatype secret (confluentinc#916)", 2026-03-24.
 FORK_POINT="${COPYRIGHT_CHECK_FORK_POINT:-7f2901226bccac68a2a71f0d9da343887b1abb46}"
 FORK_HOLDER="Antony Stubbs and contributors"
 HEADER_WINDOW=8 # lines from the top of the file searched for copyright notices
@@ -63,7 +63,7 @@ ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 # EXTRACTIONS of upstream-derived code into new files (no single origin path): always
 # Confluent + modifications line. ManagedPCInstance lives on the chaos-suite branch
 # stack, not yet on master - listing it early is harmless (only tracked files are
-# checked) and stops the check ambushing the stack at merge (see PR #83).
+# checked) and stops the check ambushing the stack at merge (see PR astubbs#83).
 EXTRACTED_FROM_UPSTREAM="
 parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/ManagedPCInstance.java
 ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}

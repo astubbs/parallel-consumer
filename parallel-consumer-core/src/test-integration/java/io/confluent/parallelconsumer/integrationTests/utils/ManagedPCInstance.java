@@ -89,7 +89,7 @@ public class ManagedPCInstance implements Runnable {
             // the control thread finishes, which waits for the poll thread (brokerPollSubsystem
             // .closeAndWait), which closes the consumer. So by the time isClosedOrFailed() returns
             // true, the consumer should be fully closed and deregistered from the group.
-            // See #857.
+            // See confluentinc#857.
             if (parallelConsumer != null) {
                 int waitMs = 0;
                 while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000) {
@@ -143,7 +143,7 @@ public class ManagedPCInstance implements Runnable {
                 onConsumed.accept(record.key());
             });
         } finally {
-            // pool threads are reused across instances - do not leak this instance id into later runners (PR #83 review)
+            // pool threads are reused across instances - do not leak this instance id into later runners (PR astubbs#83 review)
             org.slf4j.MDC.remove(MDC_INSTANCE_ID);
         }
     }

@@ -66,7 +66,7 @@ await().atMost(10s).until(() -> pc.getWm().getNumberOfWorkQueuedInShardsAwaiting
 
 Rewrote the test (`brokerPollPausedWhenBlockedInFlightFillsBuffer`) to await the real, satisfiable
 steady state - `outForProcessing == 150 && awaitingSelection == 50`, derived from named constants -
-then assert the pause. This also verifies upstream #836's actual behaviour non-vacuously for the
+then assert the pause. This also verifies confluentinc#836's actual behaviour non-vacuously for the
 first time: the 50 shard-queued records alone are below the pause threshold, so the pause firing
 proves blocked in-flight records are counted. The exact 150/50 split doubles as a regression pin on
 the static-buffer take-cap. Await bounds raised to 30s (conditions got stronger; only the
@@ -85,7 +85,7 @@ were checked and rejected before the rewrite:
 - **Not a main-code bug.** The 50-record shard floor is the static buffer cap behaving as designed,
   and the pause/resume machinery worked (the sibling test passed in the same failing run).
 - **Not already tracked.** No fork or upstream (`confluentinc/parallel-consumer`) issue mentions the
-  test; not in the quarantine lane; not covered by #63, `fix/flaky-ensure-topic-timeout`, or the
+  test; not in the quarantine lane; not covered by astubbs#63, `fix/flaky-ensure-topic-timeout`, or the
   `PartitionStateCommittedOffsetIT` work.
 
 ## Prevention
@@ -105,9 +105,9 @@ were checked and rejected before the rewrite:
 
 ## Related
 
-- Fix + full diagnosis trail: PR #98
+- Fix + full diagnosis trail: PR astubbs#98
 - Failing run: highcpu 30603617471 (Integration job 91071293663); green same-sha run: CI 30603617430
-- Test provenance: upstream confluentinc/parallel-consumer #682 (configurable buffer), #836
+- Test provenance: upstream confluentinc/parallel-consumer confluentinc#682 (configurable buffer), confluentinc#836
   (in-flight counts toward backpressure)
 - Adjacent-but-different pattern: [parallel-integration-tests-flaky-under-concurrency-2026-07-28](parallel-integration-tests-flaky-under-concurrency-2026-07-28.md)
 
