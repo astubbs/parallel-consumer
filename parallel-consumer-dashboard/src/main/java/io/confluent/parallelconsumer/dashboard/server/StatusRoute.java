@@ -208,20 +208,20 @@ public final class StatusRoute implements Handler<RoutingContext> {
                 .append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
                 .append("<title>Parallel Consumer dashboard - self diagnostic</title><style>")
                 .append("body{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:0;")
-                .append("padding:2rem;background:#fff;color:#111}")
+                .append("padding:2rem;background:#ffffff;color:#111111}")
                 .append("h1{font-size:1.2rem;margin:0 0 .25rem}")
-                .append(".sub{color:#555;margin:0 0 1.5rem}")
+                .append(".sub{color:#555555;margin:0 0 1.5rem}")
                 .append("table{border-collapse:collapse;width:100%;max-width:60rem}")
-                .append("th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #ddd;vertical-align:top}")
-                .append("th{font-weight:600;color:#555;font-size:.8rem;text-transform:uppercase}")
+                .append("th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #dddddd;vertical-align:top}")
+                .append("th{font-weight:600;color:#555555;font-size:.8rem;text-transform:uppercase}")
                 .append(".passed{color:#0a6b2e;font-weight:600}")
-                .append(".failed{color:#a11;font-weight:600}")
-                .append(".skipped{color:#777;font-weight:600}")
-                .append(".remedy{color:#a11}")
-                .append("footer{margin-top:2rem;color:#555;max-width:60rem}")
-                .append("@media(prefers-color-scheme:dark){body{background:#111;color:#eee}")
-                .append("th{color:#aaa}.sub,footer{color:#aaa}td,th{border-bottom-color:#333}")
-                .append(".passed{color:#4ade80}.failed{color:#f87171}.skipped{color:#999}.remedy{color:#f87171}}")
+                .append(".failed{color:#aa1111;font-weight:600}")
+                .append(".skipped{color:#777777;font-weight:600}")
+                .append(".remedy{color:#aa1111}")
+                .append("footer{margin-top:2rem;color:#555555;max-width:60rem}")
+                .append("@media(prefers-color-scheme:dark){body{background:#111111;color:#eeeeee}")
+                .append("th{color:#aaaaaa}.sub,footer{color:#aaaaaa}td,th{border-bottom-color:#333333}")
+                .append(".passed{color:#4ade80}.failed{color:#f87171}.skipped{color:#999999}.remedy{color:#f87171}}")
                 .append("</style></head><body>");
 
         html.append("<h1>Parallel Consumer dashboard - self diagnostic</h1>");
@@ -299,7 +299,7 @@ public final class StatusRoute implements Handler<RoutingContext> {
                     out.append("&quot;");
                     break;
                 case '\'':
-                    out.append("&#39;");
+                    out.append("&#x27;");
                     break;
                 default:
                     out.append(c);

@@ -149,7 +149,7 @@ class StatusRouteTest {
     @Test
     void userSuppliedTextIsEscapedRatherThanInterpolated() {
         assertThat(StatusRoute.escape("<img src=x onerror=alert(1)>&\"'"))
-                .isEqualTo("&lt;img src=x onerror=alert(1)&gt;&amp;&quot;&#39;");
+                .isEqualTo("&lt;img src=x onerror=alert(1)&gt;&amp;&quot;&#x27;");
     }
 
     @Test
