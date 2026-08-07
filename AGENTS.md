@@ -17,6 +17,7 @@ owned that content all along.)
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** in their own release-gated section, and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`CONCEPTS.md`** (repo root) | Shared domain vocabulary: entities, named processes and status concepts whose meaning here is project-specific (the produce/commit lock pair, *dirty*, shard, in-flight work). Each entry stands alone - no file paths, class names or current config values. Relevant when orienting to the codebase or writing about it | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with frontmatter for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for a specific piece of work | Durable reference - a plan goes stale once its work lands |
 | **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
@@ -26,6 +27,66 @@ owned that content all along.)
 
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
+## Before you investigate anything
+
+Do all five checks below **before** forming a hypothesis, and say in your write-up what they returned
+- including "nothing". Prior art does not only tell you the answer; it tells you the *method* that
+settled the last question of this shape, and the traps that voided someone's earlier experiment.
+
+| Check | Command | What it catches |
+|---|---|---|
+| Prior investigations | `ls docs/plans/`, then grep them | The same question already answered, and how it was proved |
+| Solved problems | `grep -rl <mechanism> docs/solutions/` | A documented root cause with a signature you can rule in or out |
+| In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` | A known-open defect you are about to rediscover |
+| Open PRs | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> --name-only` | A fix already in flight, and files your change would collide with |
+| **Merged** PRs, by file | `gh pr list --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` | The PR that last fixed something in this exact file - the richest prior art there is, and invisible to a search on the *open* list |
+| Existing issues | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` and filter by title - fork issues *and* the `upstream-mirror` ones | An upstream bug already triaged; read the upstream issue itself, not the mirror's summary |
+
+**Grep the mechanism, not the symptom.** The name of the failing test is the weakest search term
+available. Search the class, the lock, the option, the exception, the log line - whatever the failure
+actually turns on.
+
+**`--state open` is a collision check, not a prior-art search.** The PR that already solved something
+in your file is, by definition, merged. Searching only the open list feels like due diligence and
+finds nothing, which is worse than not looking - it produces false confidence. Same for issues:
+`--state all`, because the useful ones are usually closed.
+
+### Settling it: a fix that works is not evidence of the cause
+
+Promoted here from `docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md` §11, because a
+dated plan goes stale once its work lands and this method must not go with it.
+
+- **Confirm a cause with a control arm, not with a fix that appears to work.** Change the one term you
+  believe is responsible, hold everything else identical, and show the outcome flips. Same-magnitude,
+  different-position beats bigger-hammer. The worked example: an identical 400ms delay injected on
+  either side of a lock release - *after* it (opening the window) failed 8/8; *before* it (same added
+  latency, inside the lock) passed 8/8, against a ~1-in-6 baseline. The control arm is what ruled out
+  "it is just slower under load", which every previous look at that flake had concluded.
+- **State the prediction before running it, and report the refuted ones.** A prediction that fails is
+  the cheapest result you will get. If a fix works but its prediction was wrong, you have a symptom.
+- **Verify your instrumentation actually reached the run** - the failure mode is a silent false
+  negative that reads as "no effect":
+  - `./mvnw -pl <module>` **without `-am`** fails the `ReactorModuleConvergence` enforcer, so the test
+    never recompiles and both arms run the stale class.
+  - `surefire:test` alone **does not reprocess test resources**, so an edited `logback-test.xml` never
+    reaches `target/test-classes` and your new logging silently does not exist.
+  - Use `./mvnw -pl parallel-consumer-core -am verify` (what `bin/soak-test.sh` runs) and confirm
+    `BUILD SUCCESS` on the compile step. Better, assert the setting in the run's own output - PC logs
+    its full options at INFO on init, so the arm proves itself.
+- **Report the rate and the conditions, never a bare verdict.** "0 failures" is meaningless without N
+  and the load. `bin/soak-test.sh <Class#method> <runs>` at a low `SOAK_FREE_CORES` is the house
+  reproducer; its own closing line says it - no failures is not proof the flake is gone.
+- **A guard added with a fix must be verified by negative control.** Break the thing it guards and
+  confirm it fails deterministically. An assertion nobody has seen fail is decoration.
+
+Real example, 2026-08-07: the `TransactionTimeoutsTest.commitTimeout` handoff searched for the test's
+own name, found nothing, and classified the failure by analogy. Grepping the *mechanism*
+(`producerTransactionLock` / `commitLockAcquisitionTimeout`) finds
+`docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md`, the only prior investigation
+into that exact lock - which already documented the lock's ordering invariant, the controlled-experiment
+method for settling contention-vs-bug, and a build trap that had silently voided one earlier
+experiment. All of it applied; none of it was used.
 
 ## Overview
 
@@ -95,6 +156,14 @@ bin/performance-test.sh
   genuine bug" question above before you start manual diagnosis. `probe clean` means the fault is likely in
   the test itself, not consumer-group progress. Disable via `-Dambient.probe=off` or `@NoAmbientProbe` only
   when the probe itself is the problem (see `AmbientProbeExtension` javadoc).
+  **`probe clean` is only informative when the probe's detectors could have fired.** Lag stagnation needs
+  `LAG_STAGNATION_MIN_LAG` (50) of real lag sustained past `LAG_STAGNATION_BOUND` (150s), and rebalance
+  dwell needs `REBALANCE_DWELL_BOUND` (15s). A test with a handful of records, or one that fails inside a
+  window shorter than those bounds, cannot trip either - so its autopsy prints `probe clean` and the
+  sentence "the fault is likely in the test itself" carries no evidence at all. Check the test's record
+  count and failure window against those constants before treating a clean probe as a finding. (This is
+  not hypothetical: the `commitTimeout` autopsy of 2026-08-07 read `probe clean` on a 15-record test that
+  failed in 35s, where the thresholds are 50 records and 150s.)
 - **Unit tests**: `mvn test` / surefire plugin. Source in `src/test/java/`.
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
@@ -461,6 +530,17 @@ Keep the existing subject convention for *upstream* references (`... (#893)`, `c
 
 ## PR Discipline
 
+- **Before merging a fix, look for other instances of the same defect - and say what you found,
+  including "none".** A fix that removes today's instance invites tomorrow's. Once you can name the
+  defect *class* (not the symptom), grep for it: the pattern, the API being misused, the shape of the
+  mistake. State which candidates you checked and dismissed, not just the hits - "I found none" is only
+  worth reading if it says where you looked. Do this at merge prep, when the class is understood;
+  doing it while still diagnosing just widens the investigation.
+  Worked example, astubbs#220: the class was *a test awaiting a consequence whose trigger it cannot
+  force*. The greppable proxy was sleep-as-synchronisation in integration tests plus awaits on a
+  failure outcome. That surfaced `DrainCloseTest` and `RetriesTest` as relatives, and - just as
+  usefully - confirmed the sibling `TransactionTimeoutsTest.produceTimeout` is **not** an instance,
+  because it latches its trigger with a real margin. Ruling one out is a result.
 - **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates
   fix-ups, review responses and course corrections that nobody wants in the permanent log, but it
   usually also contains two or three genuinely separate pieces of work. Do not default; look at the
