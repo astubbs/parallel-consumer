@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.*;
@@ -107,7 +108,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * Produce a message back to the broker.
      * <p>
      * Implementation uses the blocking API, by blocking on produce ack results (in batches when the flatMap version of
-     * producing a list of records is used). Performance upgrade in later versions (#356). This is of course not an
+     * producing a list of records is used). Performance upgrade in later versions (confluentinc#356). This is of course not an
      * issue for the more common use case of PC where messages aren't produced
      * ({@link ParallelEoSStreamProcessor#poll}), and the {@code produce ack block} is still multi-threaded after all.
      * <p>

@@ -12,11 +12,11 @@ on:
 
 # One review per PR at a time, newest wins. Without this the workflow had no concurrency group at
 # all (unlike maven.yml / pr-checklist.yml / copyright.yml / the highcpu lane), so a push shortly
-# after opening left BOTH runs alive and posted TWO reviews of the same PR - seen on #107, 23
+# after opening left BOTH runs alive and posted TWO reviews of the same PR - seen on astubbs#107, 23
 # seconds apart.
 #
 # That pattern is not rare, it is what this repo's own rules produce: the changelog gate added in
-# #104 requires the entry to cite the PR number, which does not exist until the PR is opened - so
+# astubbs#104 requires the entry to cite the PR number, which does not exist until the PR is opened - so
 # opening a PR is routinely followed within seconds by a push to add the reference.
 #
 # Keyed on the PR number rather than the ref, so it also covers reopened PRs and does not collide
@@ -87,7 +87,7 @@ jobs:
           # The test-running grants exist because this workflow fires on `pull_request` open/sync,
           # i.e. BEFORE the CI test jobs have finished - so "just read the CI results" is not
           # available to the reviewer, and without these it can only assert what the author claimed.
-          # PR #100 is the cautionary case: a regression test was named so that surefire never
+          # PR astubbs#100 is the cautionary case: a regression test was named so that surefire never
           # collected it, and the suite was green precisely because the new test never ran. Only
           # actually executing the suite (and checking WHICH tests ran) catches that class of bug.
           #
@@ -100,7 +100,7 @@ jobs:
           # BOTH `bin/foo.sh` and `./bin/foo.sh` are granted for every script. These are PREFIX
           # matches, not globs: `Bash(bin/ci-unit-test.sh:*)` does not match `./bin/ci-unit-test.sh`,
           # so granting only the bare form denied every natural invocation. That is not theoretical -
-          # it is why the review on #108 logged 10 permission denials, gave up before running
+          # it is why the review on astubbs#108 logged 10 permission denials, gave up before running
           # anything, and still reported success. A grant that cannot match is worse than no grant:
           # it reads as capability the reviewer does not have.
           #
@@ -115,7 +115,7 @@ jobs:
           #
           # Every grant here is a script that EXISTS ON THIS BRANCH. Granting one that only exists on
           # another branch makes the grant inert and the claim false - which is how `bin/todo-index.sh`
-          # (added by #103) briefly ended up listed here. Its grant belongs in #103, with the script.
+          # (added by astubbs#103) briefly ended up listed here. Its grant belongs in astubbs#103, with the script.
           #
           # ./mvnw IS granted, for the job the wrappers cannot do: running ONE test class. Verifying a
           # RED/GREEN claim means reverting the fix and re-running just the new test - a targeted
@@ -146,7 +146,7 @@ jobs:
       # success indistinguishably from "reviewed, no findings". That is not hypothetical here twice
       # over: the `--comment` note above is one instance, and the action's workflow-validation guard
       # - which skips it whenever THIS FILE differs from the default branch, i.e. on every PR that
-      # edits the reviewer - is the other. PR #124 hit the latter and sat mergeable with a green
+      # edits the reviewer - is the other. PR astubbs#124 hit the latter and sat mergeable with a green
       # check and no review of any kind.
       #
       # Runs on failure too (not just success): a crashed or timed-out action must not leave the

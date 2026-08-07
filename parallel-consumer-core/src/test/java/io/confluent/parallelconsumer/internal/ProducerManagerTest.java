@@ -59,7 +59,7 @@ import static org.mockito.Mockito.*;
  *         behaiviour
  */
 @Tag("transactions")
-@Tag("#355")
+@Tag("confluentinc#355")
 @Timeout(60)
 @Slf4j
 class ProducerManagerTest {

@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
@@ -87,7 +88,7 @@ public class OffsetRunLength {
         Set highestSeenOffset to baseOffset -1 initially - in case the metadata doesn't actually contain any data and
         highestSeenOffset would remain at 0 otherwise.
         That may cause warning / state truncation.
-        Issue #546 - https://github.com/confluentinc/parallel-consumer/issues/546
+        Issue confluentinc#546 - https://github.com/confluentinc/parallel-consumer/issues/546
          */
         //TODO: look at offset encoding logic - maybe in those cases we should not create metadata at all?
         long highestSeenOffset = (baseOffset > 0) ? (baseOffset - 1) : 0L;

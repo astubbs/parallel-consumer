@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.LongPollingMockConsumer;
@@ -20,7 +21,7 @@ import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
  * @see ParallelConsumerOptions
  */
 @Tag("transactions")
-@Tag("#355")
+@Tag("confluentinc#355")
 class ParallelConsumerOptionsTest {
 
     /**

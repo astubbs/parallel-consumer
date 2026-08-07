@@ -2,7 +2,7 @@ name: PR Dependency Check
 
 # synchronize is REQUIRED in the types list: this check is a required status, and required checks
 # are evaluated per head SHA - without synchronize no run exists for newly pushed commits, so the
-# check sits "Expected - waiting for status" forever and blocks the merge (bitten on PR #83,
+# check sits "Expected - waiting for status" forever and blocks the merge (bitten on PR astubbs#83,
 # 2026-07-31, right after the check was made required).
 on:
   pull_request:

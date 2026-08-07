@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.SupplierUtils;
@@ -652,7 +653,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private void doClose(Duration timeout) throws TimeoutException, ExecutionException, InterruptedException {
-        // fixes github issue #809 - ensure doClose() state transition to CLOSED
+        // fixes github issue confluentinc#809 - ensure doClose() state transition to CLOSED
         // by catching unhandled exceptions in subsystems during close
         try {
             innerDoClose(timeout);

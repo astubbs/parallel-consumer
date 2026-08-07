@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
@@ -67,10 +68,10 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
      * before accepting?)
      * <p>
      * https://github.com/confluentinc/parallel-consumer/issues/37 Support BitSet encoding lengths longer than
-     * Short.MAX_VALUE #37
+     * Short.MAX_VALUE confluentinc#37
      * <p>
      * https://github.com/confluentinc/parallel-consumer/issues/35 RuntimeException when running with very high options
-     * in 0.2.0.0 (Bitset too long to encode) #35
+     * in 0.2.0.0 (Bitset too long to encode) confluentinc#35
      * <p>
      */
     @SneakyThrows

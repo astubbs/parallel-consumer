@@ -88,7 +88,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         Properties quickEviction = new Properties();
         quickEviction.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, MAX_POLL_INTERVAL_MS);
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
-                // sync commits sharpen revoke-vs-commit lock contention - the #857 deadlock recipe
+                // sync commits sharpen revoke-vs-commit lock contention - the confluentinc#857 deadlock recipe
                 .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
                 .order(ProcessingOrder.UNORDERED)
                 .inputTopic(topic)

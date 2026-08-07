@@ -9,10 +9,10 @@ origin: docs/plans/2026-07-30-001-feat-chaos-pain-suite-design-plan.md
 # feat: Chaos Pain Suite Phase 1 - seeded churn storm with zombie-member probe
 
 **Target branch:** `experiment/chaos-pain-suite-phase1` (worktree `.claude/worktrees/chaos-phase1`), based
-on the uber composition `experiment/stall-uber-fix`@`c72c923c` - which carries #29's harness
-(`ManagedPCInstance`), #31, and PR #80's full fix stack with all four guards green. **Unlandable base by
-design** (see origin doc): Phase 1 is written **additive-only** (zero edits to #29-owned files) so it
-transplants onto the eventual rebased-#29 slices as a near-pure file copy.
+on the uber composition `experiment/stall-uber-fix`@`c72c923c` - which carries astubbs#29's harness
+(`ManagedPCInstance`), astubbs#31, and PR astubbs#80's full fix stack with all four guards green. **Unlandable base by
+design** (see origin doc): Phase 1 is written **additive-only** (zero edits to astubbs#29-owned files) so it
+transplants onto the eventual rebased-astubbs#29 slices as a near-pure file copy.
 
 ## Problem Frame
 
@@ -41,7 +41,7 @@ greens are trusted.
 
 - Phase 1 ONLY: no Toxiproxy, freeze-thaw, kill -9, ResourcePressurizer, DiagnosticBundle runtime-DEBUG
   flip, multi-group, soak mode, or scale sweep (Phases 2-3 in the origin doc).
-- **Additive-only**: no edits to `ManagedPCInstance`, `MultiInstanceRebalanceTest`, or any #29/#80-owned
+- **Additive-only**: no edits to `ManagedPCInstance`, `MultiInstanceRebalanceTest`, or any astubbs#29/#80-owned
   file. Permitted shared-file touches: root `pom.xml` (one-line tag exclusion) + new workflow file.
 - Not PR-gating, ever; failures are investigation food with artifacts.
 - No production (`src/main`) changes.
@@ -53,7 +53,7 @@ greens are trusted.
   `Config.builder()` (maxPoll, pollDelayMs, maxConcurrency, useCooperativeAssignor...). Fleet-ready.
 - **`MultiInstanceRebalanceTest.runTest` is private** → the suite writes its own thin orchestration using
   `ManagedPCInstance` + `KafkaClientUtils` directly (accepted DRY tension, forced by additive-only; noted
-  for consolidation when the suite lands post-#29-rebase).
+  for consolidation when the suite lands post-astubbs#29-rebase).
 - **Tag exclusion mechanism**: pom `<excluded.groups>performance</excluded.groups>` default feeds
   failsafe; extend to `performance,chaos` (comma list is the documented pattern, pom L86).
 - **Zombie probe building blocks already in-tree**: AdminClient `describeConsumerGroups` +
@@ -61,7 +61,7 @@ greens are trusted.
   `PREPARING_REBALANCE`/`COMPLETING_REBALANCE` beyond T.
 - **Correctness-ledger pattern** proven in `DrainingMemberRebalanceIT` (produced-keys vs per-instance
   consumed-key sets; no-loss union + bounded-duplicates).
-- **Calibration bench exists**: `experiment/stall-uber-nofix` (drain defect + #29 + #31). The suite commit
+- **Calibration bench exists**: `experiment/stall-uber-nofix` (drain defect + astubbs#29 + astubbs#31). The suite commit
   cherry-picks onto it cleanly (additive files).
 - Seeded determinism caveat (origin doc): same seed = same action *sequence*; wall-clock jitter still
   varies interleaving. Log the seed + full timestamped action timeline every run.
@@ -127,7 +127,7 @@ timeline.
 - Create: `.../integrationTests/chaostests/ProgressProbe.java`
 
 **Approach:** composed of independent checks run on a sampling thread: (a) progress watermark - fleet-wide
-consumed-count must advance within `NO_PROGRESS_WINDOW` (generalising #857's 11s check, default 30s);
+consumed-count must advance within `NO_PROGRESS_WINDOW` (generalising confluentinc#857's 11s check, default 30s);
 (b) rebalance-dwell bound via AdminClient group state (T_REBALANCE=60s); (c) drain-completion bound -
 conductor reports STOP_DRAIN start, probe asserts instance terminal within `drainTimeout+margin`;
 (d) end-of-run ledger - union(consumed) ⊇ produced (no loss), duplicates ≤ perDrainAllowance ×
@@ -191,7 +191,7 @@ re-run - tune until the known real bug (pre-fix composition, not injected) is ca
 - Modify: origin design doc (on `docs/chaos-pain-suite-design` branch): Phase 1 status → IMPLEMENTED
   (branch pointer + calibration results table).
 - Modify: `docs/inflight.md` (this branch): chaos suite Phase 1 entry - where it lives, how to run
-  (`-Dincluded.groups=chaos`, seed protocol), calibration evidence, transplant plan (post-#29-rebase).
+  (`-Dincluded.groups=chaos`, seed protocol), calibration evidence, transplant plan (post-astubbs#29-rebase).
 
 **Test expectation:** none - docs.
 
@@ -202,7 +202,7 @@ re-run - tune until the known real bug (pre-fix composition, not injected) is ca
 - **Default suites untouched**: chaos tests excluded everywhere by default; pom change is the only shared
   edit and only *adds* an exclusion.
 - **Transplant posture preserved**: all Java is new files in a new package; the eventual move onto
-  rebased-#29 is file-copy + compile-check (the plan's whole additive-only point).
+  rebased-astubbs#29 is file-copy + compile-check (the plan's whole additive-only point).
 - **Unchanged invariants**: no `src/main` changes; existing guards (drain, nudge) unaffected - re-run as
   part of Unit 3 verification.
 
@@ -212,7 +212,7 @@ re-run - tune until the known real bug (pre-fix composition, not injected) is ca
 |---|---|
 | Suite flaky-by-design | SLO/invariant assertions only; generous defaults; seed+timeline on every failure; never PR-gating |
 | RED calibration won't fire (defect needs precise join-mid-drain timing) | Conductor pairing bias is a first-class knob; calibration loop tunes the *conductor*, not the probes |
-| Suite-local orchestration drifts from `MultiInstanceRebalanceTest`'s | Accepted for Phase 1 (additive-only); consolidation flagged for post-#29-rebase landing |
+| Suite-local orchestration drifts from `MultiInstanceRebalanceTest`'s | Accepted for Phase 1 (additive-only); consolidation flagged for post-astubbs#29-rebase landing |
 | pom tag change surprises override users | Update the pom's own comment showing the multi-group override syntax |
 | Box contention skews probe bounds | Bounds sized ≥5× healthy baseline, ≤1/5 defect signature (60s dwell vs seconds-healthy vs 5-min-zombie) |
 

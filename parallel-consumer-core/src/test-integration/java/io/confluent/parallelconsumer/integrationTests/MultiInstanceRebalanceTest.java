@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.ProgressBarUtils;
@@ -87,7 +88,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
 
     /**
      * Tests with very large numbers of parallel consumer instances to try to reproduce state and concurrency issues
-     * (#188, #189).
+     * (confluentinc#188, confluentinc#189).
      * <p>
      * This test takes some time, but seems required in order to expose some race conditions without syntehticly
      * creatign them.
