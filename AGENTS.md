@@ -206,7 +206,7 @@ stack traces (see Testing).
   (which runs from `claude.yml`, unmodified, so it validates), or split the workflow edit into its
   own PR. Do not disable the gate to get a green check.
 - **`.github/workflows/repo-hygiene.yml`** — "Repo Hygiene", on every push/PR plus dispatch. Two independent jobs. `sigpipe` runs `bin/check-shell-sigpipe.sh` (its own self-test first) to catch a `bin/*.sh` piping into `grep -q` under `pipefail`, which silently inverts the script's answer. `actions` runs `bin/check-action-versions.sh`, keeping every GitHub Action pinned to a single version across all workflows. Neither gates the build - they exist because the failures they catch are invisible rather than loud.
-- **`.github/workflows/check-dependencies.yml`** — "PR Dependency Check". Reads `depends on #N` lines from the PR body and blocks the child until every parent has merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out of order. See [PR Discipline](#pr-discipline) for the syntax.
+- **`.github/workflows/check-dependencies.yml`** — "PR Dependency Check". Reads `depends on astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out of order. See [PR Discipline](#pr-discipline) for the syntax.
 - **`.github/workflows/cancel-closed-pr-runs.yml`** — Cancels a PR's in-flight runs when it closes, so a withdrawn PR stops occupying runners. Housekeeping only; gates nothing.
 - **Self-hosted lanes** (see [`docs/SELF_HOSTED_RUNNER.md`](docs/SELF_HOSTED_RUNNER.md)). None of these gate merging - they are for speed and for work too heavy for a 2-core hosted runner. All are **skipped for PRs from forks** (`head.repo.full_name == github.repository`), because a fork PR must never run on our own hardware.
   **`highcpu` is the only self-hosted label** - six runners, all online. Declare labels in [`.github/actionlint.yaml`](.github/actionlint.yaml) or actionlint flags them.
@@ -366,7 +366,9 @@ is posted in.
 `Fixes #167` or `Fixes astubbs/parallel-consumer#167` - the `owner#NN` short form this section
 otherwise prefers is **not** cross-reference syntax, so `Fixes astubbs#167` renders as plain text and
 closes nothing. A bare number is what the convention above forbids, so in a PR body write the fully
-qualified form: `Fixes astubbs/parallel-consumer#167`.
+qualified form: `Fixes astubbs/parallel-consumer#167` - the one form that closes the issue, names the
+repo and auto-links. The gate reads PR bodies, so the other two spellings now fail it rather than
+failing silently.
 
 At or above #1000 a bare number is unambiguous, because only this fork can have one.
 
@@ -377,11 +379,11 @@ fix. The script applies the same rule as the gate, because it calls the same
 from CI. It judges the working tree, like `bin/check-copyright-headers.sh`, so uncommitted edits are
 caught too. Only lines you *add* are scanned; pre-existing bare refs in a file you touch are fine.
 
-The *inputs* can differ in one narrow case, and only in the safe direction: CI reads patches from
-GitHub's `pulls.listFiles`, which omits `patch` for a very large diff, and the gate skips a file it
-cannot see - while the local script builds its own patch with `git diff` and still checks it. So a
-green local run is not a promise that CI has looked at every file, but a red one is always real. It
-can flag something CI would silently pass; it cannot pass something CI would flag.
+The *inputs* differ in two narrow ways. CI reads patches from GitHub's `pulls.listFiles`, which omits
+`patch` for a very large diff, and the gate skips a file it cannot see - while the local script
+builds its own patch with `git diff` and still checks it. And CI additionally scans the **PR body**,
+which does not exist when you run the script. So a green local run promises neither that CI looked at
+every file nor that the description passes; a red one is always real.
 That holds only while confluentinc's numbering stays below 1000 - it is dormant rather than
 archived, so it still creeps. Measure the headroom rather than trusting a figure written here:
 `gh api 'repos/confluentinc/parallel-consumer/issues?state=all&per_page=1&sort=created&direction=desc' --jq '.[0].number'` -
@@ -422,9 +424,22 @@ amiss.
 What it checks is that a reference *names* a repo, not that it names the right one: `astubbs#857`
 passes the gate and is still wrong. Resolve the number in both repos before you write it.
 
+**The PR body is in scope too, and it is the one place the fully qualified form is mandatory.** The
+body is the surface people actually read on GitHub, and a bare `#200` renders there as a *working*
+link to the wrong issue - the exact failure the gate exists to prevent, on its most visible page. So
+write `astubbs/parallel-consumer#NN` or `confluentinc/parallel-consumer#NN` in a description: the
+short `astubbs#NN` satisfies the gate but is not cross-reference syntax, so GitHub renders it as
+plain text and the body loses the link it would otherwise have had. Same for closing keywords -
+`Fixes astubbs#167` closes nothing. This is not a second rule: the body is fed to the same
+`suspectRefs` as a synthetic entry (`prBodyEntry`), attributed as `<PR body>` in the failure. Fenced
+code blocks in the body are skipped, because GitHub does not auto-link inside one either, so a
+pasted log or a quoted gate failure is not a violation. Editing the body re-runs the job, so a fix
+there needs no push.
+
 The files listed in `EXEMPT_PATHS` are exempt, because a bare number legitimately means upstream in them: `CHANGELOG.adoc`,
 `upstream-map.yaml`, `upstream-pr-analysis.adoc`, and the gate's own test fixtures. If a flagged
-reference really is fork-local, put `issue-refs: N/A - <reason>` on its own line in the PR body.
+reference really is fork-local, put `issue-refs: N/A - <reason>` on its own line in the PR body -
+which skips the body's own references along with everything else.
 Logic and tests live in `.github/scripts/issue-ref-gate.js` and `issue-ref-gate.test.js`.
 
 **`Fixes #NNN` only closes on PRs targeting the default branch.** Discovered on astubbs#29, which targeted
@@ -493,7 +508,7 @@ Keep the existing subject convention for *upstream* references (`... (#893)`, `c
 - **Open PRs from the template and complete its checklist honestly.** `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively (e.g. `gh pr create --body-file`), so base the PR body on it and resolve every box: check it `[x]`, or mark it `N/A - <reason>`. For human-authored PRs the `PR Checklist` CI gate (`.github/workflows/pr-checklist.yml`) fails when the checklist is missing entirely *or* when any box is left unchecked without an `N/A` - so dropping the template is not a bypass. Only real bot authors (GitHub user type `Bot`, e.g. Dependabot/Renovate) are exempt.
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the specific review comment (its own thread), NOT as a separate top-level PR comment - a summary comment leaves the original conversation unresolved and blocks merge on "unresolved conversations." When a finding is fixed, reply in-thread with the fix + commit SHA and mark the thread resolved (`gh api graphql ... resolveReviewThread`). Leave a thread open only when it genuinely needs the author's decision, and say so in the reply.
 - **After opening a PR, follow up on the duplication reports.** The duplicate-code and file-similarity checks post comments flagging new clones/similarity. Read them, remove duplication introduced by *this* PR before it merges; ignore clones that already existed on the base branch (out of scope for this PR).
-- **Stacked PRs: put `depends on #N` in the description** (one line per parent). The PR-dependency gate blocks the child from merging until the parent does; keep the list current if the chain changes.
+- **Stacked PRs: put `depends on astubbs/parallel-consumer#N` in the description** (one line per parent). The PR-dependency gate blocks the child from merging until the parent does; keep the list current if the chain changes. Write the **owner/repo** form, not the bare `depends on #N` the action also accepts: the issue-reference gate reads the body too, and a bare number below the threshold fails it. Both forms are equally understood by `dependencies-action` (`partialLinkRegex`), so nothing is lost.
 
 ## Releasing
 
