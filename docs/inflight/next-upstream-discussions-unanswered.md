@@ -42,7 +42,15 @@ that have replies but no accepted answer (403, 512, 643, 671, 677, 778, 849). Un
 like documentation gaps rather than defects - "What does maxConcurrency actually do?" being the
 clearest - so the likely outcome is doc improvements plus a few answers, not new issues.
 
-**Decision needed:** does the fork answer upstream discussions at all? Answering in a repo we do not
-control, on a project whose README already points here, has an obvious pull; but it is also the only
-place these people are actually standing. Whatever the answer, it should be deliberate rather than
-per-thread improvisation.
+## Decided 2026-08-07: we do NOT mirror discussions
+
+Discussions are not a queue to be converted. There is no pipeline turning threads into issues, and
+most of these should never become one - questions, doc gaps and chat stay exactly where they are.
+
+The rule is a judgement, not a mapping: **if reading a discussion makes us think there is an issue,
+we raise one** - a normal fork issue on its own merits, no `upstream-mirror` label and no "Mirror
+of" header, citing the discussion as where it came from so the thread can be linked forward to it.
+The issue exists because we believe the problem is real, not because a discussion existed.
+
+That also keeps `upstream-mirror` meaning one precise thing - "an upstream *issue* we carry" - which
+is what makes the 2023 cutoff verifiable.
