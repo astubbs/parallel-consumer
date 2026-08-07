@@ -353,7 +353,7 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
      * <p>
      * "Exact" refers to the offset map, not the number of commits: PC legitimately re-commits the same base
      * offset when a record completes that cannot advance it (see
-     * {@link KafkaTestUtils#collapseRepeatedCommits(List)}), so this waits for at least one matching commit
+     * {@link KafkaTestUtils#collapseRepeatedCommits(List, List)}), so this waits for at least one matching commit
      * rather than requiring exactly one. Requiring exactly one turns a wait into an assertion about where the
      * wall-clock commit ticks happened to fall.
      * <p>

@@ -60,7 +60,7 @@ class KafkaTestUtilsTest {
      * never committed.
      */
     @Test
-    void thesameOffsetOnTwoPartitionsIsNotAMergeableRepeat() {
+    void theSameOffsetOnTwoPartitionsIsNotAMergeableRepeat() {
         assertThat(collapseRepeatedCommits(of(P0, P1), of(6, 6))).containsExactly(6, 6);
         assertThat(collapseRepeatedCommits(of(P0, P0), of(6, 6))).containsExactly(6);
     }
