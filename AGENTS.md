@@ -156,6 +156,14 @@ bin/performance-test.sh
   genuine bug" question above before you start manual diagnosis. `probe clean` means the fault is likely in
   the test itself, not consumer-group progress. Disable via `-Dambient.probe=off` or `@NoAmbientProbe` only
   when the probe itself is the problem (see `AmbientProbeExtension` javadoc).
+  **`probe clean` is only informative when the probe's detectors could have fired.** Lag stagnation needs
+  `LAG_STAGNATION_MIN_LAG` (50) of real lag sustained past `LAG_STAGNATION_BOUND` (150s), and rebalance
+  dwell needs `REBALANCE_DWELL_BOUND` (15s). A test with a handful of records, or one that fails inside a
+  window shorter than those bounds, cannot trip either - so its autopsy prints `probe clean` and the
+  sentence "the fault is likely in the test itself" carries no evidence at all. Check the test's record
+  count and failure window against those constants before treating a clean probe as a finding. (This is
+  not hypothetical: the `commitTimeout` autopsy of 2026-08-07 read `probe clean` on a 15-record test that
+  failed in 35s, where the thresholds are 50 records and 150s.)
 - **Unit tests**: `mvn test` / surefire plugin. Source in `src/test/java/`.
 - **Integration tests**: `mvn verify` / failsafe plugin. Source in `src/test-integration/java/`. Uses TestContainers with `confluentinc/cp-kafka` Docker image.
 - **Test exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from surefire, included in failsafe.
