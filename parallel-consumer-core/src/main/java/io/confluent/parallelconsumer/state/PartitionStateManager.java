@@ -207,14 +207,25 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
     }
 
     /**
-     * Truncate our tracked offsets as a commit was successful, so the low water mark rises, and we dont' need to track
-     * as much anymore.
+     * Records that a commit succeeded, for each partition that was committed.
      * <p>
-     * When commits are made to broker, we can throw away all the individually tracked offsets before the committed
-     * offset.
+     * Per partition, this delegates to {@link PartitionState#onOffsetCommitSuccess}, which stores the newly committed
+     * offset as the partition's last committed offset and marks the partition clean (unless its state changed again
+     * while the commit was in flight, in which case it stays dirty and will be committed again).
+     * <p>
+     * <b>No offsets are discarded here.</b> Earlier versions of this javadoc described truncating tracked offsets below
+     * the committed offset once a commit landed. That does not happen, and cannot: {@link PartitionState} tracks only
+     * <em>incomplete</em> offsets, and the offset committed is the lowest incomplete one - so there is nothing below it
+     * left to throw away.
+     * <p>
+     * Truncation of tracked state does still exist, but it happens on the <b>bootstrap poll</b> rather than on commit -
+     * see {@link PartitionState}'s {@code maybeTruncateBelowOrAbove}, reached from its
+     * {@code maybeTruncateOrPruneTrackedOffsets}. That is where records removed by retention or compaction, or a
+     * committed offset raised externally, get reconciled against the offsets we track.
+     *
+     * @param committed the offsets just successfully committed to the broker, by partition
      */
     public void onOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> committed) {
-        // partitionOffsetHighWaterMarks this will get overwritten in due course
         committed.forEach((tp, meta) -> {
             var partition = getPartitionState(tp);
             partition.onOffsetCommitSuccess(meta);
