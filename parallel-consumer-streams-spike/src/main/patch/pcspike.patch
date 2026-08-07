@@ -1,6 +1,6 @@
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
 --- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-08 02:13:20.378314408 +1200
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-08 02:47:34.886932281 +1200
 @@ -44,8 +44,13 @@
      private final Serde<?> keySerde;
      private final Serde<?> valueSerde;
@@ -129,7 +129,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractPr
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
 --- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-08 02:13:20.379798407 +1200
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-08 02:47:34.887667400 +1200
 @@ -243,7 +243,11 @@
                      "multiple times.");
          }
@@ -175,7 +175,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorC
      }
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
 --- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-08 02:13:20.381478155 +1200
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-08 02:47:34.888543435 +1200
 @@ -64,6 +64,7 @@
  import java.util.Objects;
  import java.util.Optional;
@@ -209,8 +209,24 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordColl
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
 --- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-08 02:13:20.383319153 +1200
-@@ -60,6 +60,8 @@
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-08 02:47:34.890171921 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.processor.internals;
+ 
++import io.confluent.parallelconsumer.streamsspike.PcTaskDispatcher;
+ import org.apache.kafka.clients.consumer.Consumer;
+ import org.apache.kafka.clients.consumer.ConsumerConfig;
+ import org.apache.kafka.clients.consumer.ConsumerRecord;
+@@ -52,6 +53,7 @@
+ import org.apache.kafka.streams.state.internals.ThreadCache;
+ 
+ import java.io.IOException;
++import java.time.Duration;
+ import java.util.Collections;
+ import java.util.HashMap;
+ import java.util.HashSet;
+@@ -60,6 +62,8 @@
  import java.util.Objects;
  import java.util.Optional;
  import java.util.Set;
@@ -219,7 +235,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  import java.util.function.Function;
  import java.util.stream.Collectors;
  
-@@ -84,7 +86,12 @@
+@@ -84,7 +88,12 @@
      private final int maxBufferedSize;
      private final AbstractPartitionGroup partitionGroup;
      private final RecordCollector recordCollector;
@@ -233,7 +249,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      private final Map<TopicPartition, Long> consumedOffsets;
      private final Map<TopicPartition, Long> committedOffsets;
      private final Map<TopicPartition, Long> highWatermark;
-@@ -94,7 +101,8 @@
+@@ -94,7 +103,8 @@
      private final PunctuationQueue systemTimePunctuationQueue;
      private final StreamsMetricsImpl streamsMetrics;
  
@@ -243,17 +259,37 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  
      private final Sensor closeTaskSensor;
      private final Sensor processRatioSensor;
-@@ -113,7 +121,8 @@
+@@ -113,7 +123,28 @@
      private final ProcessingExceptionHandler processingExceptionHandler;
  
      private StampedRecord record;
 -    private boolean commitNeeded = false;
++
++    /**
++     * PC spike (astubbs#255): non-null when this task feeds Parallel Consumer instead of its own
++     * {@link #partitionGroup}. Decided once, in the constructor, so a task cannot change record paths
++     * mid-run and strand records in the path it abandoned. Null is the stock path.
++     */
++    private final PcTaskDispatcher pcDispatcher;
++
++    /** PC spike (astubbs#255): how long {@link #suspend()} waits for in-flight work before giving up. */
++    private static final Duration PC_DRAIN_TIMEOUT = Duration.ofSeconds(30);
++
++    /**
++     * PC spike (astubbs#255): the PC path bypasses {@link #partitionGroup} entirely (KTD8 - one path,
++     * switched, never both), but it still needs what a {@link RecordQueue} does for a record on the way in:
++     * deserialisation, timestamp extraction, and the source node to start the chain at. So the PC path keeps
++     * its own queues and uses them as one-record converters. Touched only from the StreamThread, in
++     * {@link #pcPrepare}, which is why a plain HashMap is right here and wrong three fields up.
++     */
++    private final Map<TopicPartition, RecordQueue> pcRecordQueues = new HashMap<>();
++
 +    // PC spike (astubbs#255): set by worker threads, read by the committing thread.
 +    private volatile boolean commitNeeded = false;
      private boolean commitRequested = false;
      private boolean hasPendingTxCommit = false;
      private Optional<Long> timeCurrentIdlingStarted;
-@@ -185,14 +194,15 @@
+@@ -185,14 +216,15 @@
          maxBufferedSize = config.maxBufferedSize;
  
          // initialize the consumed and committed offset cache
@@ -273,7 +309,64 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          final Sensor enforcedProcessingSensor;
          enforcedProcessingSensor = TaskMetrics.enforcedProcessingSensor(threadId, taskId, streamsMetrics);
          final long maxTaskIdleMs = config.maxTaskIdleMs;
-@@ -771,6 +781,7 @@
+@@ -225,6 +257,10 @@
+         }
+         timeCurrentIdlingStarted = Optional.empty();
+         processingExceptionHandler = config.processingExceptionHandler;
++
++        // PC spike (astubbs#255): the switch. Off by default, so the stock path above stays the one that
++        // runs unless a test or a system property says otherwise.
++        pcDispatcher = PcTaskDispatcher.createIfEnabled(id.toString(), inputPartitions);
+     }
+ 
+     // create queues for each assigned partition and associate them
+@@ -316,6 +352,19 @@
+ 
+     @Override
+     public void suspend() {
++        // PC spike (astubbs#255): drain before suspending. Suspension is where Streams stops feeding the
++        // task and starts tearing down around it, and a worker still inside the chain would be forwarding
++        // into a record collector that is about to close. Pumping here (we are on the StreamThread, which is
++        // the only thread allowed to touch the WorkManager) also gets every consumed offset recorded before
++        // the final commit reads them.
++        if (pcDispatcher != null) {
++            final long wallClockTime = time.milliseconds();
++            if (!pcDispatcher.pumpUntilQuiescent(rawRecord -> pcPrepare(wallClockTime, rawRecord), PC_DRAIN_TIMEOUT)) {
++                log.warn("PC dispatch did not quiesce within {} before suspend; {} record(s) still in flight",
++                    PC_DRAIN_TIMEOUT, pcDispatcher.getInFlightCount());
++            }
++        }
++
+         switch (state()) {
+             case CREATED:
+                 transitToSuspend();
+@@ -673,6 +722,12 @@
+      * You must commit a task and checkpoint the state manager before closing as this will release the state dir lock
+      */
+     private void close(final boolean clean) {
++        // PC spike (astubbs#255): shut the worker pool down and give PC's partition state back, before the
++        // partition group and the record collector go.
++        if (pcDispatcher != null) {
++            TaskManager.executeAndMaybeSwallow(clean, pcDispatcher::close, "PC dispatch close", log);
++        }
++
+         switch (state()) {
+             case SUSPENDED:
+                 TaskManager.executeAndMaybeSwallow(
+@@ -765,12 +820,20 @@
+      */
+     @SuppressWarnings("unchecked")
+     public boolean process(final long wallClockTime) {
++        // PC spike (astubbs#255): the other half of the switch. On the PC path there is nothing in the
++        // partition group to select from - records went to the WorkManager instead - so selection, ordering
++        // and concurrency all come from PC and this method's job shrinks to pumping.
++        if (pcDispatcher != null) {
++            return pcProcess(wallClockTime);
++        }
++
+         if (record == null) {
+             if (!isProcessable(wallClockTime)) {
+                 return false;
              }
  
              // get the next record to process
@@ -281,7 +374,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              record = partitionGroup.nextRecord(recordInfo, wallClockTime);
  
              // if there is no record to process, return immediately
-@@ -780,10 +791,13 @@
+@@ -780,10 +843,13 @@
          }
  
          try {
@@ -293,11 +386,11 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  
              if (!(record instanceof CorruptedRecord)) {
 -                doProcess(wallClockTime);
-+                doProcess(wallClockTime, currentRecordInfo);
++                doProcess(wallClockTime, currentRecordInfo, record);
              }
  
              // update the consumed offset map after processing is done
-@@ -792,7 +806,7 @@
+@@ -792,7 +858,7 @@
  
              // after processing this record, if its partition queue's buffered size has been
              // decreased to the threshold, we can then resume the consumption on this partition
@@ -306,17 +399,104 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
                  partitionsToResume.add(partition);
              }
  
-@@ -844,7 +858,7 @@
+@@ -843,8 +909,15 @@
+         throw error;
      }
  
++    /**
++     * PC spike (astubbs#255): {@code record} is now a parameter rather than the shared field of the same
++     * name. On the PC path there is no single "current record" for a task - there are up to poolSize of
++     * them, one per worker - so the record has to travel down the call stack instead of being read out of
++     * task state. The body is untouched: the parameter deliberately shadows the field, so every existing
++     * reference now reads this thread's record and nobody else's.
++     */
      @SuppressWarnings("unchecked")
 -    private void doProcess(final long wallClockTime) {
-+    private void doProcess(final long wallClockTime, final AbstractPartitionGroup.RecordInfo recordInfo) {
++    private void doProcess(final long wallClockTime, final AbstractPartitionGroup.RecordInfo recordInfo, final StampedRecord record) {
          // process the record by passing to the source node of the topology
          final ProcessorNode<Object, Object, Object, Object> currNode = (ProcessorNode<Object, Object, Object, Object>) recordInfo.node();
          log.trace("Start processing one record [{}]", record);
-@@ -872,14 +886,13 @@
+@@ -870,16 +943,92 @@
+         log.trace("Completed processing one record [{}]", record);
+     }
  
++    // ------------------------------------------------------------------------------------------------
++    // PC spike (astubbs#255): the Parallel Consumer record path. Reached only when pcDispatcher != null.
++    // ------------------------------------------------------------------------------------------------
++
++    /**
++     * The PC replacement for the select-one-record-and-run-it body of {@link #process(long)}.
++     * <p>
++     * Two things happen here that do not happen on the stock path. First, a failure from a worker is
++     * re-thrown on <em>this</em> thread rather than at the point it occurred - which is how stock Streams
++     * behaves too (the exception reaches the uncaught-exception handler via the StreamThread), except that
++     * here it arrives one or more pump cycles late, and records dispatched in between will have run. Second,
++     * {@code isProcessable} and {@code partitionGroup.readyToProcess} are not consulted: they answer
++     * questions about a buffer this path does not fill. Stream-time punctuation goes with them, since stream
++     * time advances at partition-group selection - noted as a caveat, and irrelevant to the stateless and
++     * non-windowed topologies this spike runs.
++     *
++     * @return true if any record was handed to the worker pool this call
++     */
++    private boolean pcProcess(final long wallClockTime) {
++        final Throwable failure = pcDispatcher.pollFailure();
++        if (failure != null) {
++            throw new StreamsException(
++                String.format("Exception caught in PC-dispatched processing. taskId=%s", id()), failure);
++        }
++        return pcDispatcher.dispatchAvailable(rawRecord -> pcPrepare(wallClockTime, rawRecord)) > 0;
++    }
++
++    /**
++     * Runs on the StreamThread. Turns one raw record into the chain execution a worker will run.
++     * <p>
++     * The {@link RecordQueue} here is used as a converter, not a buffer: add one record, take it straight
++     * back out. That keeps deserialisation, timestamp extraction and the deserialisation-exception handler
++     * exactly as Kafka Streams implements them - the alternative was to reimplement all three in the bridge
++     * and spend the rest of the spike arguing about whether the reimplementation was faithful.
++     *
++     * @return the work to run, or null if the record was dropped on the way in - a bad timestamp, or a
++     *         deserialisation error the configured handler chose to continue past
++     */
++    private Runnable pcPrepare(final long wallClockTime, final ConsumerRecord<byte[], byte[]> rawRecord) {
++        final TopicPartition partition = new TopicPartition(rawRecord.topic(), rawRecord.partition());
++        final RecordQueue queue = pcRecordQueues.computeIfAbsent(partition, recordQueueCreator::createQueue);
++
++        queue.addRawRecords(Collections.singletonList(rawRecord));
++        if (queue.isEmpty()) {
++            log.debug("Record dropped during preparation, nothing to run: {}", rawRecord);
++            return null;
++        }
++
++        final StampedRecord stamped = queue.poll(wallClockTime);
++        final RecordInfo recordInfo = new RecordInfo();
++        recordInfo.queue = queue;
++
++        return () -> pcRunChain(wallClockTime, stamped, recordInfo);
++    }
++
++    /**
++     * Runs on a worker thread, concurrently with up to poolSize-1 siblings on the same task. Everything it
++     * touches is either a parameter (the record, its {@link RecordInfo}) or was made safe for this in U4:
++     * the thread-confined record context and current node, the concurrent {@link #consumedOffsets}, the
++     * volatile {@link #commitNeeded}.
++     * <p>
++     * {@link #consumedOffsets} is written on completion in whatever order workers finish, which is the
++     * optimistic-commit divergence the plan defers: Streams may commit an offset while a lower one from the
++     * same partition is still in flight. Deliberate, and recorded rather than fixed.
++     */
++    private void pcRunChain(final long wallClockTime, final StampedRecord stamped, final RecordInfo recordInfo) {
++        try {
++            if (!(stamped instanceof CorruptedRecord)) {
++                doProcess(wallClockTime, recordInfo, stamped);
++            }
++            consumedOffsets.put(recordInfo.partition(), stamped.offset());
++            commitNeeded = true;
++        } finally {
++            processorContext.setCurrentNode(null);
++        }
++    }
++
      @Override
      public void recordProcessBatchTime(final long processBatchTime) {
 -        processTimeMs += processBatchTime;
@@ -332,3 +512,19 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      /**
+@@ -1102,6 +1251,15 @@
+      */
+     @Override
+     public void addRecords(final TopicPartition partition, final Iterable<ConsumerRecord<byte[], byte[]>> records) {
++        // PC spike (astubbs#255): one path, switched (KTD8). Registering into BOTH would look tempting - "so
++        // they can be compared" - and would hang the run: nothing drains the partition group, the buffer
++        // passes maxBufferedSize, this method pauses the partition, and the consumer sits paused with no
++        // error to explain it.
++        if (pcDispatcher != null) {
++            pcDispatcher.registerRecords(partition, records);
++            return;
++        }
++
+         final int newQueueSize = partitionGroup.addRawRecords(partition, records);
+ 
+         if (log.isTraceEnabled()) {
