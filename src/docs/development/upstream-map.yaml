@@ -432,7 +432,7 @@ entries:
       #158 should close #174, #187 and #191 with it.
 
   - id: sweep-2023-null-key-ordering
-    group: batching-ordering
+    group: features
     summary: "KEY ordering serialises all null-key records into one shard (live defect)"
     fork: {branches: [], prs: [], fork_issues: [244], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [183], prs: [], related: [], status: closed, last_checked: 2026-08-07}
@@ -481,7 +481,7 @@ entries:
     group: rebalance-stability
     summary: Async offset-commit errors after broker downtime are logged and dropped
     fork: {branches: [], prs: [], fork_issues: [248], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [203], prs: [345], related: [185, 345], status: closed, last_checked: 2026-08-07}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [203], prs: [345], related: [185], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
       nioertel, 2022-03; never reproduced (reporter did not answer three diagnostic
@@ -495,7 +495,7 @@ entries:
       astubbs/bugs/broker-disconnect @bc620f3b8.
 
   - id: sweep-2023-topic-priority
-    group: batching-ordering
+    group: features
     summary: Prioritise some subscribed topics over others via reserved concurrency shares
     fork: {branches: [], prs: [], fork_issues: [236], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [50], prs: [441], related: [372], status: closed, last_checked: 2026-08-07}
