@@ -120,6 +120,37 @@ if [ "$do_audit" -eq 1 ]; then
   echo "  the same from here. Read the closing comments before believing it was a sweep."
   echo
 
+  # Discussions are a THIRD content type, invisible to every other mode here and to
+  # the manifest. They are not swept and cannot be "closed as completed", so the risk
+  # is different: a user question that simply never got a reply, in a place no issue
+  # search reaches. Release-announcement threads legitimately have no replies, so they
+  # are excluded by title rather than counted as neglect.
+  echo "## Upstream discussions with no reply at all (excluding release announcements)"
+  echo
+  disc="$(gh api graphql --paginate --slurp -f query='
+    query($cursor: String) {
+      repository(owner: "confluentinc", name: "parallel-consumer") {
+        discussions(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes { number title createdAt isAnswered author { login }
+                  category { name } comments { totalCount } }
+        }
+      }
+    }' 2>/dev/null \
+    | jq -r '[.[] | .data.repository.discussions.nodes[]]
+             | [.[] | select(.comments.totalCount == 0)
+                    | select((.title | test("^[0-9]+\\.[0-9]+\\.[0-9]"))  | not)]
+             | sort_by(.createdAt) | .[]
+             | "  #\(.number)  \(.createdAt[0:10])  [\(.author.login)]  \(.title[0:64])"' 2>/dev/null || true)"
+  if [ -z "$disc" ]; then
+    echo "  (none)"
+  else
+    printf '%s\n' "$disc"
+    echo
+    echo "  total: $(printf '%s\n' "$disc" | wc -l | tr -d ' ')"
+  fi
+  echo
+
   echo "## Closed upstream issues that are neither tracked nor mirrored"
   echo
   gap="$(jq -r '.[] | "\(.number)\t\(.closedAt[0:10])\t\(.stateReason // "-")\t\(.title)"' "$tmp/issues.json" \
