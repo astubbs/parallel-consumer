@@ -137,10 +137,9 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
                 successfullInOne.add(x.getSingleConsumerRecord());
             });
 
-            // wait for initial 0 commit
-            Thread.sleep(500);
-
-            //
+            // No wait needed before producing: the consumer group is new for this randomly named topic and
+            // reads from EARLIEST, so records produced before the assignment completes are still delivered -
+            // and the await below only passes once they have been.
             send(rebalanceTopic, 0, 0);
             send(rebalanceTopic, 0, 1);
             send(rebalanceTopic, 0, 2);
@@ -157,14 +156,13 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
                     }
             );
 
-            // wait until all expected records have been processed and committed
-            // need to wait for final message processing's offset data to be committed
-            // TODO test for event/trigger instead - could consume offsets topic but have to decode the binary
-            // could listen to a produce topic, but currently it doesn't use the produce flow
-            // could add a commit listener to the api, but that's heavy just for this?
-            // could use Consumer#committed to check and decode, but it's not thread safe
-            // sleep is lazy but much much simpler
-            Thread.sleep(500);
+            // wait until all expected records have been processed AND their offset data committed.
+            // The work manager is "dirty" from the moment a record succeeds until the offsets covering it
+            // have been committed, so !isDirty() IS the commit-happened event - no need to decode the
+            // offsets topic or touch the (not thread safe) Consumer#committed.
+            await().alias("completed work has been committed")
+                    .atMost(normalTimeout)
+                    .until(() -> !asyncOne.getWm().isDirty());
 
             // commit what we've done so far, don't wait for failing messages to be retried (message 4)
             log.info("Closing consumer, committing offset map");

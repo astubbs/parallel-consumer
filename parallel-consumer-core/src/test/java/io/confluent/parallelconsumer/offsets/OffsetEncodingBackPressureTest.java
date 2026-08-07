@@ -7,7 +7,6 @@ package io.confluent.parallelconsumer.offsets;
 import com.google.common.truth.Truth;
 import com.google.common.truth.Truth8;
 import io.confluent.parallelconsumer.FakeRuntimeException;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import io.confluent.parallelconsumer.state.PartitionState;
@@ -261,10 +260,10 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                 // fail the message
                 finalMsgLock.countDown();
 
-                // wait for the retry
+                // wait for the retry - the attempt count IS the retry-happened event, so wait on it
+                // directly rather than first sleeping out the retry delay and hoping
                 awaitForOneLoopCycle();
-                sleepQuietly(ParallelConsumerOptions.DEFAULT_STATIC_RETRY_DELAY.toMillis());
-                await().until(() -> attempts.get() >= 2);
+                await().atMost(ofSeconds(30)).until(() -> attempts.get() >= 2);
 
                 // assert partition still blocked
                 awaitForOneLoopCycle();

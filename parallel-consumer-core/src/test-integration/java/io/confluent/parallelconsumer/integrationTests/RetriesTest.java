@@ -75,9 +75,11 @@ public class RetriesTest extends BrokerIntegrationTest<String, String> {
                 latch.countDown();
             }
         }).start();
-        ThreadUtils.sleepQuietly(3000);
+        ThreadUtils.sleepQuietly(3000); // soak the retry loop, so the sampler above gets many chances to catch a violation
         throwOnHeader.set(false);
-        ThreadUtils.sleepQuietly(2000);
+        // keep sampling until the previously failing half has actually drained - the real end of the retry
+        // loop, rather than a fixed wait in which we hope it drained
+        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(100)).until(count::get, is(equalTo(4000)));
         checking.set(false);
         latch.await();
         assertThat(failed.get()).isFalse();
