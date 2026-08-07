@@ -1,4 +1,4 @@
-# confluentinc#809 and #833 are plausibly already fixed here, and nobody has said so
+# confluentinc#809 and confluentinc#833 are plausibly already fixed here, and nobody has said so
 
 Two open upstream reports, mirrored as astubbs#175 and astubbs#177. Both show the same signature:
 
@@ -30,10 +30,11 @@ commit response produced, and `pc_processed_records_total` flat across the windo
 timeout expiring does not explain a 17-minute gap; the only producer of commit responses being dead
 does.
 
-**Not established:** whether both reports are that cause. #833 runs a 50%-failure workload, which
-also touches the *dirty* asymmetry - only a success marks a partition dirty, so a workload where
-nothing succeeds attempts no commits at all. #809's stack is inside `close()` -> `doClose` ->
-`commitOffsetsThatAreReady`, which is a different entry point. They may be one defect or two.
+**Not established:** whether both reports are that cause. confluentinc#833 runs a 50%-failure
+workload, which also touches the *dirty* asymmetry - only a success marks a partition dirty, so a
+workload where nothing succeeds attempts no commits at all. confluentinc#809's stack is inside
+`close()` -> `doClose` -> `commitOffsetsThatAreReady`, which is a different entry point. They may be
+one defect or two.
 
 ## The reported number is wrong, which is why this stayed confusing
 
