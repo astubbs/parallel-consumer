@@ -28,6 +28,66 @@ owned that content all along.)
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
 
+## Before you investigate anything
+
+Do all five checks below **before** forming a hypothesis, and say in your write-up what they returned
+- including "nothing". Prior art does not only tell you the answer; it tells you the *method* that
+settled the last question of this shape, and the traps that voided someone's earlier experiment.
+
+| Check | Command | What it catches |
+|---|---|---|
+| Prior investigations | `ls docs/plans/`, then grep them | The same question already answered, and how it was proved |
+| Solved problems | `grep -rl <mechanism> docs/solutions/` | A documented root cause with a signature you can rule in or out |
+| In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` | A known-open defect you are about to rediscover |
+| Open PRs | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> --name-only` | A fix already in flight, and files your change would collide with |
+| **Merged** PRs, by file | `gh pr list --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` | The PR that last fixed something in this exact file - the richest prior art there is, and invisible to a search on the *open* list |
+| Existing issues | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` and filter by title - fork issues *and* the `upstream-mirror` ones | An upstream bug already triaged; read the upstream issue itself, not the mirror's summary |
+
+**Grep the mechanism, not the symptom.** The name of the failing test is the weakest search term
+available. Search the class, the lock, the option, the exception, the log line - whatever the failure
+actually turns on.
+
+**`--state open` is a collision check, not a prior-art search.** The PR that already solved something
+in your file is, by definition, merged. Searching only the open list feels like due diligence and
+finds nothing, which is worse than not looking - it produces false confidence. Same for issues:
+`--state all`, because the useful ones are usually closed.
+
+### Settling it: a fix that works is not evidence of the cause
+
+Promoted here from `docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md` §11, because a
+dated plan goes stale once its work lands and this method must not go with it.
+
+- **Confirm a cause with a control arm, not with a fix that appears to work.** Change the one term you
+  believe is responsible, hold everything else identical, and show the outcome flips. Same-magnitude,
+  different-position beats bigger-hammer. The worked example: an identical 400ms delay injected on
+  either side of a lock release - *after* it (opening the window) failed 8/8; *before* it (same added
+  latency, inside the lock) passed 8/8, against a ~1-in-6 baseline. The control arm is what ruled out
+  "it is just slower under load", which every previous look at that flake had concluded.
+- **State the prediction before running it, and report the refuted ones.** A prediction that fails is
+  the cheapest result you will get. If a fix works but its prediction was wrong, you have a symptom.
+- **Verify your instrumentation actually reached the run** - the failure mode is a silent false
+  negative that reads as "no effect":
+  - `./mvnw -pl <module>` **without `-am`** fails the `ReactorModuleConvergence` enforcer, so the test
+    never recompiles and both arms run the stale class.
+  - `surefire:test` alone **does not reprocess test resources**, so an edited `logback-test.xml` never
+    reaches `target/test-classes` and your new logging silently does not exist.
+  - Use `./mvnw -pl parallel-consumer-core -am verify` (what `bin/soak-test.sh` runs) and confirm
+    `BUILD SUCCESS` on the compile step. Better, assert the setting in the run's own output - PC logs
+    its full options at INFO on init, so the arm proves itself.
+- **Report the rate and the conditions, never a bare verdict.** "0 failures" is meaningless without N
+  and the load. `bin/soak-test.sh <Class#method> <runs>` at a low `SOAK_FREE_CORES` is the house
+  reproducer; its own closing line says it - no failures is not proof the flake is gone.
+- **A guard added with a fix must be verified by negative control.** Break the thing it guards and
+  confirm it fails deterministically. An assertion nobody has seen fail is decoration.
+
+Real example, 2026-08-07: the `TransactionTimeoutsTest.commitTimeout` handoff searched for the test's
+own name, found nothing, and classified the failure by analogy. Grepping the *mechanism*
+(`producerTransactionLock` / `commitLockAcquisitionTimeout`) finds
+`docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md`, the only prior investigation
+into that exact lock - which already documented the lock's ordering invariant, the controlled-experiment
+method for settling contention-vs-bug, and a build trap that had silently voided one earlier
+experiment. All of it applied; none of it was used.
+
 ## Overview
 
 Parallel Consumer is a Java library that enables concurrent message processing from Apache Kafka with a single consumer, avoiding the need to increase partition counts. It maintains ordering guarantees (by partition or key) while processing messages in parallel.
