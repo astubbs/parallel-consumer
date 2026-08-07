@@ -11,9 +11,11 @@
  * shorthand such as a hash followed by 111 as an unqualified issue reference, which fails the build. There is a
  * commit in this repo whose entire content is expanding shorthand back out. Do not reintroduce it.
  *
- * NO LAYOUT SHIFT (plan R16). Anything that updates gets tabular numerals and a reserved minimum width, and
- * anything positional moves by changing `left`/`width` on an absolutely-positioned element so its neighbours
- * cannot be pushed around. That property is mostly won or lost in this file.
+ * NO LAYOUT SHIFT (plan R16). Anything that updates gets tabular numerals and a reserved minimum width, anything
+ * whose wording changes gets a reserved minimum HEIGHT, and anything positional moves by changing `left`/`width` on
+ * an absolutely-positioned element so its neighbours cannot be pushed around. That property is mostly won or lost
+ * in this file. The height half was learned the hard way: a block that re-wraps from one line to two moves every
+ * element below it on the page, which is far more visible than any number changing width in place.
  */
 
 /* ------------------------------------------------------------------ tokens */
@@ -569,6 +571,8 @@ main {
     flex-wrap: wrap;
     gap: 10px;
     margin-bottom: 7px;
+    /* room for the ordering caveat, which is taller than the text beside it and comes and goes while you watch */
+    min-height: 1.6em;
 }
 
 .pt-name {
@@ -594,6 +598,12 @@ main {
     color: var(--text-muted);
     margin: 0 0 7px;
     max-width: 100ch;
+    /*
+     * Two lines reserved, because this sentence is the thing that was moving the page. Its four wordings differ by
+     * more than a hundred characters and it has an exact offset in it, so a partition changing state or an offset
+     * gaining a digit re-wrapped it between one line and two - seventeen pixels, applied to every row below.
+     */
+    min-height: 3em;
 }
 
 /* the bar itself */

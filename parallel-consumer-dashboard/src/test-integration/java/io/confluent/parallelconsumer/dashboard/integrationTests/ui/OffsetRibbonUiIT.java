@@ -174,6 +174,29 @@ class OffsetRibbonUiIT extends DashboardUiTestBase {
         }
     }
 
+    /**
+     * R16. The counterfactual sentence has four wordings that differ by more than a hundred characters, so while its
+     * height was free it re-wrapped between one line and two as partitions changed state - seventeen pixels, moving
+     * every row below it. Writing the longest wording into every row must not change one row's height.
+     */
+    @Test
+    void theLongestSentenceARowCanSayDoesNotChangeItsHeight() {
+        String url = serve(busyInstance());
+        openPage(url);
+
+        Object measured = script(""
+                + "const rows = Array.from(document.querySelectorAll('#panel-offsets .pt'));"
+                + "const before = rows.map(row => row.offsetHeight);"
+                + "rows.forEach(row => { row.querySelector('.pt-note').textContent = 'A single-threaded consumer "
+                + "would stop at offset 9223372036854775807 and reprocess everything above it. This instance has "
+                + "already finished 9,223,372,036,854,775,807 of those records, safely recorded in the commit "
+                + "metadata.'; });"
+                // reading offsetHeight after the writes is what forces the browser to lay the page out again
+                + "return rows.map(row => row.offsetHeight).join() === before.join();");
+
+        assertThat(measured).isEqualTo(Boolean.TRUE);
+    }
+
     @Test
     void theRibbonIsCapturedInBothThemes() {
         String url = serve(busyInstance());
