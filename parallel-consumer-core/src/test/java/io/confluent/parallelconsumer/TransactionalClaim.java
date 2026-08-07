@@ -95,7 +95,7 @@ public enum TransactionalClaim {
             + "FAILURE_INVISIBLE_AND_RECOMBINED - with no fencing the abandoned instance is never refused and the "
             + "test goes red before the replay begins. VALID ONLY AT batchSize=1: at batchSize>=2 the produce-lock "
             + "double-release stops the instance committing at all, which is recorded under "
-            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/inflight/bug-producing-lock-double-release.md"),
+            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md"),
 
     /**
      * C5 - selecting transactional mode silently changes the commit interval default.
@@ -220,7 +220,26 @@ public enum TransactionalClaim {
      */
     EAGER_PROCESSING_MAY_REPLAY(Source.OPTIONS_JAVADOC,
             "this may cause side effect replay when the record is retried, otherwise there is no replay.",
-            Status.NOT_YET_COVERED, "owned by U6"),
+            Status.PROVED, "TransactionalEagerProcessingIT#eagerProcessingReplaysTheSideEffectOfARetriedRecordWhereStrictProcessingDoesNot. "
+            + "Both halves observed under ONE forced trigger - the produce lock held shut until a worker's "
+            + "acquisition is seen to time out - applied identically to both arms: with eager processing ENABLED "
+            + "the victim's user function ran 2x, with it DISABLED exactly 1x. The claim is directional, so the "
+            + "assertion is the difference between the arms, not a count in one of them. The lock placement the "
+            + "claim rests on is read directly: the worker's own read-hold count on producerTransactionLock, "
+            + "sampled INSIDE the user function, is 1 when eager is off and 0 when it is on, and main's own two "
+            + "timeout messages agree ('early acquire produce lock ... could not START record processing phase' "
+            + "versus 'late acquire produce lock'). "
+            + "Negative controls observed (U6), all three predicted before running: (1) flipping the eager arm's "
+            + "allowEagerProcessingDuringTransactionCommit to false - one term, everything else identical - turned "
+            + "it red on 'Hold counts sampled inside the user function were [1, 1, 1, 1]' where 0 was required; "
+            + "(2) the same flip with that ordering assertion removed so the run reaches the counts turned it red "
+            + "on 'the eager arm did not re-run the user function ... invocations were {eager-victim-key-0=1}', "
+            + "with the trigger confirmed fired - so the replay is the option's doing and not the trigger's; "
+            + "(3) removing the hold itself turned it red on the non-vacuity guard, 'never raised a produce-lock "
+            + "timeout ... Worker-path failures seen: []', so a green run cannot be one where nothing was retried. "
+            + "Also asserted: the output topic still holds exactly one result per input record in BOTH arms - the "
+            + "discarded eager attempt fails before produceMessages, so what the option costs is the user's side "
+            + "effects, not duplicate output"),
 
     /**
      * C14 - the README's own promise. Users read the README, not the javadoc, so it is registered separately: a

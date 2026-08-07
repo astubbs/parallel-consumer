@@ -82,7 +82,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * They are kept unconfused here because at {@code batchSize >= 2} the produce lock is acquired per
  * {@code PollContextInternal} but released per {@code WorkContainer}, which stalls the instance outright - see
  * {@code TransactionalCrashReplayIT#outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching} and
- * {@code docs/inflight/bug-producing-lock-double-release.md}. Nothing in C7 needs batching to express it.
+ * {@code docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md}. Nothing in C7 needs batching to express it.
  *
  * <h2>What is counted</h2>
  * Records, never offsets. Commit and abort markers occupy offsets on a transactional topic, so the difference

@@ -716,7 +716,7 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
      * error at all - commits were never attempted rather than attempted and failing. The results the README
      * promises "will exist exactly once" never come to exist. The same scenario at {@code batchSize = 1} passes
      * 4/4 on the same machine at the same volume. Full evidence in
-     * {@code docs/inflight/bug-producing-lock-double-release.md}.
+     * {@code docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md}.
      * <p>
      * This arm still asserts the multiset, because that is the claim; it simply never reaches it, failing earlier
      * on the source offset.
