@@ -36,6 +36,27 @@ parallel. This is how the project gets concurrency without adding partitions.
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
 merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
 
+## Health and run state
+
+**Run state**
+Where a subsystem sits in its lifecycle: `UNUSED`, `RUNNING`, `PAUSED`, `DRAINING`, `CLOSING`, `CLOSED`.
+The **control loop** and the **broker poller** each have their own, and they legitimately diverge — pausing
+moves only the controller, and before the first poll the controller is still `UNUSED` while the poller
+already reads `RUNNING`. Each run state also has a fixed integer published through the `pc.status` and
+`pc.poller.status` gauges, so the numbers are a contract and are deliberately not the enum's ordinal.
+
+**Health verdict**
+The single boolean a container platform acts on: the control loop is not shutting down *and* no failure
+cause has been recorded. Liveness-scoped — it answers "does this instance need restarting", never "is
+this instance consuming". A **stall** leaves the run state at `RUNNING`, so the verdict reads healthy
+throughout one; that is the deliberate limit of the concept, not a defect in it. Progress is a metrics
+question, not a health-verdict one.
+
+**Failure cause**
+The exception recorded when an instance died, and the only thing that distinguishes a crash from a clean
+shutdown — both leave the control loop `CLOSED`. It is unattributed: there is one cause, sourced from the
+control loop, not one per subsystem.
+
 ## Transactional commit
 
 **Produce lock**
