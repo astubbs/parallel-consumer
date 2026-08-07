@@ -2,47 +2,83 @@
 <!--
   Copyright (C) 2026 Antony Stubbs and contributors
 
-  Placeholder page shell. The real dashboard page - layout, palette, live loop and panels - is built in a later
-  unit of the plan; this exists so the server is complete and demonstrable on its own, and so the classpath
-  resource the /status diagnostic checks for is actually there.
+  The dashboard page shell.
+
+  EVERY ASSET COMES FROM THE JAR (plan R15). There is not one absolute URL in this directory - no CDN, no font
+  service, no telemetry - so the page works air-gapped, and WebAssetManifestTest fails the build if one appears.
+
+  ABSOLUTE PATHS, NOT RELATIVE ONES. The server reroutes "/" to "/assets/index.html" internally, which leaves the
+  browser's document URL at "/". A relative "style.css" would therefore resolve to "/style.css", which is not
+  mounted. Module imports inside app.js resolve against the module's own URL, so those stay relative.
 -->
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark">
     <title>Parallel Consumer dashboard</title>
-    <style>
-        body {
-            font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-            margin: 0; padding: 2rem; background: #ffffff; color: #111111;
-        }
-        h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
-        .experimental { color: #aa1111; font-weight: 600; letter-spacing: .04em; font-size: .75rem; }
-        ul { max-width: 44rem; }
-        code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-        footer { margin-top: 2rem; color: #555555; max-width: 44rem; font-size: .85rem; }
-        @media (prefers-color-scheme: dark) {
-            body { background: #111111; color: #eeeeee; }
-            .experimental { color: #f87171; }
-            footer { color: #aaaaaa; }
-        }
-    </style>
+    <link rel="stylesheet" href="/assets/style.css">
+    <link rel="icon" href="data:,">
 </head>
 <body>
-<p class="experimental">EXPERIMENTAL &middot; READ-ONLY</p>
-<h1>Parallel Consumer dashboard</h1>
-<p>The server is running. The rendered page is not built yet.</p>
-<ul>
-    <li><a href="/api/state.json"><code>/api/state.json</code></a> - the state document, everything the page will
-        render, as JSON.
-    </li>
-    <li><code>/api/stream</code> - the same document pushed as server-sent events, one per sample.</li>
-    <li><a href="/status"><code>/status</code></a> - the self-diagnostic: why the dashboard is showing you nothing.
-    </li>
-</ul>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="badge badge-experimental"
+              title="This module is experimental and read-only. Its API carries no compatibility guarantee, and it exposes no operation that changes the consumer, the group or the broker.">Experimental &middot; read-only</span>
+        <h1>Parallel Consumer</h1>
+        <span class="instance" id="instance-id"
+              title="The instance id this Parallel Consumer reports. Blank until the first sample arrives.">&nbsp;</span>
+    </div>
+
+    <div class="topbar-spacer"></div>
+
+    <div class="status" id="status" data-phase="loading" role="status" aria-live="polite"
+         title="Two separate signals: the pulsing dot says the feed is working, the age on the right says how old the newest sample is. Neither substitutes for the other.">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-text">
+            <span class="status-label" id="status-label">Connecting</span>
+            <span class="status-detail" id="status-detail">Asking the instance for its first sample.</span>
+        </span>
+        <span class="status-age" id="status-age" title="How long ago the newest snapshot arrived.">&nbsp;</span>
+    </div>
+
+    <label class="control" for="cadence"
+           title="How often this page asks for new state. The server advertises its own sampling cadence and that is the default; anything slower polls instead of streaming, so you can throttle a busy instance from the browser. Off stops all requests. Your choice is remembered in this browser.">
+        Update
+        <select id="cadence">
+            <option value="live">Live (server cadence)</option>
+            <option value="2000">Every 2s</option>
+            <option value="5000">Every 5s</option>
+            <option value="10000">Every 10s</option>
+            <option value="30000">Every 30s</option>
+            <option value="off">Off</option>
+        </select>
+    </label>
+
+    <button type="button" class="transport-chip" id="transport" disabled
+            title="Which transport is carrying updates. Click to retry the event stream after a fallback to polling.">
+        &nbsp;
+    </button>
+</header>
+
+<main id="panels">
+    <noscript>
+        <section class="panel">
+            <h2 class="panel-title">This page needs JavaScript</h2>
+            <p class="panel-subtitle">
+                Everything it renders is also available as JSON at <code class="mono">/api/state.json</code>, and
+                <code class="mono">/status</code> is a server-rendered diagnostic that needs no JavaScript at all.
+            </p>
+        </section>
+    </noscript>
+</main>
+
 <footer>
-    Sampled operational view of one Parallel Consumer instance, not a measurement platform. Values are point-in-time
-    samples taken on the control loop and may be stale. Use Micrometer for anything that has to be accurate.
+    <p id="notice">&nbsp;</p>
+    <p class="footer-meta" id="footer-meta">&nbsp;</p>
 </footer>
+
+<script type="module" src="/assets/app.js"></script>
 </body>
 </html>

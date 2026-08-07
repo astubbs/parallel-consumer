@@ -1,0 +1,731 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ *
+ * The dashboard's design system.
+ *
+ * TWO FIRST-CLASS THEMES. Light and dark are two complete token sets, not one set with a filter over it. Every
+ * semantic token is defined independently in each block, so a colour can be tuned for dark without dragging light
+ * with it. Read them as two palettes that happen to share names.
+ *
+ * SIX-DIGIT HEX ONLY, ALWAYS. This repository's issue-reference CI gate is textual and reads a three-digit
+ * shorthand such as a hash followed by 111 as an unqualified issue reference, which fails the build. There is a
+ * commit in this repo whose entire content is expanding shorthand back out. Do not reintroduce it.
+ *
+ * NO LAYOUT SHIFT (plan R16). Anything that updates gets tabular numerals and a reserved minimum width, and
+ * anything positional moves by changing `left`/`width` on an absolutely-positioned element so its neighbours
+ * cannot be pushed around. That property is mostly won or lost in this file.
+ */
+
+/* ------------------------------------------------------------------ tokens */
+
+:root {
+    color-scheme: light dark;
+
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+    --radius: 8px;
+    --radius-sm: 5px;
+    --gap: 16px;
+    --track-height: 26px;
+    /* the axis is inset from both ends of the track so a marker at 0% or 100% is drawn whole, not clipped */
+    --track-inset: 7px;
+
+    /* surfaces and text */
+    --bg: #f4f6f9;
+    --bg-elevated: #ffffff;
+    --bg-sunken: #e9edf3;
+    --border: #d6dde6;
+    --border-strong: #b4c0cd;
+    --text: #131820;
+    --text-muted: #58657a;
+    --text-faint: #86919f;
+    --shadow: 0 1px 2px rgba(19, 24, 32, 0.06), 0 4px 12px rgba(19, 24, 32, 0.05);
+
+    /* status semantics - reserved for genuine conditions, never for the ribbon's ordinary spans */
+    --ok: #0f7a55;
+    --ok-soft: #dcf3ea;
+    --info: #1c5fd0;
+    --info-soft: #dfe9fc;
+    --warn: #8a5300;
+    --warn-soft: #fbedd4;
+    --danger: #ad231c;
+    --danger-soft: #fadedc;
+    --neutral-soft: #e4e9f0;
+
+    /*
+     * Ribbon vocabulary. The won span is deliberately the loudest thing on the page; the seen-not-yet-done span is
+     * deliberately the quietest. The stop marker is achromatic on purpose - it is a counterfactual, not a state, and
+     * giving it a colour of its own would put it in competition with the spans that do describe states.
+     */
+    --span-ready: #8fb6e8;
+    --span-ready-edge: #4d81c4;
+    --span-won: #14a56f;
+    --span-won-edge: #0b7350;
+    --span-seen: #cbd5e1;
+    --span-seen-stripe: #aebac9;
+    --marker-ink: #131820;
+    --marker-committed: #46536a;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0d1117;
+        --bg-elevated: #151b23;
+        --bg-sunken: #1d242e;
+        --border: #2a323d;
+        --border-strong: #3d4753;
+        --text: #e6ecf4;
+        --text-muted: #9aa6b6;
+        --text-faint: #6d7887;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 4px 14px rgba(0, 0, 0, 0.35);
+
+        --ok: #3ac68e;
+        --ok-soft: #10352a;
+        --info: #74a8ff;
+        --info-soft: #142842;
+        --warn: #e0a349;
+        --warn-soft: #3a2a12;
+        --danger: #f2776b;
+        --danger-soft: #3d1a17;
+        --neutral-soft: #222b36;
+
+        --span-ready: #3f6ea8;
+        --span-ready-edge: #6ca0dd;
+        --span-won: #1fb47c;
+        --span-won-edge: #4fdcaa;
+        --span-seen: #333d4b;
+        --span-seen-stripe: #47535f;
+        --marker-ink: #e6ecf4;
+        --marker-committed: #93a1b5;
+    }
+}
+
+/* ------------------------------------------------------------------- base */
+
+* {
+    box-sizing: border-box;
+}
+
+/*
+ * The `hidden` attribute has to beat any `display` a class sets, or a badge styled `display: inline-block` stays
+ * on screen while the code that hides it looks correct. This page toggles visibility with `hidden` rather than by
+ * adding and removing nodes, precisely so nothing reflows - so this rule is load-bearing, not tidiness.
+ */
+[hidden] {
+    display: none !important;
+}
+
+html {
+    background: var(--bg);
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    /* every number on this page is a number that updates - see the header comment */
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+}
+
+a {
+    color: var(--info);
+}
+
+.mono {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* ----------------------------------------------------------------- topbar */
+
+.topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--gap);
+    padding: 12px 20px;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+}
+
+.brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+}
+
+.brand h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.badge-experimental {
+    background: var(--warn-soft);
+    color: var(--warn);
+    border: 1px solid var(--warn);
+}
+
+.badge-caveat {
+    background: var(--neutral-soft);
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 600;
+}
+
+.instance {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.topbar-spacer {
+    flex: 1 1 auto;
+}
+
+/* --------------------------------------------------------- status readout */
+
+/*
+ * Two independent signals, never merged: the pulse answers "is this working", the age answers "how stale is this".
+ * The whole block reserves its width so a state change cannot reflow the toolbar next to it.
+ */
+.status {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 5px 12px 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-sunken);
+    /*
+     * A FIXED width, not a minimum. The detail line is a sentence whose length changes with the page state, and a
+     * pill that grows to fit it re-wraps the whole toolbar the moment the instance goes idle - which is a layout
+     * shift caused by a status change, exactly what R16 forbids. So the pill keeps its size and the sentence
+     * ellipsises inside it, with the full text on hover.
+     */
+    width: 27rem;
+    max-width: 100%;
+}
+
+.status-dot {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-faint);
+}
+
+.status-text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.status-label {
+    font-weight: 650;
+    font-size: 12.5px;
+    white-space: nowrap;
+}
+
+.status-detail {
+    color: var(--text-muted);
+    font-size: 11.5px;
+    /* reserved so the longest message does not widen the pill mid-session */
+    min-height: 1.25em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.status-age {
+    margin-left: auto;
+    padding-left: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    /* fixed width so a jump from 9s to 10s does not nudge anything */
+    min-width: 8ch;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.status[data-phase="loading"] .status-dot {
+    background: var(--text-faint);
+    animation: pulse 1.4s ease-in-out infinite;
+}
+
+.status[data-phase="live"] .status-dot {
+    background: var(--ok);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.status[data-phase="idle"] .status-dot {
+    background: var(--info);
+}
+
+.status[data-phase="stale"] {
+    border-color: var(--warn);
+    background: var(--warn-soft);
+}
+
+.status[data-phase="stale"] .status-dot {
+    background: var(--warn);
+}
+
+.status[data-phase="stale"] .status-label {
+    color: var(--warn);
+}
+
+.status[data-phase="nodata"] {
+    border-color: var(--warn);
+}
+
+.status[data-phase="nodata"] .status-dot {
+    background: var(--warn);
+}
+
+.status[data-phase="error"] {
+    border-color: var(--danger);
+    background: var(--danger-soft);
+}
+
+.status[data-phase="error"] .status-dot {
+    background: var(--danger);
+}
+
+.status[data-phase="error"] .status-label {
+    color: var(--danger);
+}
+
+.status[data-phase="off"] .status-dot {
+    background: var(--text-faint);
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.35;
+        transform: scale(0.8);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .status-dot {
+        animation: none !important;
+    }
+}
+
+/* --------------------------------------------------------------- controls */
+
+.control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+select,
+button {
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 4px 7px;
+}
+
+button {
+    cursor: pointer;
+}
+
+button:hover {
+    border-color: var(--info);
+}
+
+.transport-chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    /* the two transports have different word lengths; reserve for the longer one */
+    min-width: 11ch;
+    text-align: center;
+}
+
+/* ----------------------------------------------------------------- layout */
+
+main {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--gap);
+    padding: var(--gap) 20px;
+}
+
+.panel {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 16px 18px 18px;
+    min-width: 0;
+}
+
+.panel-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--gap);
+    margin-bottom: 12px;
+}
+
+.panel-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.panel-subtitle {
+    margin: 2px 0 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    max-width: 62ch;
+}
+
+.panel-head .control {
+    margin-top: 8px;
+}
+
+.style-group + .style-group {
+    margin-top: var(--gap);
+}
+
+/* ------------------------------------------------------------ hero number */
+
+.hero {
+    margin-left: auto;
+    text-align: right;
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    background: var(--ok-soft);
+    border: 1px solid var(--ok);
+}
+
+.hero-value {
+    display: block;
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--ok);
+    /* reserved so the count growing a digit never moves the label under it */
+    min-width: 7ch;
+}
+
+.hero-label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    max-width: 34ch;
+}
+
+.hero[data-zero="true"] {
+    background: var(--neutral-soft);
+    border-color: var(--border-strong);
+}
+
+.hero[data-zero="true"] .hero-value {
+    color: var(--text-muted);
+}
+
+/* ----------------------------------------------------------------- legend */
+
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-muted);
+}
+
+.legend-item b {
+    color: var(--text);
+    font-weight: 620;
+}
+
+.legend-swatch {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 12px;
+    border-radius: 2px;
+    border: 1px solid var(--border-strong);
+}
+
+.legend-swatch[data-kind="ready"] {
+    background: var(--span-ready);
+    border-color: var(--span-ready-edge);
+}
+
+.legend-swatch[data-kind="won"] {
+    background: var(--span-won);
+    border-color: var(--span-won-edge);
+}
+
+.legend-swatch[data-kind="seen"] {
+    background: repeating-linear-gradient(135deg,
+    var(--span-seen) 0 4px,
+    var(--span-seen-stripe) 4px 8px);
+}
+
+.legend-swatch[data-kind="stop"] {
+    width: 0;
+    height: 16px;
+    border: 0;
+    border-left: 3px dashed var(--marker-ink);
+    border-radius: 0;
+    margin: 0 9px 0 10px;
+}
+
+.legend-swatch[data-kind="marker"] {
+    width: 0;
+    height: 16px;
+    border: 0;
+    border-left: 3px solid var(--marker-committed);
+    border-radius: 0;
+    margin: 0 9px 0 10px;
+}
+
+/* ------------------------------------------------------- partition ribbon */
+
+.ribbons {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.pt {
+    /* `order` is set by the renderer so re-sorting never destroys or recreates a row - see ribbon.js */
+    display: block;
+    padding: 10px 12px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+}
+
+.pt-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 7px;
+}
+
+.pt-name {
+    font-family: var(--font-mono);
+    font-weight: 650;
+    font-size: 12.5px;
+}
+
+.pt-won {
+    font-size: 12px;
+    font-weight: 650;
+    color: var(--ok);
+    min-width: 16ch;
+}
+
+.pt-won[data-zero="true"] {
+    color: var(--text-faint);
+    font-weight: 500;
+}
+
+.pt-note {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin: 0 0 7px;
+    max-width: 100ch;
+}
+
+/* the bar itself */
+.pt-track {
+    position: relative;
+    height: var(--track-height);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.pt-span {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    /* a span that exists must be visible even when the axis is millions of offsets wide */
+    min-width: 3px;
+}
+
+.pt-span[data-kind="ready"] {
+    background: var(--span-ready);
+}
+
+.pt-span[data-kind="won"] {
+    background: var(--span-won);
+    box-shadow: inset 0 0 0 1px var(--span-won-edge);
+}
+
+.pt-span[data-kind="seen"] {
+    background: repeating-linear-gradient(135deg,
+    var(--span-seen) 0 5px,
+    var(--span-seen-stripe) 5px 10px);
+}
+
+.pt-marker {
+    position: absolute;
+    top: -1px;
+    bottom: -1px;
+    width: 0;
+    border-left: 2px solid var(--marker-committed);
+    pointer-events: none;
+}
+
+.pt-marker[data-kind="stop"] {
+    border-left: 3px dashed var(--marker-ink);
+}
+
+.pt-marker[data-kind="seen"] {
+    border-left-style: dotted;
+}
+
+/* the collapsed, fully-caught-up case: one marker, and it reads as healthy */
+.pt[data-collapsed="true"] .pt-track {
+    background: var(--ok-soft);
+    border-color: var(--ok);
+}
+
+.pt-axis {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+.pt-values {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.pt-value {
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+}
+
+.pt-value span {
+    font-family: var(--font-mono);
+    color: var(--text);
+}
+
+.pt-empty {
+    color: var(--text-faint);
+    font-size: 12px;
+    padding: 18px 0;
+    text-align: center;
+}
+
+/* ----------------------------------------------------------------- footer */
+
+footer {
+    padding: 18px 20px 28px;
+    color: var(--text-muted);
+    font-size: 11.5px;
+}
+
+footer p {
+    margin: 0 0 6px;
+    max-width: 90ch;
+}
+
+.footer-meta {
+    color: var(--text-faint);
+    font-family: var(--font-mono);
+}
+
+/* ------------------------------------------------------------- responsive */
+
+@media (max-width: 720px) {
+    .topbar {
+        gap: 10px;
+        padding: 10px 12px;
+    }
+
+    .status {
+        width: auto;
+        flex: 1 1 100%;
+    }
+
+    main {
+        padding: 12px;
+    }
+
+    .hero {
+        margin-left: 0;
+        text-align: left;
+    }
+}
