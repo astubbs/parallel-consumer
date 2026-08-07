@@ -530,6 +530,17 @@ Keep the existing subject convention for *upstream* references (`... (#893)`, `c
 
 ## PR Discipline
 
+- **Before merging a fix, look for other instances of the same defect - and say what you found,
+  including "none".** A fix that removes today's instance invites tomorrow's. Once you can name the
+  defect *class* (not the symptom), grep for it: the pattern, the API being misused, the shape of the
+  mistake. State which candidates you checked and dismissed, not just the hits - "I found none" is only
+  worth reading if it says where you looked. Do this at merge prep, when the class is understood;
+  doing it while still diagnosing just widens the investigation.
+  Worked example, astubbs#220: the class was *a test awaiting a consequence whose trigger it cannot
+  force*. The greppable proxy was sleep-as-synchronisation in integration tests plus awaits on a
+  failure outcome. That surfaced `DrainCloseTest` and `RetriesTest` as relatives, and - just as
+  usefully - confirmed the sibling `TransactionTimeoutsTest.produceTimeout` is **not** an instance,
+  because it latches its trigger with a real margin. Ruling one out is a result.
 - **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates
   fix-ups, review responses and course corrections that nobody wants in the permanent log, but it
   usually also contains two or three genuinely separate pieces of work. Do not default; look at the
