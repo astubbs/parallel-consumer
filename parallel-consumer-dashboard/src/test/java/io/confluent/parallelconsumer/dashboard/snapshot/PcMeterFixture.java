@@ -21,58 +21,61 @@ import java.util.function.Supplier;
  * {@code PCMetricsDef}. Production code reads the names from that enum, so a fixture that did the same could never
  * detect a wrong name - both sides would simply move together. Literals here make these tests an actual check on the
  * wire names, and {@code MeterRegistrySamplerTest#meterNamesMatchCoreDefinitions} pins the two together explicitly.
+ * <p>
+ * Public rather than package-private so tests in sibling packages - {@code json.SnapshotJsonTest} - can build the
+ * same realistic registry, instead of each growing its own copy that drifts from this one.
  */
-class PcMeterFixture {
+public class PcMeterFixture {
 
-    static final String PARTITION_HIGHEST_SEEN = "pc.partition.highest.seen.offset";
+    public static final String PARTITION_HIGHEST_SEEN = "pc.partition.highest.seen.offset";
 
-    static final String PARTITION_HIGHEST_COMPLETED = "pc.partition.highest.completed.offset";
+    public static final String PARTITION_HIGHEST_COMPLETED = "pc.partition.highest.completed.offset";
 
-    static final String PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED = "pc.partition.highest.sequential.succeeded.offset";
+    public static final String PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED = "pc.partition.highest.sequential.succeeded.offset";
 
-    static final String PARTITION_LATEST_COMMITTED = "pc.partition.latest.committed.offset";
+    public static final String PARTITION_LATEST_COMMITTED = "pc.partition.latest.committed.offset";
 
-    static final String PARTITION_INCOMPLETE_OFFSETS = "pc.partition.incomplete.offsets";
+    public static final String PARTITION_INCOMPLETE_OFFSETS = "pc.partition.incomplete.offsets";
 
-    static final String PARTITION_ASSIGNMENT_EPOCH = "pc.partition.assignment.epoch";
+    public static final String PARTITION_ASSIGNMENT_EPOCH = "pc.partition.assignment.epoch";
 
-    static final String PROCESSED_RECORDS = "pc.processed.records";
+    public static final String PROCESSED_RECORDS = "pc.processed.records";
 
-    static final String FAILED_RECORDS = "pc.failed.records";
+    public static final String FAILED_RECORDS = "pc.failed.records";
 
-    static final String SLOW_RECORDS = "pc.slow.records";
+    public static final String SLOW_RECORDS = "pc.slow.records";
 
-    static final String INFLIGHT_RECORDS = "pc.inflight.records";
+    public static final String INFLIGHT_RECORDS = "pc.inflight.records";
 
-    static final String WAITING_RECORDS = "pc.waiting.records";
+    public static final String WAITING_RECORDS = "pc.waiting.records";
 
-    static final String SHARDS = "pc.shards";
+    public static final String SHARDS = "pc.shards";
 
-    static final String SHARDS_SIZE = "pc.shards.size";
+    public static final String SHARDS_SIZE = "pc.shards.size";
 
-    static final String INCOMPLETE_OFFSETS_TOTAL = "pc.incomplete.offsets.total";
+    public static final String INCOMPLETE_OFFSETS_TOTAL = "pc.incomplete.offsets.total";
 
-    static final String DYNAMIC_LOAD_FACTOR = "pc.dynamic.load.factor";
+    public static final String DYNAMIC_LOAD_FACTOR = "pc.dynamic.load.factor";
 
-    static final String PARTITIONS_PAUSED = "pc.partitions.paused";
+    public static final String PARTITIONS_PAUSED = "pc.partitions.paused";
 
-    static final String PARTITIONS_NUMBER = "pc.partitions.number";
+    public static final String PARTITIONS_NUMBER = "pc.partitions.number";
 
-    static final String STATUS = "pc.status";
+    public static final String STATUS = "pc.status";
 
-    static final String POLLER_STATUS = "pc.poller.status";
+    public static final String POLLER_STATUS = "pc.poller.status";
 
-    static final String ENCODING_TIME = "pc.offsets.encoding.time";
+    public static final String ENCODING_TIME = "pc.offsets.encoding.time";
 
-    static final String ENCODING_USAGE = "pc.offsets.encoding.usage";
+    public static final String ENCODING_USAGE = "pc.offsets.encoding.usage";
 
-    static final String METADATA_SPACE_USED = "pc.metadata.space.used";
+    public static final String METADATA_SPACE_USED = "pc.metadata.space.used";
 
-    static final String PAYLOAD_RATIO_USED = "pc.payload.ratio.used";
+    public static final String PAYLOAD_RATIO_USED = "pc.payload.ratio.used";
 
     private final MeterRegistry registry = new SimpleMeterRegistry();
 
-    MeterRegistry getRegistry() {
+    public MeterRegistry getRegistry() {
         return registry;
     }
 
@@ -175,7 +178,7 @@ class PcMeterFixture {
      * The registry a fully-populated PC would look like: two partitions on one topic, one on another, plus every
      * aggregate, lifecycle and encoding meter.
      */
-    static PcMeterFixture fullyPopulated() {
+    public static PcMeterFixture fullyPopulated() {
         return new PcMeterFixture()
                 .partitionOffsets("orders", 0, 100, 100, 140, 150, 12, 3)
                 .partitionCounters("orders", 0, 100, 2, 1)

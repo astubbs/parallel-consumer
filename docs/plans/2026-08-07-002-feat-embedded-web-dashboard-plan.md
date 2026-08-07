@@ -67,7 +67,8 @@ There is a second, sharper reason this cannot be bought off the shelf. Parallel 
 - R51. The dashboard shows the observations a health check would be built from - the liveness of the control loop and the poller with the age of each one's last activity, partitions whose committed offset has not moved, and the derived per-partition conditions - phrased as measurements rather than as a verdict. When an official health API exists it is rendered alongside these, never instead of them, because a verdict without its evidence is what makes a failing health check hard to act on.
 - R10. The dashboard shows partition assignment activity over time, including per-partition assignment epoch changes, so a rebalance is visible after the fact rather than only while it happens.
 - R11. The dashboard animates flow between the stages of the pipeline - poller, shards, worker pool, completion, commit - driven by observed rates.
-- R53. The dashboard estimates how much faster this instance is running than a single-threaded consumer doing the same work would, presents it as a multiplier, and celebrates a large one visually. The estimate is labelled as a model, shows the inputs it was derived from, and reports a multiplier below one when that is what the numbers say.
+- R53. The dashboard estimates how much faster this instance is running than a single-threaded consumer doing the same work would, presents it as a multiplier, and celebrates a large one visually. It reports a multiplier below one when that is what the numbers say.
+- R55. The speedup estimate explains itself. A reader can see the inputs, the arithmetic and the assumptions without leaving the page, and decide for themselves whether they agree with the model. A number a user cannot audit is a number they are being asked to take on faith, and this one is too easy to disbelieve for that to work. A multiplier below one is presented as useful information - it says the configuration is not benefiting from parallelism, which is worth knowing and worth fixing - not as a failure to be hidden.
 - R36. The dashboard shows exact record time lag - the age of a record when processing begins, computed as wallclock minus the record's own timestamp - alongside offset lag, and charts the two together so their divergence is visible.
 - R39. The dashboard distinguishes the partition conditions that all look identical on a throughput chart, and names each: **idle** (caught up, offsets still, lag zero), **stalled** (offsets frozen with lag flat or rising), **running ahead** (records completed beyond the base committed offset and recorded in the commit payload), **encoding-pressured** (the encoded offset map is approaching or has hit the commit-metadata budget), **paused**, and **failing**.
 - R47. The offset view shows head-of-line blocking being *solved*, not merely present. It marks the lowest incomplete offset as the point where a single-threaded consumer would be stopped, renders the work PC has completed beyond that point as won rather than pending, and states the resulting count: records processed that a consumer without this machinery could not have processed. This is the dashboard's headline graphic and its most persuasive number.
@@ -86,6 +87,7 @@ There is a second, sharper reason this cannot be bought off the shelf. Parallel 
 
 **Feel and quality**
 
+- R56. The page is covered by automated browser tests that both assert against the live DOM programmatically and capture screenshots. Every panel is verified to render what the state document says, rather than merely to compile. Screenshots cover light and dark themes and are written to a gitignored location.
 - R14. The page reaches interactive state in under one second against a local instance on a cold load, with all assets served from the jar.
 - R15. The page makes no network request to any host other than the instance serving it. No CDN, no fonts, no telemetry, so it works air-gapped.
 - R16. Live updates mutate the existing page in place. No full-page reload, no layout shift when a value's width changes, no visible flicker.
@@ -113,6 +115,7 @@ The distinction is deliberate and load-bearing. This module ships no authenticat
 - R22. The server emits no CORS headers and rejects cross-origin requests.
 - R23. Binding a non-loopback address logs a warning at startup that names the bound address, states that the endpoint is unauthenticated, and enumerates what it exposes - consumer group id, topic names, partition assignments and offsets.
 - R24. Every endpoint is read-only. The dashboard exposes no operation that changes the state of the consumer, the group, or the broker. There is no write path, and any future one would be a deliberate reopening of this decision rather than an extension of it. Its practical consequence: the threat model is information disclosure - topic names, group id, partition assignments, offsets - and not integrity or availability.
+- R54. The server starts on port 8080 by default. If that port is unavailable it increments and retries - 8081, 8082, and so on - until it binds, silently: no logging during the search, because a failed attempt is not news. Once bound it logs one clear line carrying the full clickable URL. The resulting port therefore identifies which instance you are looking at when several run on one machine, which is the normal case during a demonstration.
 - R50. TLS is supported and optional. When enabled without a supplied certificate the server generates a self-signed one so it works with no setup; a user-supplied certificate and key are accepted. It is off by default, because a self-signed certificate makes a browser interrupt with a warning and that would spoil the zero-setup path the module exists for. Enabling it is a single option.
 - R25. Reading dashboard state never blocks, delays, or introduces a data race into the control loop or the broker poller.
 
@@ -263,6 +266,16 @@ Permanently out of scope, not deferred. These are all reasonable things to want 
 
   Note what the model deliberately leaves out, because it understates rather than overstates: a single-threaded consumer hitting a poisoned record stalls the whole partition until it gives up, where PC continues past it. That effect can be unbounded and is not something a multiplier can honestly express, so the head-of-line-blocking-avoided count (R47) carries it separately rather than being folded in to inflate this number.
 
+- KTD22. **Automated browser testing from Phase 1, not bolted on later.** (session-settled: user-directed - chosen over relying on an agent eyeballing screenshots: "it compiles" and "it looks plausible in one screenshot" are both weak evidence that the page renders what the code intends, and the gap only widens as panels accumulate.) Two capabilities are required and they are not the same thing: **programmatic assertion** against the live DOM - this element exists, this value equals the one in the state document, this state class is applied - which is what makes a regression fail a build; and **screenshot capture**, which is what lets a human or an agent see that the result is not visually broken in a way no assertion anticipated.
+
+  Use a browser-automation library at test scope only, driving a headless browser against a server started in-process. Test scope means no runtime dependency reaches library users. Land it in Phase 1 with the page shell so every later panel inherits a working harness rather than negotiating one; a panel is not done until an automated check asserts it renders what the state document says.
+
+  Screenshots are written to a gitignored directory (KTD5's rule applies: build products stay out of the repository) and captured for both the light and dark themes, so a theme regression is visible rather than theoretical.
+
+- KTD23. **The speedup estimate is auditable on the page, not just labelled.** (session-settled: user-directed - chosen over a bare number with a tooltip: the estimate is the most temptingly fakeable thing on the page, and a reader who cannot check it will reasonably discount it.) Show the model itself where the number lives - the inputs it read, the arithmetic it performed, and the assumption it rests on (a single-threaded consumer processes one record per mean user-function duration). A reader should be able to disagree with the model on its merits rather than on suspicion.
+
+  A multiplier below one is framed as a finding, not an embarrassment: it means this configuration is not getting value from parallelism, which is worth surfacing loudly because it is actionable - too few keys, a user function too fast to be worth the coordination, concurrency set too low. Naming the likely cause alongside the number is more useful than hiding it, and a meter that can report bad news is the only kind worth believing when it reports good news.
+
 ### High-Level Technical Design
 
 The load-bearing shape is the one-way boundary between the control thread and the HTTP threads. Nothing crosses it except an immutable snapshot published through a volatile reference.
@@ -329,7 +342,7 @@ Skateboard first, and nothing discarded. Every idea in this plan has a phase; wh
 
 | Phase | Units | What exists at the end of it |
 |---|---|---|
-| **1. It runs** | U1, U2, U3, U4, U5, U12, plus one offset renderer (the span ribbon - cheapest to get right) | `bin/dashboard-demo.sh` brings up a broker, a workload, PC and the page. You watch live per-partition offset state move under a scripted scenario. This is the skateboard: end-to-end, demonstrable, judgeable. |
+| **1. It runs** | U1, U2, U3, U4, U5, U12, U15, plus one offset renderer (the span ribbon - cheapest to get right) | `bin/dashboard-demo.sh` brings up a broker, a workload, PC and the page. You watch live per-partition offset state move under a scripted scenario. Automated browser tests assert the page renders what the state document says, and capture screenshots in both themes. This is the skateboard: end-to-end, demonstrable, judgeable, and defended against silent visual regression. |
 | **2. The differentiators** | U6 in full, U7 | The things nothing else can show: the head-of-line-blocking counterfactual with its hero count, all four offset renderers with the picker and show-all comparison, the pixel/cell bar at true per-offset fidelity, the speedup multiplier, encoding pressure and encoding identity. After this the dashboard has a reason to exist. |
 | **3. Lifecycle and lag** | U8, U14 | Lifecycle and poller as separate indicators, the rebalance timeline, pause rendered graphically, health-equivalent observations, and exact record time lag charted against offset lag. |
 | **4. Reach and polish** | U9, U10, U11, U13 | Pipeline flow animation, consumer group context behind its flag, documentation and a runnable example, and the self-recording demo for the landing page. |
@@ -359,6 +372,7 @@ Skateboard first, and nothing discarded. Every idea in this plan has a phase; wh
 | U12 | Scenario framework and one-command demo | `scenario/*.java`, `bin/dashboard-demo.sh` | U4 |
 | U13 | Self-recording demo | `bin/dashboard-demo.sh --record`, `.gitignore` | U9, U12 |
 | U14 | Exact time lag and the divergence chart | `lag/*.java`, `dashboard/panels/lag.js` | U5, U7 |
+| U15 | Browser test harness | `src/test-integration/.../ui/*.java` | U5 |
 
 All Java paths below are under `parallel-consumer-dashboard/src/main/java/io/confluent/parallelconsumer/dashboard/` unless stated. All new files carry the fork-original header `Copyright (C) 2026 Antony Stubbs and contributors` and never the Confluent header.
 
@@ -476,6 +490,7 @@ All Java paths below are under `parallel-consumer-dashboard/src/main/java/io/con
 6. Serve static assets only from a fixed classpath prefix, with traversal rejected after canonicalisation.
 7. On a non-loopback bind, log a WARN naming the address, stating the endpoint is unauthenticated, and listing what it exposes - group id, topic names, partition assignments, offsets. The Spring Boot Actuator record is the cautionary tale for why this warning is not boilerplate.
 8. Reject anything other than `GET` and `HEAD` with `405`. There is no write path, and there must remain none - assert this rather than assume it, since it is the property that makes the threat model disclosure-only (R24).
+8c. **Port selection: 8080, then walk upward silently** (R54). Try 8080; on a bind failure increment and retry until one succeeds, with a sane attempt bound. Log nothing during the search - a port being busy is not news, and a wall of failed-bind warnings buries the one line that matters. Once bound, log a single clear line with the full URL, formatted so a terminal renders it clickable. With several instances on one machine the port becomes the identifier for which consumer you are looking at, which is the normal case during a demonstration, so the URL line is the primary output of starting the dashboard.
 8b. **TLS, optional and off by default** (R50). One option turns it on. With no certificate supplied, generate a self-signed one at startup so it works with no preparation; accept a supplied certificate and key otherwise. Log which mode is in force and, when self-signed, say plainly that the browser will warn and why. Keep the default off so the zero-setup demo path is not interrupted by a certificate interstitial.
 9. Carry the accuracy disclaimer (R42) in the page footer and at the head of the state document's schema: a sampled operational view of one instance, not a measurement platform, with Micrometer named as the route to accuracy.
 
@@ -791,6 +806,38 @@ All Java paths below are under `parallel-consumer-dashboard/src/main/java/io/con
 - Integration: under the showcase scenario's slow-function phase, time lag rises while offset lag stays comparatively flat, and the divergence is visible in the document.
 
 **Verification:** Against the demo, the two series visibly diverge during the slow-function phase and converge again afterwards.
+
+### U15. Browser test harness
+
+**Goal:** Prove the page renders what the code intends, automatically, from Phase 1 onward.
+
+**Requirements:** R56
+
+**Dependencies:** U5
+
+**Files:**
+- `parallel-consumer-dashboard/src/test-integration/java/io/confluent/parallelconsumer/dashboard/integrationTests/ui/DashboardUiTestBase.java`
+- `.../ui/PageShellUiIT.java`, `.../ui/OffsetRibbonUiIT.java`
+- `.gitignore` (screenshot output directory)
+
+**Approach:**
+1. Pick a browser-automation library that runs headless from a JVM test, at **test scope only** so no runtime dependency reaches library users. It must do both halves of KTD22: query the live DOM programmatically, and capture a screenshot. Evaluate what fits this repo's Java baseline and CI before committing to one; record the choice and why.
+2. `DashboardUiTestBase` starts the server in-process against a **fixture snapshot** rather than a live broker, so the UI suite runs fast and deterministically without Docker. The broker-backed path already exists in U12's demo; this harness exists to test rendering, not integration.
+3. Assert against the DOM: the panels a given state document should produce are present, values on the page match the values in the document, and the state classes (idle, stale, error) apply when the fixture says they should. These are the assertions that make a regression fail a build.
+4. Capture screenshots in both light and dark themes into a gitignored output directory. Emitting a build product into the repository is the same mistake KTD5 rejects, and a stale checked-in screenshot is worse than none.
+5. Provide a way to point the harness at a chosen fixture so a later panel can add its own case without restructuring the base.
+6. Keep it out of the default gating suite if it proves slow or environment-sensitive, but wire it so it runs somewhere - a harness nothing executes is decoration.
+
+**Execution note:** Write one failing assertion against a panel that does not exist yet, watch it fail, then make it pass. The harness's whole value is that its failures are trustworthy, and that is worth proving once at the start.
+
+**Test scenarios:**
+- A fixture snapshot with three partitions renders three ribbon rows, asserted by DOM query and not by screenshot.
+- A value rendered on the page equals the corresponding value in the state document, so a formatting bug that drops precision is caught.
+- The stale state applies when no snapshot has arrived within the staleness window, and the idle state when the instance is connected but doing nothing - these must be distinguishable programmatically, not merely visually.
+- Screenshots are produced for both themes and land in the gitignored directory; `git status` is clean afterwards.
+- A deliberately broken renderer fails the suite. Prove this once by breaking it on purpose, so the harness is known to be capable of failing.
+
+**Verification:** The suite passes against the fixture, screenshots exist for both themes, `git status` is clean, and a deliberate regression is demonstrated to fail it.
 
 ### U13. Self-recording demo
 
