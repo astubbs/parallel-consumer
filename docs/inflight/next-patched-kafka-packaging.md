@@ -57,12 +57,16 @@ So the open work here is dependency hygiene, not classpath archaeology:
 independently. A consumer who wants Connect never pulls a patched Streams, each artifact tracks only the
 upstream module it mirrors, and the two spikes can reach release readiness on their own schedules.
 
-The live consequence is naming. Keeping the upstream artifactId under our own groupId
-(`<our-group>:connect-runtime`) makes the drop-in relationship obvious and keeps exclusions readable, but
-leaves two artifacts Maven will happily resolve together, since it deduplicates on groupId *and*
-artifactId. A distinct artifactId removes that ambiguity at the cost of making the correspondence less
-self-evident. Either way the `bannedDependencies` rule above is what actually enforces the invariant -
-pick the naming for readability and let the enforcer do the work.
+**Naming - decided (user, 2026-08-08): a distinct artifactId, not the upstream one.** Reusing
+`connect-runtime` under our groupId would have made the drop-in relationship self-evident, but Maven
+deduplicates on groupId *and* artifactId together, so it prevents nothing and reads as though it does.
+A distinct artifactId makes it plain in a dependency tree that this is our patched build rather than
+Apache's, which is the property that matters when someone is debugging why their `WorkerSinkTask` behaves
+oddly. Pick names that keep both facts legible - which upstream module it mirrors, and that it is patched.
+
+Naming still enforces nothing. The `bannedDependencies` rule above is the only thing that makes a build
+resolving both jars fail rather than silently picking one by classpath order, so it is required, not
+optional.
 
 **Version coupling.** A published patched artifact is pinned to one Kafka version. Decide whether we
 publish per-Kafka-version artifacts, a version range, or a classifier - and how that interacts with the
