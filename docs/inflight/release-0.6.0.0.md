@@ -47,6 +47,36 @@ survive the release.
   that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
   `README.adoc` regenerated.
 
+## Say plainly that the experimental modules cannot affect plain PC
+
+If 0.6.0.0 ships new experimental modules - the Kafka Streams one (astubbs#255) and the Connect one -
+the release notes, README and any announcement must make it **obvious to an existing PC user that
+these have no bearing on their usage**. The failure mode to design against is someone reading
+"parallel-consumer now patches Kafka Streams internals at build time" and concluding *my plain PC
+setup just got riskier*. Nothing about that inference is true, and left uncorrected it costs the
+release trust it has not spent.
+
+The claim is provable, not reassurance - state it as a fact with its reason:
+
+- The experimental modules are **leaves**. They depend on `parallel-consumer-core`; nothing depends
+  on them. Core's pom does not reference them, and adding them changed no shipped code in any
+  existing module - verified on the spike branch against `origin/master`.
+- The patched Apache Kafka classes ship **only inside the experimental module's own jar**. A user who
+  does not depend on that artifact never has them on the classpath.
+- The experimental seam **cannot be reached** from the core, vert.x or reactor modules. It is not a
+  flag those modules read.
+
+So: **depending on the experimental artifact is the entire opt-in.** Not depending on it is a
+complete opt-out, requiring no configuration and no action.
+
+Two things to get right in the wording:
+
+- **Per-module maturity, not global.** The project ships a stable 0.6.0.0 *and* an alpha module at the
+  same time; that is a normal state, not a contradiction. Do not let one alpha module downgrade how
+  the release describes itself.
+- **Do not overcorrect into burying it.** The alpha is promotional material worth having - it should
+  be easy to find and try. The goal is an accurate blast radius, not a quiet one.
+
 ## Do at release: one sweep over the upstream mirrors
 
 All 78 upstream issues are mirrored here (astubbs#44, astubbs#117-astubbs#195), and each carries a **Fork status** section
