@@ -52,9 +52,17 @@ So the open work here is dependency hygiene, not classpath archaeology:
 - Fork only the modules actually patched. A patched `connect-runtime` still depends on stock `connect-api`
   and `kafka-clients` from upstream, which keeps the republished surface small and the drift low.
 
-**Scope of the fork.** Decide whether each patched Kafka module is published as its own artifact (a
-`connect-runtime` fork for this work, a `kafka-streams` fork for the KS work) or whether they share one.
-Separate artifacts keep a consumer who only wants Connect from pulling a patched Streams.
+**Scope of the fork - decided (user, 2026-08-08): separate artifacts, one per patched Kafka module.** A
+`connect-runtime` fork for this work, a `kafka-streams` fork for the KS work, published and versioned
+independently. A consumer who wants Connect never pulls a patched Streams, each artifact tracks only the
+upstream module it mirrors, and the two spikes can reach release readiness on their own schedules.
+
+The live consequence is naming. Keeping the upstream artifactId under our own groupId
+(`<our-group>:connect-runtime`) makes the drop-in relationship obvious and keeps exclusions readable, but
+leaves two artifacts Maven will happily resolve together, since it deduplicates on groupId *and*
+artifactId. A distinct artifactId removes that ambiguity at the cost of making the correspondence less
+self-evident. Either way the `bannedDependencies` rule above is what actually enforces the invariant -
+pick the naming for readability and let the enforcer do the work.
 
 **Version coupling.** A published patched artifact is pinned to one Kafka version. Decide whether we
 publish per-Kafka-version artifacts, a version range, or a classifier - and how that interacts with the
