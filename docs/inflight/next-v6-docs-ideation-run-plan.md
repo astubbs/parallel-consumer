@@ -161,16 +161,15 @@ it.
 by agent letter. Every agent gets the same preamble naming who else is running concurrently and which
 files they own. Raw ce-ideate option sets go there; only the chosen direction is committed.
 
-## Decisions to take before launching
+## Settled: the work stays on this branch
 
-- **Whether the notes branch becomes its own PR first.** The ledger's premise is that notes live on
-  `master` where any session can see them, and a branch-only note is invisible to exactly the sessions
-  it was written for. Splitting the notes into their own small PR now, and running the proof of concept
-  on branches off `master`, gets them visible immediately. Proving it out on this branch first keeps
-  everything in one place but leaves the notes parked for the duration. This affects where the wave 0
-  worktree branches from, so it is worth settling before the first agent starts.
-- **One PR or four at the end.** Deferrable to merge prep. F is separable from the other three on
-  content and is the only one touching CI, which argues for splitting it out at minimum.
+Everything proves out here. The notes reach `master` the ordinary way, through the merge, so there is
+no case for splitting them off early to make them visible sooner. Every idea's worktree branches from
+`docs/v6-release-ideas`.
+
+Whether that merge arrives as one PR or several is decided once there is something to look at, not
+now. F is separable on content and is the only one touching CI, so it is the obvious candidate if a
+split is wanted, but that is an observation rather than a plan.
 
 ## Where it is safe to stop
 
