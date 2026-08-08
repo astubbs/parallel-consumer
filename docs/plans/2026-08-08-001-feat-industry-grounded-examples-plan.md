@@ -248,8 +248,13 @@ the 1.13 package; following one breaks the build.
 
 Meter choices (verified against real scrape output):
 - **latency distribution** → `Timer` with `publishPercentileHistogram()` and
-  `serviceLevelObjectives(...)`. Not `publishPercentiles` — configuring **both** silently discards the
-  quantiles, and client-side percentiles are not aggregable across instances.
+  `serviceLevelObjectives(...)`, not `publishPercentiles`. **Corrected during implementation:** this
+  originally claimed that configuring *both* silently discards the quantiles. That was measured and
+  **refuted** — on this module's pinned 1.12.13 registry both families are published. (The discard
+  behaviour was researched against Micrometer 1.13.15, a different code path; the pin means it does not
+  apply here.) The reason that survives measurement is the one to give: client-side quantiles are
+  per-process and cannot be aggregated into a fleet percentile at all, so adding them doubles the series
+  count in exchange for an answer nobody can combine.
 - **in-flight concurrency** → `LongTaskTimer.activeTasks()`. A plain `Timer` cannot answer "how many
   right now" because it only records on completion. Omit its histogram: default LTT buckets start at
   **120 seconds**, useless for sub-second order processing.
