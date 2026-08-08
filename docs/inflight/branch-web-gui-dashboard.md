@@ -56,6 +56,34 @@ Method, per the merge-strategy rule in `AGENTS.md`:
    did not.
 5. Rebase-merge, so each lands on master on its own.
 
+## TODO later: end-user docs and promotional material in the README
+
+Not started, and not in Phase 1. Plan unit **U11** already scopes the mechanics (how to wire it up,
+the security posture, a runnable example); what is additionally wanted is **promotional** material -
+telling a reader why this is worth their attention, not only how to switch it on.
+
+**The trap: `README.adoc` is generated. Never hand-edit it.** Edit
+[`src/docs/README_TEMPLATE.adoc`](../../src/docs/README_TEMPLATE.adoc) and regenerate, or the work is
+silently overwritten on the next build.
+
+Raw material already written and ready to draw on:
+
+- The plan's **`## Promotional Potential`** section, which carries two claims with their evidence and,
+  more importantly, their caveats: *running safely ahead of the commit point* (records finished past
+  where a single-threaded consumer would have stopped, encoded into the commit metadata, so a restart
+  does not replay them) and *exact time lag* (KIP-489 has sat Under Discussion since January 2020, so
+  the whole external tooling market interpolates; PC holds the `ConsumerRecord` and can subtract).
+  **Re-read the caveats before publishing either** - each has wording that is wrong on the facts if
+  copied carelessly, and the time-lag one needs KIP-489's status re-checked at publication time.
+- The screenshots and the self-recording demo (`bin/dashboard-demo.sh --record`, plan U13, not yet
+  built) - a recording of the ribbon showing head-of-line blocking being avoided is the most direct
+  answer to "why not just use share groups?".
+- astubbs#208 (the parked documentation site) is where a landing page would live; this README work is
+  the interim home and should not wait for it.
+
+Related: `docs/inflight/parked-docs-site.md` records that the fork's biggest problem is people finding
+upstream, reading "no longer maintained", and leaving - so promotional copy here is not vanity.
+
 ## Other open items
 
 - `ShowcaseScenarioIT` is untagged and costs ~150s in the default integration lane. Tagging it out
