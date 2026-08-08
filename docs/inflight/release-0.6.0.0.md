@@ -21,11 +21,12 @@ survive the release.
 1. **`CHANGELOG.adoc` says the Kafka client "stays on 3.9.1"; `pom.xml:121` says `3.9.2`.** The
    release notes for an unreleased release are factually wrong. Decide which is intended and make
    them agree.
-2. **The README's Roadmap sends readers to the *upstream* tracker** and refers to this repo in the
+2. ~~**The README's Roadmap sends readers to the *upstream* tracker** and refers to this repo in the
    third person: *"have a look at the confluentinc/parallel-consumer GitHub issues, and clone
-   Antony's fork"* (`src/docs/README_TEMPLATE.adoc:1011-1012`). That is pre-fork text, it is the
-   section someone reads to answer "is this maintained?" (astubbs#195), and it is now doubly wrong because
-   all 78 upstream issues are mirrored *here*. Edit the template, not `README.adoc`.
+   Antony's fork"*.~~ **FIXED** - verified 2026-08-08 against `origin/master`: that text is gone, and
+   the Roadmap section now states outright that this repository is where maintenance happens. Note
+   that the replacement promises the issue tracker is *"the single place to look"* for what is
+   planned, which the roadmap work has to reconcile - see `next-living-roadmap.md`.
 3. **`PCModule:127-129` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
    `messageBufferSize` is set, so `isMaxReached()` is true from startup and
    `AbstractParallelEoSStreamProcessor:1130` logs *"Max loading factor steps reached"* at WARN on
