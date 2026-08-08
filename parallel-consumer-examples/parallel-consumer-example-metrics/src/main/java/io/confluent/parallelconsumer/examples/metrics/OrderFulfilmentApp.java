@@ -86,10 +86,11 @@ import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOr
  * {@code micrometer-registry-prometheus} to a pre-1.13 version on purpose; do not follow a tutorial that
  * shows the newer package.
  * <p>
- * <b>What is scaffolding and what is the library.</b> Only the region tagged {@code orderFulfilment} -
- * the options builder, its meter-registry wiring and the poll call - is Parallel Consumer.
- * {@link #fulfilStage(ConsumerRecord)}, {@link ConcurrencyObserver} and {@link RunSummary} are this
- * example's own instrumentation, and live outside the tag on purpose: they come from a module that is
+ * <b>What is scaffolding and what is the library.</b> Only the regions tagged {@code orderFulfilment} and
+ * {@code orderFulfilmentProcess} - the options builder, its meter-registry wiring and the poll call - are
+ * Parallel Consumer. {@link #fulfilStage(ConsumerRecord)}, {@link ConcurrencyObserver} and
+ * {@link RunSummary} are this
+ * example's own instrumentation, and live outside the tags on purpose: they come from a module that is
  * never published to Maven Central, so a snippet that referenced them would not compile in the reader's
  * project.
  *
@@ -325,9 +326,10 @@ public class OrderFulfilmentApp {
     }
 
     /**
-     * Declared before {@link #run()} on purpose: the two {@code orderFulfilment} regions are concatenated
-     * in file order when the README includes them, so the options builder has to come before the poll
-     * call or the snippet reads back to front.
+     * The setup half of the README snippet, tagged {@code orderFulfilment}. The poll call carries a tag of
+     * its own, {@code orderFulfilmentProcess}, and the README includes the two as separate blocks in that
+     * order: the generator (asciidoc-template-maven-plugin) reads only the FIRST region of any given tag
+     * name, so a second region sharing this tag would be silently dropped rather than concatenated.
      */
     @SuppressWarnings({"FeatureEnvy", "MagicNumber"})
     ParallelStreamProcessor<String, String> setupParallelConsumer() {
@@ -339,19 +341,19 @@ public class OrderFulfilmentApp {
                 // is packed. KEY ordering guarantees that - at most one stage per customer in flight, in
                 // offset order - while DIFFERENT customers' orders still run in parallel. UNORDERED would
                 // be faster and wrong; PARTITION would be correct and no faster than a plain consumer.
-                .ordering(KEY)
+                .ordering(KEY) // <1>
                 // Sized for the warehouse system's connection pool, not for the machine's core count:
                 // these threads spend their lives blocked on it, which is the work PC overlaps
-                .maxConcurrency(MAX_CONCURRENCY)
+                .maxConcurrency(MAX_CONCURRENCY) // <2>
                 .consumer(kafkaConsumer)
                 // Hand PC the SAME registry the application's own meters use, so pc_* series sit beside
                 // order_* series and a dashboard can put "orders in flight" next to "records in flight"
-                .meterRegistry(meterRegistry)
+                .meterRegistry(meterRegistry) // <3>
                 // Tags added to every pc_* meter. Bounded values only - these multiply the series count
-                .metricsTags(Tags.of(Tag.of("service", "order-fulfilment")))
+                .metricsTags(Tags.of(Tag.of("service", "order-fulfilment"))) // <4>
                 // Distinguishes this instance's pc_* series from another instance's. Stable, not a random
                 // UUID per restart: a fresh value on each deploy churns the series set for no benefit
-                .pcInstanceTag(PC_INSTANCE)
+                .pcInstanceTag(PC_INSTANCE) // <5>
                 .build();
 
         ParallelStreamProcessor<String, String> orderProcessor =
@@ -369,17 +371,17 @@ public class OrderFulfilmentApp {
 
         postSetup();
 
-        // tag::orderFulfilment[]
-        parallelConsumer.poll(context -> {
+        // tag::orderFulfilmentProcess[]
+        parallelConsumer.poll(context -> { // <1>
             ConsumerRecord<String, String> order = context.getSingleRecord().getConsumerRecord();
 
             // fulfilStage() is THIS EXAMPLE's scaffolding - the meters and the per-order logging - and
             // deliberately lives outside this region. All it wraps is one blocking call to a warehouse
             // management system, which is where every millisecond of this example's latency is spent, and
             // which throws when there is no stock so that Parallel Consumer retries the order.
-            fulfilStage(order);
+            fulfilStage(order); // <2>
         });
-        // end::orderFulfilment[]
+        // end::orderFulfilmentProcess[]
     }
 
     /**

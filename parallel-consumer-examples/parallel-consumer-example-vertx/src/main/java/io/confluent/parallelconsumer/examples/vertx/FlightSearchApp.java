@@ -88,11 +88,12 @@ import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOr
  * actually do what it claims?" - so it logs the fan-out for every search and prints a {@link RunSummary}
  * when it closes.
  * <p>
- * <b>What is scaffolding and what is the library.</b> Only the region tagged {@code flightSearch} - the
- * options builder, the client construction and the {@code vertxFuture} call - is Parallel Consumer.
- * {@link #beginSearch(FlightSearch)}, {@link #finishSearch(FlightSearch, AsyncResult)},
+ * <b>What is scaffolding and what is the library.</b> Only the regions tagged {@code flightSearch} and
+ * {@code flightSearchProcess} - the options builder, the client construction and the
+ * {@code vertxFuture} call - are Parallel Consumer. {@link #beginSearch(FlightSearch)},
+ * {@link #finishSearch(FlightSearch, AsyncResult)},
  * {@link ConcurrencyObserver} and {@link RunSummary} are this example's own instrumentation, and live
- * outside the tag on purpose: they come from a module that is never published to Maven Central, so a
+ * outside the tags on purpose: they come from a module that is never published to Maven Central, so a
  * snippet that referenced them would not compile in the reader's project.
  */
 @Slf4j
@@ -250,9 +251,11 @@ public class FlightSearchApp {
     }
 
     /**
-     * Declared before {@link #run()} on purpose: the two {@code flightSearch} regions are concatenated in
-     * file order when the README includes them, so the options builder has to come before the
-     * {@code vertxFuture} call or the snippet reads back to front.
+     * The setup half of the README snippet, tagged {@code flightSearch}. The {@code vertxFuture} call
+     * carries a tag of its own, {@code flightSearchProcess}, and the README includes the two as separate
+     * blocks in that order: the generator (asciidoc-template-maven-plugin) reads only the FIRST region of
+     * any given tag name, so a second region sharing this tag would be silently dropped rather than
+     * concatenated.
      */
     @SuppressWarnings("FeatureEnvy")
     VertxParallelStreamProcessor<String, String> setupParallelConsumer() {
@@ -264,10 +267,10 @@ public class FlightSearchApp {
                 // a later search must not overwrite a newer cached fare with an older one. KEY ordering
                 // guarantees that (at most one search per route in flight, in offset order) while
                 // searches for DIFFERENT routes are priced in parallel.
-                .ordering(KEY)
+                .ordering(KEY) // <1>
                 // Searches in flight ACROSS routes. Each of them is FAN_OUT_WIDTH outstanding HTTP
                 // requests, not one - which is what the connection pool below has to be sized for.
-                .maxConcurrency(MAX_CONCURRENCY)
+                .maxConcurrency(MAX_CONCURRENCY) // <2>
                 .consumer(kafkaConsumer)
                 .build();
 
@@ -282,7 +285,7 @@ public class FlightSearchApp {
         Vertx searchVertx = Vertx.vertx();
         WebClient fareApi = WebClient.create(searchVertx, new WebClientOptions()
                 .setMaxPoolSize(FAN_OUT_WIDTH * MAX_CONCURRENCY)
-                .setHttp2MaxPoolSize(FAN_OUT_WIDTH * MAX_CONCURRENCY));
+                .setHttp2MaxPoolSize(FAN_OUT_WIDTH * MAX_CONCURRENCY)); // <3>
 
         // The three-argument constructor is the one that accepts a pre-configured client; the
         // single-argument one would build its own, with the pool sizing described above.
@@ -306,13 +309,13 @@ public class FlightSearchApp {
         int fareApiPort = getFareApiPort();
         WebClient fareApi = this.fareApiClient;
 
-        // tag::flightSearch[]
+        // tag::flightSearchProcess[]
         // vertxFuture() is the non-blocking entry point: return the Future your composition produces and
         // Parallel Consumer completes the record when that Future does. NOTHING blocks here - PC's
         // Vert.x engine deliberately dispatches on a SINGLE thread, because the user function's job is
         // to start work, not to wait for it. What overlaps is the outstanding HTTP exchanges and the
         // records they belong to, not a pool of worker threads.
-        parallelConsumer.vertxFuture(context -> {
+        parallelConsumer.vertxFuture(context -> { // <1>
             ConsumerRecord<String, String> record = context.getSingleRecord().getConsumerRecord();
             FlightSearch search = FlightSearch.parse(record.key(), record.partition(), record.value());
 
@@ -324,7 +327,7 @@ public class FlightSearchApp {
             // for any of them, so all FAN_OUT_WIDTH requests are on the wire together and the search
             // costs the SLOWEST provider rather than the sum of them.
             List<Future<FareQuote>> legs = new ArrayList<>(FARE_PROVIDERS.size());
-            for (FareProvider provider : FARE_PROVIDERS) {
+            for (FareProvider provider : FARE_PROVIDERS) { // <2>
                 legs.add(fareApi
                         .get(fareApiPort, fareApiHost, provider.getPath())
                         .addQueryParam(ROUTE_PARAM, search.getRoute())
@@ -339,16 +342,16 @@ public class FlightSearchApp {
                         // RECOVER PER LEG, BEFORE THE JOIN. Future.all fails fast on the first failure,
                         // so without this one unreachable provider would fail the whole search. It is
                         // also the domain-correct behaviour: two quotes still make a search.
-                        .recover(failure -> Future.succeededFuture(FareQuote.unavailable(provider, failure))));
+                        .recover(failure -> Future.succeededFuture(FareQuote.unavailable(provider, failure)))); // <3>
             }
 
             // JOIN. Future.all(List<? extends Future<?>>) - NOT CompositeFuture.all(List), which is
             // deprecated and takes a raw list. Future.all returns the CompositeFuture directly.
-            return Future.all(legs)
+            return Future.all(legs) // <4>
                     .map(joined -> cheapestOf(search, joined.<FareQuote>list()))
                     .onComplete(outcome -> finishSearch(search, outcome));
         });
-        // end::flightSearch[]
+        // end::flightSearchProcess[]
     }
 
     /**

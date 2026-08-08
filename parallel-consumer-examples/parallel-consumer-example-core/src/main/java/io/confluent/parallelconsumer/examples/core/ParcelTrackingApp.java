@@ -49,11 +49,12 @@ import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOr
  * actually do what it claims?" - so it logs the thread, the consignment and the in-flight count for every
  * scan, and prints a {@link RunSummary} when it closes.
  * <p>
- * <b>What is scaffolding and what is the library.</b> Only the region tagged {@code parcelTracking} - the
- * options builder and the poll call - is Parallel Consumer. {@link #trackScan(ConsumerRecord)},
- * {@link ConcurrencyObserver} and {@link RunSummary} are this example's own instrumentation, and live
- * outside the tag on purpose: they come from a module that is never published to Maven Central, so a
- * snippet that referenced them would not compile in the reader's project.
+ * <b>What is scaffolding and what is the library.</b> Only the regions tagged {@code parcelTracking} and
+ * {@code parcelTrackingProcess} - the options builder and the poll call - are Parallel Consumer.
+ * {@link #trackScan(ConsumerRecord)}, {@link ConcurrencyObserver} and {@link RunSummary} are this
+ * example's own instrumentation, and live outside the tags on purpose: they come from a module that is
+ * never published to Maven Central, so a snippet that referenced them would not compile in the reader's
+ * project.
  */
 @Slf4j
 public class ParcelTrackingApp {
@@ -161,9 +162,10 @@ public class ParcelTrackingApp {
     }
 
     /**
-     * Declared before {@link #run()} on purpose: the two {@code parcelTracking} regions are concatenated
-     * in file order when the README includes them, so the options builder has to come before the poll
-     * call or the snippet reads back to front.
+     * The setup half of the README snippet, tagged {@code parcelTracking}. The poll call carries a tag of
+     * its own, {@code parcelTrackingProcess}, and the README includes the two as separate blocks in that
+     * order: the generator (asciidoc-template-maven-plugin) reads only the FIRST region of any given tag
+     * name, so a second region sharing this tag would be silently dropped rather than concatenated.
      */
     @SuppressWarnings({"FeatureEnvy", "MagicNumber"})
     ParallelStreamProcessor<String, String> setupParallelConsumer() {
@@ -177,10 +179,10 @@ public class ParcelTrackingApp {
                 // that - at most one scan per consignment is in flight, in offset order - while scans for
                 // DIFFERENT consignments still run in parallel. UNORDERED would be faster and wrong here;
                 // PARTITION would be correct and no faster than a plain consumer.
-                .ordering(KEY)
+                .ordering(KEY) // <1>
                 // Sized for the geocoding API's connection pool, not for the machine's core count: these
                 // threads spend their lives blocked on a network call, which is the work PC overlaps
-                .maxConcurrency(MAX_CONCURRENCY)
+                .maxConcurrency(MAX_CONCURRENCY) // <2>
                 .consumer(kafkaConsumer)
                 .producer(kafkaProducer)
                 .build();
@@ -200,20 +202,20 @@ public class ParcelTrackingApp {
 
         postSetup();
 
-        // tag::parcelTracking[]
-        parallelConsumer.pollAndProduce(context -> {
+        // tag::parcelTrackingProcess[]
+        parallelConsumer.pollAndProduce(context -> { // <1>
             ConsumerRecord<String, String> scan = context.getSingleRecord().getConsumerRecord();
 
             // trackScan() is THIS EXAMPLE's scaffolding - the concurrency observation and the per-scan
             // logging - and deliberately lives outside this region. All it wraps is one blocking call to
             // a geocoding API, which is where every millisecond of this example's latency is spent, and
             // which throws when the API is unavailable so that Parallel Consumer retries the scan.
-            String position = trackScan(scan);
+            String position = trackScan(scan); // <2>
 
             return new ProducerRecord<>(positionTopic, scan.key(), position);
         }, result -> log.debug("Position for consignment {} written at offset {}",
                 result.getOut().key(), result.getMeta().offset()));
-        // end::parcelTracking[]
+        // end::parcelTrackingProcess[]
     }
 
     /**

@@ -89,11 +89,12 @@ import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOr
  * actually do what it claims?" - so it logs every demand signal and prints a {@link RunSummary} when it
  * closes.
  * <p>
- * <b>What is scaffolding and what is the library.</b> Only the region tagged {@code meterTelemetry} - the
- * options builder and the {@code react} call - is Parallel Consumer. {@link #openReading(MeterReading)},
- * {@link #recordDemand(MeterReading, long)}, {@link #ingestSample(MeterReading, MeterSample)},
+ * <b>What is scaffolding and what is the library.</b> Only the regions tagged {@code meterTelemetry} and
+ * {@code meterTelemetryProcess} - the options builder and the {@code react} call - are Parallel Consumer.
+ * {@link #openReading(MeterReading)}, {@link #recordDemand(MeterReading, long)},
+ * {@link #ingestSample(MeterReading, MeterSample)},
  * {@link #finishReading(MeterReading)}, {@link ConcurrencyObserver} and {@link RunSummary} are this
- * example's own instrumentation, and live outside the tag on purpose: they come from a module that is
+ * example's own instrumentation, and live outside the tags on purpose: they come from a module that is
  * never published to Maven Central, so a snippet that referenced them would not compile in the reader's
  * project.
  */
@@ -251,9 +252,11 @@ public class MeterTelemetryApp {
     }
 
     /**
-     * Declared before {@link #run()} on purpose: the two {@code meterTelemetry} regions are concatenated
-     * in file order when the README includes them, so the options builder has to come before the
-     * {@code react} call or the snippet reads back to front.
+     * The setup half of the README snippet, tagged {@code meterTelemetry}. The {@code react} call carries
+     * a tag of its own, {@code meterTelemetryProcess}, and the README includes the two as separate blocks
+     * in that order: the generator (asciidoc-template-maven-plugin) reads only the FIRST region of any
+     * given tag name, so a second region sharing this tag would be silently dropped rather than
+     * concatenated.
      */
     @SuppressWarnings("FeatureEnvy")
     ReactorProcessor<String, String> setupParallelConsumer() {
@@ -265,11 +268,11 @@ public class MeterTelemetryApp {
                 // yesterday's corrected reading must not land after today's. KEY ordering guarantees that
                 // - at most one reading per meter in flight, in offset order - while readings for
                 // DIFFERENT meters still stream in parallel.
-                .ordering(KEY)
+                .ordering(KEY) // <1>
                 // The OUTER bound: meter readings in flight ACROSS meters. The INNER bound - settlement
                 // periods in flight WITHIN one reading - is limitRate, below. They are independent, and
                 // conflating them is the usual misreading of a "backpressure" example.
-                .maxConcurrency(MAX_CONCURRENCY)
+                .maxConcurrency(MAX_CONCURRENCY) // <2>
                 .consumer(kafkaConsumer)
                 .build();
 
@@ -287,11 +290,11 @@ public class MeterTelemetryApp {
 
         postSetup();
 
-        // tag::meterTelemetry[]
+        // tag::meterTelemetryProcess[]
         // react() is the ONLY entry point on ReactorProcessor - never call the core poll* methods on it.
         // It subscribes to the publisher you return, once per record, with UNBOUNDED demand. So any
         // throttling within a record is yours to declare, which is what limitRate does below.
-        parallelConsumer.react(context -> {
+        parallelConsumer.react(context -> { // <1>
             ConsumerRecord<String, String> record = context.getSingleRecord().getConsumerRecord();
             MeterReading reading = MeterReading.parse(record.key(), record.partition(), record.value());
 
@@ -302,16 +305,16 @@ public class MeterTelemetryApp {
                     // One record is one meter's DAY, so it expands into its 48 half-hourly settlement
                     // periods. A single-element publisher would have no demand to throttle - and
                     // limitRate is a Flux operator, so it would not even compile on a Mono.
-                    .thenMany(Flux.fromIterable(reading.getSamples()))
+                    .thenMany(Flux.fromIterable(reading.getSamples())) // <2>
                     // UPSTREAM of limitRate, and that is the whole point: here the callback sees the
                     // demand limitRate is actually issuing. Move it below limitRate and it reports
                     // request(unbounded) forever - Parallel Consumer's own subscription - and this
                     // example would silently demonstrate nothing.
-                    .doOnRequest(demand -> recordDemand(reading, demand))
+                    .doOnRequest(demand -> recordDemand(reading, demand)) // <3>
                     .log(DEMAND_TRACE, Level.INFO, SignalType.ON_SUBSCRIBE, SignalType.REQUEST, SignalType.ON_NEXT)
                     // The INNER bound: eight settlement periods - four hours of the meter's day - are
                     // requested at a time, then replenished as they are consumed.
-                    .limitRate(DEMAND_WINDOW)
+                    .limitRate(DEMAND_WINDOW) // <4>
                     // concatMap, not flatMap: a meter's own periods are written in time order.
                     .concatMap(sample -> ingestSample(reading, sample))
                     // Before the terminal signal reaches Parallel Consumer, so this reading is closed out
@@ -323,9 +326,9 @@ public class MeterTelemetryApp {
                     // Consumer's own assertion in PartitionState.onSuccess trips and offsets stop
                     // committing. count() gives the subscriber exactly one signal - and it is the number
                     // of settlement periods stored, which is what the record's acknowledgement should say.
-                    .count();
+                    .count(); // <5>
         });
-        // end::meterTelemetry[]
+        // end::meterTelemetryProcess[]
     }
 
     /**
