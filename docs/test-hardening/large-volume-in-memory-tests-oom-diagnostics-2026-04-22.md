@@ -15,7 +15,7 @@
 > `inactive-tests-audit-2026-08-08.md` in this directory. Its §2.1 reference maps to §8.1 there.
 >
 > **What has changed since it was written:** the 500-message kneecap it describes is still in place
-> on master - PR #49 never touched the file, contrary to what the predecessor audit recorded. The
+> on master - astubbs#49 never touched the file, contrary to what the predecessor audit recorded. The
 > work this document scopes is triaged in `docs/refactoring.md`.
 
 ---
@@ -23,7 +23,7 @@
 # `LargeVolumeInMemoryTests` - OOM at 1M messages
 
 **Date observed:** 2026-04-22
-**Branch:** `fix/ci-kafka-matrix` (PR #49) at that time
+**Branch:** `fix/ci-kafka-matrix` (astubbs#49) at that time
 **Context:** Restoring `quantityOfMessagesToProduce` from 500 to 1,000,000 messages caused an `OutOfMemoryError: Java heap space` on GitHub Actions `ubuntu-latest` runners.
 
 ## Symptom

@@ -225,7 +225,7 @@ flowchart TB
     PR38[astubbs#38 JUnit 6<br/>blocked] -.unblocked by.- U4
     PR206[astubbs#206 timeouts<br/>open] -.owns the @Timeout item.- U1
     PR29[astubbs#29 largeNumberOfInstances<br/>open] -.owns the @Tag item.- U1
-    PR106[astubbs#106 / #207<br/>own offsets main code] -.may rebase.- U5
+    PR106[astubbs#106 + astubbs#207<br/>own offsets main code] -.may rebase.- U5
 ```
 
 U2, U3, U4 and U8 are independent and can proceed in any order. U6 must precede U7 - they touch the

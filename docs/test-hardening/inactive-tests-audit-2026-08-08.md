@@ -847,7 +847,7 @@ them is started here.
 **Not work at all** - recorded so nobody opens a ticket for them:
 
 - Eight of the ten deleted stubs (§4): five are covered by named enabled tests, three describe
-  features that do not exist (tracked as astubbs#149, #160, #236), and `truncationOnCommit` is
+  features that do not exist (tracked as astubbs#149, astubbs#160, astubbs#236), and `truncationOnCommit` is
   obsolete because on-commit truncation is structurally unreachable.
 - `VeryLargeMessageVolumeTest`'s volume (8.1) - it was never reduced.
 - `LoadTest`'s 4,000 (8.4) - it is untagged, gating, and a listed member of the load-tightness flake
