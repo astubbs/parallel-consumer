@@ -20,6 +20,21 @@ EOS gates, close/suspend, error wrapping, ordering). Quoted without that pairing
 Remember `README.adoc` is generated - edit `src/docs/README_TEMPLATE.adoc`. Its "Java Version per
 Module" table also does not yet list the new module.
 
+**Whatever is written must also make the blast radius obvious.** An existing PC user reading that
+parallel-consumer now patches Kafka internals must not conclude that their own plain PC usage just
+became riskier. It did not, and the point is provable rather than merely reassuring:
+
+- The experimental modules are **leaves**. They depend on `parallel-consumer-core`; nothing depends on
+  them, core's pom does not reference them, and adding them changed no shipped code in any existing
+  module - verified against `origin/master`.
+- The patched Apache Kafka classes ship **only inside the experimental module's own jar**.
+- The seam is **unreachable** from the core, vert.x and reactor modules.
+
+So depending on the experimental artifact is the entire opt-in, and not depending on it is a complete
+opt-out requiring no configuration. Two traps in the wording: maturity is per module, so one alpha
+must not downgrade how the release describes itself; and the correction must not overshoot into
+burying the alpha, which is worth finding.
+
 ## 2. Packaging the forks - groupId AND artifactId
 
 The open question: how do we publish artifacts that contain patched Apache Kafka code?
