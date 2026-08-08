@@ -77,6 +77,20 @@ Two things to get right in the wording:
 - **Do not overcorrect into burying it.** The alpha is promotional material worth having - it should
   be easy to find and try. The goal is an accurate blast radius, not a quiet one.
 
+## Promotional material wanted
+
+Each of these is an idea rather than a commitment, and each has its own note:
+
+- **The test suite presented as a product**, including what has been tested and fixed since the last
+  upstream release - the strongest available answer to "this fork just added features". See
+  `next-testing-suite-as-product-docs.md`.
+- **A per-module maturity table**, and correcting what `<1.0` implies: it reserves the *API surface*,
+  not reliability. See `next-module-maturity-table.md`.
+- **A living roadmap** of high-level themes, anchored on stated 1.0 exit criteria rather than a date.
+  See `next-living-roadmap.md`.
+- **Per-PR feature documentation**, so features stop landing undocumented. See
+  `next-per-pr-docs-and-feature-index.md`.
+
 ## Do at release: one sweep over the upstream mirrors
 
 All 78 upstream issues are mirrored here (astubbs#44, astubbs#117-astubbs#195), and each carries a **Fork status** section
