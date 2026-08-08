@@ -628,6 +628,112 @@ and the module README are on master.
 
 ---
 
+### U8. The benchmarks: prove the point is latency, not throughput
+
+**Goal:** Measure the thing the spike exists for. Stock Kafka Streams parallelises across *partitions*;
+PC parallelises across *keys*. Where a record's cost is dominated by blocking IO - a call to a web
+service, the motivating case - a single partition serialises work that has no reason to be serial, and
+one slow record delays every record queued behind it regardless of key.
+
+**The primary metric is the latency distribution, not throughput.** Throughput improvement is a
+consequence and is easy to mistake for a faster harness; head-of-line blocking is the property PC
+actually removes, and it is visible only per record.
+
+**Requirements:** R2, R8
+
+**Dependencies:** U6, U7
+
+**Files:**
+- `.../integrationTests/HeadOfLineBlockingBenchmarkTest.java` (create)
+- `.../integrationTests/KeyCardinalityScalingBenchmarkTest.java` (create)
+- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (modify - record measurements against predictions)
+
+**The control arm.** Both experiments run stock against PC **in the same JVM, on the same patched
+classes**, switching only `PcDispatchSwitch`. One term changes. A separate stock build would differ in
+JVM, broker state and warm-up as well, and could not attribute a difference to the seam.
+
+**Predictions, stated before running.** Each is falsifiable, and a refuted one is reported as
+prominently as one that holds.
+
+*Experiment A - head-of-line blocking.* One partition. One record on key `slow` costing `S`, produced
+first; many subsequent records on other keys costing `F`, where `S >> F`. Measure per-record latency
+from produce to output for the **fast** records only.
+
+- **A1 (stock):** fast-record p99 latency `>= S`. Every record behind the blocker waits for it, because
+  `PartitionGroup.nextRecord()` hands them over one at a time.
+- **A2 (PC):** fast-record p99 latency `<< S`, bounded by pool availability rather than by the blocker.
+- **A3 (negative control, single key):** re-run with **every** record on the same key. PC's KEY
+  ordering permits at most one in-flight record per key, so PC must show **no meaningful advantage**
+  here. If it still wins, the gain is not key concurrency and both measurements are void.
+
+*Experiment B - key-cardinality sweep.* Fixed record count `N`, fixed per-record cost `C`, one
+partition, cardinality `K` swept over `{1, 2, 4, 8}`.
+
+- **B1 (stock):** wall-clock `~ N x C`, **flat in K**. Stock has no intra-partition concurrency, so
+  cardinality changes nothing. This doubles as the control on the claim itself: if stock speeds up with
+  K, the premise is wrong.
+- **B2 (PC):** wall-clock `~ N x C / min(K, poolSize)` - speedup rising with K and plateauing at the
+  pool size.
+- **B3 (negative control, `K = 1`):** PC and stock within noise of each other. Same falsifier as A3, at
+  the other experiment.
+
+**Approach:**
+
+1. Reuse `PcDrivenProofSupport` for the broker, topology and drain. Add a per-record cost that is a
+   *block*, not a spin, so the pool can genuinely overlap work - a spin would compete for cores and
+   measure the scheduler instead.
+2. Timestamp each output at emission and pair it with its produce time to get per-record latency.
+   Report p50 and p99 per arm, and log the full distribution - a mean would hide exactly the tail
+   head-of-line blocking creates.
+3. Assert on **ratios with wide margins**, never on absolute wall-clock. The predicted A-effect is
+   roughly `S/F`; asserting a factor of two where ten is expected leaves room for a loaded CI machine
+   without letting a null result pass.
+4. Record measured numbers against each prediction in the result document, including any that were
+   refuted.
+
+**Execution note:** These are measurements, so treat contention as a first-class hazard. Run each arm
+more than once, report the spread rather than a single figure, and state the machine and its load.
+A benchmark that cannot be reproduced is an anecdote.
+
+**Test scenarios:**
+- Under a blocker, fast-key p99 latency is dramatically lower with the seam on than off.
+- With every record on one key, the seam confers no meaningful advantage (A3).
+- Stock wall-clock is flat across key cardinality; PC's falls with it, plateauing at pool size.
+- At `K = 1` the two arms are within noise (B3).
+
+**Verification:** Each prediction has a measured outcome recorded against it, with the reproduction
+count and the spread. Both negative controls behave as predicted, or the positive results are withdrawn.
+
+**Experiment A result - all three predictions held.** One partition, a 1500ms blocker at the head, 24
+records at 25ms behind it, pool of 4, both arms in one JVM on the patched classes:
+
+| Statistic | Stock | PC | Ratio |
+|---|---|---|---|
+| min | 1541ms | 27ms | **57.1x** |
+| p50 | 1858ms | 232ms | 8.0x |
+| p99 | 2205ms | 637ms | 3.5x |
+
+- **A1 held.** Stock's *minimum* is 1541ms - even the luckiest fast record waited for the blocker.
+- **A2 held.** PC's minimum is 27ms, its own cost and nothing else.
+- **A3 held**, and informatively: with every record on one key PC measures **0.99x on min and 0.69x
+  on p50** - slower, as it must be when KEY ordering forbids concurrency and the pool handoff still
+  costs. A negative control that merely tied would be weaker evidence than one that goes the wrong way
+  for the right reason.
+
+**Two corrections made during the run, both recorded because they change what the numbers mean.**
+
+1. *The control changed two terms.* Processing cost was originally selected by key, so putting every
+   record on the blocker's key made every record a 1500ms record - the control differed from the
+   experiment in workload as well as cardinality, and its p50 was 19568ms against the experiment's
+   1865ms. Cost is now selected by value, leaving cardinality as the only difference.
+2. *The p99 was the wrong statistic to assert on.* At n=24 the p99 is the single worst sample, and
+   the worst sample is the last record queued through the pool - it measures queueing depth, not
+   blocking, and it moved with pool size rather than with the seam. The claim "a fast record does not
+   wait for the slow one" is stated by the **minimum**, which is what A1 and A2 now assert. The p99 is
+   still reported; it is simply not the evidence.
+
+---
+
 ## Current Shortcomings
 
 **This is a worklist, not a list of permanent limitations.** Each item below is something the PC path
@@ -718,6 +824,79 @@ in-flight worker's. `StreamsProducer.transactionInFlight` is also a non-volatile
 
 This is composable with more work; it was scoped out (KTD7 chose at-least-once) to keep the spike
 bounded, which is also what kept `StreamsProducer` out of the patch entirely.
+
+### The StreamThread's poll wait throttles dispatch - confirmed, and the largest single win available
+
+Found by U8's negative control, which was not looking for it, and then confirmed by a one-term
+experiment.
+
+**The observation.** Stock Kafka Streams serialises per partition **without regard to key** -
+`PartitionGroup.nextRecord()` does not know what key a record carries. So in the single-key arm both
+paths are serial, and PC still came out at 0.69x. Against an ideal serial time of
+`1500 + 24 x 25 = 2100ms`, stock overshot by ~91ms and PC by ~1786ms: roughly 74ms per record of cost
+that bought nothing. The absence of concurrency explains a missing gain, never a penalty.
+
+**The mechanism.** `StreamThread` is a single thread that both polls and processes, so blocking up to
+`poll.ms` - **100ms by default** - costs stock nothing: while it waits, there is no work it could be
+doing instead. Under the seam that assumption is false. Workers are processing in the background, and
+a blocked poll stalls *dispatch*. With one key, PC's KEY ordering releases at most one record at a
+time, so `process()` dispatches one record, returns, and the StreamThread goes back to a poll that
+blocks while PC holds records it could already have handed out.
+
+**Confirmed by controlled experiment**, changing only `poll.ms`:
+
+| | PC overhead vs stock, single key | Experiment A p50 | Experiment A p99 |
+|---|---|---|---|
+| `poll.ms` = 100 (default) | ~1695ms | 8.0x | 3.5x |
+| `poll.ms` = 1 | ~24ms | **19.1x** | **11.8x** |
+
+The penalty is ~98% poll wait. It is also **charged on every workload**, not just the single-key case:
+it was merely masked while concurrency was paying for it. With it removed, experiment A's PC p99 is
+186ms against a theoretical floor of `24 records / 3 free workers x 25ms = 200ms` - PC becomes limited
+by pool size, which is the only thing that should limit it.
+
+**The fix is a dynamic poll timeout, not a lower constant.** Poll briefly while the dispatcher has work
+buffered or in flight; keep the configured `poll.ms` once it is quiescent. A flat low value would
+busy-spin an idle consumer, which is exactly what the 100ms default exists to prevent. Kafka Streams'
+one-thread model and this spike's two-thread model want opposite things from one setting.
+
+**What the thread is actually waiting for.** Two different events can make work available, and only one
+of them arrives through the consumer:
+
+- **Records from the broker** - delivered by the poll itself. Blocking is the right thing.
+- **A worker completion**, freeing a pool slot or unblocking a key - never seen by the consumer.
+- **A timer**, once retries return: a record sitting out its backoff becomes dispatchable with no poll
+  involved. This is why wake-on-work is a correctness requirement rather than a tuning nicety. It does
+  not bite today only because retries are disabled, which is itself on this list.
+
+**Target design: wake on work.** Block for the full budget, and be woken the moment PC has something
+dispatchable.
+
+The obvious mechanism is the wrong one. `KafkaConsumer` offers no notify, so waking a blocked `poll()`
+means `wakeup()` - which throws `WakeupException` and which **Kafka Streams already uses for
+shutdown**. A wake delivered while the thread is not polling arms the *next* poll instead, so a stray
+signal can swallow the shutdown one. That is a failure that shows up once in a thousand shutdowns.
+
+**`poll()` is only forced on us as the blocking primitive if we accept it as one, and we have patch
+access.** So split the wait: poll with a short timeout to collect any broker records, then block on
+**our own** condition for the remainder of the configured budget, signalled by a worker completion or
+a retry timer. The consumer is never blocked long enough to need interrupting, the wake is exact, and
+`wakeup()` keeps its single existing meaning. This is the design to build.
+
+**Interim: adaptive timeout.** While anything is in flight, poll with a short timeout. Bounded spin,
+paid only while workers are genuinely busy, no new signalling, cannot deadlock. Worth having early
+because it is a few lines and recovers most of the measured gap - but it is a stopgap, not the
+destination, and it cannot see the retry timer at all.
+
+**Cost to weigh (R8).** `poll.ms` is consumed by `StreamThread`, which this patch does not currently
+touch, so the proper fix likely adds a **fifth patched class** and enlarges the surface that must be
+re-derived on every Kafka bump. Worth pricing against the alternative of having the module set a low
+`poll.ms` when the seam is enabled - cheaper, no new patched class, but it trades an idle-consumer spin
+for the dispatch latency and cannot adapt.
+
+**Meanwhile the alpha understates itself**, and users can recover most of the gap today by setting
+`poll.ms` low themselves. Worth documenting as a known workaround rather than leaving the default to
+speak for the design.
 
 ### Carried over from the result document and the branch's own commits
 

@@ -17,6 +17,31 @@ one has a substantiated claim worth using:
 EOS gates, close/suspend, error wrapping, ordering). Quoted without that pairing it reads as
 "Kafka-equivalent", which is not true yet. Both facts, or neither.
 
+**The head-of-line blocking measurement is the strongest promotional material this module has.** One
+partition, one 1500ms record at the head of the queue, twentyfour 25ms records behind it on other
+keys. Same JVM, same patched classes, switching only the seam:
+
+| | Stock Kafka Streams | PC-driven | |
+|---|---|---|---|
+| Quickest fast record | 1541ms | **27ms** | **57x** |
+| Median fast record | 1858ms | 232ms | 8x |
+
+The quickest figure is the one to lead with, because it is the claim itself rather than a summary of
+it: under stock dispatch even the luckiest record behind the blocker waited for it, because
+`PartitionGroup.nextRecord()` hands the partition over one record at a time. Under PC dispatch the
+quickest paid its own 25ms and nothing else.
+
+**Pair it with the control, always** - same rule as the 188 above. With every record on a **single
+key** the same benchmark gives **0.69x**: PC is *slower*, because KEY ordering permits at most one
+in-flight record per key and the pool handoff still costs something. That is not an embarrassment to
+bury; it is what makes the headline credible, and it tells a reader exactly when this helps them.
+Quoted alone the headline reads as "PC is 57x faster than Kafka Streams", which is false and which
+the first competent reader will falsify.
+
+Two further caveats belong with any published version: the comparison is **within one partition**
+(stock Streams parallelises across partitions, and that is not what is being measured), and the
+workload is **blocking IO**, which is the case PC is for - CPU-bound work would not behave this way.
+
 Remember `README.adoc` is generated - edit `src/docs/README_TEMPLATE.adoc`. Its "Java Version per
 Module" table also does not yet list the new module.
 
