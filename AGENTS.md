@@ -28,6 +28,48 @@ owned that content all along.)
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
 
+## You are a machine running techniques written for humans
+
+Nearly all engineering advice you have absorbed carries an unstated cost model: human attention, working
+memory, fatigue, and the tedium of repetitive work. You inherited the advice and the cost model together,
+and you cannot easily tell them apart. **The advice is usually right. The cost model is usually not yours.**
+
+Before letting a technique's conventional wisdom shape a decision, ask what its justification rests on. If
+it rests on correctness, it binds you. If it rests on human effort, it does not.
+
+**Cheap for you, expensive for a human - never let these steer a design:**
+
+- **Merge conflicts, rebases, and patches against a moving upstream.** Never reshape, relocate, or narrow a
+  change to dodge a conflict. Never reject forking or patching a dependency because "we would have to
+  maintain the patch" - regenerating a patch is a task you are good at. `parallel-consumer-streams-spike`
+  patches Kafka itself at build time; that is a normal option, not a heroic one.
+- **Reading whole subsystems.** Read the source and *know* the contract. Do not infer it from javadoc and
+  naming and then act on the inference - that is how lifecycle and threading assumptions turn out wrong.
+- **Exhaustiveness.** Forty test cases cost barely more than five. Prefer per-version source sets to a
+  clever reflection shim, every enum branch to the interesting ones, every error path to the happy one.
+  Cleverness whose purpose is saving keystrokes buys you nothing and costs the reader.
+- **Wide mechanical changes.** A 200-file rename verified against the suite is among the *safest* changes
+  available to you, not the riskiest. Human fear of large diffs is fear of attention lapses.
+- **Keeping N things in sync.** The *maintenance* argument for an abstraction is weak for you. The
+  *single-source-of-truth-for-correctness* argument is not - keep that one, and keep [Be DRY](#code-style).
+
+**Re-derive rather than inherit:**
+
+- **"Ship the smallest thing first"** is right, but choose the increment for what it *validates*, not for
+  what it *avoids building*. The smallest-looking option is sometimes more code and less capability.
+- **Effort estimates** ("that is a two-week change", "that is a lot of files") justify nothing. Argue from
+  risk and verifiability. Strip every effort-based reason from an argument and see what is actually left.
+
+**Still genuinely hard - the human intuition holds here:**
+
+- **Wall-clock.** CI, broker integration tests, and builds do not care how fast you think.
+- **Non-determinism.** Concurrency bugs and flakes are hard for you too, and this repository's history is
+  the proof. Do not get confident here; see [Testing](#testing).
+- **Judgment about people.** What users want, what is worth building, what to prioritise. Ask.
+- **Anything you cannot verify.** No broker, no credentials, no production data. Say so plainly instead of
+  reasoning past it.
+- **Irreversible or outward-facing actions.** Cheap to perform is not the same as safe to perform.
+
 ## Before you investigate anything
 
 Do all five checks below **before** forming a hypothesis, and say in your write-up what they returned
