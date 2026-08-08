@@ -1,7 +1,13 @@
 # In-flight & parked work - how this directory works
 
-Shared, cross-branch working notes kept on `master`, so any branch or session can see what is open
-right now. **Not** an issue tracker and **not** a backlog.
+Cross-branch working notes on what is open right now. **Not** an issue tracker and **not** a backlog.
+
+A note is written on the branch whose work it concerns, and reaches `master` when that branch merges -
+so the set on `master` is what has landed, and the full picture is spread across the active branches.
+Two ways to see it: notes propagate naturally through branch merging, and an agent can read another
+worktree's notes directly at any time (`ls ../*/docs/inflight/`), which is worth doing when your work
+touches something another branch owns. **A note on a feature branch is the normal case, not a mistake** -
+do not "correct" it by moving it to `master`.
 
 This was one file until 2026-08-04. It became a directory because *every* PR edited it - it appeared
 in 26 of the last 30 master commits - so unrelated PRs conflicted with each other constantly, purely
