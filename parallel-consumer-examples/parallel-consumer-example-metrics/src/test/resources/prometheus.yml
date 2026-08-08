@@ -12,8 +12,13 @@ scrape_configs:
     static_configs:
       - targets:
           - 'localhost:9090'
+  # One target per example in this module. They MUST be on different ports: both examples' tests run in
+  # the same forked JVM and CoreApp never stops its HttpServer, so a shared port would leave whichever
+  # ran second unable to bind. 7001 is CoreApp; 7002 is OrderFulfilmentApp.METRICS_PORT.
+  # A target whose example is not running simply scrapes as down, which neither test asserts on.
   - job_name: 'pc'
     metrics_path: '/prometheus'
     static_configs:
       - targets:
           - 'host.testcontainers.internal:7001'
+          - 'host.testcontainers.internal:7002'
