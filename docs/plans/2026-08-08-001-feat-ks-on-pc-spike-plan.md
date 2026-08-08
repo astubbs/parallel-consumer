@@ -49,7 +49,7 @@ spike is designed so a red or ambiguous result sends the question back to the al
 | R3 | Output is correct against a stock Kafka Streams baseline: multiset equality across the whole run, and sequence equality within each key. |
 | R4 | A control arm exists proving the generate-and-patch harness is behaviour-neutral before any patch content is applied. |
 | R5 | The outcome - including a failure or an early stop - is recorded durably **on master**, with enough detail that the next person does not repeat it. |
-| R6 | Nothing in the spike is published to Maven Central or changes the behaviour of any shipped module. |
+| R6 | The spike module publishes to Maven Central as an **alpha/experimental artifact**, clearly labelled as such, with its seam off by default - and changes the behaviour of no **other** module. *(Reversed in revision; see KTD-S5. It previously read "nothing in the spike is published".)* |
 | R7 | No Apache Kafka source is committed to this repository. The CI gates pass without being bypassed or weakened. |
 | R8 | The spike reports the size and shape of the change set. The patch file is that report: its line count, the classes it touches, and whether any new PC API was required. |
 | R9 | The spike exercises at least one code path where the thread-confinement fix is actually load-bearing, so a green result distinguishes "confinement works" from "confinement was never needed here". |
@@ -68,7 +68,12 @@ minimal stateful arm (U7) so the result can discriminate.
 - Caching-enabled state, and therefore the cache-layer concurrency problems entirely.
 - Throughput measurement. "Faster" is not the question.
 - The Web GUI stretch goal on astubbs#255 - it needs the parallel-safe tagging pass.
-- Merging the spike *code* into the product. The result *documents* land on master (R5).
+
+**Ships as alpha.** The module lands on master and publishes as an alpha/experimental artifact alongside
+release 0.6.0.0, with its seam off by default and its known limitations enumerated in
+`parallel-consumer-streams-spike/README.md`. Maturity is per-module, not global. This reverses an earlier
+non-goal ("merging the spike code into the product; the spike branch is kept, not landed") - see KTD-S5.
+The result documents land in the same PR as the code (R5).
 
 #### Deferred to Follow-Up Work
 - Everything the report ranks Tier 2 beyond the thread-confinement, and all of Tier 3.
@@ -80,8 +85,8 @@ minimal stateful arm (U7) so the result can discriminate.
 
 ### Key Technical Decisions
 
-Three decisions below carry a `session-settled:` annotation - the user closed them in conversation and
-they are not to be re-opened. **Everything else here, including KTD0, was chosen during planning.** A
+The decisions below carrying a `session-settled:` annotation were closed by the user in conversation and
+are not to be re-opened. **Everything else here, including KTD0, was chosen during planning.** A
 later reviewer should challenge the unannotated ones freely.
 
 **KTD-S1. The question is "how little must change to make it work".**
@@ -103,6 +108,23 @@ Kafka into this repository - see KTD-S4.
 which an earlier draft of this plan proposed: the user rejected it outright.)*
 This is what makes KTD1 the only remaining question, and it deletes an entire unit of licensing
 machinery the vendoring approach required.
+
+**KTD-S5. The module ships, as a published alpha/experimental artifact.**
+*(session-settled: user-directed - chosen over keeping it an unmerged throwaway, which is what KTD-S3,
+R6 and the Scope Boundaries originally said. The user reversed that decision after the result was in:
+maturity is per-module, not global, so an experimental module can publish alongside a stable release
+provided it is labelled honestly and is inert unless switched on.)*
+Consequences, recorded so nothing silently keeps the old posture: KTD6 is rewritten (it publishes);
+R6 is rewritten (it publishes, and must not change any **other** module's behaviour); the "not for merge"
+non-goal is deleted; the docs land in the same PR as the code rather than a separate docs-only one; and
+Apache Kafka's own 188-test suite moves from an opt-in profile into the module's normal test run, because
+a shipped artifact's behaviour-preservation gate should run on every build.
+**One obligation the throwaway posture did not have:** the published jar contains *compiled, modified*
+Apache Kafka classes, so Apache 2.0 s4(b)/s4(c) now apply to the distribution - `NOTICE` names the four
+classes, attributes the ASF, and states that they were changed. KTD-S4 is untouched: still no Apache
+source in the repository, only the patch.
+This does **not** reverse KTD-S3's *posture* - the code is still an experiment and says so on the tin. It
+reverses only what happens to the artifact.
 
 **KTD0. Cut the seam inside `processor/internals`.** Drive the processor chain from PC's `WorkManager`
 rather than supplying a PC-backed client or building a PC-native API.
@@ -130,7 +152,9 @@ The three plugins needed - `maven-dependency-plugin:unpack`, `exec-maven-plugin`
 
 *Rejected:* **vendoring the classes into the repo** (KTD-S4). It would have required a new copyright-gate
 provenance class and a `NOTICE` change - a whole unit of machinery to make committing ~110KB of ASF
-source legal and CI-clean.
+source legal and CI-clean. (Under KTD-S5 the `NOTICE` change became necessary anyway, because the
+published jar distributes the *compiled* modified classes. The copyright-gate machinery did not: the gate
+only scans tracked `.java` files, and there still are none.)
 *Rejected:* **forking and publishing Kafka locally.** It works, but a locally-published version is
 **unresolvable on a CI runner**, so the branch could never go green; it also costs a clone, a ~3 minute
 cold build, and a `dependencyManagement` pin to stop the forked POM dragging in an unpublished
@@ -167,14 +191,24 @@ class.
 *Still rejected:* windowed operators, joins and suppression - they change semantics under out-of-order
 processing, which would make a failure ambiguous.
 
-**KTD6. A top-level module that explicitly skips publishing.** New module
-`parallel-consumer-streams-spike` carrying the three publish-skip **properties** (`maven.deploy.skip`,
-`maven.install.skip`, `gpg.skip`) **plus a `<build><plugins>` block** setting
-`central-publishing-maven-plugin`'s `<skipPublishing>true</skipPublishing>`. There is no
-`central-publishing-maven-plugin.skipPublishing` property - the plugin exposes only an unqualified
-`${skipPublishing}` expression - so a properties-only copy would silently fail to protect R6.
-*Rejected:* placing it under `parallel-consumer-examples` to inherit the skips. A spike is not an
-example, and inheriting protection by accident of location is less legible than copying it.
+**KTD6. A top-level module that publishes, as an alpha/experimental artifact.** New module
+`parallel-consumer-streams-spike`, publishing like any other module - no publish-skip properties, no
+`central-publishing-maven-plugin` `<skipPublishing>` block - with its alpha status carried in the pom
+`<name>`/`<description>` and in `parallel-consumer-streams-spike/README.md`, and its seam off by default
+so the artifact is inert unless a user opts in.
+*Reversal, recorded rather than quietly edited (KTD-S5):* this decision originally read "a top-level
+module that explicitly skips publishing", carrying the three publish-skip **properties**
+(`maven.deploy.skip`, `maven.install.skip`, `gpg.skip`) **plus** a `<build><plugins>` block setting
+`<skipPublishing>true</skipPublishing>` - because there is no
+`central-publishing-maven-plugin.skipPublishing` property (the plugin exposes only an unqualified
+`${skipPublishing}` expression), so a properties-only copy would have protected nothing. That machinery
+is now removed. The note about `skipPublishing` being plugin *configuration* rather than a property is
+kept here because it is still true and still a trap for the modules that **do** skip.
+*Still relevant:* the module stays ordered **before** `parallel-consumer-examples` in `<modules>`.
+That ordering was originally about the spike's own skip; it still matters because `examples` is the
+skipPublishing module and the recorded plugin bug is about a skipPublishing module being **last**.
+*Rejected:* placing it under `parallel-consumer-examples`. It is not an example, and being there would
+now actively suppress its publication.
 
 **KTD7. At-least-once, not EOS.** Keeps `StreamsProducer` out of the patch entirely.
 
@@ -269,7 +303,7 @@ which KTD-S4 makes unnecessary. The gap in unit numbering is intentional.)*
 ### U1. Spike module and the generate-and-patch harness
 
 **Goal:** A module that unpacks four Kafka source files, applies a patch, compiles the result ahead of
-the jar, and never publishes - with no Kafka source tracked.
+the jar, and publishes as an alpha artifact (KTD-S5) - with no Kafka source tracked.
 
 **Requirements:** R6, R7
 
@@ -289,9 +323,10 @@ the jar, and never publishes - with no Kafka source tracked.
 1. Add to the root `<modules>` list (`pom.xml:35-41`), before `parallel-consumer-examples` - that pom
    records a central-publishing bug where a skipPublishing module last in reactor order suppressed the
    whole bundle upload.
-2. Apply KTD6 exactly: copy both the `<properties>` block
-   (`parallel-consumer-examples/pom.xml:33-37`) **and** the `central-publishing-maven-plugin` `<build>`
-   block (lines 39-49). **No `release.target` override** - see Assumptions.
+2. Apply KTD6: **no** publish-skip properties and **no** `central-publishing-maven-plugin`
+   `<skipPublishing>` block - the module publishes like any other. Carry the alpha framing in the pom
+   `<name>`/`<description>` and in the module README instead. **No `release.target` override** - see
+   Assumptions.
 3. Wire the harness, all three plugins already used elsewhere in this build:
    - `maven-dependency-plugin:unpack` in `generate-sources`, artifact
      `org.apache.kafka:kafka-streams:${kafka.version}` classifier `sources`, `includes` limited to the
@@ -310,9 +345,10 @@ the jar, and never publishes - with no Kafka source tracked.
 
 **Test scenarios:** `Test expectation: none` - harness only; U3's control arm is the first real test.
 
-**Verification:** `./mvnw -pl parallel-consumer-streams-spike -am install` succeeds; no
-`parallel-consumer-streams-spike` artifact appears under `~/.m2`; `git status` shows no `.java` file
-under `org/apache/kafka/` tracked anywhere; `bin/ci-unit-test.sh` passes.
+**Verification:** `./mvnw -pl parallel-consumer-streams-spike -am install` succeeds and the
+`parallel-consumer-streams-spike` artifact **does** appear under
+`~/.m2/repository/bz/stub/parallelconsumer/`; `git status` shows no `.java` file under
+`org/apache/kafka/` tracked anywhere; `bin/ci-unit-test.sh` passes.
 
 ---
 
@@ -529,7 +565,7 @@ choice, and land the verdict where the next person will find it.
 **Files:**
 - `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/PcDrivenStatefulProofTest.java` (create)
 - `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (create - **lands on master**)
-- `docs/inflight/branch-ks-on-pc-spike.md` (create - **lands on master**)
+- `parallel-consumer-streams-spike/README.md` (create - the alpha module's front door; **lands on master**)
 - `docs/plans/2026-08-07-002-investigate-kafka-streams-on-pc-report.md` (modify - link the result)
 
 **Approach:**
@@ -546,9 +582,11 @@ choice, and land the verdict where the next person will find it.
    Kafka version bump against classes carrying no compatibility guarantee; the DSL emission-semantics
    change that disabling caching forces on the parallel path; and the distribution shape a shipped
    version would need, since build-time patching is a spike technique, not a product one.
-4. **Land the documents on master via a docs-only PR**, separate from the spike branch, plus
-   `docs/inflight/branch-ks-on-pc-spike.md` per that directory's conventions (`branch-` prefix is for
-   work on a branch with no PR). Without this the back-link points at nothing from master and R5 is unmet.
+4. **Land the documents in the same PR as the code** (KTD-S5 - the module ships, so there is no longer a
+   separate docs-only PR, and no `branch-`-prefixed inflight note, since that prefix is for work on a
+   branch with **no** PR). Add `parallel-consumer-streams-spike/README.md` as the module's own front
+   door: what it is, that it is alpha and wants field testers, how to switch the seam on, what is known
+   not to work, and how to report findings.
 5. Record the caveats: 3.9-only; caching-disabled only; optimistic commit; retries disabled; the patch
    is pinned to 3.9.2 and will need re-deriving on any bump.
 
@@ -562,7 +600,7 @@ is a successful spike and gets the same care.
 - The stateful run is repeatable across executions.
 
 **Verification:** The verdict is stated plainly with evidence and reproduction rate; the result document
-and inflight note are on master.
+and the module README are on master.
 
 ---
 
@@ -574,7 +612,9 @@ and inflight note are on master.
    nothing (R7).
 4. `.github/scripts/issue-ref-gate.test.js` exits 0, and no added line carries an unqualified sub-1000
    issue reference.
-5. No artifact from `parallel-consumer-streams-spike` is installed or deployed (R6).
+5. `parallel-consumer-streams-spike` installs and is publishable, and no **other** module's behaviour
+   changed (R6). Apache Kafka's own 188 tests run in the module's normal `test` phase - no profile flag -
+   and are green with nothing skipped.
 6. U3's control arm is green before U4, after U4, and after U5 with the dispatch flag off.
 7. `pcspike.patch` applies cleanly from a clean checkout, and the build fails loudly if it does not.
 8. The result document and inflight note exist **on master**, whatever the verdict.
@@ -593,7 +633,8 @@ and inflight note are on master.
 | Patch iteration friction makes the spike unpleasant enough to abandon. | U1 ships `regen-patch.sh`; KTD1 states the cost openly rather than pretending it away. |
 | A half-applied patch produces an incoherent build. | U1 runs `patch --dry-run` first and fails on any rejected hunk. |
 | Optimistic commit means the spike is not crash-safe. | Deliberate and in Scope Boundaries; U7 records it. |
-| The result never reaches anyone because the branch does not land. | U7 lands the documents on master via a separate docs-only PR. |
+| The result never reaches anyone because the branch does not land. | Resolved by KTD-S5: the module and its documents land together in one PR. |
+| A published alpha artifact is mistaken for a supported one. | The seam is off by default; the pom `<name>`/`<description>` lead with ALPHA/EXPERIMENTAL; the module README enumerates what is known not to work, including that offsets are optimistic and there is no distribution shape. |
 
 ---
 
@@ -601,9 +642,10 @@ and inflight note are on master.
 
 - The question in the Summary has an answer, positive or negative, backed by a test that runs - or an
   explicit stop at U3 or U5 with its verdict written down.
-- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` and `docs/inflight/branch-ks-on-pc-spike.md` are
-  **on master**, recording the verdict, the evidence, `pcspike.patch`'s size and the classes it touches
-  (R8), what a green result would commit to, which KTD0 alternative the result points back to, and the
-  reproduction rate.
+- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` and `parallel-consumer-streams-spike/README.md`
+  are **on master**, recording the verdict, the evidence, `pcspike.patch`'s size and the classes it
+  touches (R8), what a green result would commit to, which KTD0 alternative the result points back to,
+  and the reproduction rate.
 - The Verification Contract passes in full - including item 3, no tracked Kafka source.
-- No shipped module's behaviour changed, and nothing new publishes.
+- No **other** module's behaviour changed. `parallel-consumer-streams-spike` publishes as an alpha
+  artifact, labelled as such, with the seam off by default (KTD-S5).
