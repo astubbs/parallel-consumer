@@ -5,6 +5,7 @@ package io.confluent.parallelconsumer.streamsspike.integrationTests;
 
 import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import io.confluent.parallelconsumer.streamsspike.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -16,7 +17,10 @@ import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.KStream;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
@@ -45,10 +49,18 @@ import static org.awaitility.Awaitility.await;
  * Concurrency fixes that quietly break the serial path are not fixes.
  * <p>
  * If this test goes red, the plan says STOP - write up the verdict and re-plan.
+ * <p>
+ * <b>The stock path is asked for, not assumed.</b> {@link PcDispatchSwitch} defaults <em>on</em> - depending
+ * on this artifact is the opt-in - so this arm turns it off itself, in {@link #useStockDispatch()}. This test
+ * exists to say what the patched classes do under serial, single-threaded Streams, and it would silently stop
+ * saying that if it ran on the PC path.
  *
  * @see io.confluent.parallelconsumer.streamsspike.ShadowedClassLoadingTest
  */
 @Slf4j
+// The switch it depends on is process-wide, so an arm that turns it on in another class would otherwise be
+// able to do so underneath this one - converting the control arm into a second PC arm, silently.
+@Isolated
 class ShadowedStreamsControlTest extends BrokerIntegrationTest<String, String> {
 
     private static final int KEYS = 5;
@@ -56,6 +68,25 @@ class ShadowedStreamsControlTest extends BrokerIntegrationTest<String, String> {
     private static final int TOTAL = KEYS * RECORDS_PER_KEY;
 
     private static final String SUFFIX = "-processed";
+
+    /**
+     * Explicit, because the default is now the other way. Without this the topology below would run on the PC
+     * worker pool and this class would quietly become a second parallel arm rather than the baseline the whole
+     * spike is measured against.
+     */
+    @BeforeEach
+    void useStockDispatch() {
+        PcDispatchSwitch.disable();
+        assertThat(PcDispatchSwitch.isEnabled())
+                .as("the control arm must run stock, serial Kafka Streams dispatch")
+                .isFalse();
+    }
+
+    /** Hand the JVM back at the artifact's default, so the next test states its own requirement. */
+    @AfterEach
+    void restoreDefaultDispatch() {
+        PcDispatchSwitch.resetToDefault();
+    }
 
     @Test
     void statelessTopologyBehavesIdenticallyUnderShadowedClasses() {

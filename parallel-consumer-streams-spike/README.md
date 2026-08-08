@@ -49,34 +49,41 @@ in [`docs/plans/2026-08-08-002-ks-on-pc-spike-result.md`](../docs/plans/2026-08-
   merely undisturbed.
 
 What that does **not** mean: that this is finished, crash-safe, or semantically equal to stock Kafka
-Streams. It is not. Read [What is known not to work](#what-is-known-not-to-work) before enabling it
-anywhere that matters.
+Streams. It is not. Read [Known gaps](#known-gaps) before relying on it anywhere that matters.
 
-## How to turn it on
+## Using it
 
-**The seam is off by default.** With the switch unset, the stock Kafka Streams path is the one that runs
-and this artifact changes nothing about your topology's behaviour.
+**The seam is on by default. Depending on this artifact is the opt-in.** Nobody puts an alpha module
+called `parallel-consumer-streams-spike` on their classpath by accident, and having done so, they wanted
+the PC seam - so there is no second switch to find.
 
-For a whole JVM (manual experimentation, running an app):
+**To turn it off** and get stock, serial Kafka Streams dispatch back - which is exactly what an A/B
+comparison needs:
 
 ```
--Dpc.streams.spike.dispatch.enabled=true
--Dpc.streams.spike.dispatch.poolSize=4      # optional, defaults to 4
+-Dpc.streams.spike.dispatch.enabled=false
 ```
 
-From a test, so it can be turned off again:
+Other settings:
+
+```
+-Dpc.streams.spike.dispatch.poolSize=4      # worker threads per task; also PC's maxConcurrency. Default 4.
+```
+
+From a test, so each arm states which path it wants rather than inheriting a default:
 
 ```java
-PcDispatchSwitch.enable(4);   // worker threads per task; also PC's maxConcurrency
+PcDispatchSwitch.enable(4);            // worker threads per task
+// PcDispatchSwitch.disable();         // ... or the stock path, said out loud
 try {
     // ... build and run the topology ...
 } finally {
-    PcDispatchSwitch.disable();
+    PcDispatchSwitch.resetToDefault(); // hand the JVM back as you found it
 }
 ```
 
 The decision is taken **once, in the `StreamTask` constructor**, so a task never changes record paths
-halfway through a run. Tasks created before `enable(...)` keep the stock path.
+halfway through a run. Tasks created while the switch was off keep the stock path.
 
 Two things to know before you get a surprising result:
 
@@ -87,43 +94,20 @@ Two things to know before you get a surprising result:
   application. See §7.3 of the result document: there is no shipped distribution shape yet. This is the
   single biggest reason this is alpha.
 
-## What is known not to work
+## Known gaps
 
-All of these are recorded decisions, not defects discovered late. The full list with reasoning is §8 of
-the result document.
+**This is an alpha, and it has real, known shortcomings.** They are not enumerated here on purpose:
+implementation has not stopped, so any list in this README would be out of date by the time you read it.
+The living list, with the mechanism behind each item and an assessment of what it would take to close it,
+is **[Current Shortcomings in the plan](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)**.
 
-| Not working | Detail |
-|---|---|
-| **Stream-time punctuation** | Stream time advances at partition-group *selection*, and the PC path never selects from the partition group, so stream-time punctuators do not fire. Wall-clock punctuation is unaffected. Disqualifying for anything windowed. |
-| **Consumer pausing** | Stock `addRecords` pauses a partition once its buffer exceeds `maxBufferedSize`. The PC path hands everything to `WorkManager`, so PC's own backpressure is the only inflow limit. |
-| **Prompt failure reporting** | A worker's exception is stored and re-thrown on the `StreamThread` at the *next* `process()` call. Records dispatched in between will already have run. |
-| **Crash safety - offsets are committed optimistically** | Offset commit stays on the stock Streams path. `consumedOffsets` is written by workers in *completion* order, so Streams may commit an offset while a lower one from the same partition is still in flight. **Do not run this where a crash must not lose or replay records.** |
-| **Retries** | Disabled. PC's response to a failure is re-dispatch, which would re-run the whole chain including `forward()` calls that already emitted downstream - duplicates stock Streams never produces. |
-| **Caching on stateful stores** | Caching must be **disabled** (`Materialized...withCachingDisabled()`). This is a user-visible semantics change: with caching on a KTable emits at flush (one record per key per commit interval); with it off, every update is forwarded. Your downstream volume and output-topic retention change. |
-| **Windowed operators, joins, suppression** | Out of scope. They change semantics under out-of-order processing. |
-| **Exactly-once (EOS)** | Out of scope - at-least-once only. This is what keeps `StreamsProducer` out of the patch entirely. |
-| **Multiple tasks / rebalancing** | Every test runs one `StreamThread`, one partition, one task. Multi-task and rebalance behaviour under PC dispatch is untested. |
-| **Kafka versions other than the pinned one** | See [Kafka version pinning](#kafka-version-pinning). |
-| **Two read-modify-write races survive** | `commitNeeded` and `partitionsToResume` are `volatile`/concurrent, which fixes *corruption*, not *atomicity*. |
-
-### The precise semantic gap: 33 of Kafka's own `StreamTaskTest` cases
-
-With the switch **off**, Kafka's `StreamTaskTest` is 101/101. With it **on**, it is **68/101**. Those 33
-failures are the honest measure of how far the PC path is from stock Kafka Streams - and they are a
-worklist, written by Kafka's own authors:
-
-| Cluster | Tests | Corresponds to |
-|---|---|---|
-| Offset / commit accounting | 11 | optimistic commit - the largest cluster, and the one blocking crash-safety |
-| Buffering, pause/resume | 5 | no consumer pausing; `maxBufferedSize` is meaningless when nothing fills the partition group |
-| Close / suspend | 5 | the drain-before-suspend path this module adds |
-| EOS commit gates | 3 | EOS deliberately out of scope |
-| Error wrapping | 3 | failures surface a pump cycle late; exception type and timing differ |
-| Stream-time punctuation | 2 | stream time advances at selection, which the PC path skips |
-| Ordering | 1 | global ordering across a partition, which parallel dispatch necessarily changes |
-
-It doubles as a positive control: the released `StreamTask` has no dispatch flag, so a run whose behaviour
-changes when the flag is set is *provably* executing the patched class.
+**Read that section before relying on this anywhere that matters.** In summary, and without the detail:
+stream-time-driven behaviour (punctuation, windows, joins, suppression) does not work; offsets are
+committed optimistically, so a crash can lose records; caching must be disabled on state stores, which
+changes what your topology emits; retries are off and failures surface a pump cycle late; and EOS is out
+of scope. The size of the gap is measured, not estimated - **33 of Apache Kafka's own `StreamTaskTest`
+cases fail with the seam on** (68/101, against 101/101 with it off), and the shortcomings list maps onto
+those failures.
 
 ## The 188-test claim
 
@@ -139,9 +123,9 @@ This is a substantiated claim, available for release notes and other promotional
   and `RecordCollectorImpl`, which precede the `kafka-streams` jar on the classpath - proven separately by
   `ShadowedClassLoadingTest`, and cross-checked by the fact that turning the dispatch flag on changes the
   result (the released classes have no such flag).
-- **The condition:** dispatch switch **off**. This is a *behaviour-preservation* claim about the patch,
-  not a claim about the parallel path. The parallel path's number is 68/101 on `StreamTaskTest`, above,
-  and is stated everywhere the 188 is.
+- **The condition:** dispatch switch **off** - set explicitly on that surefire execution, not inherited
+  from a default. This is a *behaviour-preservation* claim about the patch, not a claim about the parallel
+  path. The parallel path's number is 68/101 on `StreamTaskTest`, and is stated everywhere the 188 is.
 - **How to reproduce:** it runs in this module's **normal** test run, no profile and no flag:
 
   ```
@@ -190,8 +174,9 @@ Field reports are the point of publishing this. Please report on
 4. **What you compared against** - output equality against stock, per-key ordering, aggregate values.
 5. **Reproduction rate** - "3 of 20 runs" is worth far more than "sometimes".
 
-Anything in [What is known not to work](#what-is-known-not-to-work) is already known; the valuable reports
-are the ones *outside* that table, and any evidence that one of those items is worse than stated.
+Anything in [Current Shortcomings](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)
+is already known; the valuable reports are the ones *outside* that list, and any evidence that one of
+those items is worse than stated.
 
 ## Further reading
 

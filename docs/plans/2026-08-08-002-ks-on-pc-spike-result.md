@@ -17,7 +17,9 @@ title: "Result: can PC's work-shard manager drive a Kafka Streams processor chai
 
 **Status update, 2026-08-08 (user-directed reversal - plan KTD-S5):** this was written as the deliverable
 of a throwaway experiment that would not merge. It now merges: `parallel-consumer-streams-spike` **ships
-as a published alpha/experimental artifact** alongside release 0.6.0.0, with its seam off by default.
+as a published alpha/experimental artifact** alongside release 0.6.0.0, with its seam **on** by default
+(plan KTD-S6 - taking the dependency is the opt-in; `-Dpc.streams.spike.dispatch.enabled=false` turns it
+off).
 Maturity is per-module, not global. Nothing in the technical result below changes - the caveats in §7,
 §8 and §9 are exactly the reasons it ships as *alpha*. The module's own front door is
 [`parallel-consumer-streams-spike/README.md`](../../parallel-consumer-streams-spike/README.md).
@@ -76,9 +78,12 @@ consumer poll
 outcomes through a queue that the StreamThread drains, mirroring PC's own controller/mailbox
 discipline. `WorkManager` is not thread-safe and is never touched from a worker.
 
-The switch (`PcDispatchSwitch`) defaults **off**, so the stock path remains the one that runs unless a
-test turns it on. That default is what makes "with the flag off, zero records reached the pool" a real
-assertion rather than a tautology.
+The switch (`PcDispatchSwitch`) is process-wide, and every arm below states which path it wants rather
+than inheriting a default - `enable(n)` or `disable()`, at the site, with a comment. That explicitness is
+what makes "with the flag off, zero records reached the pool" a real assertion rather than a tautology.
+*(It defaulted **off** while this was written, which is what the control arms leaned on; plan KTD-S6
+later flipped the default to **on** - taking the dependency is the opt-in - and made every control arm
+disable the seam itself.)*
 
 ---
 
@@ -540,10 +545,13 @@ can consume is worth less than a topic hop everybody can.
 - **It ships, as alpha** (plan KTD-S5, user-directed - this reverses the original "not for merge, never
   publishes" posture, which is what §1 through §11 above were written under).
   `parallel-consumer-streams-spike` publishes like any other module, alongside release 0.6.0.0, with the
-  dispatch seam **off by default** so the artifact is inert unless a user opts in. Its known limitations
-  - §7, §8 and §9 - are exactly why it is labelled alpha rather than supported, and they are restated for
-  users in [`parallel-consumer-streams-spike/README.md`](../../parallel-consumer-streams-spike/README.md),
-  which also asks for field testers.
+  dispatch seam **on by default** - taking the dependency is the opt-in (plan KTD-S6), and
+  `-Dpc.streams.spike.dispatch.enabled=false` turns it off. Its known limitations - §7, §8 and §9 - are
+  exactly why it is labelled alpha rather than supported. They are carried forward as the plan's
+  [Current Shortcomings](2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings), which is the
+  living list;
+  [`parallel-consumer-streams-spike/README.md`](../../parallel-consumer-streams-spike/README.md) points
+  users there and asks for field testers.
 - `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` is the artefact worth keeping. It is
   the answer to R8 and the starting point for anyone re-deriving against a newer Kafka.
 - To work on it: `./mvnw -pl parallel-consumer-streams-spike generate-sources`, edit

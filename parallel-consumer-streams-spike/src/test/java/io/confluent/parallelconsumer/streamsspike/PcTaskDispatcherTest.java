@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The seam itself, with Kafka Streams taken out of the picture.
@@ -78,7 +79,9 @@ class PcTaskDispatcherTest {
             dispatcher.close();
             dispatcher = null;
         }
-        PcDispatchSwitch.disable();
+        // Back to the artifact's default (on), not to off - a teardown that parks the switch somewhere other
+        // than where the JVM found it is the implicit coupling this default flip exists to remove.
+        PcDispatchSwitch.resetToDefault();
     }
 
     /**
@@ -130,28 +133,78 @@ class PcTaskDispatcherTest {
     }
 
     /**
-     * With the switch off there is no dispatcher at all, so the marker cannot move. This is the assertion that
-     * makes a non-zero marker elsewhere mean something.
+     * The default, asserted rather than assumed - this is the test that would go red if someone flipped it
+     * back. Depending on this artifact is the opt-in, so a {@code StreamTask} constructed with nothing
+     * configured gets a dispatcher; turning the switch off gets the stock partition group back, and then the
+     * marker cannot move, which is what makes a non-zero marker elsewhere mean something.
+     * <p>
+     * {@code resetToDefault()} rather than reading {@code isEnabled()} straight off: this class mutates the
+     * process-wide switch, so by the time this method runs the switch holds whatever the last test left, and
+     * an unqualified read here would be asserting on test-ordering rather than on the default.
      */
     @Test
-    void theSwitchIsOffByDefaultAndTheDispatchMarkerStaysAtZero() {
-        assertThat(PcDispatchSwitch.isEnabled())
-                .as("PC dispatch must default to off, or the U3 control arm stops being a control")
-                .isFalse();
-        assertThat(PcTaskDispatcher.createIfEnabled("task-off", INPUT_PARTITIONS))
-                .as("no dispatcher means StreamTask keeps its own partition group")
-                .isNull();
-        assertThat(PcDispatchCounters.getRecordsDispatchedToPool()).isZero();
+    void theSwitchIsOnByDefaultAndTurningItOffLeavesTheStockPathInPlace() {
+        PcDispatchSwitch.resetToDefault();
 
-        PcDispatchSwitch.enable(4);
-        // Assigned to the field so @AfterEach closes its worker pool - and disables the switch again.
-        dispatcher = PcTaskDispatcher.createIfEnabled("task-on", INPUT_PARTITIONS);
+        assertThat(PcDispatchSwitch.isEnabled())
+                .as("PC dispatch must default to ON - putting this artifact on the classpath IS the opt-in, "
+                        + "and a second, hidden opt-in step buys nobody anything")
+                .isTrue();
+        // Assigned to the field so @AfterEach closes its worker pool.
+        dispatcher = PcTaskDispatcher.createIfEnabled("task-default-on", INPUT_PARTITIONS);
         assertThat(dispatcher)
-                .as("and turning it on must produce one")
+                .as("so a task built with nothing configured must get a dispatcher")
                 .isNotNull();
         assertThat(dispatcher.getRecordsDispatched())
                 .as("merely existing dispatches nothing")
                 .isZero();
+
+        dispatcher.close();
+        dispatcher = null;
+
+        PcDispatchSwitch.disable();
+        assertThat(PcTaskDispatcher.createIfEnabled("task-off", INPUT_PARTITIONS))
+                .as("and turning it off must give the stock path back - no dispatcher means StreamTask keeps "
+                        + "its own partition group")
+                .isNull();
+        assertThat(PcDispatchCounters.getRecordsDispatchedToPool())
+                .as("nothing reached a worker pool in either half")
+                .isZero();
+    }
+
+    /**
+     * The property is the only way an application (as opposed to a test) can get the stock path back, so its
+     * parsing is worth an assertion of its own - including that a typo fails loudly rather than being read as
+     * "off", which would silently produce a run that looks like a control arm and is not.
+     */
+    @Test
+    void theEnabledPropertyTurnsTheSeamOffAndRejectsAnythingItCannotUnderstand() {
+        final String original = System.getProperty(PcDispatchSwitch.ENABLED_PROPERTY);
+        try {
+            System.setProperty(PcDispatchSwitch.ENABLED_PROPERTY, "false");
+            PcDispatchSwitch.resetToDefault();
+            assertThat(PcDispatchSwitch.isEnabled())
+                    .as("-D%s=false is how an A/B run gets stock Kafka Streams dispatch back",
+                            PcDispatchSwitch.ENABLED_PROPERTY)
+                    .isFalse();
+
+            System.setProperty(PcDispatchSwitch.ENABLED_PROPERTY, "TRUE");
+            PcDispatchSwitch.resetToDefault();
+            assertThat(PcDispatchSwitch.isEnabled()).as("and case must not matter").isTrue();
+
+            System.setProperty(PcDispatchSwitch.ENABLED_PROPERTY, "flase");
+            assertThatThrownBy(PcDispatchSwitch::resetToDefault)
+                    .as("a typo must not be silently read as 'off'")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY);
+        } finally {
+            if (original == null) {
+                System.clearProperty(PcDispatchSwitch.ENABLED_PROPERTY);
+            } else {
+                System.setProperty(PcDispatchSwitch.ENABLED_PROPERTY, original);
+            }
+            PcDispatchSwitch.resetToDefault();
+        }
     }
 
     /**
