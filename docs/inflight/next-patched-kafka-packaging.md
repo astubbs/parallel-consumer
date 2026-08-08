@@ -9,7 +9,8 @@ classes locally and gitignore the output, which distributes nothing.
 
 That distinction is the crux: generating patched classes on a developer's machine is just building.
 Publishing them to Maven Central is redistribution of a modified Apache Kafka, and the obligations only
-attach to the second.
+attach to the second. We intend to publish, so they attach - and only the patch files are version
+controlled, so the repository itself never carries Kafka source.
 
 ## Questions to answer
 
@@ -31,19 +32,29 @@ practice for a Maven artifact - per-file headers, a `NOTICE` entry, README text,
 a different obligation from the fork's existing Confluent-header rule in `AGENTS.md`, which is about our
 own upstream-derived sources, not about Kafka's.
 
-**Class shadowing.** The patched classes currently keep their original fully-qualified names, so they win
-on the classpath by ordering. That is fine for a build-time spike and hazardous for a published artifact:
-consumers get split packages and load-order-dependent behaviour, and cannot easily tell which
-`WorkerSinkTask` they are running. Options worth pricing:
+**Coexistence, not shadowing.** The distribution model is settled (user, 2026-08-08) and it is the same one
+the KS work will use: we publish a **fork of the patched Kafka module under our own coordinates**, as a
+drop-in replacement. Classes keep their original fully-qualified names on purpose - the patch depends on
+being the same class Kafka's own internals reference by name, so relocating or shading it is not available.
+Only the **patch files** are version-controlled; they are applied at build and publish time, and the
+generated sources and classes stay gitignored, exactly as `parallel-consumer-streams-spike` already does
+with `src/main/patch/pcspike.patch` and `bin/apply-patch.sh` / `bin/regen-patch.sh`.
 
-1. Shade and relocate the patched classes to our own package, so nothing shadows Kafka.
-2. Publish the *patch and the tooling* rather than patched bytecode, and apply it in the consumer's build.
-   Distributes no Kafka code at all - cleanest legally, worst usability.
-3. Publish patched classes under our own coordinate and document the classpath requirement loudly.
+This is well-precedented - shipping a modified Kafka derivative under your own coordinates is what several
+vendors do - and it removes the split-package hazard *provided consumers get exactly one of the two jars*.
+So the open work here is dependency hygiene, not classpath archaeology:
 
-Option 1 is the likely answer but needs checking against how the patch actually binds - `PcTaskDispatcher`
-and `pcspike.patch` will show whether relocation is even possible or whether the patch depends on being
-the same class Kafka's own internals reference by name.
+- Our published module must depend on our forked artifact and **exclude** the upstream one, and we should
+  document the exclusion for consumers who pull `org.apache.kafka` transitively by another route.
+- Consider a `bannedDependencies` enforcer rule so a build that ends up with both fails loudly instead of
+  resolving by classpath order. The root pom already uses `bannedDependencies` for log4j and javafaker, so
+  the mechanism is in place.
+- Fork only the modules actually patched. A patched `connect-runtime` still depends on stock `connect-api`
+  and `kafka-clients` from upstream, which keeps the republished surface small and the drift low.
+
+**Scope of the fork.** Decide whether each patched Kafka module is published as its own artifact (a
+`connect-runtime` fork for this work, a `kafka-streams` fork for the KS work) or whether they share one.
+Separate artifacts keep a consumer who only wants Connect from pulling a patched Streams.
 
 **Version coupling.** A published patched artifact is pinned to one Kafka version. Decide whether we
 publish per-Kafka-version artifacts, a version range, or a classifier - and how that interacts with the
