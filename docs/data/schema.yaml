@@ -18,6 +18,7 @@ kinds:
       - maturity
       - reliability_confidence
       - api_expectation
+      - evidence_id
       - use_this_if
   roadmap:
     required:
@@ -26,6 +27,7 @@ kinds:
       - themes
       - one_point_zero
       - update_policy
+      - v6_stability_exception
     theme_required:
       - id
       - order
@@ -36,8 +38,13 @@ kinds:
     required:
       - release
       - reader_contract
+      - release_claim
+      - v6_stability_exception
       - claim_boundaries
       - test_layers
+      - test_harness
+      - module_evidence
+      - quality_system
       - regression_controls
       - quarantine
       - investigation_records
@@ -46,6 +53,19 @@ kinds:
       - command
       - merge_gate
       - proves
+      - why_it_matters
+      - limitation
+      - inspect
+    module_evidence_required:
+      - id
+      - artifact
+      - coverage
+      - inspect
+      - limitation
+    quality_system_required:
+      - id
+      - detects
+      - posture
       - inspect
   feature:
     required:

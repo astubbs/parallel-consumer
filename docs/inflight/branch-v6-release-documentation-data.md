@@ -36,6 +36,24 @@ before a later pass treats it as complete:
   own evidence; they cannot borrow the stable-module conclusion. A thin area belongs in the open ledger,
   not behind softened wording.
 
+## v6 is the stability-release outlier
+
+The v6 position is now stronger and simpler than the initial plan language: **0.6.0.0 is cut only when
+all known defects in the release scope are gone**. This is a release gate, not a claim that an uncut
+branch has already achieved omniscience; unknown defects remain possible. The gate is intentionally
+not weakened by deferring virtual threads, micro-batching and a dead-letter queue, because those are
+new capabilities rather than defects to excuse.
+
+The 2026-08-09 PR-queue snapshot makes that claim concrete. The stability input includes the
+`confluentinc#857` rebalance-progress fix (astubbs#29), stale same-offset record safety (astubbs#31),
+transactional correctness (astubbs#257 and astubbs#261), and offset/lifecycle/operator fixes
+(astubbs#57, astubbs#116, astubbs#201, astubbs#203, astubbs#204 and astubbs#207). It also includes
+the work that makes a green test result worth trusting: no retry-hidden flakes (astubbs#224), honest
+commit assertions (astubbs#260), a transactional-claim register (astubbs#262), inactive-test
+remediation (astubbs#264), and causality-based test repairs (astubbs#265). The data records this as a
+release snapshot and says to reconcile it against the final merged queue before cutting v6; it does
+not turn the roadmap into an issue tracker.
+
 ## Data gaps found in review
 
 - **Module evidence:** `testing-evidence.yaml` says a module cannot borrow core-only confidence, but
@@ -90,6 +108,47 @@ shortcomings, not a claim that the data or later public material has landed.
 
 Research checks also confirmed that the four source plan files and the shared
 `release-0.6.0.0.md` entry are unchanged by this branch's data work. `git diff --check` is clean.
+
+## Research pass applied after the review
+
+The initial-review shortcomings above were used as a work list. The following is the corresponding
+evidence review, and the parts now represented in data rather than left as a promise:
+
+- **Harness architecture and why it is credible:** the deterministic core harness makes ordering,
+  commit and bounded-concurrency assertions observable without broker timing; `BrokerIntegrationTest`
+  and `KafkaClientUtils` supply a controlled real-Kafka path; CI runs that path in JVM forks so
+  broker contention is not mistaken for product behavior. `AmbientProbeExtension` records rebalance
+  dwell, stagnant lag and frozen commits in a failure autopsy. The seeded chaos harness adds the
+  alive-but-not-progressing failure class and a no-loss/bounded-duplicate ledger; mutation and soak
+  lanes have deliberately narrower, stated meanings. These facts now live in `testing-evidence.yaml`
+  with an inspect path and limitation for each, instead of only as a list of suite names.
+- **Per-module breadth, with its limits:** core has deterministic, real-broker and chaos evidence;
+  Vert.x has a real-Kafka/WireMock concurrency-and-drain test; Reactor and Mutiny have adapter unit
+  harnesses that exercise delayed completion, bounds and commits; examples exercise application
+  wiring, with real-broker Streams and metrics examples. Reactor and Mutiny do *not* currently have
+  adapter-specific real-broker suites, examples are not API guarantees, and the planned Streams and
+  Connect alphas still require release-time proof. `module-maturity.yaml` now references these exact
+  records, so core confidence cannot be silently borrowed.
+- **Quality is produced by more than a test layer:** test-convention architecture checks, required
+  unit/integration/performance lanes, quarantine audit, static/dependency analysis, PR-scoped
+  mutation and review-delivery verification are now structured quality-system records. Their gate
+  state and scope are recorded rather than implied; a non-gating green lane is not presented as
+  merge approval.
+- **Post-upstream defect → proof → guard:** the data now includes the drain-path zombie,
+  latest-reset nudge race, vacuous backpressure await and thread-parallel contamination cases, each
+  with the investigation or control arm and recurrence guard. The empty quarantine registry is
+  explicitly explained as enforced evidence, not an absence of process. The release-critical
+  `confluentinc#857` test and astubbs#29 resolution remain an explicit manual v6 falsifier.
+- **Feature coverage:** a planned v6 Mutiny feature record now exposes its Java 17 floor, async-Uni
+  contract, known evidence and first-release caveat. It is planned rather than retroactively marked
+  published because its implementation commit is not contained in any release tag. The feature set
+  is now 29 YAML records: 26 published and three planned.
+
+Remaining data work is deliberately kept visible: fill the missing first-release implementation
+commits for nine older published feature records, and verify stored README anchors against generated
+AsciiDoc IDs. The feature-data contract now defines `user-visible` and the future gate's burden for
+an N/A, but does not implement that gate. Renderer work, the public testing page and promotional copy
+remain downstream consumers of this data, not delivered by this branch.
 
 ## Downstream boundary
 

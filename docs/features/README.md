@@ -6,7 +6,9 @@ copyright: Copyright (C) 2026 Antony Stubbs and contributors
 # Feature documentation
 
 Each YAML file in this directory defines a user-visible capability: what it does, when to use it, how mature
-it is and which constraints matter. They are not changelog fragments. A release note tells a reader that
+it is and which constraints matter. Here, *user-visible* means a user can select an artifact, call a public API,
+set configuration, observe a supported operational surface, or rely on a documented processing behavior. A pure
+refactor, internal test change or bug fix that restores an existing contract is not a new feature record. They are not changelog fragments. A release note tells a reader that
 something changed; a feature definition remains useful whenever the documentation site needs to explain the
 capability.
 
@@ -16,7 +18,7 @@ the data, not that rendering.
 
 The first set maps every capability named in the README's `Features List`, then extends that seed with later
 user-visible capabilities found in the tagged release history: commit modes, retry and executor controls,
-PollContext, metrics, recovery policies and buffer configuration. It also includes the v6 alpha modules. The README
+PollContext, metrics, recovery policies and buffer configuration. It also includes the Mutiny integration and the v6 alpha modules. The README
 stays as the current presentation until the separate rendering work consumes these files.
 
 ## Page contract
@@ -42,4 +44,6 @@ fix or refactor—create one when a user gains a new API, configuration choice, 
 operational behavior.
 
 The pull-request checklist asks authors to add feature documentation data or state why it is not applicable.
-A refactor with no user-visible behavior can be N/A; a new option or consumable module normally cannot.
+A refactor with no user-visible behavior can be N/A; a new option, consumable module, supported processing
+behavior, metric or externally meaningful configuration normally cannot. The future gate must compare that
+decision with the changed public surface; an unchecked box or an unreasoned N/A is not sufficient evidence.

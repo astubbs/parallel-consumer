@@ -1105,33 +1105,37 @@ The other modules are unaffected, and using them does not pull Mutiny in.
 === Module maturity
 
 Maturity belongs to a module, not to one project-wide version number. Reliability and API stability are separate:
-the release checks the stable modules' known critical failure modes, while their public APIs remain pre-1.0. An
+0.6.0.0 ships only once every known defect in the stable-module release scope is resolved and evidenced, while their public APIs remain pre-1.0. An
 alpha artifact is a separate, explicit opt-in and cannot change an application that does not depend on it.
+
+This makes v6 a special stability release. Virtual threads, micro-batching and a dead-letter queue are intentionally
+deferred capabilities, not exceptions to the known-defect gate. The claim does not deny that unknown defects can exist;
+it says the known defect ledger is cleared before the release is cut.
 
 |===
 | Module | Status | Reliability confidence | API expectation | Use this if
 
 | `parallel-consumer-core`
 | Stable
-| Release-gated for known critical failure modes
+| Release-gated for all known defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | You need ordered concurrent Kafka consumption in a standard Java application.
 
 | `parallel-consumer-vertx`
 | Stable
-| Release-gated for known critical failure modes
+| Release-gated for all known defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | Your processing uses Vert.x asynchronous APIs.
 
 | `parallel-consumer-reactor`
 | Stable
-| Release-gated for known critical failure modes
+| Release-gated for all known defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | Your processing uses Project Reactor.
 
 | `parallel-consumer-mutiny`
 | Stable (Java 17)
-| Release-gated for known critical failure modes
+| Release-gated for all known defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | Your processing uses SmallRye Mutiny.
 

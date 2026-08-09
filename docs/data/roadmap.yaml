@@ -15,6 +15,17 @@ ownership:
   roadmap: Themes, order, rationale and the release-level definition of done.
   feature_data: User-facing capability details that can move a theme forward.
 date_policy: Do not add dates; order and rationale are the published commitment.
+v6_stability_exception:
+  role: >-
+    v6 is a special release-level reliability milestone: it clears the known-defect scope and makes the evidence for that
+    conclusion inspectable before API settlement at 1.0.
+  release_condition: 0.6.0.0 is cut only when every known defect is resolved; unknown defects remain possible and must not be denied.
+  evidence: testing-evidence.yaml#v6_stability_exception
+  intentionally_deferred_capabilities:
+    - Virtual threads
+    - Micro-batching
+    - Dead-letter queue
+  rationale_for_deferrals: These are new capabilities, not known-defect exceptions. Deferring them does not weaken the v6 defect-resolution gate.
 themes:
   - id: performance-and-processing-headroom
     order: 1
@@ -26,13 +37,18 @@ themes:
       - ../features/offset-map-acknowledgement.yaml
       - ../features/batch-processing.yaml
     advances_when: A measured bottleneck is removed or the applicable performance limit becomes clear and reproducible.
+    unblocks:
+      - Flexible processing and integrations can add concurrency without introducing an avoidable client-side bottleneck.
   - id: reliability-and-operating-confidence
     order: 2
     title: Reliability and operating confidence
     rationale: A client-side queue owns delivery-sensitive state, so it must make progress, preserve ordering and surface failures clearly.
-    current_direction: Continue fixing diagnosed failure modes and make the testing evidence easy to inspect.
+    current_direction: Clear every known defect for v6 and make the testing evidence easy to inspect.
     evidence: testing-evidence.yaml
     advances_when: A diagnosed failure mode gains a reproducible guard, or the release evidence becomes easier to audit.
+    unblocks:
+      - Adoption guidance can distinguish stable modules from experiments without asking users to take reliability on faith.
+      - API settlement can be evaluated as a compatibility decision rather than a substitute for defect work.
   - id: observability
     order: 3
     title: Observability
@@ -40,6 +56,8 @@ themes:
     current_direction: Improve the metrics and diagnostic surfaces that explain progress, buffering, failure and lifecycle state.
     evidence: ../features/micrometer-metrics.yaml
     advances_when: An operator can observe a previously opaque state or diagnose a real failure path with less guesswork.
+    unblocks:
+      - Reliability investigations can turn an operational symptom into a reproducible guard.
   - id: flexible-processing-and-integrations
     order: 4
     title: Flexible processing and integrations
@@ -50,6 +68,8 @@ themes:
       - ../features/kafka-connect-experimental.yaml
       - module-maturity.yaml
     advances_when: A supported processing model has explicit setup, evidence and boundaries; experiments remain isolated from stable modules.
+    unblocks:
+      - Adoption guidance can offer a suitable processing model without letting an alpha experiment redefine the stable core.
   - id: usability-and-documentation
     order: 5
     title: Usability and documentation
@@ -57,12 +77,16 @@ themes:
     current_direction: Keep feature documentation with the feature and make module maturity explicit.
     evidence: ../features/README.md
     advances_when: A user-visible capability has a conflict-free feature definition with setup and limits.
+    unblocks:
+      - API settlement and release claims can be evaluated against explicit, user-facing contracts rather than scattered prose.
   - id: api-settlement
     order: 6
     title: API settlement
     rationale: A stable public surface is the remaining reason not to call the stable modules 1.0.
     current_direction: Prefer clear, compatible APIs and reduce the refactoring needed to settle them.
     advances_when: A remaining public-surface decision is intentionally settled rather than merely left unchanged.
+    unblocks:
+      - The 1.0 API-stability milestone once reliability evidence and module boundaries already hold.
 one_point_zero:
   meaning: API stability milestone, not the point at which reliability begins.
   what_changes_for_users: Stable APIs stop moving by default; the reliability standard is already release-gated before 1.0.
@@ -73,7 +97,7 @@ one_point_zero:
     - id: public-api-settlement
       condition: Public APIs that users build against are intentionally settled.
     - id: reproducible-reliability-evidence
-      condition: Known critical reliability defects are addressed and their evidence remains reproducible.
+      condition: All known reliability defects are addressed and their evidence remains reproducible.
     - id: experimental-boundaries
       condition: Experimental modules are clearly labelled and do not borrow stable-module maturity.
     - id: adoption-guidance
@@ -83,4 +107,5 @@ update_policy:
   source_inputs:
     - Feature definition added or materially changed.
     - Release validation changes the supported module posture.
+    - A release-wide stability condition changes, including whether its all-known-defects gate held.
   rule: Do not copy individual issue state into this document; link readers to the issue tracker instead.
