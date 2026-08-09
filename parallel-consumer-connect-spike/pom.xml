@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-connect-spike</artifactId>
+    <name>Kafka Parallel Consumer - Kafka Connect Feasibility Spike (EXPERIMENTAL, LOCAL ONLY)</name>
+    <description>
+        DEVELOPMENT-ONLY FEASIBILITY HARNESS. NOT A CONNECT INTEGRATION OR DISTRIBUTABLE ARTIFACT.
+        Generates one patched Kafka Connect runtime class locally to prove classpath shadowing while its
+        bridge remains hard-disabled. It has no live Connect delivery or offset-commit path.
+    </description>
+
+    <properties>
+        <!-- Generated source stays outside target/generated-sources because the root build registers that
+             directory as an integration-test source root. A second compilation would make classpath order
+             accidental instead of proving that target/classes shadows the released jar. -->
+        <connect.patched.dir>${project.build.directory}/connect-patched</connect.patched.dir>
+        <connect.pristine.dir>${project.build.directory}/connect-pristine</connect.pristine.dir>
+        <connect.patched.classes>org/apache/kafka/connect/runtime/WorkerSinkTask.java</connect.patched.classes>
+        <connect.stock.classes.dir>${project.build.directory}/stock-empty-classes</connect.stock.classes.dir>
+        <connect.stock.reports.dir>${project.build.directory}/surefire-reports-worker-sink-stock</connect.stock.reports.dir>
+        <connect.patched.reports.dir>${project.build.directory}/surefire-reports-worker-sink-patched</connect.patched.reports.dir>
+
+        <!-- This module is a local feasibility harness, not an artifact users may consume. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-streams-spike</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>connect-runtime</artifactId>
+            <version>${kafka.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!-- Kafka publishes compiled Connect tests and client fixtures, but classifier dependencies are not
+             transitive. The regression arms scan this exact WorkerSinkTaskTest instead of copying its source. -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>connect-runtime</artifactId>
+            <version>${kafka.version}</version>
+            <classifier>test</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+            <classifier>test</classifier>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Unpack only the named source, twice. Every build starts from the released 3.9.2 source jar;
+                 the pristine tree exists solely so the shared regen-patch.sh can re-derive the tracked diff. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>unpack-connect-runtime-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>unpack</goal>
+                        </goals>
+                        <configuration>
+                            <overWriteReleases>true</overWriteReleases>
+                            <overWriteSnapshots>true</overWriteSnapshots>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.apache.kafka</groupId>
+                                    <artifactId>connect-runtime</artifactId>
+                                    <version>${kafka.version}</version>
+                                    <classifier>sources</classifier>
+                                    <type>jar</type>
+                                    <includes>${connect.patched.classes}</includes>
+                                    <outputDirectory>${connect.patched.dir}</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.apache.kafka</groupId>
+                                    <artifactId>connect-runtime</artifactId>
+                                    <version>${kafka.version}</version>
+                                    <classifier>sources</classifier>
+                                    <type>jar</type>
+                                    <includes>${connect.patched.classes}</includes>
+                                    <outputDirectory>${connect.pristine.dir}</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Reuse the parent Streams spike's dry-run-first patch implementation directly. process-sources
+                 is deliberately later than unpack's generate-sources phase; same-phase plugin order is unsafe
+                 because exec-maven-plugin is inherited before maven-dependency-plugin in the effective pom. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>apply-connect-runtime-patch</id>
+                        <phase>process-sources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>${maven.multiModuleProjectDirectory}/parallel-consumer-streams-spike/bin/apply-patch.sh</executable>
+                            <arguments>
+                                <argument>${connect.patched.dir}</argument>
+                                <argument>${project.basedir}/src/main/patch/pcconnect.patch</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>add-patched-connect-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${connect.patched.dir}</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- WorkerSinkTaskTest runs twice in separate, non-reused JVMs. The stock arm substitutes an
+                 intentionally empty main-classes directory; the patched arm puts target/classes first. A
+                 final explicitly selected test compares both XML report sets to the checked manifest. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/WorkerSinkTaskRegressionTest.java</exclude>
+                    </excludes>
+                    <systemPropertyVariables>
+                        <pc.connect.module.dir>${project.basedir}</pc.connect.module.dir>
+                        <pc.connect.apply.patch.script>${maven.multiModuleProjectDirectory}/parallel-consumer-streams-spike/bin/apply-patch.sh</pc.connect.apply.patch.script>
+                        <pc.connect.regen.patch.script>${maven.multiModuleProjectDirectory}/parallel-consumer-streams-spike/bin/regen-patch.sh</pc.connect.regen.patch.script>
+                        <pc.connect.pristine.dir>${connect.pristine.dir}</pc.connect.pristine.dir>
+                    </systemPropertyVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>worker-sink-task-stock</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <classesDirectory>${connect.stock.classes.dir}</classesDirectory>
+                            <dependenciesToScan>
+                                <dependency>org.apache.kafka:connect-runtime</dependency>
+                            </dependenciesToScan>
+                            <includes>
+                                <include>org/apache/kafka/connect/runtime/WorkerSinkTaskTest.java</include>
+                                <include>**/WorkerSinkTaskRegressionTest.java</include>
+                            </includes>
+                            <excludes combine.self="override"/>
+                            <reportsDirectory>${connect.stock.reports.dir}</reportsDirectory>
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <systemPropertyVariables combine.children="append">
+                                <pc.connect.regression.mode>stock</pc.connect.regression.mode>
+                            </systemPropertyVariables>
+                            <properties>
+                                <configurationParameters>
+                                    junit.jupiter.execution.parallel.enabled = false
+                                </configurationParameters>
+                            </properties>
+                            <groups combine.self="override"/>
+                            <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>worker-sink-task-patched-disabled</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                            <dependenciesToScan>
+                                <dependency>org.apache.kafka:connect-runtime</dependency>
+                            </dependenciesToScan>
+                            <includes>
+                                <include>org/apache/kafka/connect/runtime/WorkerSinkTaskTest.java</include>
+                                <include>**/WorkerSinkTaskRegressionTest.java</include>
+                            </includes>
+                            <excludes combine.self="override"/>
+                            <reportsDirectory>${connect.patched.reports.dir}</reportsDirectory>
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <systemPropertyVariables combine.children="append">
+                                <pc.connect.regression.mode>patched</pc.connect.regression.mode>
+                            </systemPropertyVariables>
+                            <properties>
+                                <configurationParameters>
+                                    junit.jupiter.execution.parallel.enabled = false
+                                </configurationParameters>
+                            </properties>
+                            <groups combine.self="override"/>
+                            <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>worker-sink-task-report-verifier</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/WorkerSinkTaskRegressionTest.java</include>
+                            </includes>
+                            <excludes combine.self="override"/>
+                            <reportsDirectory>${project.build.directory}/surefire-reports-worker-sink-verifier</reportsDirectory>
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <systemPropertyVariables combine.children="append">
+                                <pc.connect.regression.mode>verify</pc.connect.regression.mode>
+                                <pc.connect.stock.reports.dir>${connect.stock.reports.dir}</pc.connect.stock.reports.dir>
+                                <pc.connect.patched.reports.dir>${connect.patched.reports.dir}</pc.connect.patched.reports.dir>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

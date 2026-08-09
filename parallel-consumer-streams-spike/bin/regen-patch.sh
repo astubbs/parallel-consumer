@@ -31,16 +31,30 @@
 #
 #   bin/regen-patch.sh kafka-test-pristine kafka-test-patched src/main/patch/pcspike-testfixtures.patch
 #
-# The three arguments are all-or-nothing; with none, the main tree above is assumed.
+# The first three arguments are all-or-nothing; with none, the main tree above is assumed. A fourth
+# optional argument selects another module directory while keeping this one shared implementation.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-module_dir="$(dirname "$here")"
+default_module_dir="$(dirname "$here")"
 
 pristine_name="${1:-kafka-pristine}"
 patched_name="${2:-kafka-patched}"
 patch_rel="${3:-src/main/patch/pcspike.patch}"
+module_dir="${4:-$default_module_dir}"
+
+if [[ $# -ne 0 && $# -ne 3 && $# -ne 4 ]]; then
+    echo "usage: regen-patch.sh [<pristine-name> <patched-name> <patch-path> [<module-dir>]]" >&2
+    exit 2
+fi
+
+if [[ ! -d "$module_dir" ]]; then
+    echo "regen-patch: module directory does not exist: $module_dir" >&2
+    exit 1
+fi
+
+module_dir="$(cd "$module_dir" && pwd)"
 
 pristine="$module_dir/target/$pristine_name"
 patched="$module_dir/target/$patched_name"
@@ -49,7 +63,7 @@ patch_file="$module_dir/$patch_rel"
 for d in "$pristine" "$patched"; do
     if [[ ! -d "$d" ]]; then
         echo "regen-patch: missing $d" >&2
-        echo "regen-patch: run './mvnw -pl parallel-consumer-streams-spike generate-sources' first" >&2
+        echo "regen-patch: run the module's generate-sources phase first" >&2
         exit 1
     fi
 done
@@ -73,8 +87,11 @@ hunks_before=$(grep -c '^@@' "$patch_file" 2>/dev/null || true)
 
 # diff -ruN prefixes paths with the two directory names; strip them so the patch applies with -p1 from
 # inside the generated directory, which is what apply-patch.sh does.
+tab=$'\t'
 sed -e "s|^--- $pristine_name/|--- a/|" \
     -e "s|^+++ $patched_name/|+++ b/|" \
+    -e "s|^\(--- [^$tab]*\)$tab.*$|\1|" \
+    -e "s|^\(+++ [^$tab]*\)$tab.*$|\1|" \
     "$patch_file.tmp" >"$patch_file"
 rm -f "$patch_file.tmp"
 

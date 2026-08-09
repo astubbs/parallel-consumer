@@ -1,0 +1,19 @@
+diff -ruN connect-pristine/org/apache/kafka/connect/runtime/WorkerSinkTask.java connect-patched/org/apache/kafka/connect/runtime/WorkerSinkTask.java
+--- a/org/apache/kafka/connect/runtime/WorkerSinkTask.java
++++ b/org/apache/kafka/connect/runtime/WorkerSinkTask.java
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.connect.runtime;
+ 
++import io.confluent.parallelconsumer.connectspike.PcConnectDispatchBridge;
+ import org.apache.kafka.clients.consumer.Consumer;
+ import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
+ import org.apache.kafka.clients.consumer.ConsumerRecord;
+@@ -77,6 +78,7 @@
+  */
+ class WorkerSinkTask extends WorkerTask<ConsumerRecord<byte[], byte[]>, SinkRecord> {
+     private static final Logger log = LoggerFactory.getLogger(WorkerSinkTask.class);
++    private static final boolean PC_CONNECT_DISPATCH_ENABLED = PcConnectDispatchBridge.enabled();
+ 
+     private final WorkerConfig workerConfig;
+     private final SinkTask task;
