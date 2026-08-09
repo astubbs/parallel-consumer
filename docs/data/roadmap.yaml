@@ -1,0 +1,86 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: roadmap
+release: 0.6.0.0
+reader_contract:
+  answers: Where the project is going, why that order was chosen, and what remains before 1.0.
+  does_not_answer: Individual issue status, delivery dates or an external promise.
+strategy_context:
+  proposition: A client-side sub-broker that increases processing fan-out without a broker change or added partitions.
+  primary_user: Teams whose downstream scales beyond their Kafka partition count and still need per-key ordering.
+  decision_rule: Prioritize work that makes that client-side reliability, performance and visibility proposition credible.
+ownership:
+  issue_tracker: Live units of work, known defects and their status.
+  roadmap: Themes, order, rationale and the release-level definition of done.
+  feature_data: User-facing capability details that can move a theme forward.
+date_policy: Do not add dates; order and rationale are the published commitment.
+themes:
+  - id: performance-and-processing-headroom
+    order: 1
+    title: Performance and processing headroom
+    rationale: The client-side sub-broker proposition only pays off when it adds fan-out and lowers latency without becoming the bottleneck.
+    current_direction: Improve the queue, offset encoding and processing paths that set the practical concurrency ceiling.
+    evidence:
+      - ../features/client-side-work-queue.yaml
+      - ../features/offset-map-acknowledgement.yaml
+      - ../features/batch-processing.yaml
+    advances_when: A measured bottleneck is removed or the applicable performance limit becomes clear and reproducible.
+  - id: reliability-and-operating-confidence
+    order: 2
+    title: Reliability and operating confidence
+    rationale: A client-side queue owns delivery-sensitive state, so it must make progress, preserve ordering and surface failures clearly.
+    current_direction: Continue fixing diagnosed failure modes and make the testing evidence easy to inspect.
+    evidence: testing-evidence.yaml
+    advances_when: A diagnosed failure mode gains a reproducible guard, or the release evidence becomes easier to audit.
+  - id: observability
+    order: 3
+    title: Observability
+    rationale: Moving scheduling and offset state into the JVM makes ordinary broker tooling incomplete; operators need to see the client-side queue.
+    current_direction: Improve the metrics and diagnostic surfaces that explain progress, buffering, failure and lifecycle state.
+    evidence: ../features/micrometer-metrics.yaml
+    advances_when: An operator can observe a previously opaque state or diagnose a real failure path with less guesswork.
+  - id: flexible-processing-and-integrations
+    order: 4
+    title: Flexible processing and integrations
+    rationale: A client library can offer application-specific processing models that a broker must keep generic.
+    current_direction: Maintain the stable core, Vert.x, Reactor and Mutiny integrations while shipping Streams and Connect as opt-in alpha modules.
+    evidence:
+      - ../features/kafka-streams-experimental.yaml
+      - ../features/kafka-connect-experimental.yaml
+      - module-maturity.yaml
+    advances_when: A supported processing model has explicit setup, evidence and boundaries; experiments remain isolated from stable modules.
+  - id: usability-and-documentation
+    order: 5
+    title: Usability and documentation
+    rationale: A capability that cannot be discovered or used safely does not help an adopter.
+    current_direction: Keep feature documentation with the feature and make module maturity explicit.
+    evidence: ../features/README.md
+    advances_when: A user-visible capability has a conflict-free feature definition with setup and limits.
+  - id: api-settlement
+    order: 6
+    title: API settlement
+    rationale: A stable public surface is the remaining reason not to call the stable modules 1.0.
+    current_direction: Prefer clear, compatible APIs and reduce the refactoring needed to settle them.
+    advances_when: A remaining public-surface decision is intentionally settled rather than merely left unchanged.
+one_point_zero:
+  meaning: API stability milestone, not the point at which reliability begins.
+  what_changes_for_users: Stable APIs stop moving by default; the reliability standard is already release-gated before 1.0.
+  not_exit_criteria:
+    - A deadline.
+    - The absence of every backlog item.
+  exit_criteria:
+    - id: public-api-settlement
+      condition: Public APIs that users build against are intentionally settled.
+    - id: reproducible-reliability-evidence
+      condition: Known critical reliability defects are addressed and their evidence remains reproducible.
+    - id: experimental-boundaries
+      condition: Experimental modules are clearly labelled and do not borrow stable-module maturity.
+    - id: adoption-guidance
+      condition: Documentation identifies each module's intended use and support posture.
+update_policy:
+  trigger: A release changes a theme's status or ordering.
+  source_inputs:
+    - Feature definition added or materially changed.
+    - Release validation changes the supported module posture.
+  rule: Do not copy individual issue state into this document; link readers to the issue tracker instead.

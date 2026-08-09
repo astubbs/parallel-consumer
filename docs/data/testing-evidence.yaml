@@ -1,0 +1,109 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: testing-evidence
+release: 0.6.0.0
+reader_contract:
+  audience: Skeptical technical evaluator who needs to verify claims quickly.
+  presentation_rule: A renderer should preserve the inspection path beside every claim and optimize for scanning.
+release_claim: Known critical failure modes are fixed before release, with inspectable evidence in this repository.
+claim_boundaries:
+  - The data records known failure modes and their controls; it does not claim that unknown defects cannot exist.
+  - A passing test does not replace diagnosis, a control arm or investigation evidence for a concurrency fix.
+  - An experimental module must supply its own evidence and does not inherit the stable-module claim.
+test_layers:
+  - id: unit
+    proves: Deterministic behavior in isolation, including offset encoding, foreign metadata handling and commit decisions.
+    command: bin/ci-unit-test.sh
+    merge_gate: true
+    inspect:
+      - path: parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/offsets/WorkManagerOffsetMapCodecManagerTest.java
+        demonstrates: Offset-map encoding and decoding behavior.
+  - id: broker-integration
+    proves: Consumer-group progress, rebalances, transactions and real Kafka behavior.
+    command: bin/ci-integration-test.sh
+    merge_gate: true
+    inspect:
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/RebalanceEoSDeadlockTest.java
+        demonstrates: Rebalance and exactly-once coordination under a real broker.
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/state/PartitionStateCommittedOffsetIT.java
+        demonstrates: Committed-offset behavior across reset strategies.
+  - id: performance
+    proves: Behavior under sustained concurrent processing.
+    command: bin/performance-test.sh
+    merge_gate: true
+    inspect:
+      - path: bin/performance-test.sh
+        demonstrates: Performance-tagged tests run with their tags explicitly selected.
+  - id: mutation
+    proves: Tests detect meaningful changes to the code they cover.
+    command: bin/ci-mutation-test.sh
+    merge_gate: false
+    status: advisory PR-scoped evidence
+    inspect:
+      - path: .github/workflows/maven.yml
+        demonstrates: The PR-scoped Mutation Tests job is advisory and never gates merge.
+  - id: chaos
+    proves: Rebalance, revocation and stalled-progress behavior under calibrated disruption.
+    command: bin/chaos-test.sh
+    merge_gate: false
+    inspect:
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosChurnStormIT.java
+        demonstrates: Calibrated churn under real broker disruption.
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosRevokeUnderWorkIT.java
+        demonstrates: Revocation while work is active and stalled-progress detection.
+  - id: soak
+    proves: Long-running behavior outside the merge gate.
+    command: bin/soak-test.sh
+    merge_gate: false
+    inspect:
+      - path: bin/soak-test.sh
+        demonstrates: Failure-rate measurement under deliberately constrained CPU, with per-run logs.
+module_breadth:
+  stable_modules:
+    - parallel-consumer-core
+    - parallel-consumer-vertx
+    - parallel-consumer-reactor
+    - parallel-consumer-mutiny
+  rule: A module's maturity claim must link to evidence for that module rather than borrowing core-only coverage.
+regression_controls:
+  diagnosis_first:
+    rule: A failing test is not weakened, retried or serialized just to pass before its cause is established.
+    evidence: AGENTS.md#testing
+  negative_control:
+    rule: Where practical, a regression test must fail without its fix.
+    examples:
+      - investigation: ../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md
+        control: The old single-nudge pattern fails deterministically; LatestResetTailNudgeIT passes with the shared helper.
+      - investigation: ../solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md
+        control: Synchronizing record arrival makes the old vacuous await fail deterministically before the test is rewritten.
+  ambient_probe:
+    rule: Broker-test failures include an ambient-probe autopsy to distinguish shared-broker contention from lost progress.
+    inspect: AGENTS.md#testing
+investigation_records:
+  - defect: Drain-path zombie and busy-spin under contention.
+    proof: A real drain-path defect was isolated while investigating a flaky integration test; no timeout was loosened.
+    recurrence_guard: BrokerPollSystemDrainTest and the documented diagnosis.
+    source: ../solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
+  - defect: Latest-offset-reset nudge race in the integration harness.
+    proof: The old control arm fails deterministically when reset position is established after its only nudge.
+    recurrence_guard: LatestResetTailNudgeIT and BrokerIntegrationTest.awaitWithTopicNudge.
+    source: ../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md
+  - defect: Vacuous backpressure await condition.
+    proof: Arrival synchronization proves the original condition was unsatisfiable after work arrived.
+    recurrence_guard: A rewritten steady-state assertion with named 150/50 bounds.
+    source: ../solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md
+quarantine:
+  registry: ../QUARANTINED_TESTS.md
+  requires_diagnosis: true
+  requires_open_owning_fix: true
+  non_empty_blocks_release: true
+  current_status: Empty; the registry says both astubbs#80-family quarantines were re-enabled when their fix landed.
+  verification:
+    - bin/check-quarantine-registry.sh
+    - bin/check-quarantine-owners.sh
+  meaning: An empty enforced registry is stronger evidence than no quarantine mechanism; it shows the release is not silently excluding known failures.
+transparency:
+  solved: ../solutions/
+  open: ../inflight/
+  rule: Surface a thin or unresolved area as open work instead of weakening a claim to make it sound complete.

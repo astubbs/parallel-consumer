@@ -1,0 +1,44 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Kafka Streams experimental module
+category: integration
+module: parallel-consumer-streams-spike
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - This alpha artifact ships in 0.6.0.0 as directed; the final built artifact must confirm the dependency boundary.
+summary: >-
+  An alpha experiment for running a Kafka Streams processor chain using Parallel Consumer's work manager and
+  worker pool.
+use_this_when:
+  - You already use Kafka Streams and want to evaluate this experimental execution seam.
+  - You can validate topology, recovery behavior and the experiment's stated limitations in your own environment.
+setup:
+  maven:
+    group_id: bz.stub.parallelconsumer
+    artifact_id: parallel-consumer-streams-spike
+    version: 0.6.0.0
+  dispatch:
+    default: enabled when the artifact is present
+    comparison_switch: -Dpc.streams.spike.dispatch.enabled=false
+    comparison_result: Restores stock Kafka Streams dispatch for an A/B control arm.
+opt_in:
+  mechanism: Add the parallel-consumer-streams-spike artifact.
+  isolated_from_stable_modules: true
+  explanation: A Parallel Consumer application without this artifact cannot load its patched Kafka Streams classes.
+boundaries:
+  - The stable-module release claim does not apply to this alpha module.
+  - Its API and behavior can change.
+  - Keep a stock Kafka Streams path available while evaluating it.
+  - The experiment is not a throughput claim; evaluate correctness and recovery for the topology you run.
+  - Caching, punctuators, stream-stream joins and windowed operators have experiment-specific limits and must not be treated as stable support.
+validation:
+  - Verify the intended module artifact is the only opt-in; stable Parallel Consumer artifacts must not depend on it.
+  - Exercise the same topology with the comparison switch before relying on results from the experimental dispatch path.
+references:
+  - label: Kafka Streams experimental-module tracking
+    url: https://github.com/astubbs/parallel-consumer/issues/255

@@ -1,0 +1,33 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Custom retry delays
+category: operability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.3.2.0
+  evidence:
+    tag: 0.3.2.0
+    commit: 546216219d40a6afd35835baf4b7ee172168782f
+    path: CHANGELOG.adoc
+    basis: Added a custom retry-delay provider for failed records.
+summary: Calculate a retry delay from each record's context instead of using one fixed delay for every failure.
+use_this_when:
+  - A downstream error has a known backoff or rate-limit policy.
+  - Retry timing should depend on the record's failure count or other record context.
+setup:
+  option: ParallelConsumerOptions.retryDelayProvider
+  input: RecordContext
+  output: java.time.Duration
+opt_in:
+  mechanism: Supply retryDelayProvider when building ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - The returned duration is a retry target, not an exact scheduling guarantee.
+  - A provider supersedes defaultMessageRetryDelay, so keeping both can hide which policy is active.
+references:
+  - label: Retry-delay option
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java

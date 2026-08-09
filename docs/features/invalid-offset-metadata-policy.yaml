@@ -1,0 +1,34 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Recognized offset-metadata policy
+category: reliability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.5.2.6
+  evidence:
+    tag: 0.5.2.6
+    commit: 8417498c46944acfcb18ba5ad2992b22011d6c88
+    path: CHANGELOG.adoc
+    basis: Added an error policy for recognized non-Parallel-Consumer offset metadata on assignment.
+summary: Choose whether recognizable Kafka Streams offset metadata encountered for a reused group fails startup or is logged and ignored.
+use_this_when:
+  - A consumer group might previously have been used by Kafka Streams.
+  - Operations need an explicit policy instead of discovering incompatible offset metadata during assignment.
+setup:
+  option: ParallelConsumerOptions.invalidOffsetMetadataPolicy
+  values:
+    - FAIL is the default and stops the application.
+    - IGNORE logs a warning and resumes from the committed offset.
+opt_in:
+  mechanism: Set InvalidOffsetMetadataHandlingPolicy when building ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - The policy applies to metadata Parallel Consumer recognizes as Kafka Streams metadata.
+  - Unrecognizable metadata follows the library's recovery path and is not made fatal by this option.
+references:
+  - label: Offset-metadata policy
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java

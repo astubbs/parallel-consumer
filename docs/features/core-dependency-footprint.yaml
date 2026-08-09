@@ -1,0 +1,33 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Core dependency footprint
+category: compatibility
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: First tagged release to state the core's minimal dependency footprint.
+readme_anchor: features-list
+summary: Keep the core module focused on the Kafka client and its direct support dependencies rather than requiring an async framework.
+use_this_when:
+  - You need the core processor without adopting Vert.x, Reactor or Mutiny.
+  - Dependency surface is an operational or supply-chain concern for your application.
+setup:
+  maven:
+    group_id: bz.stub.parallelconsumer
+    artifact_id: parallel-consumer-core
+opt_in:
+  mechanism: Depend on the core artifact only.
+  isolated_from_stable_modules: true
+boundaries:
+  - This is not a promise of zero transitive dependencies; inspect the published POM for the exact release you use.
+  - Adding an integration artifact intentionally adds that integration's dependency surface.
+references:
+  - label: Core module POM
+    path: parallel-consumer-core/pom.xml

@@ -258,6 +258,9 @@ We can break out as described below into the tool for processing that step, then
 
 == Features List
 
+Renderer-ready source data for every capability in this list lives in link:docs/features/[`docs/features/`].
+This README remains the current presentation until the separate documentation-site work renders that data.
+
 * Have massively parallel consumption processing without running hundreds or thousands of:
 ** Kafka consumer clients,
 ** topic partitions,
@@ -1307,11 +1310,11 @@ The original {base_confluent_url}[confluentinc/parallel-consumer] is no longer a
 
 For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
 
-For what is planned, in progress, or known-broken, the {issues_link}[issue tracker on this repository]
-is the single place to look. We mirrored every open issue from the upstream tracker into it (all 78 of
-them, labelled `upstream-mirror` and titled `confluentinc#NNN: ...`), so an upstream report you are
-following has a counterpart here that reflects its real status on this fork. Please raise new issues
-here rather than upstream - see <<Support and Issues>>.
+For the direction of the project, see link:docs/data/roadmap.yaml[the roadmap data]. For work in progress and
+known defects, use the {issues_link}[issue tracker on this repository]. We mirrored every open issue from
+the upstream tracker into it (all 78 of them, labelled `upstream-mirror` and titled
+`confluentinc#NNN: ...`), so an upstream report you are following has a counterpart here that reflects its
+real status on this fork. Please raise new issues here rather than upstream - see <<Support and Issues>>.
 
 == Usage Requirements
 
@@ -1347,11 +1350,75 @@ Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny 
 
 | `parallel-consumer-mutiny`
 | 17
+
+| `parallel-consumer-streams-spike`
+| 8
+
+| `parallel-consumer-connect`
+| 8
 |===
 
 WARNING: Adding `parallel-consumer-mutiny` to a Java 8 or Java 11 application will build without complaint and then fail at runtime with an `UnsupportedClassVersionError`, because its SmallRye Mutiny dependency is compiled for Java 17.
 Maven cannot warn you about this, so check the table before picking the module.
 The other modules are unaffected, and using them does not pull Mutiny in.
+
+=== Module maturity
+
+Maturity belongs to a module, not to one project-wide version number. Reliability and API stability are separate:
+the release checks the stable modules' known critical failure modes, while their public APIs remain pre-1.0. An
+alpha artifact is a separate, explicit opt-in and cannot change an application that does not depend on it.
+
+|===
+| Module | Status | Reliability confidence | API expectation | Use this if
+
+| `parallel-consumer-core`
+| Stable
+| Release-gated for known critical failure modes
+| Pre-1.0; compatible change is preferred, not guaranteed
+| You need ordered concurrent Kafka consumption in a standard Java application.
+
+| `parallel-consumer-vertx`
+| Stable
+| Release-gated for known critical failure modes
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Vert.x asynchronous APIs.
+
+| `parallel-consumer-reactor`
+| Stable
+| Release-gated for known critical failure modes
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Project Reactor.
+
+| `parallel-consumer-mutiny`
+| Stable (Java 17)
+| Release-gated for known critical failure modes
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses SmallRye Mutiny.
+
+| `parallel-consumer-examples`
+| Reference examples
+| Exercises supported use cases; not a runtime dependency
+| Changes with the APIs it demonstrates
+| You want runnable examples before choosing an integration module.
+
+| `parallel-consumer-streams-spike`
+| Alpha / experimental
+| Module-specific evidence only; does not inherit stable confidence
+| Volatile while the experiment is evaluated
+| You want to evaluate the Kafka Streams integration and can tolerate changing behaviour and APIs.
+
+| `parallel-consumer-connect`
+| Alpha / experimental
+| Module-specific evidence only; does not inherit stable confidence
+| Volatile while the experiment is evaluated
+| You want to evaluate running supported Kafka Connect sink tasks in-process.
+|===
+
+The experimental artifacts are opt-in leaves. Read link:docs/features/kafka-streams-experimental.yaml[the
+Kafka Streams feature data] or link:docs/features/kafka-connect-experimental.yaml[the Kafka Connect feature
+data] before depending on either one. For the reliability evidence and release-time limits behind the stable
+module claim, see link:docs/data/testing-evidence.yaml[the testing evidence data] and
+link:docs/data/module-maturity.yaml[the module-maturity data].
 
 == Development Information
 
@@ -1652,5 +1719,3 @@ https://www.google.com/url?q=https://www.yourkit.com/.net/profiler/&source=gmail
 == Change Log
 
 Release notes for every version live in link:CHANGELOG.adoc[CHANGELOG.adoc].
-
-

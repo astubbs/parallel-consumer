@@ -1,0 +1,36 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Producer-send and synchronous-commit timeouts
+category: operability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.4.0.1
+  evidence:
+    tag: 0.4.0.1
+    commit: 9c2c55c54a0fb9b3e9570d1ef7c7f63e9128bdfa
+    path: CHANGELOG.adoc
+    basis: Added a timeout for blocking producer sends; the same release added the synchronous commit timeout.
+  milestones:
+    - release: 0.4.0.1
+      commit: 4b10eb4d87f3d530205fece608441e36a23cb1fd
+      basis: Added offsetCommitTimeout for periodic synchronous commits.
+summary: Bound how long a produce flow waits for Kafka send completion and how long synchronous commit mode waits for an offset commit.
+use_this_when:
+  - A blocked Kafka operation must fail or retry within the application's latency budget.
+setup:
+  options:
+    - ParallelConsumerOptions.sendTimeout for producer send completion.
+    - ParallelConsumerOptions.offsetCommitTimeout for PERIODIC_CONSUMER_SYNC.
+opt_in:
+  mechanism: Set the relevant Duration on ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - A send timeout causes the input record to be reprocessed, so align it with producer delivery settings and idempotency needs.
+  - offsetCommitTimeout applies only to synchronous consumer commit mode.
+references:
+  - label: Timeout options
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java

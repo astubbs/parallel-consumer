@@ -1,0 +1,89 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: documentation-data-schema
+consumer_contract:
+  source_of_truth: These files are hand-maintained release-documentation data, not site-renderer output.
+  renderer_rule: A renderer may choose presentation but must not strengthen a claim or omit a stated boundary.
+  release_rule: Release-scoped claims are conditional until the release-validation data says their evidence holds.
+kinds:
+  module-maturity:
+    required:
+      - release
+      - axes
+      - release_validation
+      - modules
+    module_required:
+      - artifact
+      - maturity
+      - reliability_confidence
+      - api_expectation
+      - use_this_if
+  roadmap:
+    required:
+      - release
+      - reader_contract
+      - themes
+      - one_point_zero
+      - update_policy
+    theme_required:
+      - id
+      - order
+      - title
+      - rationale
+      - current_direction
+  testing-evidence:
+    required:
+      - release
+      - reader_contract
+      - claim_boundaries
+      - test_layers
+      - regression_controls
+      - quarantine
+      - investigation_records
+    test_layer_required:
+      - id
+      - command
+      - merge_gate
+      - proves
+      - inspect
+  feature:
+    required:
+      - title
+      - category
+      - module
+      - maturity
+      - availability
+      - summary
+      - use_this_when
+      - setup
+      - opt_in
+      - boundaries
+    optional:
+      - references
+      - validation
+      - release_assumptions
+    availability:
+      published:
+        required:
+          - status
+          - since
+          - evidence
+        evidence_required:
+          - tag
+          - path
+          - basis
+        evidence_optional:
+          - commit
+        optional:
+          - documented_since
+          - milestones
+        milestone_required:
+          - release
+          - basis
+        milestone_optional:
+          - commit
+      planned:
+        required:
+          - status
+          - target_release

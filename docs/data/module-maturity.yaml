@@ -1,0 +1,80 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: module-maturity
+release: 0.6.0.0
+reader_contract:
+  question: Can I rely on this module in production, and can I safely compile against it long term?
+  answer_shape: Reliability confidence and API stability are independent fields; project version alone answers neither.
+axes:
+  reliability:
+    claim: Stable modules do not ship until known critical failure modes are addressed and evidenced.
+    scope: Stable modules only; an alpha module never borrows this claim.
+    evidence: testing-evidence.yaml
+    does_not_claim: That no unknown defect exists.
+  api_stability:
+    claim: Stable-module APIs remain pre-1.0 and can change before 1.0.
+    does_not_mean: The stable modules are unreliable or experimental.
+release_validation:
+  automated:
+    - Release workflow verifies the current master CI run succeeded.
+    - Release workflow blocks when the quarantine registry is non-empty.
+  manual:
+    - Review known critical defects and their reproducible evidence before cutting the release.
+    - Verify each alpha module's artifact boundary and user-facing setup against the built release artifact.
+  on_failure: Do not cut the release; amend this data and the README to match the actual release posture.
+modules:
+  - artifact: parallel-consumer-core
+    maturity: stable
+    minimum_java: 8
+    reliability_confidence: release-gated stable module
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    use_this_if: You need ordered concurrent Kafka consumption in a standard Java application.
+  - artifact: parallel-consumer-vertx
+    maturity: stable
+    minimum_java: 8
+    reliability_confidence: release-gated stable module
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    use_this_if: Your processing uses Vert.x asynchronous APIs.
+  - artifact: parallel-consumer-reactor
+    maturity: stable
+    minimum_java: 8
+    reliability_confidence: release-gated stable module
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    use_this_if: Your processing uses Project Reactor.
+  - artifact: parallel-consumer-mutiny
+    maturity: stable
+    minimum_java: 17
+    reliability_confidence: release-gated stable module
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    use_this_if: Your processing uses SmallRye Mutiny.
+  - artifact: parallel-consumer-examples
+    maturity: reference examples
+    reliability_confidence: Exercises supported module use cases; it is not a runtime library dependency.
+    api_expectation: Examples change with the APIs they demonstrate.
+    support_posture: Use as starting points, not as a compatibility surface.
+    use_this_if: You want runnable examples before choosing a stable integration module.
+  - artifact: parallel-consumer-streams-spike
+    maturity: alpha
+    minimum_java: 8
+    reliability_confidence: Experimental; module-specific evidence is required and does not inherit stable confidence.
+    api_expectation: Volatile while the experiment is evaluated.
+    support_posture: Evaluation and field feedback only; retain a stock Kafka Streams path.
+    opt_in: artifact dependency
+    isolated_from_stable_modules: true
+    feature: ../features/kafka-streams-experimental.yaml
+    use_this_if: You want to evaluate the Kafka Streams integration and can tolerate changing behavior and APIs.
+  - artifact: parallel-consumer-connect
+    maturity: alpha
+    minimum_java: 8
+    reliability_confidence: Experimental; module-specific evidence is required and does not inherit stable confidence.
+    api_expectation: Volatile while the experiment is evaluated.
+    support_posture: Evaluation and field feedback only; retain the conventional Connect deployment path.
+    opt_in: artifact dependency
+    isolated_from_stable_modules: true
+    feature: ../features/kafka-connect-experimental.yaml
+    use_this_if: You want to evaluate running supported Kafka Connect sink tasks in-process.

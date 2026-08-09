@@ -1,0 +1,40 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Backpressure and broker liveness management
+category: operability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: First tagged release to describe throttle control and broker-liveness management.
+  milestones:
+    - release: 0.3.0.0
+      basis: Self-tuning queue loading and offset-payload backpressure replaced the original fixed queue controls.
+readme_anchor: ordering-guarantees
+summary: Pause subscribed partitions when internal work reaches its configured limit while keeping consumer-group liveness under control.
+use_this_when:
+  - Processing is slower than input and memory must remain bounded.
+  - Partition-order workloads need buffer and Kafka fetch tuning to avoid starving worker threads.
+setup:
+  tune:
+    - ParallelConsumerOptions.messageBufferSize or the load-factor options.
+    - Kafka consumer max.partition.fetch.bytes together with the Parallel Consumer buffer.
+  observe:
+    - pc.partitions.paused
+    - pc.inflight.records
+    - pc.waiting.records
+opt_in:
+  mechanism: Automatic when buffered work reaches the configured throttle threshold.
+  isolated_from_stable_modules: false
+boundaries:
+  - A larger buffer can hide uneven partition traffic but also increases retained work and recovery exposure.
+  - messageBufferSize switches load-factor behavior to a static value; do not treat it as a harmless cosmetic limit.
+references:
+  - label: Partition-order tuning guidance
+    path: README.adoc#ordering-guarantees
