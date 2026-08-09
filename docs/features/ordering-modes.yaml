@@ -11,8 +11,9 @@ availability:
   since: 0.1.0
   evidence:
     tag: 0.1.0
+    commit: 713c7468d5ecda55a2190d38e698cda017e91259
     path: README.adoc
-    basis: First tagged release to list partition, key and unordered processing.
+    basis: The initial repository baseline and first tagged release contain partition, key and unordered processing.
   milestones:
     - release: 0.3.0.0
       basis: KEY became the default ordering mode, replacing UNORDERED.

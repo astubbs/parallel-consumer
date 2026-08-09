@@ -12,8 +12,9 @@ availability:
   documented_since: 0.2.0.0
   evidence:
     tag: 0.1.0
+    commit: 713c7468d5ecda55a2190d38e698cda017e91259
     path: pom.xml
-    basis: The first release targets Java 8 bytecode; the README first named Java 8 compatibility in 0.2.0.0.
+    basis: The initial repository baseline and first release target Java 8 bytecode; the README first named Java 8 compatibility in 0.2.0.0.
   milestones:
     - release: 0.3.0.2
       basis: GitHub CI began exercising the Java 8 build.

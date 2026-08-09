@@ -37,11 +37,16 @@ do not stamp an existing capability with the current release. The renderer-indep
 ## Availability provenance
 
 The release history, not the README, establishes `since`. Use the first released tag containing the implementation
-commit, and record that tag, the commit where it can be identified and a concise evidence basis. A capability can
+commit, and record that tag, the commit and a concise evidence basis. If a feature predates retained history, use the
+initial repository baseline commit and say that explicitly rather than inventing a later introduction. A capability can
 carry later `milestones` when a release materially expanded it; for example, basic throttling existed in `0.1.0`,
 while the adaptive queue and offset-payload controls landed in `0.3.0.0`. Do not create a feature page for every bug
 fix or refactor—create one when a user gains a new API, configuration choice, observable surface or supported
 operational behavior.
+
+When a record uses `readme_anchor` or a `README.adoc#...` reference, name an explicit anchor in
+`src/docs/README_TEMPLATE.adoc`; do not rely on a renderer's generated section-ID convention. This makes the
+data's navigation stable across the current README and future rendering.
 
 The pull-request checklist asks authors to add feature documentation data or state why it is not applicable.
 A refactor with no user-visible behavior can be N/A; a new option, consumable module, supported processing

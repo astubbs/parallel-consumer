@@ -132,6 +132,7 @@ image::{talk_preview_image}[Talk]
 
 toc::[]
 
+[[motivation]]
 == Motivation
 
 === Why would I need this?
@@ -256,6 +257,7 @@ The end-to-end latency of the responses to these answers needs to be as low as t
 We can break out as described below into the tool for processing that step, then return to the Kafka Streams context.
 * Provisioning extra machines (either virtual machines or real machines) to run multiple clients has a cost, using this library instead avoids the need for extra instances to be deployed in any respect.
 
+[[features-list]]
 == Features List
 
 Renderer-ready source data for every capability in this list lives in link:docs/features/[`docs/features/`].
@@ -889,6 +891,7 @@ This will put the message back in the queue.
         });
 ----
 
+[[head-of-line-blocking]]
 === Head of Line Blocking
 
 In order to have a failing record not block progress of a partition, one of the ordering modes other than `PARTITION` must be used, so that the system is allowed to process other messages that are perhaps in `KEY` order or in the case of `UNORDERED` processing - any message.

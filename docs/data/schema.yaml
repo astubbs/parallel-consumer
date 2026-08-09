@@ -91,10 +91,9 @@ kinds:
           - evidence
         evidence_required:
           - tag
+          - commit
           - path
           - basis
-        evidence_optional:
-          - commit
         optional:
           - documented_since
           - milestones

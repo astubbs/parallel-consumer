@@ -34,4 +34,4 @@ boundaries:
   - Completion tracking preserves Kafka delivery semantics; external side effects still need their own idempotency design.
 references:
   - label: Offset-map architecture
-    path: README.adoc#offset-map
+    path: README.adoc#offset_map

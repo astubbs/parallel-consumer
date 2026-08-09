@@ -11,8 +11,9 @@ availability:
   since: 0.1.0
   evidence:
     tag: 0.1.0
+    commit: 713c7468d5ecda55a2190d38e698cda017e91259
     path: README.adoc
-    basis: First tagged release to describe the client-side queue on top of the Kafka consumer.
+    basis: The initial repository baseline and first tagged release contain the client-side queue on top of the Kafka consumer.
 readme_anchor: features-list
 summary: Hold fetched records as bounded client-side work, then dispatch them according to the selected ordering mode and available processing capacity.
 use_this_when:

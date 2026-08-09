@@ -11,8 +11,9 @@ availability:
   since: 0.1.0
   evidence:
     tag: 0.1.0
+    commit: 713c7468d5ecda55a2190d38e698cda017e91259
     path: README.adoc
-    basis: First tagged release to state the core's minimal dependency footprint.
+    basis: The initial repository baseline and first tagged release state the core's minimal dependency footprint.
 readme_anchor: features-list
 summary: Keep the core module focused on the Kafka client and its direct support dependencies rather than requiring an async framework.
 use_this_when:

@@ -11,8 +11,9 @@ availability:
   since: 0.1.0
   evidence:
     tag: 0.1.0
+    commit: 713c7468d5ecda55a2190d38e698cda017e91259
     path: README.adoc
-    basis: First tagged release to describe the clean draining shutdown cycle.
+    basis: The initial repository baseline and first tagged release contain the drain and non-drain shutdown contract.
 readme_anchor: shutdown
 summary: Choose whether shutdown finishes downloaded backlog or returns unstarted records for redelivery.
 use_this_when:

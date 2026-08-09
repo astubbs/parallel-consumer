@@ -144,11 +144,13 @@ evidence review, and the parts now represented in data rather than left as a pro
   published because its implementation commit is not contained in any release tag. The feature set
   is now 29 YAML records: 26 published and three planned.
 
-Remaining data work is deliberately kept visible: fill the missing first-release implementation
-commits for nine older published feature records, and verify stored README anchors against generated
-AsciiDoc IDs. The feature-data contract now defines `user-visible` and the future gate's burden for
-an N/A, but does not implement that gate. Renderer work, the public testing page and promotional copy
-remain downstream consumers of this data, not delivered by this branch.
+The provenance and navigation gaps are now closed: the nine older published feature records cite the
+initial repository baseline commit because each feature predates the retained path-level history;
+stored README anchors are explicit in the template (and the offset-map reference uses its existing
+`offset_map` ID), rather than relying on generated AsciiDoc-ID conventions. The feature-data contract
+now defines `user-visible` and the future gate's burden for an N/A, but does not implement that gate.
+Renderer work, the public testing page and promotional copy remain downstream consumers of this data,
+not delivered by this branch.
 
 ## Downstream boundary
 
