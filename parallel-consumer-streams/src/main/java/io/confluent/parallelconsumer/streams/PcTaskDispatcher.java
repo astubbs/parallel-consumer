@@ -317,6 +317,12 @@ public class PcTaskDispatcher implements Closeable {
      * <p>Identity-keyed because {@link WorkContainer} is compared by topic-partition and offset, and two
      * containers for the same offset across an assignment epoch would collide on a value map.
      *
+     * <p><b>It is not bounded at {@link #poolSize}, so do not "optimise" it into a fixed-size array.</b> A
+     * worker decrements {@link #inFlight} after queueing its outcome but before the StreamThread's drain
+     * removes the entry, so a pump can be authorised to dispatch against a slot whose predecessor's hold is
+     * still registered - roughly {@code 2 * poolSize} entries at worst, between drains. Harmless for the
+     * mark, because a lingering entry is a real timestamp held slightly longer, which errs low.
+     *
      * <p><b>The hold is registered before the record is released and cleared after its effects are
      * visible</b>, so there is no instant at which a dispatched record is neither in flight here nor folded
      * back into PC. The entry goes in before {@code workerPool.execute}, and comes out in the drain - which
@@ -551,6 +557,7 @@ public class PcTaskDispatcher implements Closeable {
         // its whole key for ~poll.ms. Stock consumes such records inline, so this loop restores parity.
         // Terminates: every iteration either consumes at least one record from a finite backlog or exits.
         int consumed = 0;
+        int dispatchedToPool = 0;
         while (true) {
             int capacity = poolSize - inFlight.get();
             if (capacity < 1) {
@@ -584,6 +591,7 @@ public class PcTaskDispatcher implements Closeable {
 
                 // The hold goes on before the record is released to the pool - see inFlightStreamTimestamps.
                 holdStreamTime(work, prepared.streamTimestamp());
+                dispatchedToPool++;
                 inFlight.incrementAndGet();
                 recordsDispatched.incrementAndGet();
                 PcDispatchCounters.onDispatchedToPool();
@@ -597,7 +605,13 @@ public class PcTaskDispatcher implements Closeable {
             drainCompletions();
         }
         lastDispatchCount = consumed;
-        publishStreamTime();
+        // Only when this pump actually put something in the pool. Both drains above publish at their own
+        // tail, so with nothing dispatched the state has not moved since the last publish and recomputing
+        // would walk the map for an answer it already has - on the pump where the map is at its FULLEST,
+        // since a pool-full pump is exactly the one that dispatches nothing.
+        if (dispatchedToPool > 0) {
+            publishStreamTime();
+        }
         return consumed;
     }
 
@@ -620,9 +634,7 @@ public class PcTaskDispatcher implements Closeable {
      * The general case still needs KTD-S7's opaque rider.
      */
     public void seedStreamTime(final long committedPartitionTime) {
-        if (committedPartitionTime > maxDispatchedStreamTimestamp) {
-            maxDispatchedStreamTimestamp = committedPartitionTime;
-        }
+        maxDispatchedStreamTimestamp = Math.max(maxDispatchedStreamTimestamp, committedPartitionTime);
         publishStreamTime();
     }
 
@@ -632,22 +644,29 @@ public class PcTaskDispatcher implements Closeable {
      */
     private void holdStreamTime(final WorkContainer<byte[], byte[]> work, final long streamTimestamp) {
         inFlightStreamTimestamps.put(work, streamTimestamp);
-        if (streamTimestamp > maxDispatchedStreamTimestamp) {
-            maxDispatchedStreamTimestamp = streamTimestamp;
-        }
+        maxDispatchedStreamTimestamp = Math.max(maxDispatchedStreamTimestamp, streamTimestamp);
         if (streamTimeLowWaterMark != ConsumerRecord.NO_TIMESTAMP && streamTimestamp < streamTimeLowWaterMark) {
             dispatchesBehindStreamTime++;
         }
     }
 
     /**
-     * Recompute {@link #streamTimeLowWaterMark} and publish it. Dispatching thread only, and called from
-     * every path that can change {@link #inFlightStreamTimestamps} - the tail of {@link #dispatchAvailable},
-     * the tail of {@link #drainCompletions}, and both close paths.
+     * Recompute {@link #streamTimeLowWaterMark} and publish it. Owner thread only. Called from the tail of
+     * {@link #dispatchAvailable}, the tail of {@link #drainCompletions}, and {@link #seedStreamTime} -
+     * and <b>deliberately from neither close path</b>, for the reason on
+     * {@link #dropStreamTimeHoldsWithoutPublishing()}. Do not "restore" a missing publish there.
      * <p>
      * <b>Publish after the last mutation, never before it.</b> U10 lost Kafka's own
      * {@code shouldClearCommitStatusesInCloseDirty} to exactly that ordering mistake, on the flag this field
      * replaces the pattern of.
+     * <p>
+     * <b>And never mid-batch, which is subtler.</b> Publishing after each individual hold would let the
+     * monotone clamp fix the mark on a partial batch: hold 100, publish 100, then hold 50 - and the clamp
+     * refuses to come back down to the true minimum. The batch has to be fully registered before the minimum
+     * over it means anything. The cost is that a worker started earlier in the batch can read a mark that
+     * does not yet include its own record; that reads LOW, which is the safe direction, and it is why
+     * {@code ProcessorContext.currentStreamTimeMs()} inside {@code process()} is a lower bound rather than a
+     * value a processor can pin its own record against.
      * <p>
      * The emptiness test and the max are <b>one observation</b> over state only this thread writes. Splitting
      * them - asking "is it empty?" and then taking the max - would be a high-water read with a race in front
@@ -752,6 +771,7 @@ public class PcTaskDispatcher implements Closeable {
      */
     private void drainCompletions() {
         WorkContainer<byte[], byte[]> work;
+        boolean releasedAnyHold = false;
         while ((work = completed.poll()) != null) {
             // Read the outcome before handing the container over - handleFutureResult ends the flight and
             // hands the container to shard and partition state, and nothing promises it stays readable.
@@ -759,13 +779,17 @@ public class PcTaskDispatcher implements Closeable {
             // Release the stream-time hold here, whatever the outcome. A FAILED record must release too: with
             // retries disabled its KEY shard stays blocked for the life of the task, so a hold that survived
             // failure would pin stream time forever and punctuation would never fire again.
-            inFlightStreamTimestamps.remove(work);
+            releasedAnyHold |= inFlightStreamTimestamps.remove(work) != null;
             workManager.handleFutureResult(work);
             if (succeeded) {
                 successesDrained++;
             }
         }
-        publishStreamTime();
+        // Only when a hold actually came off. The common call is the one at the top of every pump with an
+        // empty mailbox, and recomputing there answers a question whose inputs have not changed.
+        if (releasedAnyHold) {
+            publishStreamTime();
+        }
     }
 
     /**
@@ -1116,21 +1140,30 @@ public class PcTaskDispatcher implements Closeable {
         // keep its StreamThread on the split-wait branch for work that can never complete.
         workSignal.deregister(this);
         workerPool.shutdownNow();
-        releaseStreamTimeHolds();
+        // NOT releaseStreamTimeHolds() here, and that is a correction rather than an omission.
+        // abortAllActive() reaches this from a TEST thread while the StreamThread is still looping through
+        // dispatchAvailable -> drainCompletions -> publishStreamTime, which iterates the map. Clearing it
+        // from here would be a plain-collection mutation racing a traversal - and setting `closed` first does
+        // not close the window, because dispatchAvailable drains BEFORE it checks closed. An aborted
+        // dispatcher is already out of ACTIVE and unreachable, so its map dies with it.
         log.info("PC dispatch ABORTED over {} - simulating a crash, nothing drained, nothing reported",
                 inputPartitions);
     }
 
     /**
-     * Drop the stream-time holds of a closed dispatcher, <b>without</b> republishing (astubbs#255, U13).
+     * Drop the stream-time holds of a cleanly closed dispatcher, <b>without</b> republishing (astubbs#255,
+     * U13). Named for the omission because the omission is the point.
      * <p>
-     * The omission is the point. Republishing here would recompute over an empty map and advance the mark to
+     * Republishing here would recompute over an empty map and advance the mark to
      * {@link #maxDispatchedStreamTimestamp} - over records that never completed, which is the one direction
      * that is unsafe. A closed dispatcher's mark stays frozen at the last honest value it had, and nothing
      * punctuates off it again anyway. Clearing the map is only about not holding {@link WorkContainer}
      * references past the close.
+     * <p>
+     * <b>{@link #close()} only, never {@link #abortClose()}</b> - see the comment there. This is a plain map,
+     * and the abort path runs on a foreign thread.
      */
-    private void releaseStreamTimeHolds() {
+    private void dropStreamTimeHoldsWithoutPublishing() {
         inFlightStreamTimestamps.clear();
     }
 
@@ -1162,7 +1195,7 @@ public class PcTaskDispatcher implements Closeable {
         successesCommitted = successesPublished.get();
         // After the drain above: a pool that terminated cleanly leaves no holds and the drain already
         // published the final mark; a pool that had to be forced still holds some, and those stay unpublished.
-        releaseStreamTimeHolds();
+        dropStreamTimeHoldsWithoutPublishing();
         log.info("PC dispatch closed over {}", inputPartitions);
     }
 }

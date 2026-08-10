@@ -23,6 +23,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static io.confluent.parallelconsumer.streams.PreparedRecords.prepared;
+import static io.confluent.parallelconsumer.streams.PreparedRecords.record;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -464,12 +465,9 @@ class PcWorkSignalTest {
 
     private void registerOneRecord() {
         List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
-        batch.add(new ConsumerRecord<>(
-                TOPIC,
-                PARTITION.partition(),
-                0L,
-                "the-key".getBytes(StandardCharsets.UTF_8),
-                "the-value".getBytes(StandardCharsets.UTF_8)));
+        // The shared fixture, not a hand-rolled ConsumerRecord: the short constructor leaves the timestamp
+        // at NO_TIMESTAMP, and prepared() takes the stream timestamp from the record (astubbs#255, U13).
+        batch.add(record(PARTITION, 0L, "the-key"));
         dispatcher.registerRecords(PARTITION, batch);
     }
 
