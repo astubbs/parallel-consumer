@@ -280,6 +280,26 @@ better than three independent volatiles. It is not done here: U13 is editing thi
 the low-water mark, and the brief is explicit that redesigning the mechanism is not this unit's to do.
 Recorded as deferred follow-up for whoever merges the two branches.
 
+**Is this publication shaped to carry U13's second field?** Yes, in the sense that matters: the occupancy
+map is written through a single owner-thread choke point, `publishBufferedCounts()`, called immediately
+after every mutation. A second published value slots in beside it under the same rule, and merging the
+three volatiles into one record at consolidation is a mechanical change to that one method plus its
+readers - not a redesign anyone has to negotiate.
+
+**But "one traversal serving both" is not available, and that is a technical finding rather than a
+preference.** The two questions are about **different sets**:
+
+| | Set | Maintained by |
+|---|---|---|
+| U14 occupancy | registered **minus handed out** - records no worker has started | an O(1) incremental counter, no traversal |
+| U13 low-water | the minimum timestamp over records registered and **not yet completed** - which *includes* the in-flight ones | needs an ordered structure or a scan |
+
+Occupancy deliberately excludes in-flight records, because that is what Kafka's `RecordQueue.size()` means
+and it is the unbounded quantity. A low-water mark that excluded in-flight records would advance stream
+time past records still running, which is exactly the unsafety it exists to prevent. So one snapshot is
+right and one traversal is wrong, and a consolidation that merges the two fields must not also merge the
+sets behind them.
+
 Governs R2.
 
 #### KTD4. The surfaced failure is classified the way stock's `process()` classifies it, at the point it is rethrown.
@@ -311,7 +331,36 @@ after those records were handed out.
 
 Governs R9, R10.
 
-#### KTD6. Task idling is reimplemented in a simplified, stall-safe form, or not at all.
+#### KTD6. Task idling is stream-time machinery, so U13 decides whether U7 is built at all.
+
+**This is a shared design point with U13, not a U14 decision.** In stock Kafka Streams, `max.task.idle.ms`
+exists to stop stream time advancing from one partition while another has data not yet fetched. U13's
+frontier low-water mark answers the same question - when is it safe to advance - from the other end: stream
+time may advance only to the lowest timestamp still outstanding, because nothing older can arrive. Designed
+independently, the two produce two answers to one question.
+
+**The low-water mark looks like the more fundamental mechanism, and U7 should be scoped against what U13
+says it subsumes rather than assumed to stand alone.** If stream time cannot advance past the lowest
+outstanding timestamp, most of what idling protects is already covered, and a partition with no data
+buffered cannot drag stream time forward regardless of whether this gate exists.
+
+**U7 is not cut here, and the cost of cutting it is the point of this entry.** What would be lost:
+
+| Lost by dropping U7 | Weight |
+|---|---|
+| `shouldBeProcessableIfAllPartitionsBuffered` stays red | Low. One case, and P8 was only medium confidence anyway. |
+| `timeCurrentIdlingStarted` stays empty, so the `task-idle-ratio` metric reads zero on the PC path | Low, but it is a metric that silently lies rather than being absent. |
+| `max.task.idle.ms` stays a setting the PC path reads and ignores | **This is the real cost, and R17 is why.** The module's promise is that unsupported semantics refuse loudly rather than differ silently. |
+
+That last row does not require U7. **R17 is satisfiable without it**, by recording `max.task.idle.ms` in
+the divergence list beside stream time and partition ordering, and refusing or warning when it is set to a
+non-default value on the PC path. That is cheaper than U7, keeps the promise, and is the option to take if
+U13 subsumes the mechanism. What is not acceptable is dropping U7 and saying nothing.
+
+**Do not resolve this inside U14.** The coordinator reconciles it once U13 has stated what its low-water
+mark does and does not subsume.
+
+#### KTD6a. If U7 is built, it takes a simplified, stall-safe form.
 
 Stock's `PartitionGroup.readyToProcess` consults `fetchedLags` and returns false indefinitely when a
 partition's lag is unknown or positive. Reimplementing that against PC's occupancy carries a real stall
@@ -709,9 +758,14 @@ than parking on a drain timeout.
 
 **Goal:** `isProcessable` means something on the PC path, without any path to a stall.
 
-**Requirements:** R6 partially. Mechanism per KTD6.
+**BLOCKED on U13, deliberately.** Idling is stream-time machinery and U13's low-water mark answers the
+same question - see KTD6. Do not build this unit until U13 has stated what its mechanism subsumes. If it
+subsumes idling, take KTD6's cheaper alternative instead: record `max.task.idle.ms` in the divergence
+list and refuse or warn on a non-default value, which satisfies R17 without the patch-surface growth.
 
-**Dependencies:** U1.
+**Requirements:** R6 partially, R17. Mechanism per KTD6 and KTD6a.
+
+**Dependencies:** U1, and U13's statement of scope.
 
 **Files:**
 - `parallel-consumer-streams/src/main/patch/pc-streams.patch` (via `target/kafka-patched/.../StreamTask.java`)

@@ -62,6 +62,22 @@ public final class PcDispatchSwitch {
      */
     public static final String WAKE_ON_WORK_PROPERTY = "pc.streams.wakeOnWork.enabled";
 
+    /**
+     * Set {@code -Dpc.streams.backpressure.enabled=false} to stop the PC path pausing a partition when it is
+     * holding more than {@code buffered.records.per.partition} records for it (astubbs#255, U14).
+     * <p>
+     * Two reasons this exists, the same two as {@link #WAKE_ON_WORK_PROPERTY}. It is the <b>control arm</b>:
+     * the memory-bound proof has to vary exactly one term, and flipping this leaves the build, the JVM, the
+     * broker and the data identical in a way that comparing against a parent commit never can. And it is an
+     * escape hatch on the one change in this module whose failure mode is a <em>silent stall</em> rather
+     * than an exception - a partition that is paused and never resumed looks exactly like an idle topology -
+     * so an operator needs a way to take it out of the picture without rebuilding.
+     * <p>
+     * Turning it off restores unbounded accumulation under a slow processor. That is the point of a control
+     * arm, and it is not a mode anyone should run in production.
+     */
+    public static final String BACKPRESSURE_PROPERTY = "pc.streams.backpressure.enabled";
+
     private static final int DEFAULT_POOL_SIZE = 4;
 
     private static volatile boolean enabled = readEnabledProperty();
@@ -69,6 +85,8 @@ public final class PcDispatchSwitch {
     private static volatile int poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
 
     private static volatile boolean wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY);
+
+    private static volatile boolean backpressure = readBooleanProperty(BACKPRESSURE_PROPERTY);
 
     private PcDispatchSwitch() {
     }
@@ -95,6 +113,27 @@ public final class PcDispatchSwitch {
      */
     public static void setWakeOnWork(final boolean wakeOnWorkEnabled) {
         wakeOnWork = wakeOnWorkEnabled;
+    }
+
+    /**
+     * Whether the patched {@code StreamTask} should pause a partition once PC is holding more than
+     * {@code buffered.records.per.partition} records for it.
+     * <p>
+     * Reports false whenever the seam is off, unconditionally - with records going through Kafka's own
+     * {@code PartitionGroup}, {@code addRecords} already applies the stock pause from the real queue size,
+     * and asking twice could only pause a partition Kafka had decided not to pause. Same shape as
+     * {@link #isWakeOnWorkEnabled()}, so the patch asks one question rather than two.
+     */
+    public static boolean isBackpressureEnabled() {
+        return enabled && backpressure;
+    }
+
+    /**
+     * Turn the PC-path pause off (or back on) for this JVM. Intended for the control arm of the
+     * memory-bound proof; the system property is the equivalent for a whole run.
+     */
+    public static void setBackpressure(final boolean backpressureEnabled) {
+        backpressure = backpressureEnabled;
     }
 
     public static int getPoolSize() {
@@ -132,6 +171,7 @@ public final class PcDispatchSwitch {
         poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
         enabled = readEnabledProperty();
         wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY);
+        backpressure = readBooleanProperty(BACKPRESSURE_PROPERTY);
     }
 
     /**
