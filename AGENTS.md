@@ -13,6 +13,7 @@ owned that content all along.)
 | Document | Owns | Explicitly NOT for |
 |---|---|---|
 | **`AGENTS.md`** (this file) | Conventions, build/test commands, and the rules agents must follow | Work items of any kind |
+| **`STRATEGY.md`** (repo root) | What the product is and why: the target problem, the guiding choice to solve it client-side, who it is for, the metrics that would show the approach working, and the tracks under investment | A roadmap, a schedule, or a feature list. It is a *claims* document that nothing tests, so work which falsifies one of its claims has to update it - the open branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
 | **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and **never** a committed index file, which every PR would edit |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** in their own release-gated section, and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |

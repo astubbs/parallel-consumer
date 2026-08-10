@@ -108,8 +108,8 @@ The two are not strict alternatives -- they solve different problems.
 | In your code: a configurable retry delay function, record skipping, or a circuit breaker
 
 | Broker cost
-| Per-record state is persisted to the internal `__share_group_state` topic through a share coordinator, plus acknowledgement RPCs
-| None beyond an ordinary consumer group. State is client-side, piggybacked onto commit metadata -- see <<offset_map,the offset map>>
+| Per-record state is persisted to the internal `__share_group_state` topic through a share coordinator, plus acknowledgement RPCs -- but that topic is theirs alone, so the state is isolated
+| None beyond an ordinary consumer group: no coordinator, no per-record RPCs. The trade is isolation rather than load -- the state rides in the commit metadata field, which is free-form and shared with anything else that has ever owned the group, so foreign bytes there have to be survived rather than prevented -- see <<offset_map,the offset map>>
 
 | Requires
 | KRaft, and Apache Kafka 4.2 / Confluent Platform 8.2. The 4.0 release was early access and explicitly not for production clusters
