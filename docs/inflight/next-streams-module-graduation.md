@@ -1,6 +1,6 @@
 # Graduating the streams module out of "spike"
 
-The owner's notes on what `parallel-consumer-streams-spike` (astubbs#255) needs before it is a module
+The owner's notes on what `parallel-consumer-streams` (astubbs#255) needs before it is a module
 people are asked to take seriously rather than a published experiment. The ranked technical worklist
 is `pr-ks-spike-next-work.md`; packaging, naming, licensing and the user-facing documentation are in
 `next-fork-packaging-docs-and-licensing.md`. This file is only the "stop calling it a spike" half.

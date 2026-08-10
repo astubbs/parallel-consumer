@@ -41,7 +41,7 @@
              production-ready; see its README. Ordered before parallel-consumer-examples, which is the
              module that skips publishing: the examples pom records a central-publishing-maven-plugin
              bug where a skipPublishing module LAST in reactor order suppressed the whole bundle. -->
-        <module>parallel-consumer-streams-spike</module>
+        <module>parallel-consumer-streams</module>
         <module>parallel-consumer-examples</module>
     </modules>
 

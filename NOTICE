@@ -9,7 +9,7 @@ Apache License, Version 2.0.
 This fork is maintained independently at:
   https://github.com/astubbs/parallel-consumer
 
-The parallel-consumer-streams-spike artifact additionally contains MODIFIED versions of
+The parallel-consumer-streams artifact additionally contains MODIFIED versions of
 four classes from Apache Kafka:
 
   org.apache.kafka.streams.processor.internals.StreamTask
@@ -25,5 +25,5 @@ https://kafka.apache.org
 These files have been CHANGED by Antony Stubbs and contributors, to allow the Kafka
 Streams processor chain to execute concurrently under Parallel Consumer. The changes are
 expressed as, and limited to, the patch tracked at
-parallel-consumer-streams-spike/src/main/patch/pcspike.patch; no Apache Kafka source is
-redistributed in this repository. See parallel-consumer-streams-spike/README.md.
+parallel-consumer-streams/src/main/patch/pc-streams.patch; no Apache Kafka source is
+redistributed in this repository. See parallel-consumer-streams/README.md.

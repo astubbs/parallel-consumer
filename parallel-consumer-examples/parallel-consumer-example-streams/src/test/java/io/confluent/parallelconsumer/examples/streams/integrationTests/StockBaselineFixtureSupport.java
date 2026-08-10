@@ -42,25 +42,25 @@ import static org.awaitility.Awaitility.await;
  * stock Kafka Streams, the shape of the input run, the produce/start/verify machinery, and the fixture file
  * format.
  * <p>
- * <b>Why generators for the astubbs#255 spike live in an examples module at all.</b>
- * {@code parallel-consumer-streams-spike} compiles patched copies of four
+ * <b>Why generators for the astubbs#255 module live in an examples module at all.</b>
+ * {@code parallel-consumer-streams} compiles patched copies of four
  * {@code org.apache.kafka.streams.processor.internals} classes into its own {@code target/classes}, which
  * precedes the {@code kafka-streams} jar on the classpath. Every {@code KafkaStreams} instance in that JVM
  * therefore runs the patched classes - including one a test called "the stock arm". Both arms would then
  * share every defect the patch introduced, and comparing them would prove exactly nothing.
- * {@code parallel-consumer-example-streams} does not depend on the spike module (and, being earlier in the
- * reactor, the spike could not depend on it either), so Kafka Streams here comes from the published jar.
+ * {@code parallel-consumer-example-streams} does not depend on the module module (and, being earlier in the
+ * reactor, the module could not depend on it either), so Kafka Streams here comes from the published jar.
  * {@link #assertClasspathIsStock()} asserts that rather than assuming it, and every generator calls it before
  * recording a single row.
  * <p>
  * <b>The fixture is the contract between the two modules.</b> It carries the inputs as well as the outputs,
- * and the spike-side tests replay those inputs rather than reconstructing them - so the two arms cannot drift
+ * and the module-side tests replay those inputs rather than reconstructing them - so the two arms cannot drift
  * apart in what they were fed, which is the failure mode that would quietly make the comparison meaningless.
  * The two modules cannot share code in this reactor order, so the file format is the only thing duplicated,
  * and it is deliberately trivial.
  * <p>
  * <b>Default mode is verify, not regenerate.</b> A generator that overwrites its own expectation can never
- * fail. Pass {@code -Dpc.spike.fixture.regenerate=true} to rewrite the tracked files - and then read the diff
+ * fail. Pass {@code -Dpc.module.fixture.regenerate=true} to rewrite the tracked files - and then read the diff
  * before committing them.
  *
  * @author Antony Stubbs
@@ -70,7 +70,7 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String, String> {
 
-    // --- the shape of the run. Mirrored, by necessity, in the spike-side tests; the fixture carries the
+    // --- the shape of the run. Mirrored, by necessity, in the module-side tests; the fixture carries the
     // --- resulting data so only these declarations are duplicated, never the records themselves.
 
     static final int KEYS = 6;
@@ -87,7 +87,7 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
 
     /**
      * Every input record carries this header, whose value is the record's own value in UTF-8. It exists for
-     * the spike-side probe: {@code context.headers()} is an <em>ambient</em> read off the per-task record
+     * the module-side probe: {@code context.headers()} is an <em>ambient</em> read off the per-task record
      * context, so a header that matches the value handed to the processor is evidence that the ambient slot
      * belonged to this record and not to a sibling running on another worker thread.
      */
@@ -95,21 +95,21 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
 
     static final String FIXTURE_VERSION = "1";
 
-    static final String REGENERATE_PROPERTY = "pc.spike.fixture.regenerate";
+    static final String REGENERATE_PROPERTY = "pc.module.fixture.regenerate";
 
-    static final String SPIKE_MODULE = "parallel-consumer-streams-spike";
+    static final String PATCHED_MODULE = "parallel-consumer-streams";
 
     /**
-     * The classes the spike patches. If any of these loads from anywhere but the jar in this JVM, this module
-     * has acquired a dependency on the spike and the baseline is contaminated.
+     * The classes the module patches. If any of these loads from anywhere but the jar in this JVM, this module
+     * has acquired a dependency on the module and the baseline is contaminated.
      */
-    private static final List<String> SPIKE_PATCHED_CLASSES = Arrays.asList(
+    private static final List<String> PATCHED_CLASSES = Arrays.asList(
             "org.apache.kafka.streams.processor.internals.StreamTask",
             "org.apache.kafka.streams.processor.internals.AbstractProcessorContext",
             "org.apache.kafka.streams.processor.internals.ProcessorContextImpl",
             "org.apache.kafka.streams.processor.internals.RecordCollectorImpl");
 
-    private static final String SPIKE_MARKER_CLASS = "io.confluent.parallelconsumer.streamsspike.PcDispatchSwitch";
+    private static final String PATCHED_MODULE_MARKER_CLASS = "io.confluent.parallelconsumer.streams.PcDispatchSwitch";
 
     /**
      * Defines the topology under test. A lambda rather than an overridden method so a generator can keep its
@@ -121,17 +121,17 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
 
     /**
      * The load-bearing assertion of this whole arrangement, and the reason these generators are not simply a
-     * second arm inside the spike module. Everything else is only as meaningful as this is.
+     * second arm inside the module module. Everything else is only as meaningful as this is.
      */
     static void assertClasspathIsStock() throws ClassNotFoundException {
-        for (String name : SPIKE_PATCHED_CLASSES) {
+        for (String name : PATCHED_CLASSES) {
             Class<?> loaded = Class.forName(name);
             URL location = loaded.getProtectionDomain().getCodeSource().getLocation();
             log.info("{} loaded from {}", name, location);
 
             assertThat(location.toString())
                     .as("%s must load from the published kafka-streams jar in THIS module. If it loads from a "
-                                    + "directory, this JVM is running the spike's patched copy and the 'stock' "
+                                    + "directory, this JVM is running the module's patched copy and the 'stock' "
                                     + "baseline it generates is not stock - it shares every defect the patch "
                                     + "introduced, and comparing the two arms proves nothing.",
                             name)
@@ -139,8 +139,8 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
                     .endsWith(".jar");
         }
 
-        assertThatThrownBy(() -> Class.forName(SPIKE_MARKER_CLASS))
-                .as("the spike module must not be on this module's classpath at all - its presence is the "
+        assertThatThrownBy(() -> Class.forName(PATCHED_MODULE_MARKER_CLASS))
+                .as("the module module must not be on this module's classpath at all - its presence is the "
                         + "single way this baseline could be silently contaminated")
                 .isInstanceOf(ClassNotFoundException.class);
     }
@@ -156,7 +156,7 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
         for (int seq = 0; seq < RECORDS_PER_KEY; seq++) {
             for (int k = 0; k < KEYS; k++) {
                 long timestamp = TIMESTAMP_BASE + index * TIMESTAMP_STEP;
-                // The value encodes its own expected timestamp on purpose. The spike-side probe compares
+                // The value encodes its own expected timestamp on purpose. The module-side probe compares
                 // context.timestamp() - an ambient read - against a number carried by the value it was
                 // handed as a method argument, so the comparison has an anchor outside the record context.
                 // Comparing two ambient reads to each other would agree happily on the wrong record.
@@ -225,12 +225,12 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
                          final List<Row> outputs,
                          final String[] descriptionLines) {
         StringBuilder sb = new StringBuilder();
-        sb.append("# Stock Kafka Streams baseline for the astubbs#255 PC-on-Streams spike.\n");
+        sb.append("# Stock Kafka Streams baseline for the astubbs#255 PC-on-Streams module.\n");
         sb.append("#\n");
         sb.append("# GENERATED - do not hand-edit. Written by ").append(generator.getSimpleName()).append(" in\n");
         sb.append("# parallel-consumer-example-streams, a module that does NOT depend on\n");
-        sb.append("# ").append(SPIKE_MODULE).append(", so these rows come from the published kafka-streams jar\n");
-        sb.append("# and not from the spike's patched target/classes. That independence is what makes this a\n");
+        sb.append("# ").append(PATCHED_MODULE).append(", so these rows come from the published kafka-streams jar\n");
+        sb.append("# and not from the module's patched target/classes. That independence is what makes this a\n");
         sb.append("# baseline rather than a second copy of the thing under test.\n");
         sb.append("#\n");
         for (String line : descriptionLines) {
@@ -244,7 +244,7 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
         sb.append("#     -Dcopyright.skip=true -D").append(REGENERATE_PROPERTY).append("=true\n");
         sb.append("#\n");
         sb.append("# Tracked at ").append(fixtureRelativePath).append('\n');
-        sb.append("# 'in' rows are the inputs in produce order, and the spike-side test replays exactly these\n");
+        sb.append("# 'in' rows are the inputs in produce order, and the module-side test replays exactly these\n");
         sb.append("# rather than rebuilding them, so the two arms cannot drift in what they were fed. Every\n");
         sb.append("# input also carries a header named by probeHeader below, whose value is the record's own\n");
         sb.append("# value in UTF-8.\n");
@@ -285,7 +285,7 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
         Files.write(scratch, rendered.getBytes(StandardCharsets.UTF_8));
 
         assertThat(tracked)
-                .as("the tracked fixture must exist - the spike-side proof test asserts against it, and "
+                .as("the tracked fixture must exist - the module-side proof test asserts against it, and "
                         + "without it that test has no baseline at all. Regenerate with -D%s=true; this run's "
                         + "output was written to %s", REGENERATE_PROPERTY, scratch)
                 .exists();
@@ -293,7 +293,7 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
         String trackedText = new String(Files.readAllBytes(tracked), StandardCharsets.UTF_8);
         assertThat(rendered)
                 .as("stock Kafka Streams must still produce exactly the tracked baseline. If this fails, the "
-                        + "baseline the spike is being judged against no longer describes stock behaviour - "
+                        + "baseline the module is being judged against no longer describes stock behaviour - "
                         + "do NOT regenerate until you know which of the two changed. This run's output: %s",
                         scratch)
                 .isEqualTo(trackedText);
@@ -302,27 +302,27 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
     }
 
     /**
-     * The fixtures are tracked inside the spike module, not this one, because both these generators and the
-     * fixtures are spike scaffolding with the same lifetime - when the throwaway module goes, they go with
+     * The fixtures are tracked inside the module module, not this one, because both these generators and the
+     * fixtures are module scaffolding with the same lifetime - when the throwaway module goes, they go with
      * it, and nothing is left dangling in a shipped example module. The cost is this walk up the tree, which
-     * fails loudly rather than silently skipping if the spike module is not there.
+     * fails loudly rather than silently skipping if the module module is not there.
      */
     static Path locateTrackedFixture(final String relativePath) throws IOException {
         File dir = new File(System.getProperty("user.dir")).getCanonicalFile();
         while (dir != null) {
-            if (new File(dir, SPIKE_MODULE).isDirectory()) {
+            if (new File(dir, PATCHED_MODULE).isDirectory()) {
                 return new File(dir, relativePath).toPath();
             }
             dir = dir.getParentFile();
         }
-        throw new IllegalStateException("Could not find " + SPIKE_MODULE + " above "
+        throw new IllegalStateException("Could not find " + PATCHED_MODULE + " above "
                 + System.getProperty("user.dir") + " - these generators exist only to feed that module's "
-                + "proof tests, so if the spike module is gone they should go with it.");
+                + "proof tests, so if the module module is gone they should go with it.");
     }
 
     /**
      * One record, in or out. Values are strings even when the topology emits longs, so both fixtures share a
-     * single row grammar; the spike-side reader parses whatever the topology's serde produced.
+     * single row grammar; the module-side reader parses whatever the topology's serde produced.
      */
     static final class Row {
         final String key;

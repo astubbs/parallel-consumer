@@ -16,13 +16,13 @@ title: "Result: can PC's work-shard manager drive a Kafka Streams processor chai
 **Issue:** astubbs#255 · **Branch:** `feats/ks-on-pc-spike`
 
 **Status update, 2026-08-08 (user-directed reversal - plan KTD-S5):** this was written as the deliverable
-of a throwaway experiment that would not merge. It now merges: `parallel-consumer-streams-spike` **ships
+of a throwaway experiment that would not merge. It now merges: `parallel-consumer-streams` **ships
 as a published alpha/experimental artifact** alongside release 0.6.0.0, with its seam **on** by default
-(plan KTD-S6 - taking the dependency is the opt-in; `-Dpc.streams.spike.dispatch.enabled=false` turns it
+(plan KTD-S6 - taking the dependency is the opt-in; `-Dpc.streams.dispatch.enabled=false` turns it
 off).
 Maturity is per-module, not global. Nothing in the technical result below changes - the caveats in §7,
 §8 and §9 are exactly the reasons it ships as *alpha*. The module's own front door is
-[`parallel-consumer-streams-spike/README.md`](../../parallel-consumer-streams-spike/README.md).
+[`parallel-consumer-streams/README.md`](../../parallel-consumer-streams/README.md).
 
 Written for someone who was not there. It assumes no knowledge of the branch and none of the
 conversation.
@@ -163,7 +163,7 @@ verbatim, so the two arms cannot drift in what they were fed.
 
 ## 4. The change-set size and shape (R8)
 
-`parallel-consumer-streams-spike/src/main/patch/pcspike.patch`:
+`parallel-consumer-streams/src/main/patch/pc-streams.patch`:
 
 ```
 530 lines · 25 hunks · 4 classes
@@ -176,7 +176,7 @@ verbatim, so the two arms cannot drift in what they were fed.
 | `RecordCollectorImpl` | `offsets` and `producedSensorByTopic` are written from every worker thread through the `to()` sink. **The compiler never demands this class** - it is constructed outside `StreamTask` - so it had to be named up front rather than discovered |
 | `StreamTask` | the seam itself, plus per-record `recordInfo`, concurrent `consumedOffsets`/`partitionsToResume`, `volatile commitNeeded`, `LongAdder processTimeMs` |
 
-A second, separate 167-line patch (`pcspike-testfixtures.patch`, 5 hunks, 1 class) covers the test side:
+A second, separate 167-line patch (`pc-streams-testfixtures.patch`, 5 hunks, 1 class) covers the test side:
 Kafka's own `InternalMockProcessorContext` fixture does `getfield` on the field this spike made private,
 and needs the same accessor conversion in order to run at all. It is generated at
 `generate-test-sources` in every build, alongside the main patch.
@@ -297,7 +297,7 @@ Neither control arm is committed - the tracked patch is the green one. To reprod
 
 ```bash
 # 1. put the tracked patch into the generated tree
-./mvnw -pl parallel-consumer-streams-spike -am process-sources
+./mvnw -pl parallel-consumer-streams -am process-sources
 
 # 2. edit target/kafka-patched/org/apache/kafka/streams/processor/internals/
 #      AbstractProcessorContext.java
@@ -307,18 +307,18 @@ Neither control arm is committed - the tracked patch is the green one. To reprod
 #    RUN NO MAVEN BETWEEN THIS STEP AND THE NEXT - unpack silently reverts your edits.
 
 # 3. re-derive the patch (it will warn that the hunk count dropped; here that is expected)
-parallel-consumer-streams-spike/bin/regen-patch.sh
+parallel-consumer-streams/bin/regen-patch.sh
 
 # 4. `clean` is NOT optional - see §10.2
-./mvnw -pl parallel-consumer-streams-spike -am clean verify -DskipUTs=true \
+./mvnw -pl parallel-consumer-streams -am clean verify -DskipUTs=true \
   -Dit.test=PcDrivenStatefulProofTest -Dfailsafe.failIfNoSpecifiedTests=false -Dcopyright.skip=true
 
 # 5. confirm the instrumentation actually reached the run
-javap -p -classpath parallel-consumer-streams-spike/target/classes \
+javap -p -classpath parallel-consumer-streams/target/classes \
   org.apache.kafka.streams.processor.internals.AbstractProcessorContext | grep -E 'recordContext|currentNode'
 
 # 6. put it back
-git checkout -- parallel-consumer-streams-spike/src/main/patch/pcspike.patch
+git checkout -- parallel-consumer-streams/src/main/patch/pc-streams.patch
 ```
 
 The PC-OFF arm of the same test is the control-of-the-control: it runs the identical un-confined build
@@ -442,12 +442,12 @@ excluded and no assertion was relaxed.
 > *behaviour-preservation* claim about the patch, not a claim about the parallel path.
 >
 > **Reproduce it** - it runs in the module's normal test run, no profile and no flag:
-> `./mvnw -pl parallel-consumer-streams-spike -am test`. Kafka's execution reports separately under
-> `parallel-consumer-streams-spike/target/surefire-reports-kafka-upstream/`.
+> `./mvnw -pl parallel-consumer-streams -am test`. Kafka's execution reports separately under
+> `parallel-consumer-streams/target/surefire-reports-kafka-upstream/`.
 >
 > **Do not quote it without the counterpart.** The parallel path's number is the 68/101 below, and the
 > honest form of the claim carries both. The count lives in three places - the surefire execution's
-> comment in `parallel-consumer-streams-spike/pom.xml`, that module's README, and here. If it changes,
+> comment in `parallel-consumer-streams/pom.xml`, that module's README, and here. If it changes,
 > change all three.
 
 Re-running `StreamTaskTest` with PC dispatch **on** gives **68/101**. That 33-test delta is not a
@@ -616,17 +616,17 @@ can consume is worth less than a topic hop everybody can.
 
 - **It ships, as alpha** (plan KTD-S5, user-directed - this reverses the original "not for merge, never
   publishes" posture, which is what §1 through §11 above were written under).
-  `parallel-consumer-streams-spike` publishes like any other module, alongside release 0.6.0.0, with the
+  `parallel-consumer-streams` publishes like any other module, alongside release 0.6.0.0, with the
   dispatch seam **on by default** - taking the dependency is the opt-in (plan KTD-S6), and
-  `-Dpc.streams.spike.dispatch.enabled=false` turns it off. Its known limitations - §7, §8 and §9 - are
+  `-Dpc.streams.dispatch.enabled=false` turns it off. Its known limitations - §7, §8 and §9 - are
   exactly why it is labelled alpha rather than supported. They are carried forward as the plan's
   [Current Shortcomings](2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings), which is the
   living list;
-  [`parallel-consumer-streams-spike/README.md`](../../parallel-consumer-streams-spike/README.md) points
+  [`parallel-consumer-streams/README.md`](../../parallel-consumer-streams/README.md) points
   users there and asks for field testers.
-- `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` is the artefact worth keeping. It is
+- `parallel-consumer-streams/src/main/patch/pc-streams.patch` is the artefact worth keeping. It is
   the answer to R8 and the starting point for anyone re-deriving against a newer Kafka.
-- To work on it: `./mvnw -pl parallel-consumer-streams-spike generate-sources`, edit
+- To work on it: `./mvnw -pl parallel-consumer-streams generate-sources`, edit
   `target/kafka-patched/`, then `bin/regen-patch.sh`. **Any Maven run between those two steps silently
   reverts your edits** - `unpack` runs with `overWriteReleases`. `regen-patch.sh` warns when the hunk
   count drops, which is the tripwire.

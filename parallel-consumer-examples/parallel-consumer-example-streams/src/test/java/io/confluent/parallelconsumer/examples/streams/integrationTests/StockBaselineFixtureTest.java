@@ -25,9 +25,9 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Generates - and, on every subsequent run, re-verifies - the <b>stateless</b> stock Kafka Streams baseline
- * that {@code PcDrivenStreamsProofTest} in {@code parallel-consumer-streams-spike} asserts against (U6).
+ * that {@code PcDrivenStreamsProofTest} in {@code parallel-consumer-streams} asserts against (U6).
  * <p>
- * See {@link StockBaselineFixtureSupport} for why a generator for the spike lives in an examples module, and
+ * See {@link StockBaselineFixtureSupport} for why a generator for the module lives in an examples module, and
  * for the fixture format.
  *
  * @author Antony Stubbs
@@ -41,10 +41,10 @@ class StockBaselineFixtureTest extends StockBaselineFixtureSupport {
     static final String TOPOLOGY = "stream -> mapValues((key, value) -> value + \"" + SUFFIX + "\") -> to";
 
     static final String FIXTURE_RELATIVE_PATH =
-            SPIKE_MODULE + "/src/test/resources/stock-baseline-fixture.tsv";
+            PATCHED_MODULE + "/src/test/resources/stock-baseline-fixture.tsv";
 
     /**
-     * The load-bearing assertion of this class, and the reason it is not simply a second arm inside the spike
+     * The load-bearing assertion of this class, and the reason it is not simply a second arm inside the module
      * module. Everything else here is only as meaningful as this is.
      */
     @Test
@@ -134,7 +134,7 @@ class StockBaselineFixtureTest extends StockBaselineFixtureSupport {
         for (Row out : outputs) {
             assertThat(out.timestamp)
                     .as("stock Kafka Streams carries the input record's timestamp to the sink for %s - the "
-                            + "spike asserts that too, and it is the property that breaks first if the "
+                            + "module asserts that too, and it is the property that breaks first if the "
                             + "per-record context leaks between worker threads", out.value)
                     .isEqualTo(inputTimestamps.get(out.value));
         }

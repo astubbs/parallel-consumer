@@ -77,7 +77,7 @@ minimal stateful arm (U7) so the result can discriminate.
 **Ships as alpha.** The module lands on master and publishes as an alpha/experimental artifact alongside
 release 0.6.0.0, with its seam **on by default** (KTD-S6 - depending on the artifact is the opt-in) and
 its known gaps tracked in [Current Shortcomings](#current-shortcomings), which
-`parallel-consumer-streams-spike/README.md` points at rather than duplicating. Maturity is per-module,
+`parallel-consumer-streams/README.md` points at rather than duplicating. Maturity is per-module,
 not global. This reverses an earlier
 non-goal ("merging the spike code into the product; the spike branch is kept, not landed") - see KTD-S5.
 The result documents land in the same PR as the code (R5).
@@ -199,9 +199,9 @@ class.
 processing, which would make a failure ambiguous.
 
 **KTD6. A top-level module that publishes, as an alpha/experimental artifact.** New module
-`parallel-consumer-streams-spike`, publishing like any other module - no publish-skip properties, no
+`parallel-consumer-streams`, publishing like any other module - no publish-skip properties, no
 `central-publishing-maven-plugin` `<skipPublishing>` block - with its alpha status carried in the pom
-`<name>`/`<description>` and in `parallel-consumer-streams-spike/README.md`.
+`<name>`/`<description>` and in `parallel-consumer-streams/README.md`.
 *(This decision originally continued "and its seam off by default so the artifact is inert unless a user
 opts in" - reversed by KTD-S6: taking the dependency **is** the opt-in.)*
 *Reversal, recorded rather than quietly edited (KTD-S5):* this decision originally read "a top-level
@@ -221,11 +221,11 @@ now actively suppress its publication.
 **KTD-S6. The dispatch seam defaults ON. Depending on the artifact is the opt-in.**
 *(session-settled: user-directed - reverses KTD8's "defaulting to stock" and the off-by-default posture
 in KTD6, R6 and the Risks table.)*
-Nobody puts a separate, loudly-labelled alpha artifact called `parallel-consumer-streams-spike` on their
+Nobody puts a separate, loudly-labelled alpha artifact called `parallel-consumer-streams` on their
 classpath by accident. Having done so deliberately, they wanted the PC seam; requiring them to *also*
-set `-Dpc.streams.spike.dispatch.enabled=true` is a second opt-in that buys nothing and costs every user
+set `-Dpc.streams.dispatch.enabled=true` is a second opt-in that buys nothing and costs every user
 a support question. The property survives as the way to turn the seam **off**
-(`-Dpc.streams.spike.dispatch.enabled=false`), which is what an A/B comparison needs anyway.
+(`-Dpc.streams.dispatch.enabled=false`), which is what an A/B comparison needs anyway.
 *What the old default was actually paying for:* keeping U3's control arm stock without it having to say
 so. That is a **test** concern, and tests can state their requirement explicitly - so they now do, at
 each site, with a comment saying why. The Kafka upstream-test surefire execution sets the property to
@@ -305,7 +305,7 @@ encoding - the too-large fallback must account for both.
 flowchart LR
     subgraph src["Build time - nothing tracked but the patch"]
         JAR["kafka-streams:3.9.2<br/>sources jar"]
-        PATCH["pcspike.patch<br/>(tracked)"]
+        PATCH["pc-streams.patch<br/>(tracked)"]
         GEN["target/generated-sources"]
     end
     subgraph unchanged["Unchanged - stock kafka-streams:3.9.2 jar"]
@@ -382,12 +382,12 @@ the jar, and publishes as an alpha artifact (KTD-S5) - with no Kafka source trac
 
 **Files:**
 - `pom.xml` (modify - add to `<modules>`, **before** `parallel-consumer-examples`)
-- `parallel-consumer-streams-spike/pom.xml` (create)
-- `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` (create - **empty at this unit**)
-- `parallel-consumer-streams-spike/bin/regen-patch.sh` (create)
-- `parallel-consumer-streams-spike/.gitignore` (create - exclude the generated tree)
-- `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/TestConventionsArchTest.java` (create)
-- `parallel-consumer-streams-spike/src/test/resources/logback-test.xml` (create)
+- `parallel-consumer-streams/pom.xml` (create)
+- `parallel-consumer-streams/src/main/patch/pc-streams.patch` (create - **empty at this unit**)
+- `parallel-consumer-streams/bin/regen-patch.sh` (create)
+- `parallel-consumer-streams/.gitignore` (create - exclude the generated tree)
+- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/TestConventionsArchTest.java` (create)
+- `parallel-consumer-streams/src/test/resources/logback-test.xml` (create)
 
 **Approach:**
 
@@ -402,11 +402,11 @@ the jar, and publishes as an alpha artifact (KTD-S5) - with no Kafka source trac
    - `maven-dependency-plugin:unpack` in `generate-sources`, artifact
      `org.apache.kafka:kafka-streams:${kafka.version}` classifier `sources`, `includes` limited to the
      four target files, output to `target/generated-sources/kafka-patched`.
-   - `exec-maven-plugin` applying `src/main/patch/pcspike.patch` with `patch -p1`. Run
+   - `exec-maven-plugin` applying `src/main/patch/pc-streams.patch` with `patch -p1`. Run
      `patch --dry-run` first and fail the build on a rejected hunk - a silently half-applied patch is
      the worst possible failure here.
    - `build-helper-maven-plugin:add-source` adding the generated directory as a compile source root.
-4. `regen-patch.sh`: re-derive `pcspike.patch` by diffing a pristine extract against the edited
+4. `regen-patch.sh`: re-derive `pc-streams.patch` by diffing a pristine extract against the edited
    generated tree. Without this the spike is painful to iterate on (KTD1's stated cost).
 5. Dependencies: `parallel-consumer-core` (compile), `kafka-streams` at `${kafka.version}` (compile),
    `slf4j-api` and `jackson-databind` at **compile** scope. Test scope: `parallel-consumer-core` with
@@ -416,8 +416,8 @@ the jar, and publishes as an alpha artifact (KTD-S5) - with no Kafka source trac
 
 **Test scenarios:** `Test expectation: none` - harness only; U3's control arm is the first real test.
 
-**Verification:** `./mvnw -pl parallel-consumer-streams-spike -am install` succeeds and the
-`parallel-consumer-streams-spike` artifact **does** appear under
+**Verification:** `./mvnw -pl parallel-consumer-streams -am install` succeeds and the
+`parallel-consumer-streams` artifact **does** appear under
 `~/.m2/repository/bz/stub/parallelconsumer/`; `git status` shows no `.java` file under
 `org/apache/kafka/` tracked anywhere; `bin/ci-unit-test.sh` passes.
 
@@ -433,11 +433,11 @@ behaviour-neutral, or nothing later can be attributed.
 **Dependencies:** U1
 
 **Files:**
-- `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/ShadowedStreamsControlTest.java` (create)
+- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/ShadowedStreamsControlTest.java` (create)
 
 **Approach:**
 
-1. Leave `pcspike.patch` empty. The generated classes are then byte-for-byte the 3.9.2 sources, so any
+1. Leave `pc-streams.patch` empty. The generated classes are then byte-for-byte the 3.9.2 sources, so any
    behaviour difference is the harness's fault and nothing else's - a cleaner control than vendoring
    could give.
 2. **The class set is named, not discovered:** `StreamTask` and `AbstractProcessorContext` are the
@@ -481,9 +481,9 @@ load-bearing change - including the caller that would otherwise defeat it.
 **Dependencies:** U3 (control arm green)
 
 **Files:**
-- `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` (modify - this is now the only place
+- `parallel-consumer-streams/src/main/patch/pc-streams.patch` (modify - this is now the only place
   Kafka changes are expressed)
-- `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/ProcessorContextConfinementTest.java` (create)
+- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/ProcessorContextConfinementTest.java` (create)
 
 **Approach:**
 
@@ -515,7 +515,7 @@ be behaviour-preserving under single-threaded execution, and a regression is far
 - U3's control-arm topology still produces identical output.
 
 **Verification:** The confinement test passes; `ProcessorContextImpl` is proven live; U3's control arm
-is still green; `pcspike.patch` applies cleanly from a clean checkout.
+is still green; `pc-streams.patch` applies cleanly from a clean checkout.
 
 ---
 
@@ -529,8 +529,8 @@ worker pool, not via `partitionGroup.nextRecord()` on the StreamThread.
 **Dependencies:** U4
 
 **Files:**
-- `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` (modify)
-- `parallel-consumer-streams-spike/src/main/java/io/confluent/parallelconsumer/streamsspike/` (create - the bridge and its worker pool; **this is fork-original code and lives in the repo normally**)
+- `parallel-consumer-streams/src/main/patch/pc-streams.patch` (modify)
+- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/` (create - the bridge and its worker pool; **this is fork-original code and lives in the repo normally**)
 
 **Approach:**
 
@@ -593,8 +593,8 @@ the flag-off path is green.
 
 **Files:**
 - `parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StockBaselineFixtureTest.java` (create)
-- `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/PcDrivenStreamsProofTest.java` (create)
-- `parallel-consumer-streams-spike/src/test/resources/stock-baseline-fixture.tsv` (create - the fixture
+- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/PcDrivenStreamsProofTest.java` (create)
+- `parallel-consumer-streams/src/test/resources/stock-baseline-fixture.tsv` (create - the fixture
   itself, tracked so the spike-side test has a baseline without re-running the stock arm, and re-verified
   against a live stock run on every execution of `StockBaselineFixtureTest`. It carries the *inputs* as
   well as the outputs, and the spike-side test replays those, so the two arms cannot drift in what they
@@ -637,9 +637,9 @@ choice, and land the verdict where the next person will find it.
 **Dependencies:** U6
 
 **Files:**
-- `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/PcDrivenStatefulProofTest.java` (create)
+- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/PcDrivenStatefulProofTest.java` (create)
 - `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (create - **lands on master**)
-- `parallel-consumer-streams-spike/README.md` (create - the alpha module's front door; **lands on master**)
+- `parallel-consumer-streams/README.md` (create - the alpha module's front door; **lands on master**)
 - `docs/plans/2026-08-07-002-investigate-kafka-streams-on-pc-report.md` (modify - link the result)
 
 **Approach:**
@@ -649,7 +649,7 @@ choice, and land the verdict where the next person will find it.
    exercises `ChangeLoggingKeyValueBytesStore` and `MeteredKeyValueStore` - the ambient `recordContext`
    readers that make U4's change load-bearing.
 2. Write the result document: the verdict; what was run; what broke and how it was diagnosed; which of
-   the report's §4 claims held; **the change-set size and shape (R8) - quote `pcspike.patch`'s line
+   the report's §4 claims held; **the change-set size and shape (R8) - quote `pc-streams.patch`'s line
    count and the classes it touches**; which KTD0 alternative a red or ambiguous result sends the
    question back to; and the next experiment.
 3. **Add a "What a green result commits to" section**, pricing at least: re-deriving the patch on every
@@ -658,7 +658,7 @@ choice, and land the verdict where the next person will find it.
    version would need, since build-time patching is a spike technique, not a product one.
 4. **Land the documents in the same PR as the code** (KTD-S5 - the module ships, so there is no longer a
    separate docs-only PR, and no `branch-`-prefixed inflight note, since that prefix is for work on a
-   branch with **no** PR). Add `parallel-consumer-streams-spike/README.md` as the module's own front
+   branch with **no** PR). Add `parallel-consumer-streams/README.md` as the module's own front
    door: what it is, that it is alpha and wants field testers, how to switch the seam **off** (KTD-S6 -
    it is on by default), a signpost to [Current Shortcomings](#current-shortcomings) rather than a copy
    of it, and how to report findings.
@@ -800,13 +800,13 @@ and this unit measures how many it resolves.
 unit must not disturb)
 
 **Files:**
-- `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` (modify - `StreamTask` hunks only;
+- `parallel-consumer-streams/src/main/patch/pc-streams.patch` (modify - `StreamTask` hunks only;
   the other three patched classes are untouched, and the patch surface stays at four)
-- `parallel-consumer-streams-spike/src/main/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcher.java`
+- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java`
   (modify - expose commit-data collection, a commit-outstanding signal, the commit-success
   acknowledgement pass-through, and an abort-style close - no drain, no completion feed-back,
   immediate `shutdownNow` - for the crash test; module class, free to grow)
-- `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/CommitFrontierCrashRestartTest.java`
+- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java`
   (create)
 - `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (modify - record the measured pile-A delta
   against the predictions)
@@ -897,7 +897,196 @@ green over repeated runs, with the reproduction count stated. Kafka's 188 stay g
 untouched. The pile-A delta is recorded in the result document with refuted predictions called out; both the
 baseline and the after-measurement are N-run, and a test that flips across runs is recorded as
 UNRESOLVED, not resolved.
-`pcspike.patch` still applies cleanly and its new hunk count is reported (R8).
+`pc-streams.patch` still applies cleanly and its new hunk count is reported (R8).
+
+---
+
+### U10. Pile B and rebalance: the close/suspend/recycle lifecycle
+
+**Goal:** Make the task lifecycle a tested path rather than an assumed one - **pile B and rebalance are
+one piece of work**, not two. Pile B's five failing `StreamTaskTest` cases are all close, suspend and
+recycle; rebalance is what drives those transitions in production. Every integration proof this module
+has is **one partition, one task, one instance**, so multi-task and multi-instance behaviour is
+*unexercised*, and six known issues sit in that territory with no coverage at all.
+
+Doing them together means pile B's tests become the fast inner loop (they run in seconds, without a
+broker) and the multi-instance IT becomes the outer proof.
+
+**Requirements:** R3, R10
+
+**Dependencies:** U9
+
+**Priority depends on what is shipping, and an earlier draft of this plan got that wrong** - it ranked
+U10 "MVP-blocking" by applying a production bar to a technical preview.
+
+- **Not blocking the v6 technical preview.** The preview's contract is at-least-once inside a stated
+  envelope, and rebalance duplicates sit *inside* that contract. What the preview owes is
+  **disclosure** - U11 must say rebalance is unexercised, in those words.
+- **Blocking production.** None of the six can ship to someone running this for real.
+- **One exception already pulled forward:** the revived-task stall was a *silent* hang - no progress,
+  no error, nothing logged. Patched `StreamTask.revive()` now throws instead, naming the cause and the
+  way out. Recreating the dispatcher is the real fix and stays in this unit; failing loudly is the
+  floor, and it cost no new patched class.
+
+**Files:**
+- `.../integrationTests/RebalanceUnderPcDispatchTest.java` (create - multi-partition, multi-instance)
+- `parallel-consumer-streams/src/main/patch/pc-streams.patch` (modify)
+- `.../PcTaskDispatcher.java` (modify)
+
+**The six known issues, all currently uncovered:**
+
+1. **The suspend-drain pump runs after every flow's final commit.** In 3.9.2 revocation and clean close
+   commit *before* `suspend()`, so drained outputs post-date the final commit: **duplicates on every
+   routine rebalance**. The design call: commit the post-drain frontier from the PC path, or move the
+   drain ahead of the commit.
+2. **A revived task keeps its closed dispatcher.** `closeDirtyAndRevive` resurrects the same
+   `StreamTask`; its dispatcher is closed, so records register forever and dispatch never runs.
+   **Now fails loudly** rather than hanging (see the priority note); recreating the dispatcher so
+   revival actually works is still this unit's job.
+3. **`prepareRecycle()` never closes the dispatcher** (found by U9's simplify pass). Active/standby
+   recycling leaks the dispatcher into the static `ACTIVE` registry, leaks its worker pool, and never
+   revokes its WorkManager partitions. Dormant only because no test configures standby replicas.
+4. **A timed-out drain falls through to `closeTopology()`** with workers still inside the chain.
+5. **`updateInputPartitions()` never propagates to the dispatcher** - stale partition set under
+   cooperative rebalancing.
+6. **`onOffsetCommitSuccess` has no epoch guard** - a stale ack could clear a reassigned partition's
+   dirty flag. Not reachable through today's 1:1 dispatcher-per-task wiring; becomes reachable if that
+   changes.
+
+**Execution note:** Start from a failing multi-instance test, not from the fix list. The list above is
+what code reading found; the test is what says which of them actually bite, and in what order.
+
+**Test scenarios:**
+- Two instances, multi-partition topic, one joins mid-run: no input's effect is lost, and duplicates are
+  bounded to the frontier-and-beyond window.
+- Revocation while records are in flight: the drained outputs are covered by a commit (issue 1).
+- Standby recycling: the dispatcher is closed and deregistered (issue 3).
+- A worker held past `PC_DRAIN_TIMEOUT` across `suspend()`: the task closes dirty rather than proceeding.
+
+**Verification:** The multi-instance test is green over repeated runs with the count stated. Each of the
+six issues is either fixed with a test, or explicitly re-recorded with evidence that it does not bite.
+
+---
+
+### U14. Piles C, D and H: buffering, error surfacing, and the metric
+
+**Goal:** Close the plumbing piles - the divergences that are wiring rather than design. Eight failures
+across three piles, none of which needs a decision, all of which need someone to do them.
+
+**Requirements:** R3
+
+**Dependencies:** U10
+
+**Pile C - buffering and pause/resume (4).** `StreamTask.addRecords`'s `maxBufferedSize` backpressure
+never fires, because PC holds the records rather than the partition group. PC has its own inflow
+control; it is simply not wired to Streams' pause/resume. Wire it, or record why PC's limits are the
+only ones that should apply.
+
+**Pile D - error surfacing and timeouts (3).** Failures reach the StreamThread a pump cycle late rather
+than synchronously, and the `TimeoutException` paths are unwired. The lateness is inherent to
+asynchronous dispatch; what is fixable is that the exception types and wrapping should match stock so
+existing error handling still recognises them.
+
+**Pile H - the metric (1).** `shouldRecordE2ELatencyOnSourceNodeAndTerminalNodes`. Triage first: it may
+be a genuine gap in the seam's instrumentation or another synchronous-assert artefact.
+
+**Execution note:** These are the piles where a fix is cheap and the test is already written - Kafka's
+own suite is the acceptance criteria. Work them with the seam on and let the failing cases drive.
+
+---
+
+### U11. The v6 supported envelope: refuse what is not proven, and say so
+
+**Goal:** Give v6 a named, enforced boundary instead of a shortcomings list. Two halves, and the second
+is what makes shipping honest: **enforce** the envelope in code, and **state** it in the documentation.
+
+**Requirements:** R6, R8
+
+**Dependencies:** U10
+
+**The envelope, as it stands:** stateless and non-windowed-stateful topologies, at-least-once,
+caching disabled, single Kafka version. Everything else refuses.
+
+**Approach:**
+
+1. **Enforce progressively, throw when reached.** Per the annotate-and-throw design: `@DoNotCall` plus
+   `@Deprecated` for compile-time refusal, `UnsupportedOperationException` from the body guarded on the
+   seam being enabled, and the `ProcessorTopology` check at task construction as the backstop.
+2. **Caching is the worked example.** A topology that enables caching on a store must fail loudly at
+   construction rather than producing quietly wrong results. This is the pattern for every other
+   unproven construct.
+3. **Reinstatement is evidence-gated**, not judgement-gated: an API comes back when Kafka's own suite
+   exercises it with the seam **on** and passes.
+
+**What the documentation must say, in these words or better:**
+
+- **"Stateful works" is true and shippable. "Stateful works at the same cost" is not.** Caching is
+  disabled, so every update emits rather than being conflated by the cache: RocksDB write amplification
+  and downstream volume both rise. A reader who takes "stateful works" at face value and hits that in
+  production will feel misled, and will be right. State the cost in the same breath as the capability.
+- **What we have proven is single-partition, single-task.** Until U10 lands, say so plainly rather than
+  letting "key concurrency for Kafka Streams" imply a normal multi-instance deployment.
+- **What is out of scope for v6, what is next, and why we expect it to work.** Not a bare exclusion
+  list - each item gets its reason and its expected route:
+  - *Stream time and windowing*: deferred because they are a semantic design question, not a work item.
+    The expected route is the frontier low-water mark (see [Current Shortcomings](#current-shortcomings)),
+    and the reason to expect it to work is that it is the mechanism already built and proven for offsets
+    applied to a second quantity.
+  - *Caching re-enabled*: deferred behind the per-thread `ThreadCache` budget and put-thread eviction
+    forwarding. Tracked as U12.
+  - *EOS*: far out. The transactional producer's thread affinity is a real boundary, not a backlog item.
+
+**Verification:** A topology using any unproven construct fails at construction with a message naming
+the construct and how to turn the seam off. The README states the envelope, the stateful cost, and the
+proven-scope limit.
+
+---
+
+### U12. Re-enable caching on stateful stores
+
+**Goal:** Remove the "stateful works, but not at the same cost" asterisk U11 has to publish. Promoted
+from a shortcoming to a unit because it is the difference between a usable stateful story and a
+caveated one.
+
+**Requirements:** R3
+
+**Dependencies:** U11
+
+**The three blockers, any one of which is currently sufficient to forbid it:** `CachingKeyValueStore`
+takes a whole-store exclusive lock; `ThreadCache`'s eviction budget is per-**thread** and shared across
+every task on that thread; and eviction runs downstream `forward()` calls on whichever thread called
+`put`. The third is the hardest: it puts an arbitrary worker inside another record's forward path.
+
+**Execution note:** Measure the cost first. If write amplification and downstream volume with caching
+off are small for realistic workloads, this unit is worth less than it looks and should be re-ranked.
+
+---
+
+### U13. Stream time under concurrency, and what it does to punctuation timing
+
+**Goal:** Answer the semantic question the whole windowing surface depends on, and characterise the
+timing divergence *before* anyone relies on it.
+
+**Requirements:** R3
+
+**Dependencies:** U10
+
+**The approach to test:** advance stream time to the **frontier** - the low-water mark over in-flight
+work - rather than to the highest timestamp dispatched. Reason to expect it to work: this is the
+mechanism already built and proven for offsets, applied to a second quantity. Completion tracking and
+watermarking are the same problem.
+
+**The risk that must be characterised early, not discovered late:** a low-water-mark stream time
+advances in **jumps tied to completion timing**, so punctuation firing times become non-deterministic
+relative to stock. The results should be *correct* but *differently timed*, and "differently timed"
+is a semantic change a windowed application can notice. Characterise the divergence - how far
+punctuation can lag stock, whether it is bounded by the slowest in-flight record, and whether two runs
+over identical input can fire punctuators at different points - before any windowed operator is
+reinstated.
+
+**Execution note:** This is the unit most likely to produce a genuinely novel result, and the one most
+likely to be talked about. Hold it to the evidence standard the benchmarks were held to: state the
+prediction first, and report refutations most prominently.
 
 ---
 
@@ -916,6 +1105,20 @@ was to find out how much of the gap is work and how much is design.
 | **F. Stream-time punctuation** | 2 | `shouldPunctuateOnceStreamTimeAfterGap`, `shouldRespectPunctuateCancellationStreamTime` |
 | **G. Ordering** | 1 | `shouldProcessInOrder` |
 | **H. Metrics** | 1 | `shouldRecordE2ELatencyOnSourceNodeAndTerminalNodes` |
+
+**The piles are the roadmap.** Each one is owned by a unit, deferred with a reason, or recorded as
+by-design - no pile is unassigned, because an unassigned pile is how a divergence survives to a release:
+
+| Pile | Count | Owner | State |
+|---|---|---|---|
+| A. Offset and commit accounting | 14 | **U9** | Done. Crash-safety proven in the integration arm; the unit tests stay red on metadata bytes by design (KTD-S7) |
+| B. Close / suspend / recycle lifecycle | 5 | **U10** | Next. Same territory as rebalance, so taken together - B's five tests are the ready-made check on whether the lifecycle fixes landed |
+| C. Buffering and pause/resume | 4 | **U14** | Planned. `maxBufferedSize` backpressure never fires because PC holds the records |
+| D. Error surfacing and timeouts | 3 | **U14** | Planned. Failures arrive a pump cycle late; the timeout paths are unwired |
+| E. EOS gating | 3 | - | Out of scope for v6 (KTD7). The transactional producer's thread affinity is a boundary, not a backlog item |
+| F. Stream-time punctuation | 2 | **U13** | Deferred with a route: the frontier low-water mark |
+| G. Ordering | 1 | - | By design: PC preserves order **per key**, not per partition. That is the trade the seam exists to make; the test asserts stock's partition ordering |
+| H. Metrics | 1 | **U14** | Planned. `shouldRecordE2ELatencyOnSourceNodeAndTerminalNodes` - triage with the plumbing pile |
 
 **Piles A to D are 26 of 33 - work, not design, except two of A's 14: the metadata-encoding
 assertions KTD-S7 leaves red by design.** A alone is 14, and A is exactly the item already
@@ -1014,7 +1217,7 @@ are not, and a few are genuinely hard; **the next working session's first job is
 which** and pick off the cheap ones. Nothing here is a defect discovered late - every item is a
 consequence of a decision recorded in this plan or in the result document's §8.
 
-They live here rather than in `parallel-consumer-streams-spike/README.md` on purpose: implementation has
+They live here rather than in `parallel-consumer-streams/README.md` on purpose: implementation has
 not stopped, so this list will move, and a README that enumerates it goes stale the week it is written.
 The README points here.
 
@@ -1068,10 +1271,13 @@ KTD-S7 and R10.** This entry retires when U9 lands.
 
 ### Caching must be disabled on stateful stores
 
-Three separate reasons, any one of which is sufficient: `CachingKeyValueStore` takes a whole-store
-exclusive lock; `ThreadCache`'s eviction budget is per-**thread** and shared across every task on that
-thread; and eviction runs downstream `forward()` calls on whichever thread happened to call `put`. None
-of that survives concurrent dispatch.
+**Promoted to [U12](#u12-re-enable-caching-on-stateful-stores).** Three separate reasons, any one of
+which is sufficient: `CachingKeyValueStore` takes a whole-store exclusive lock; `ThreadCache`'s eviction
+budget is per-**thread** and shared across every task on that thread; and eviction runs downstream
+`forward()` calls on whichever thread happened to call `put`. None of that survives concurrent dispatch.
+
+Until U12 lands this is a **published cost, not a hidden one**: "stateful works" is true, "stateful
+works at the same cost" is not, and U11 requires both halves to be stated together.
 
 Disabling it is not free, and the cost is user-visible rather than internal: with caching on, the DSL
 emits roughly one record per key per commit interval; with it off, it emits **every** update. Downstream
@@ -1223,12 +1429,12 @@ territory: what happens to in-flight PC work when Kafka Streams tears a task dow
    nothing (R7).
 4. `.github/scripts/issue-ref-gate.test.js` exits 0, and no added line carries an unqualified sub-1000
    issue reference.
-5. `parallel-consumer-streams-spike` installs and is publishable, and no **other** module's behaviour
+5. `parallel-consumer-streams` installs and is publishable, and no **other** module's behaviour
    changed (R6). Apache Kafka's own 188 tests run in the module's normal `test` phase - no profile flag -
    and are green with nothing skipped.
 6. U3's control arm is green before U4, after U4, and after U5 with the dispatch flag off - which, under
    KTD-S6, it turns off itself rather than inheriting from a default.
-7. `pcspike.patch` applies cleanly from a clean checkout, and the build fails loudly if it does not.
+7. `pc-streams.patch` applies cleanly from a clean checkout, and the build fails loudly if it does not.
 8. The result document and inflight note exist **on master**, whatever the verdict.
 9. U9's commit-frontier test is documented red-then-green; the kill-restart test (R10) is green
    over repeated runs with the reproduction count stated; Kafka's 188 remain green seam-off,
@@ -1257,11 +1463,11 @@ territory: what happens to in-flight PC work when Kafka Streams tears a task dow
 
 - The question in the Summary has an answer, positive or negative, backed by a test that runs - or an
   explicit stop at U3 or U5 with its verdict written down.
-- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` and `parallel-consumer-streams-spike/README.md`
-  are **on master**, recording the verdict, the evidence, `pcspike.patch`'s size and the classes it
+- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` and `parallel-consumer-streams/README.md`
+  are **on master**, recording the verdict, the evidence, `pc-streams.patch`'s size and the classes it
   touches (R8), what a green result would commit to, which KTD0 alternative the result points back to,
   and the reproduction rate.
 - The Verification Contract passes in full - including item 3, no tracked Kafka source.
-- No **other** module's behaviour changed. `parallel-consumer-streams-spike` publishes as an alpha
+- No **other** module's behaviour changed. `parallel-consumer-streams` publishes as an alpha
   artifact, labelled as such (KTD-S5), with the seam on by default and a documented way to turn it off
   (KTD-S6).

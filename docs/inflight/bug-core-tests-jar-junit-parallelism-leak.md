@@ -16,12 +16,12 @@ that its own configuration does not mention. It is invisible until something is 
 isolation-sensitive, and then it looks like a flake in the consuming module.
 
 **How it surfaced.** Apache Kafka's own `StreamTaskTest`, run against the patched classes in
-`parallel-consumer-streams-spike`, failed **159 tests on state-directory lock contention** before anyone
+`parallel-consumer-streams`, failed **159 tests on state-directory lock contention** before anyone
 had looked at the patch. Kafka's tests are written for a serial runner - `StreamTaskTest` pins a fixed
 state-directory name and shares `MockProducer`/`MockConsumer` per instance. Nothing in that module
 requested parallelism; it arrived with the core tests jar.
 
-**Worked around, not fixed.** `parallel-consumer-streams-spike/pom.xml` pins it off for the Kafka
+**Worked around, not fixed.** `parallel-consumer-streams/pom.xml` pins it off for the Kafka
 execution via surefire `configurationParameters`, which outrank the properties file:
 
 ```xml

@@ -1,6 +1,6 @@
 # Publishing patched-Kafka modules: packaging, docs, and licensing
 
-Raised when `parallel-consumer-streams-spike` (astubbs#255) flipped from throwaway to a published
+Raised when `parallel-consumer-streams` (astubbs#255) flipped from throwaway to a published
 alpha module. A second worktree is doing the same for Kafka **Connect**, so these questions now apply
 to a family of modules rather than one, and answering them once is cheaper than twice.
 
@@ -100,7 +100,7 @@ burying the alpha, which is worth finding.
 The open question: how do we publish artifacts that contain patched Apache Kafka code?
 
 **A hazard that makes this urgent, found while verifying the alpha publish.** The published
-`parallel-consumer-streams-spike` jar contains six compiled classes under
+`parallel-consumer-streams` jar contains six compiled classes under
 `org/apache/kafka/streams/processor/internals/` - `StreamTask`, `AbstractProcessorContext`,
 `ProcessorContextImpl`, `RecordCollectorImpl` and two inner classes. That is the whole mechanism: they
 precede the real `kafka-streams` jar on the classpath and win.
@@ -124,7 +124,7 @@ Options to weigh:
 Whatever we pick has to work for Streams and Connect the same way.
 
 **Our own names carry "spike", and that should not ship.** The module is
-`parallel-consumer-streams-spike` and its code lives in `io.confluent.parallelconsumer.streamsspike`.
+`parallel-consumer-streams` and its code lives in `io.confluent.parallelconsumer.streams`.
 "Spike" describes how the work started, not what it is now that it is published. The concrete ask is to
 rename the package - at minimum take "spike" out of it - and it wants settling together with the
 groupId and artifactId above rather than separately, because all three are one naming decision and a

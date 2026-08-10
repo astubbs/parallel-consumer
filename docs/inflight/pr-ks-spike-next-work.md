@@ -1,6 +1,6 @@
 # Kafka Streams spike: the next moves, ranked
 
-For the `parallel-consumer-streams-spike` work (astubbs#255). Detail and measurements live in
+For the `parallel-consumer-streams` work (astubbs#255). Detail and measurements live in
 `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`; this file is the ranked worklist. Presentation
 work - the example demo, the API stability tag, and dropping "spike" from the name - is in
 `next-streams-module-graduation.md`.

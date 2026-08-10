@@ -32,24 +32,24 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Generates - and, on every subsequent run, re-verifies - the <b>stateful</b> stock Kafka Streams baseline
- * that {@code PcDrivenStatefulProofTest} in {@code parallel-consumer-streams-spike} asserts against (U7).
+ * that {@code PcDrivenStatefulProofTest} in {@code parallel-consumer-streams} asserts against (U7).
  * <p>
- * See {@link StockBaselineFixtureSupport} for why a generator for the spike lives in an examples module, and
+ * See {@link StockBaselineFixtureSupport} for why a generator for the module lives in an examples module, and
  * for the fixture format.
  * <p>
- * <b>Why a non-windowed count, and nothing more ambitious.</b> The spike's thread-confinement change is only
+ * <b>Why a non-windowed count, and nothing more ambitious.</b> The module's thread-confinement change is only
  * load-bearing where something reads the per-task record context <em>ambiently</em>, and in Kafka Streams
  * that is the state-store stack: {@code MeteredKeyValueStore}, {@code ChangeLoggingKeyValueBytesStore} and
  * {@code StoreQueryUtils}. A stateless topology instantiates none of them. Windowed operators, joins and
  * suppression would instantiate them too, but they also change their own semantics under out-of-order
  * processing - so a failure there could not be attributed to the confinement, which is the only thing the
- * spike is trying to measure. A non-windowed aggregation is the smallest topology that makes the store stack
+ * module is trying to measure. A non-windowed aggregation is the smallest topology that makes the store stack
  * real while keeping the expected output a fixed, order-independent fact.
  * <p>
  * <b>Caching is disabled deliberately, and it is not free.</b> With the record cache on, a KTable emits only
  * on flush and the downstream sees one record per key per commit; with it off, every update is forwarded, so
  * this baseline has exactly one output per input and the counts appear as {@code 1, 2, 3, 4, 5}. That is a
- * DSL emission-semantics change, not an implementation detail - the spike's write-up prices it.
+ * DSL emission-semantics change, not an implementation detail - the module's write-up prices it.
  *
  * @author Antony Stubbs
  * @see StockBaselineFixtureTest
@@ -57,13 +57,13 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 class StockStatefulBaselineFixtureTest extends StockBaselineFixtureSupport {
 
-    static final String COUNT_STORE = "pc-spike-counts";
+    static final String COUNT_STORE = "pc-streams-counts";
 
     static final String TOPOLOGY =
             "stream -> groupByKey -> count(Materialized.as(\"" + COUNT_STORE + "\").withCachingDisabled()) -> toStream -> to";
 
     static final String FIXTURE_RELATIVE_PATH =
-            SPIKE_MODULE + "/src/test/resources/stock-stateful-baseline-fixture.tsv";
+            PATCHED_MODULE + "/src/test/resources/stock-stateful-baseline-fixture.tsv";
 
     /**
      * Same premise as the stateless generator's, asserted again rather than assumed to still hold: this
@@ -166,7 +166,7 @@ class StockStatefulBaselineFixtureTest extends StockBaselineFixtureSupport {
         for (Map.Entry<String, List<String>> entry : countsByKey.entrySet()) {
             assertThat(entry.getValue())
                     .as("key %s must count 1..%s in order - a baseline recorded from a run that lost an "
-                            + "update would make the spike's headline assertion meaningless", entry.getKey(),
+                            + "update would make the module's headline assertion meaningless", entry.getKey(),
                             RECORDS_PER_KEY)
                     .containsExactlyElementsOf(expectedSequence);
         }
