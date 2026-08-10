@@ -185,7 +185,7 @@ public final class PcDispatchSwitch {
     }
 
     /**
-     * Absent means on, and anything that is not {@code true}/{@code false} throws. Shared by both switches
+     * Absent means on, and anything that is not {@code true}/{@code false} throws. Shared by every switch
      * rather than copied, because the loud-failure rule above is the whole point and two copies is how one of
      * them quietly stops enforcing it.
      */

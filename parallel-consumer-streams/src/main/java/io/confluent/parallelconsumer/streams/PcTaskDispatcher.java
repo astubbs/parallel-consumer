@@ -92,9 +92,12 @@ import java.util.concurrent.atomic.AtomicReference;
  *       thread.</li>
  *   <li>{@link #isClosed()}, {@link #getInFlightCount()}, {@link #hasPendingCompletions()},
  *       {@link #isQuiescent()}, {@link #hasPendingFailure()},
- *       {@link #getBufferedRecordCount(TopicPartition)}, {@link #getBufferedRecordCount()} and the
- *       counters - <b>any thread</b>, for the same reason as the first bullet: atomics, concurrent
- *       collections and volatiles only. The buffered counts are read from
+ *       {@link #getBufferedRecordCount(TopicPartition)}, {@link #getBufferedRecordCount()} and the five
+ *       record counters ({@code getRecordsOffered} through {@code getRecordsFailed}) - <b>any thread</b>,
+ *       for the same reason as the first bullet: atomics, concurrent
+ *       collections and volatiles only. <b>Not {@code getBufferedUnderflowCount()}</b>, which is a plain
+ *       {@code int} and owner-thread-only - it is named like the others and is not one of them. The
+ *       buffered counts are read from
  *       {@code StreamTask.addRecords} on the StreamThread, and sampled from a watcher thread by the
  *       memory-bound proof, which is what makes "any thread" a requirement here rather than a
  *       convenience (astubbs#255, U14).</li>
@@ -263,8 +266,13 @@ public class PcTaskDispatcher implements Closeable {
      * {@link #registerRecords} for why the increment is measured rather than counted.
      *
      * <p>Records queued behind a <em>failed</em> record on the same key stay counted, and that is correct
-     * rather than a trap: they genuinely are in memory and will never be handed out. Their partition stays
-     * paused, and the task is already dying, because the failure surfaces through {@link #pollFailure()}.
+     * rather than a trap: they genuinely are in memory and will never be handed out.
+     *
+     * <p><b>And it is not only their partition that stops draining</b> - a pending failure halts this whole
+     * dispatcher, not just the poison key's shard (see {@link #hasPendingFailure()}). Worth knowing before
+     * debugging why an <em>unrelated</em> partition's count has stopped falling: the cause may be a failure
+     * on a different partition of the same task rather than an accounting bug here. The task is dying either
+     * way, because the failure surfaces through {@link #pollFailure()}.
      */
     private final Map<TopicPartition, Integer> bufferedByPartition = new ConcurrentHashMap<>();
 
@@ -492,6 +500,16 @@ public class PcTaskDispatcher implements Closeable {
      *
      * <p>Asking PC per record instead keeps both sides in the same unit, and asks the same question
      * {@code registerWork} is about to ask itself.
+     *
+     * <p><b>KNOWN RESIDUAL, and it is the honest cost of not changing a shared API.</b> This asks the
+     * question <em>before</em> {@code registerWork} runs, while PC's own answer is computed <em>after</em>
+     * the truncation {@code registerWork} performs - so the two evaluations are not guaranteed to see the
+     * same partition state, and a batch straddling a bootstrap truncation could be counted differently from
+     * the way it is queued. The real fix is for {@code WorkManager.registerWork} to report how many records
+     * it queued, since {@code PartitionState.maybeRegisterNewPollBatchAsWork} already computes exactly that
+     * - but that is a shared {@code parallel-consumer-core} API change made for a streams-module gain, so it
+     * is recorded here rather than smuggled in. The blast radius is bounded: a mismatch shows up as a
+     * non-zero {@link #getBufferedUnderflowCount()}, which is why that counter exists and is asserted on.
      */
     private int countRecordsPcWillQueue(final TopicPartition partition,
                                         final EpochAndRecordsMap<byte[], byte[]> batch) {
@@ -787,8 +805,10 @@ public class PcTaskDispatcher implements Closeable {
      * bound would then be "everything PC holds" rather than "what was already running", which is no bound at
      * all.
      * <p>
-     * Cleared only by {@link #close()} or {@link #abortClose()}, because those are the only points at which
-     * this dispatcher stops being the one that failed. A revived task is refused outright by the patched
+     * <b>Never actually reset.</b> {@link #close()} and {@link #abortClose()} make it moot rather than
+     * clearing it: {@link #dispatchAvailable} tests {@code closed} first, so a closed dispatcher never
+     * consults this again. Said precisely rather than as "cleared on close", because a javadoc claim you
+     * could check and find false is the exact defect this class's history is made of. A revived task is refused outright by the patched
      * {@code StreamTask.revive()}, so there is no path that needs it cleared while still live.
      * <p>
      * A question, so it does not mutate.
