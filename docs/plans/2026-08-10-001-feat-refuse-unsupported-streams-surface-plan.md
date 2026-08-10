@@ -271,9 +271,14 @@ every signature survives.
 - `parallel-consumer-streams/src/main/patch/pc-streams.patch` - regenerated
 
 **Approach:**
-1. Two lines per method, no more: `@Deprecated` and `@DoNotCall("<reason>")`. `@DoNotCall`'s optional
+1. ~~Two lines per method, no more: `@Deprecated` and `@DoNotCall("<reason>")`. `@DoNotCall`'s optional
    `value` carries the reason, so no javadoc edit is needed and the patch stays proportional to the method
-   count rather than to the file size.
+   count rather than to the file size.~~ **Wrong, and corrected in the branch.** `@DoNotCall`'s message is
+   read only by ErrorProne, and an ErrorProne build has already failed hard with a full error - so that
+   reasoning reached exactly the audience that needed it least. Everyone else got the `@Deprecated`
+   strikethrough with no reason attached, whose obvious reading is "Apache Kafka deprecated `join`" - false,
+   and alarming. Each refused overload therefore also carries a javadoc `@deprecated` tag: same reason,
+   naming this module as the refuser and the switch that turns it off. Three lines per method plus the tag.
 2. Group the reason strings by construct so the compile error a user sees matches the runtime message
    layer 2 produces for the same call.
 3. Do **not** annotate the impl overrides. See Scope Boundaries.
@@ -299,6 +304,11 @@ override these now-deprecated methods.
   weaker per-class assertion is what is available.
 - Assert a control: a supported method on the same interface (e.g. `KStream.mapValues`) is **not**
   deprecated, so the test would fail if the annotation were applied indiscriminately.
+- Assert that every `@Deprecated` the patch adds sits behind a javadoc block carrying a `@deprecated` tag,
+  by walking the patch's post-image. Structural rather than wording-based, so rephrasing a tag passes but
+  forgetting one on an overload a future Kafka adds does not. Pair it with a count of the javadoc lines
+  naming this module, which is the only way to cover the four overloads Kafka had already deprecated - for
+  those the patch adds no `@Deprecated` of its own, and appends to Kafka's existing tag instead.
 
 **Verification:** `KStream`, `KTable`, `KGroupedStream` and `CogroupedKStream` compile into
 `target/classes` and win over the jar.

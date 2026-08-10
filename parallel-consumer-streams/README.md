@@ -26,7 +26,7 @@ consumer poll
 Under PC's KEY ordering, at most one record per key is in flight, so records on distinct keys of the same
 partition run concurrently while per-key order is preserved.
 
-The Kafka side of the change is a **1477-line patch across 13 Kafka classes**: the dispatch seam itself is
+The Kafka side of the change is a **1774-line patch across 13 Kafka classes**: the dispatch seam itself is
 5 `processor.internals` classes (`StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`,
 `RecordCollectorImpl`, `StreamThread`), and the other 8 are the `kstream` interfaces and impls that carry
 the refusals below. It needed **no new Parallel Consumer API**.
@@ -183,6 +183,12 @@ own 419 tests still pass unmodified.
 property, so `@DoNotCall` fires in any build running ErrorProne no matter what the switch says. If you
 have deliberately turned the seam off and want the call anyway, suppress the ErrorProne check at the call
 site - the property will not do it for you.
+
+**Every refused method also carries a javadoc `@deprecated` tag saying so in as many words.** Without one,
+an IDE strikes `stream.join(...)` through with no reason attached, and the obvious inference - Apache Kafka
+deprecated `join` - is false and alarming. `@DoNotCall`'s message is no help there: only ErrorProne reads
+it, and an ErrorProne build has already failed hard. So the tag names this module as the thing refusing,
+gives the same reason, and points at the switch that turns it off.
 
 **The method signatures are all still there.** Nothing was deleted: Kafka's own test suite calls these
 methods heavily, and deleting them would stop that suite compiling and forfeit the evidence below.

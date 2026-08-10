@@ -1,6 +1,6 @@
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java kafka-patched/org/apache/kafka/streams/kstream/CogroupedKStream.java
 --- a/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-08-10 23:38:21.483457141 +1200
++++ b/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-08-11 00:19:12.330011201 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -9,27 +9,42 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java 
  import org.apache.kafka.common.utils.Bytes;
  import org.apache.kafka.streams.KafkaStreams;
  import org.apache.kafka.streams.KeyValue;
-@@ -296,6 +297,8 @@
+@@ -295,7 +296,13 @@
+      * @param <W>     the window type
       *
       * @return an instance of {@link TimeWindowedCogroupedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
      <W extends Window> TimeWindowedCogroupedKStream<K, VAgg> windowedBy(final Windows<W> windows);
  
      /**
-@@ -307,6 +310,8 @@
+@@ -306,7 +313,13 @@
+      *        the specification of the aggregation {@link SlidingWindows}
       *
       * @return an instance of {@link TimeWindowedCogroupedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
      TimeWindowedCogroupedKStream<K, VAgg> windowedBy(final SlidingWindows windows);
  
      /**
-@@ -318,6 +323,8 @@
+@@ -317,7 +330,13 @@
+      *        the specification of the aggregation {@link SessionWindows}
       *
       * @return an instance of {@link SessionWindowedCogroupedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
@@ -38,7 +53,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java 
  }
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-08-10 23:38:21.484050196 +1200
++++ b/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-08-11 00:16:04.040448454 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -82,7 +97,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/CogroupedKSt
              builder,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-08-10 23:38:21.484602875 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-08-11 00:16:04.040991838 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -126,7 +141,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KGroupedStre
              windows,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-08-10 23:38:21.486408291 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-08-11 00:16:04.042757993 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -170,7 +185,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KStreamImpl.
  
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KTableImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KTableImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-08-10 23:38:21.488063745 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-08-11 00:16:04.044354937 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -214,7 +229,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KTableImpl.j
          Objects.requireNonNull(joiner, "joiner can't be null");
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java kafka-patched/org/apache/kafka/streams/kstream/KGroupedStream.java
 --- a/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-08-10 23:38:21.489162145 +1200
++++ b/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-08-11 00:19:12.329149519 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -223,27 +238,40 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java ka
  import org.apache.kafka.common.utils.Bytes;
  import org.apache.kafka.streams.KafkaStreams;
  import org.apache.kafka.streams.KeyValue;
-@@ -544,6 +545,8 @@
+@@ -543,21 +544,39 @@
+      * @param windows the specification of the aggregation {@link Windows}
       * @param <W>     the window type
       * @return an instance of {@link TimeWindowedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
      <W extends Window> TimeWindowedKStream<K, V> windowedBy(final Windows<W> windows);
  
      /**
-@@ -551,6 +554,8 @@
+      * Create a new {@link TimeWindowedKStream} instance that can be used to perform sliding windowed aggregations.
       * @param windows the specification of the aggregation {@link SlidingWindows}
       * @return an instance of {@link TimeWindowedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
      TimeWindowedKStream<K, V> windowedBy(final SlidingWindows windows);
  
      /**
-@@ -558,6 +563,8 @@
+      * Create a new {@link SessionWindowedKStream} instance that can be used to perform session windowed aggregations.
       * @param windows the specification of the aggregation {@link SessionWindows}
       * @return an instance of {@link TimeWindowedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
@@ -252,7 +280,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java ka
      /**
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-patched/org/apache/kafka/streams/kstream/KStream.java
 --- a/org/apache/kafka/streams/kstream/KStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KStream.java	2026-08-10 23:38:21.495824547 +1200
++++ b/org/apache/kafka/streams/kstream/KStream.java	2026-08-11 00:19:12.326168510 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -261,252 +289,392 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-pat
  import org.apache.kafka.common.serialization.Serde;
  import org.apache.kafka.common.serialization.Serdes;
  import org.apache.kafka.common.utils.Bytes;
-@@ -1255,6 +1256,8 @@
+@@ -1254,7 +1255,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key and within the joining window intervals
       * @see #leftJoin(KStream, ValueJoiner, JoinWindows)
       * @see #outerJoin(KStream, ValueJoiner, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
                                   final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                   final JoinWindows windows);
-@@ -1332,6 +1335,8 @@
+@@ -1331,7 +1338,13 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key and within the joining window intervals
       * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows)
       * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
                                   final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
                                   final JoinWindows windows);
-@@ -1411,6 +1416,8 @@
+@@ -1410,7 +1423,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key and within the joining window intervals
       * @see #leftJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
       * @see #outerJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
                                   final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                   final JoinWindows windows,
-@@ -1492,6 +1499,8 @@
+@@ -1491,7 +1510,13 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key and within the joining window intervals
       * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
       * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
                                   final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
                                   final JoinWindows windows,
-@@ -1572,6 +1581,8 @@
+@@ -1571,7 +1596,13 @@
+      * this {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoiner, JoinWindows)
       * @see #outerJoin(KStream, ValueJoiner, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                       final JoinWindows windows);
-@@ -1652,6 +1663,8 @@
+@@ -1651,7 +1682,13 @@
+      * this {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoinerWithKey, JoinWindows)
       * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
                                       final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
                                       final JoinWindows windows);
-@@ -1735,6 +1748,8 @@
+@@ -1734,7 +1771,13 @@
+      * this {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoiner, JoinWindows, StreamJoined)
       * @see #outerJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                       final JoinWindows windows,
-@@ -1820,6 +1835,8 @@
+@@ -1819,7 +1862,13 @@
+      * this {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
       * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
                                       final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
                                       final JoinWindows windows,
-@@ -1901,6 +1918,8 @@
+@@ -1900,7 +1949,13 @@
+      * both {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoiner, JoinWindows)
       * @see #leftJoin(KStream, ValueJoiner, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
                                        final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                        final JoinWindows windows);
-@@ -1982,6 +2001,8 @@
+@@ -1981,7 +2036,13 @@
+      * both {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoinerWithKey, JoinWindows)
       * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
                                        final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
                                        final JoinWindows windows);
-@@ -2066,6 +2087,8 @@
+@@ -2065,7 +2126,13 @@
+      * both {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoiner, JoinWindows, StreamJoined)
       * @see #leftJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
                                        final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                        final JoinWindows windows,
-@@ -2152,6 +2175,8 @@
+@@ -2151,7 +2218,13 @@
+      * both {@code KStream} and within the joining window intervals
       * @see #join(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
       * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated and stream time does
++     *             not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as
++     *             stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated and stream time does not advance there")
      <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
                                        final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
                                        final JoinWindows windows,
-@@ -2229,6 +2254,8 @@
+@@ -2228,7 +2301,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoiner)
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
                                   final ValueJoiner<? super V, ? super VT, ? extends VR> joiner);
  
-@@ -2307,6 +2334,8 @@
+@@ -2306,7 +2385,13 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoinerWithKey)
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
                                   final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner);
  
-@@ -2385,6 +2414,8 @@
+@@ -2384,7 +2469,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoiner, Joined)
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
                                   final ValueJoiner<? super V, ? super VT, ? extends VR> joiner,
                                   final Joined<K, V, VT> joined);
-@@ -2466,6 +2497,8 @@
+@@ -2465,7 +2556,13 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoinerWithKey, Joined)
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
                                   final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner,
                                   final Joined<K, V, VT> joined);
-@@ -2546,6 +2579,8 @@
+@@ -2545,7 +2642,13 @@
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
       * @see #join(KTable, ValueJoiner)
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
                                       final ValueJoiner<? super V, ? super VT, ? extends VR> joiner);
  
-@@ -2626,6 +2661,8 @@
+@@ -2625,7 +2728,13 @@
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
       * @see #join(KTable, ValueJoinerWithKey)
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
                                       final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner);
  
-@@ -2707,6 +2744,8 @@
+@@ -2706,7 +2815,13 @@
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
       * @see #join(KTable, ValueJoiner, Joined)
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
                                       final ValueJoiner<? super V, ? super VT, ? extends VR> joiner,
                                       final Joined<K, V, VT> joined);
-@@ -2790,6 +2829,8 @@
+@@ -2789,7 +2904,13 @@
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
       * @see #join(KTable, ValueJoinerWithKey, Joined)
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that does not advance there")
      <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
                                       final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner,
                                       final Joined<K, V, VT> joined);
-@@ -2821,6 +2862,8 @@
+@@ -2820,7 +2941,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoiner}, one output for each input {@code KStream} record
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
      <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
                                       final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
                                       final ValueJoiner<? super V, ? super GV, ? extends RV> joiner);
-@@ -2853,6 +2896,8 @@
+@@ -2852,7 +2979,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
      <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
                                       final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
                                       final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> joiner);
-@@ -2885,6 +2930,8 @@
+@@ -2884,7 +3017,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoiner}, one output for each input {@code KStream} record
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
      <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
                                       final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
                                       final ValueJoiner<? super V, ? super GV, ? extends RV> joiner,
-@@ -2919,6 +2966,8 @@
+@@ -2918,7 +3057,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
       * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
      <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
                                       final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
                                       final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> joiner,
-@@ -2955,6 +3004,8 @@
+@@ -2954,7 +3099,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoiner}, one output for each input {@code KStream} record
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
      <GK, GV, RV> KStream<K, RV> leftJoin(final GlobalKTable<GK, GV> globalTable,
                                           final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
                                           final ValueJoiner<? super V, ? super GV, ? extends RV> valueJoiner);
-@@ -2991,6 +3042,8 @@
+@@ -2990,7 +3141,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
      <GK, GV, RV> KStream<K, RV> leftJoin(final GlobalKTable<GK, GV> globalTable,
                                           final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
                                           final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> valueJoiner);
-@@ -3027,6 +3080,8 @@
+@@ -3026,7 +3183,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoiner}, one output for each input {@code KStream} record
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
      <GK, GV, RV> KStream<K, RV> leftJoin(final GlobalKTable<GK, GV> globalTable,
                                           final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
                                           final ValueJoiner<? super V, ? super GV, ? extends RV> valueJoiner,
-@@ -3064,6 +3119,8 @@
+@@ -3063,7 +3226,13 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
       * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
       * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that does not
++     *             advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves exactly as stock
++     *             Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that does not advance there")
@@ -515,7 +683,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-pat
                                           final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> valueJoiner,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patched/org/apache/kafka/streams/kstream/KTable.java
 --- a/org/apache/kafka/streams/kstream/KTable.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KTable.java	2026-08-10 23:38:21.499264667 +1200
++++ b/org/apache/kafka/streams/kstream/KTable.java	2026-08-11 00:19:12.327923290 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -524,221 +692,350 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patc
  import org.apache.kafka.common.serialization.Serde;
  import org.apache.kafka.common.utils.Bytes;
  import org.apache.kafka.streams.KafkaStreams;
-@@ -728,6 +729,8 @@
+@@ -727,7 +728,13 @@
+      *
       * @param suppressed Configuration object determining what, if any, updates to suppress
       * @return A new KTable with the desired suppression characteristics.
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because "only the final result per window" is a statement about
++     *             stream time, which does not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("suppress is not supported on the Parallel Consumer dispatch path (astubbs#255): \"only the final result per window\" is a statement about stream time, which does not advance there")
      KTable<K, V> suppress(final Suppressed<? super K> suppressed);
  
      /**
-@@ -1175,6 +1178,8 @@
+@@ -1174,7 +1181,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoiner)
       * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
                                  final ValueJoiner<? super V, ? super VO, ? extends VR> joiner);
  
-@@ -1251,6 +1256,8 @@
+@@ -1250,7 +1263,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoiner)
       * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
                                  final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                  final Named named);
-@@ -1330,6 +1337,8 @@
+@@ -1329,7 +1348,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoiner, Materialized)
       * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
                                  final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                  final Materialized<K, VR, KeyValueStore<Bytes, byte[]>> materialized);
-@@ -1410,6 +1419,8 @@
+@@ -1409,7 +1434,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
       * @see #leftJoin(KTable, ValueJoiner, Materialized)
       * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
                                  final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                  final Named named,
-@@ -1494,6 +1505,8 @@
+@@ -1493,7 +1524,13 @@
+      * left {@code KTable}
       * @see #join(KTable, ValueJoiner)
       * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner);
  
-@@ -1577,6 +1590,8 @@
+@@ -1576,7 +1613,13 @@
+      * left {@code KTable}
       * @see #join(KTable, ValueJoiner)
       * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                      final Named named);
-@@ -1663,6 +1678,8 @@
+@@ -1662,7 +1705,13 @@
+      * left {@code KTable}
       * @see #join(KTable, ValueJoiner, Materialized)
       * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                      final Materialized<K, VR, KeyValueStore<Bytes, byte[]>> materialized);
-@@ -1750,6 +1767,8 @@
+@@ -1749,7 +1798,13 @@
+      * left {@code KTable}
       * @see #join(KTable, ValueJoiner, Materialized)
       * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                      final Named named,
-@@ -1833,6 +1852,8 @@
+@@ -1832,7 +1887,13 @@
+      * both {@code KTable}s
       * @see #join(KTable, ValueJoiner)
       * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner);
  
-@@ -1916,6 +1937,8 @@
+@@ -1915,7 +1976,13 @@
+      * both {@code KTable}s
       * @see #join(KTable, ValueJoiner)
       * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                       final Named named);
-@@ -2001,6 +2024,8 @@
+@@ -2000,7 +2067,13 @@
+      * both {@code KTable}s
       * @see #join(KTable, ValueJoiner)
       * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                       final Materialized<K, VR, KeyValueStore<Bytes, byte[]>> materialized);
-@@ -2088,6 +2113,8 @@
+@@ -2087,7 +2160,13 @@
+      * both {@code KTable}s
       * @see #join(KTable, ValueJoiner)
       * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
      <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
                                       final Named named,
-@@ -2107,6 +2134,8 @@
+@@ -2106,7 +2185,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
                                      final Function<V, KO> foreignKeyExtractor,
                                      final ValueJoiner<V, VO, VR> joiner);
-@@ -2129,6 +2158,7 @@
+@@ -2127,8 +2212,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
       * @deprecated since 3.1, removal planned for 4.0. Use {@link #join(KTable, Function, ValueJoiner, TableJoined)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
       */
      @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
                                      final Function<V, KO> foreignKeyExtractor,
                                      final ValueJoiner<V, VO, VR> joiner,
-@@ -2152,6 +2182,8 @@
+@@ -2151,7 +2241,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
                                      final Function<V, KO> foreignKeyExtractor,
                                      final ValueJoiner<V, VO, VR> joiner,
-@@ -2173,6 +2205,8 @@
+@@ -2172,7 +2268,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
                                      final Function<V, KO> foreignKeyExtractor,
                                      final ValueJoiner<V, VO, VR> joiner,
-@@ -2198,6 +2232,7 @@
+@@ -2196,8 +2298,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
       * @deprecated since 3.1, removal planned for 4.0. Use {@link #join(KTable, Function, ValueJoiner, TableJoined, Materialized)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
       */
      @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
                                      final Function<V, KO> foreignKeyExtractor,
                                      final ValueJoiner<V, VO, VR> joiner,
-@@ -2224,6 +2259,8 @@
+@@ -2223,7 +2330,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
                                      final Function<V, KO> foreignKeyExtractor,
                                      final ValueJoiner<V, VO, VR> joiner,
-@@ -2244,6 +2281,8 @@
+@@ -2243,7 +2356,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains only those records that satisfy the given predicate
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
                                          final Function<V, KO> foreignKeyExtractor,
                                          final ValueJoiner<V, VO, VR> joiner);
-@@ -2266,6 +2305,7 @@
+@@ -2264,8 +2383,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
       * @deprecated since 3.1, removal planned for 4.0. Use {@link #leftJoin(KTable, Function, ValueJoiner, TableJoined)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
       */
      @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
                                          final Function<V, KO> foreignKeyExtractor,
                                          final ValueJoiner<V, VO, VR> joiner,
-@@ -2288,6 +2328,8 @@
+@@ -2287,7 +2411,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
                                          final Function<V, KO> foreignKeyExtractor,
                                          final ValueJoiner<V, VO, VR> joiner,
-@@ -2309,6 +2351,8 @@
+@@ -2308,7 +2438,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
                                          final Function<V, KO> foreignKeyExtractor,
                                          final ValueJoiner<V, VO, VR> joiner,
-@@ -2334,6 +2378,7 @@
+@@ -2332,8 +2468,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
       * @deprecated since 3.1, removal planned for 4.0. Use {@link #leftJoin(KTable, Function, ValueJoiner, TableJoined, Materialized)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
       */
      @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
      <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
                                          final Function<V, KO> foreignKeyExtractor,
                                          final ValueJoiner<V, VO, VR> joiner,
-@@ -2360,6 +2405,8 @@
+@@ -2359,7 +2500,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
       * @param <VO>                the value type of the other {@code KTable}
       * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
       */
 +    @Deprecated
 +    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
@@ -747,7 +1044,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patc
                                          final ValueJoiner<V, VO, VR> joiner,
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
 --- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-10 23:38:21.500009475 +1200
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-11 00:16:04.058293631 +1200
 @@ -44,8 +44,13 @@
      private final Serde<?> keySerde;
      private final Serde<?> valueSerde;
@@ -876,7 +1173,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractPr
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
 --- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-10 23:38:21.500641240 +1200
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-11 00:16:04.058935851 +1200
 @@ -243,7 +243,11 @@
                      "multiple times.");
          }
@@ -922,7 +1219,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorC
      }
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
 --- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-10 23:38:21.501512301 +1200
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-11 00:16:04.059866658 +1200
 @@ -64,6 +64,7 @@
  import java.util.Objects;
  import java.util.Optional;
@@ -956,7 +1253,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordColl
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
 --- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-10 23:41:06.369951202 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-11 00:16:04.061718439 +1200
 @@ -16,6 +16,8 @@
   */
  package org.apache.kafka.streams.processor.internals;
@@ -1414,7 +1711,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      public void updateEndOffsets(final TopicPartition topicPartition, final Long offset) {
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamThread.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamThread.java
 --- a/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-08-10 23:40:57.802311010 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-08-11 00:16:04.063585304 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.processor.internals;
