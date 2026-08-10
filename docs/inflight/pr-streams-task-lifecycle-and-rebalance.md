@@ -1,140 +1,138 @@
-# The Kafka Streams task lifecycle under PC dispatch: four of seven divergences closed, three re-recorded
+# Rebalance under PC dispatch: one shape proven, and the shapes that are not
 
 For `parallel-consumer-streams` (astubbs#255), and **relevant to the Connect module too** - it wraps a
 task whose lifecycle the framework drives the same way, so most of these questions transfer.
 
-Recorded here rather than only in the plan because a downstream branch scans this directory and will
-not read another branch's plan. Planned as U10 (taken together with pile B, the close/suspend/recycle
-failures in Kafka's own suite).
+This entry used to list seven open lifecycle divergences. U10 closed or re-recorded all seven, so the
+old list is now history and lives in
+`docs/plans/2026-08-11-001-feat-ks-streams-task-lifecycle-and-rebalance-plan.md`. **What is left is the
+rebalance surface, which is larger than the part that was tested**, and that is what this entry is now
+for.
 
-## What is proven now
+## Resolved, and by what
 
-**Multi-partition, multi-instance, one rebalance.** `RebalanceUnderPcDispatchTest` runs two
-`KafkaStreams` instances in one application id over a 4-partition topic with cooperative assignment, the
-second joining mid-run, and asserts no loss, capacity-bounded duplicates, that the handover actually
-happened, and that ownership moved rather than being shared. That replaces the previous honest headline
-("one partition, one task, one instance") for the rebalance case specifically.
+| Divergence | Outcome |
+|---|---|
+| 1. Suspend-drain runs after the final commit | **Re-recorded.** The drain stays: `suspend()` is orderly teardown on the StreamThread, not the abandon-in-place revocation path. Duplicates are now *bounded and measured* rather than unmeasured. The predicate half of it was a real defect and was fixed - see below. |
+| 2. A revived task keeps its closed dispatcher | **Still open, still loud.** `revive()` throws rather than silently re-creating, because a silent re-create restores a working dispatcher carrying none of the closed one's in-flight state. `bindToCurrentThread()` also refuses a closed dispatcher, closing the same hazard on the new hand-off path. |
+| 3. `prepareRecycle()` never closes the dispatcher | **Fixed.** Routes through the same close call as `close(boolean)`. Four leaks per recycle - the static `ACTIVE` entry, the worker pool, the `PcWorkSignal` registration, the WorkManager partition state - pinned by `closingReleasesEveryResourceARecycleUsedToLeak`. |
+| 4. A timed-out drain falls through to `closeTopology()` | **Covered by mechanism, not by new code.** Once the predicate counted in-flight work, a non-quiescent dispatcher reports uncommitted work, so `validateClean()` throws and Kafka's own `TaskManager` closes the task dirty. No guard was added, deliberately: an unnecessary second guard is worse than none. |
+| 5. `updateInputPartitions()` never reaches the dispatcher | **Fixed.** `PcTaskDispatcher.updatePartitions()` revokes then assigns against PC's WorkManager - core's order, and the source of the epoch fence. Without it a cooperatively-gained partition had no epoch and every record was dropped silently. |
+| 6. `onOffsetCommitSuccess` has no epoch guard | **Re-recorded as unreachable, with a guard instead of an assertion.** Both the acknowledgement and the partition update are owner-thread-only, so they cannot interleave. `theCommitAckAndThePartitionUpdateAreBothOwnerThreadOnly` fails loudly if a later change moves either off the StreamThread. |
+| 7. Owner-thread guard binds at construction | **Fixed, and the premise was wrong.** The bind moved to hand-off and the wake signal moves with it. But "one owner thread per task" was never Kafka's model - `DefaultStateUpdater` calls `maybeCheckpoint` from its own thread. The real fix was splitting the dispatcher into a mutating surface (owner-thread-only) and a read-only surface (any thread), under the rule that **a question may not mutate**. |
 
-**Still unexercised:** standby replicas, task recycling end-to-end, and revival. See below.
+**The defect that pile B actually found.** `pcAwareCommitNeeded()` asked *"is there **completed** work no
+commit has covered"*. On the stock path that is the same question as *"is there uncommitted work"* -
+processing is synchronous, so there is no third state. Asynchronous dispatch creates one, and
+`validateClean()` is the caller that must see it: **a clean close while records were still inside the
+processor chain succeeded silently**, where Kafka's contract is to throw `TaskMigratedException` so the
+TaskManager closes dirty. Pile B went 4 failing to 1, with 5 cases fixed and 0 regressed.
 
-## Pile B, measured rather than assumed
+## Do not "fix" `shouldThrowExceptionOnCloseCleanError`
 
-The plan called pile B "the ready-made check on whether the lifecycle fixes landed" and listed five
-cases. Measured on this branch with the seam ON, before any change: **four failing, not five** -
-`shouldThrowIfRecyclingDirtyTask` already passed.
+**It fails on purpose, and it is a regression guard.** Someone will eventually see one red case in Kafka's
+own suite and try to close it. This is the note that should stop them.
 
-More importantly, **the four were not close/suspend bugs**. Every one failed at an assertion that runs
-*before* any close or suspend code, on `assertTrue(task.commitNeeded())` immediately after
-`task.process(...)`, or on the `prepareCommit` that gates on the same predicate. They were the
-asynchronous-dispatch artefact already diagnosed for pile A.
+The test calls `postCommit(true)` and then `closeClean()`, but never `updateCommittedOffsets` - so no
+commit success was ever acknowledged. Stock passes because `postCommit` ends in `clearCommitStatuses()`,
+which clears the stock field. PC deliberately clears its dirty state **only** on the genuine success-only
+seam, so `validateClean()` correctly refuses the clean close.
 
-That relocated the defect rather than dissolving it - see divergence 1.
+Making this test green requires acknowledging the commit in `postCommit`. That is precisely the
+silent-data-loss defect recorded in
+`docs/solutions/integration-issues/kafka-streams-task-lifecycle-callbacks-do-not-mean-what-they-are-named.md`:
+Kafka reaches `postCommit` after a **swallowed commit failure** (`TaskManager.tryCloseCleanActiveTasks`)
+and with **no commit attempted at all** (`closeDirtyAndRevive`). Acking there marks work durably
+committed that the broker never accepted, and releases the state needed to redo it - with no error, no
+retry and no log line.
 
-| | Before | After |
-|---|---|---|
-| Pile B failing | 4 | **1** |
-| `StreamTaskTest` failing, seam ON | 35 / 101 | **30 / 101** |
-| Cases fixed | - | 5 |
-| Cases regressed | - | **0** |
+So this red case is evidence that the earlier fix is still in place. If it ever goes green, check why
+before celebrating.
 
-The one remaining pile-B case is `shouldThrowExceptionOnCloseCleanError`, and it is now failing *later*
-than it was: `commitNeeded()` passes, and `closeClean()` throws `TaskMigratedException` from
-`validateClean()` where the test wants `ProcessorStateException`. That is **by design, and the design is
-load-bearing**. The test reaches `closeClean` having called `postCommit(true)` but never
-`updateCommittedOffsets` - so no commit success was ever acknowledged. Stock passes because `postCommit`
-ends in `clearCommitStatuses()`, which clears the stock field. PC deliberately clears only on the genuine
-success-only seam, and making this test pass would mean acknowledging on `postCommit` - which is exactly
-the silent-data-loss defect recorded in
-`docs/solutions/integration-issues/kafka-streams-task-lifecycle-callbacks-do-not-mean-what-they-are-named.md`.
-**This failure is evidence that fix is still in place.**
+## What is proven, precisely
 
-## The seven divergences
+`RebalanceUnderPcDispatchTest`: two `KafkaStreams` instances, one application id, a 4-partition topic,
+the **cooperative** assignor, the second instance **joining** mid-run. Asserts no loss, capacity-bounded
+duplicates, that the handover actually happened (via an `assign`+`seek` reader scoped past a boundary
+captured when B starts, so it cannot be satisfied by pre-handover output), and that ownership moved
+rather than being shared.
 
-1. **The suspend-drain pump runs after every flow's final commit.** ~~Duplicates on routine rebalances.~~
-   **Re-recorded, with a measurement.** The drain stays: `suspend()` is the orderly teardown on the
-   StreamThread, where waiting is legitimate and bounded, not the abandon-in-place revocation path.
-   Drained output post-dating the final commit produces at-least-once duplicates, and
-   `RebalanceUnderPcDispatchTest` now bounds them by capacity rather than leaving them unmeasured.
-   Moving the drain ahead of the commit is a teardown-ordering change in Kafka's own `TaskManager`,
-   outside this patch surface.
+Four runs, all green: `produced=240 uniqueConsumed=240 totalOutputs=240 duplicates=0 bothInstances=0`.
 
-   **What this investigation did fix in the same area** is the predicate the teardown gates on.
-   `pcAwareCommitNeeded()` asked "is there *completed* work no commit has covered". On the stock path
-   that is the same question as "is there uncommitted work", because processing is synchronous and there
-   is no third state. Under asynchronous dispatch there is, and `validateClean()` is exactly the caller
-   that must see it: **a clean close while records were still inside the processor chain succeeded
-   silently**, where Kafka's contract is to throw `TaskMigratedException` so the TaskManager closes the
-   task dirty. Now `PcTaskDispatcher.hasUncommittedWork()` counts in-flight work, and the four pile-B
-   cases moved on the strength of it.
+**That is one shape of one event.** Everything below is a different shape.
 
-2. **A revived task keeps its closed dispatcher.** **Still open, still loud.** Patched
-   `StreamTask.revive()` throws rather than accepting records into a dispatcher that will never hand them
-   out. Recreating the dispatcher is the real fix and was not attempted here: a silent re-create restores
-   a *working* dispatcher carrying none of the closed one's in-flight state, which converts a diagnosable
-   crash into another silent loss. `PcTaskDispatcher.bindToCurrentThread()` now refuses to bind a closed
-   dispatcher, which closes the same hazard on the new hand-off path before it could open.
+## Open: the `duplicates=0` result is not yet evidence of correctness
 
-3. **`prepareRecycle()` never closes the dispatcher.** **Fixed.** It now routes through the same
-   `TaskManager.executeAndMaybeSwallow(..., pcDispatcher::close, ...)` call `close(boolean)` makes, so
-   the two teardown routes cannot drift apart again. Four things leaked per recycle - the static `ACTIVE`
-   registry entry, the worker pool, the `PcWorkSignal` registration, and the WorkManager's partition
-   state - and `closingReleasesEveryResourceARecycleUsedToLeak` pins all four, because a teardown that
-   forgets one is only caught by whichever the author did not think about.
+The test permits 76 duplicates and measured **zero, four times running**. Two readings, and this entry
+does not yet know which is right:
 
-   **Honest limit:** no test drives a real active-to-standby recycle, because no test configures standby
-   replicas - which is precisely why this stayed dormant. What is tested is the contract the recycle path
-   now invokes.
+1. The frontier commit is genuinely doing its job and the handover window is clean.
+2. **The rebalance is not landing where duplicates arise.** B joins after A has been running a while, and
+   the work is 240 tiny records with no artificial processing cost - so the pool drains almost as fast as
+   it fills, and there may be nothing in flight at the moment partitions are revoked.
 
-4. **A timed-out drain falls through to `closeTopology()`.** **Re-recorded as covered, by mechanism
-   rather than by new code.** With divergence 1's predicate fixed, a dispatcher that did not quiesce
-   reports `hasUncommittedWork() == true`, so `validateClean()` throws and Kafka's own `TaskManager`
-   closes the task dirty. No new guard was added, because the existing machinery now reaches the right
-   outcome and an unnecessary second guard is worse than none.
+Reading 2 is the more likely one, and the reason to suspect it is structural: **a test that never
+approaches its own bound is not exercising the thing it bounds.** The bound is currently unfalsified
+rather than satisfied.
 
-   **Residual, and it is real:** `PC_DRAIN_TIMEOUT` is 30 seconds and `suspend()` runs *inside* the
-   revocation callback, so a stuck worker blocks the rebalance for 30s. That is inside
-   `max.poll.interval.ms` (300s) but far outside the 15s dwell bound core's `ProgressProbe` treats as
-   healthy. Lowering it trades duplicate-freedom for rebalance latency, which is a product call.
+The cheap discriminator is a control arm: give the topology a real per-record cost (as
+`PcDrivenStreamsDispatchTest` does with `PROCESSING_COST`) so that records are demonstrably in flight
+when B joins, and assert the in-flight count at the revocation instant is non-zero. If duplicates stay at
+zero *with* work in flight, reading 1 is established. Until then, treat `duplicates=0` as "the window was
+probably never entered", not as a correctness claim.
 
-5. **`updateInputPartitions()` never reaches the dispatcher.** **Fixed.** It now calls
-   `PcTaskDispatcher.updatePartitions()`, which revokes then assigns against PC's `WorkManager` - core's
-   own order, and the mechanism that supplies the epoch fence. Without it a partition gained by a
-   cooperative rebalance had no assignment epoch, so `EpochAndRecordsMap` dropped every one of its
-   records: zero registered, no exception, a topology that just looks idle. Tested in both directions,
-   including that an identical partition set is a no-op rather than a spurious epoch bump.
+## Open: the rebalance shapes with no coverage at all
 
-6. **`onOffsetCommitSuccess` has no epoch guard.** **Re-recorded as unreachable, now with a guard rather
-   than an assertion.** Divergence 5 changes a live dispatcher's partition set, which is exactly what
-   could have made this reachable, so it needed showing rather than assuming. Both
-   `updateCommittedOffsets` (which acknowledges) and `updateInputPartitions` (which revokes) run on the
-   StreamThread, and the owner-thread guard enforces that, so the two cannot interleave and no
-   acknowledgement can cross a revocation boundary.
-   `theCommitAckAndThePartitionUpdateAreBothOwnerThreadOnly` pins both halves, so a later change that
-   moves either call off the StreamThread fails loudly instead of silently reopening this.
+Roughly in value order. The first is the one that matters most.
 
-7. **The dispatcher's owner-thread guard binds at construction.** **Fixed, and the premise was wrong in a
-   way worth recording.** The bind moved to `bindToCurrentThread()`, called from the constructor and
-   again wherever a task is handed to a thread; the `PcWorkSignal` registration moves with it, because
-   moving the guard alone yields a dispatcher whose guard admits the new thread while its wake still goes
-   to the old one - a stall rather than an exception, and therefore worse.
+1. **Revocation while records are in flight in the worker pool.** The highest-value gap, because it is
+   where the seam is *structurally* different from stock: **Kafka does not know the worker pool exists.**
+   Stock revokes a partition whose records are, by construction, either fully processed or untouched -
+   there is no third state for `TaskManager` to reason about. Under PC there is, and the design answer
+   (adopted from `parallel-consumer-core`) is to **abandon in-flight work behind an epoch fence** rather
+   than drain or block: the late outcome is recognised as stale and dropped, and the new owner re-reads
+   from the last commit. `anOutcomeForARevokedPartitionIsDroppedRatherThanCommitted` covers that at the
+   dispatcher level, but **nothing covers it end-to-end through a real broker rebalance**, which is where
+   the interaction with `suspend()`'s drain, the commit ordering and Kafka's own teardown lives.
+2. **B leaving rather than joining.** Only the join path is tested. Departure is the path that runs
+   `suspend()` under revocation, which is where divergence 1's duplicate window and divergence 4's drain
+   timeout both live - so it exercises strictly more of the changed code than the join does.
+3. **An instance crashing mid-rebalance.** Not a clean `close()`: a kill, so the group must fence and
+   redistribute without a revocation callback ever running. `PcTaskDispatcher.abortAllActive()` is the
+   existing crash-injection surface and `CommitFrontierCrashRestartTest` is the existing pattern; nobody
+   has combined them with a second live instance.
+4. **Repeated rebalances in sequence.** One handover proves the transition; it does not prove the state
+   after it is a valid starting point for the next one. This is where a leaked dispatcher or a stale
+   partition set would accumulate rather than merely occur - which is exactly what divergences 3 and 5
+   were.
+5. **The eager assignor.** Every assertion here is under `CooperativeStickyAssignor`, pinned at the call
+   site. Eager revokes everything and re-assigns, so `updateInputPartitions` is not even the path taken -
+   tasks are closed and rebuilt. Different code, zero coverage.
+6. **Standby tasks and state restoration during handover.** Still the case that **no test configures
+   standby replicas**, which is why the recycle leak was dormant for so long. Restoration during a
+   handover also brings `DefaultStateUpdater` - a second thread on the task - into contact with a task
+   that is changing hands, and the read-only surface added in divergence 7 is exactly what that thread
+   uses.
+7. **Repetition under load.** Four runs of 240 records is an **existence proof, not a reliability
+   claim.** No statement about flake rate is supportable from it. The repeat count and the record volume
+   both need to go up before "rebalance works" is a claim rather than an observation.
 
-   **But "one owner thread per task" was never the real model.** Kafka Streams' `DefaultStateUpdater`
-   calls `StreamTask.maybeCheckpoint` *from its own thread* for restoring and standby tasks. So the
-   correct model is two surfaces, now stated in `PcTaskDispatcher`'s class javadoc: a **mutating** surface
-   that is owner-thread-only because it touches the non-thread-safe `WorkManager`, and a **read-only**
-   surface answerable from any thread. The rule that keeps them apart is that **a question is not allowed
-   to mutate** - a query that drained the completion mailbox "just to be accurate" is how a plain field
-   read became a cross-thread write.
+## Open: the upstream evidence base is behind one dependency decision
 
-## What this blocks, and what it does not
+Kafka publishes 78 Streams integration tests, and **64 of them need `EmbeddedKafkaCluster`**, which pulls
+in the Scala broker (`kafka.server.KafkaServer`) and `EmbeddedZookeeper`. This module runs on
+Testcontainers, so adopting it means a second broker mechanism in one module.
 
-**Not the technical preview.** The preview's contract is at-least-once inside a stated envelope, and
-rebalance duplicates sit inside that contract. What the preview owes is **disclosure** - and it can now
-say more than "unexercised": one rebalance shape is exercised and its duplicate window is bounded.
+That is **one decision unlocking a large evidence base**, and it was deliberately not taken as a side
+effect of U10. Worth deciding on its own merits.
 
-**Production, still no.** Standby replicas, recycling and revival remain untested or refused.
+Note that the specific upstream rebalance test would not have covered the gap above anyway:
+`RebalanceIntegrationTest` has a single case,
+`shouldCommitAllTasksIfRevokedTaskTriggerPunctuation`, whose subject is punctuation-triggered commit on
+revocation - not loss or duplicate accounting across a handover. The argument for the dependency is the
+other 63 tests, not that one.
 
 ## Delete when
 
-Divergences 2 (revival) and 3's standby-recycle arm are covered end-to-end, and the drain-timeout
-residual in 4 has a decided answer.
+The in-flight-revocation gap has end-to-end coverage, the `duplicates=0` reading is settled by a control
+arm with work demonstrably in flight, and departure and repeated-rebalance shapes are covered.
