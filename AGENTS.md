@@ -43,7 +43,9 @@ covers every worktree at once):
 gh repo set-default astubbs/parallel-consumer
 ```
 
-Verify with `gh repo view --json nameWithOwner` - it must print `astubbs/parallel-consumer`.
+Verify with `gh repo view --json nameWithOwner -q .nameWithOwner` - it must print exactly
+`astubbs/parallel-consumer`. (Keep this one *unqualified*: it is testing what the bare default
+resolves to, so adding `-R` would defeat the check.)
 
 **Why this earns a section rather than a footnote: the failure is usually silent.** `gh pr view 259`
 fails loudly ("Could not resolve to a PullRequest") only because upstream happens to have no such PR.
