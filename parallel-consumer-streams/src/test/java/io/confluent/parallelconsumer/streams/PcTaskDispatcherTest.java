@@ -33,7 +33,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -350,11 +353,22 @@ class PcTaskDispatcherTest {
      */
     private static List<ConsumerRecord<byte[], byte[]>> records(final int count,
                                                                 final LongFunction<String> keyForOffset) {
+        return records(PARTITION, count, keyForOffset);
+    }
+
+    /**
+     * The same batch builder for a partition other than the default one - needed by the U10 partition-update
+     * tests, which are about a second partition arriving and leaving. An overload rather than a copy, so the
+     * record shape cannot drift between the two.
+     */
+    private static List<ConsumerRecord<byte[], byte[]>> records(final TopicPartition partition,
+                                                                final int count,
+                                                                final LongFunction<String> keyForOffset) {
         List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
         for (long offset = 0; offset < count; offset++) {
             batch.add(new ConsumerRecord<>(
-                    TOPIC,
-                    PARTITION.partition(),
+                    partition.topic(),
+                    partition.partition(),
                     offset,
                     keyForOffset.apply(offset).getBytes(StandardCharsets.UTF_8),
                     ("value-" + offset).getBytes(StandardCharsets.UTF_8)));
@@ -570,6 +584,442 @@ class PcTaskDispatcherTest {
                     .isZero();
         } finally {
             second.close();
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // U10 (astubbs#255): task lifecycle - the uncommitted-work predicate, the owner-thread rebind, the
+    // partition update, and the teardown contract that recycling leaked.
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * <b>The distinction the whole clean-close fix rests on.</b>
+     * <p>
+     * "Is a commit worth attempting" and "is it safe to walk away" are the same question on the stock path,
+     * because processing is synchronous and a record is either done or not yet started. Asynchronous dispatch
+     * creates a third state - running - and this asserts the two predicates disagree about it. If they ever
+     * agree here, {@code validateClean()} is back to letting a clean close discard live work.
+     */
+    @Test
+    void inFlightWorkIsUncommittedWorkButIsNotYetCommitData() throws Exception {
+        dispatcher = new PcTaskDispatcher("task-inflight-predicate", INPUT_PARTITIONS, 4);
+
+        assertThat(dispatcher.hasUncommittedWork())
+                .as("a dispatcher holding nothing has nothing uncommitted")
+                .isFalse();
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("and nothing to commit")
+                .isFalse();
+
+        final CountDownLatch inChain = new CountDownLatch(1);
+        final CountDownLatch releaseWorker = new CountDownLatch(1);
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "held-key"));
+        dispatcher.dispatchAvailable(record -> () -> {
+            inChain.countDown();
+            awaitLatch(releaseWorker);
+        });
+
+        assertThat(inChain.await(30, TimeUnit.SECONDS))
+                .as("the worker must actually be inside the chain before the predicates are read, or this "
+                        + "test proves nothing about the in-flight state")
+                .isTrue();
+
+        try {
+            assertThat(dispatcher.getInFlightCount())
+                    .as("precondition: exactly one record is running")
+                    .isEqualTo(1);
+            assertThat(dispatcher.hasCommitDataOutstanding())
+                    .as("nothing has COMPLETED, so there is no commit worth attempting - the frontier has "
+                            + "not moved")
+                    .isFalse();
+            assertThat(dispatcher.hasUncommittedWork())
+                    .as("but the task is emphatically not safe to close clean: a record is inside the "
+                            + "processor chain and no commit covers it")
+                    .isTrue();
+        } finally {
+            releaseWorker.countDown();
+        }
+
+        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("once complete and fed back, the work is commit data")
+                .isTrue();
+        assertThat(dispatcher.hasUncommittedWork())
+                .as("and still uncommitted - completion is not a commit")
+                .isTrue();
+
+        dispatcher.onCommitSuccess(dispatcher.collectCommitData());
+
+        assertThat(dispatcher.hasCommitDataOutstanding()).as("the ack clears the commit data").isFalse();
+        assertThat(dispatcher.hasUncommittedWork())
+                .as("and clears the uncommitted-work answer too - both predicates agree once the work is "
+                        + "genuinely committed, which is the only state where they must")
+                .isFalse();
+    }
+
+    /**
+     * A failed record must not make the task permanently un-closable.
+     * <p>
+     * With retries disabled a failed record blocks its KEY shard forever and the records behind it stay
+     * <em>available</em> in PC's counters. Defining uncommitted work as "PC still holds records" would
+     * therefore make one poison pill enough to keep {@code validateClean()} throwing for the rest of the
+     * task's life - the same trap {@link PcTaskDispatcher#isQuiescent()} was written to avoid. Nothing is
+     * lost by closing: the failed record never completed, so the frontier never rose over it.
+     */
+    @Test
+    void aFailedRecordDoesNotLeaveTheTaskPermanentlyUncloseable() {
+        dispatcher = new PcTaskDispatcher("task-failed-not-stuck", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "same-key"));
+
+        dispatcher.pumpUntilQuiescent(record -> () -> {
+            throw new IllegalStateException("KABOOM");
+        }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getRecordsFailed())
+                .as("precondition: the record really did fail")
+                .isGreaterThan(0);
+        assertThat(dispatcher.hasUncommittedWork())
+                .as("a failed record is not uncommitted WORK - it will never complete, so it can never be "
+                        + "committed, and counting it would deadlock every future clean close")
+                .isFalse();
+    }
+
+    /**
+     * The owner-thread bind moves with the task. Before U10 it was captured in the constructor, which is
+     * correct only while a task is created and driven by one thread forever - a recycled or reassigned task
+     * carried a stale owner and the guard threw {@link IllegalStateException} on a <b>legitimate</b> call.
+     */
+    @Test
+    void rebindingHandsTheCommitSurfaceToTheNewOwnerAndRevokesItFromTheOld() throws Exception {
+        dispatcher = new PcTaskDispatcher("task-rebind", INPUT_PARTITIONS, 4);
+        final Thread constructingThread = Thread.currentThread();
+
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("precondition: the constructing thread owns the commit surface")
+                .isFalse();
+
+        runOnNewThread("new-owner", () -> {
+            assertThatThrownBy(dispatcher::hasCommitDataOutstanding)
+                    .as("before rebinding, the new thread is a stranger")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("owner-thread-only")
+                    .hasMessageContaining("bindToCurrentThread");
+
+            dispatcher.bindToCurrentThread();
+
+            assertThat(dispatcher.hasCommitDataOutstanding())
+                    .as("after rebinding the new owner may drive the commit surface - this is the "
+                            + "legitimate call the construction-time bind used to reject")
+                    .isFalse();
+        });
+
+        assertThatThrownBy(dispatcher::hasCommitDataOutstanding)
+                .as("and ownership MOVED rather than being shared - the old owner is now the stranger, or "
+                        + "the guard would be protecting nothing")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(constructingThread.getName());
+    }
+
+    /**
+     * <b>Regression test for a live defect: the state updater is a legitimate foreign caller.</b>
+     * <p>
+     * Kafka Streams' {@code DefaultStateUpdater} calls {@code StreamTask.maybeCheckpoint} from its own
+     * thread for restoring and standby tasks, and that method gates on "is there work outstanding". Under
+     * stock, that gate is a plain field read. Routing it through a draining, owner-thread-guarded call turned
+     * it into concurrent mutation of PC's shard and partition state from a second thread - which the guard
+     * then reported as {@code IllegalStateException ... called from '...-StateUpdater-1'}, killing the client
+     * at startup.
+     * <p>
+     * The guard was right and the call site was wrong. So the <em>query</em> is now genuinely a query -
+     * readable by anyone, mutating nothing - while everything that touches {@code WorkManager} stays
+     * owner-thread-only. This pins that split: if a later change reintroduces a drain or a guard here, the
+     * state updater dies again, and it dies in CI rather than in somebody's cluster.
+     */
+    @Test
+    void theOutstandingWorkQueryIsAnswerableFromAForeignThread() throws Exception {
+        dispatcher = new PcTaskDispatcher("task-foreign-query", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "k" + offset));
+        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.hasUncommittedWork())
+                .as("precondition: there is completed, uncommitted work to report")
+                .isTrue();
+
+        runOnNewThread("StateUpdater-1", () -> {
+            assertThat(dispatcher.hasUncommittedWork())
+                    .as("a foreign thread must get the SAME answer without throwing - this is the exact "
+                            + "call DefaultStateUpdater makes through maybeCheckpoint")
+                    .isTrue();
+            assertThat(dispatcher.getInFlightCount())
+                    .as("and the rest of the read-only surface is equally safe from there")
+                    .isZero();
+            assertThat(dispatcher.isClosed()).isFalse();
+        });
+
+        dispatcher.onCommitSuccess(dispatcher.collectCommitData());
+
+        runOnNewThread("StateUpdater-2", () ->
+                assertThat(dispatcher.hasUncommittedWork())
+                        .as("and the foreign reader sees the commit, so the published state is not stale - "
+                                + "a query that never updates would gate checkpointing forever")
+                        .isFalse());
+    }
+
+    /**
+     * The guard and the wake signal are one seam. Moving the owner without moving the signal would leave a
+     * dispatcher whose guard admits the new thread while its workers still wake the old one - a stall rather
+     * than an exception, and therefore the worse of the two failures.
+     */
+    @Test
+    void rebindingMovesTheWakeSignalWithTheOwner() throws Exception {
+        dispatcher = new PcTaskDispatcher("task-rebind-signal", INPUT_PARTITIONS, 4);
+
+        assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                .as("precondition: the constructing thread's signal speaks for this dispatcher")
+                .isEqualTo(1);
+
+        runOnNewThread("new-signal-owner", () -> {
+            dispatcher.bindToCurrentThread();
+            assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                    .as("the new owner's signal now speaks for the dispatcher, so a worker completion wakes "
+                            + "the thread that is actually waiting")
+                    .isEqualTo(1);
+        });
+
+        assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                .as("and the old owner's signal no longer does - otherwise that thread keeps taking the "
+                        + "split-wait branch for work it no longer drives")
+                .isZero();
+    }
+
+    /** Rebinding to the thread that already owns the dispatcher is a no-op, not a churn of registrations. */
+    @Test
+    void rebindingToTheSameThreadChangesNothing() {
+        dispatcher = new PcTaskDispatcher("task-rebind-idempotent", INPUT_PARTITIONS, 4);
+
+        dispatcher.bindToCurrentThread();
+        dispatcher.bindToCurrentThread();
+
+        assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                .as("Kafka drives the assignment paths on every rebalance whether or not the owner changed; "
+                        + "re-registering each time would grow the signal's set without bound")
+                .isEqualTo(1);
+        assertThat(dispatcher.hasUncommittedWork()).isFalse();
+    }
+
+    /** A closed dispatcher cannot be handed to a live thread - that is the revive hazard in another shape. */
+    @Test
+    void aClosedDispatcherRefusesToBeBound() {
+        dispatcher = new PcTaskDispatcher("task-bind-closed", INPUT_PARTITIONS, 4);
+        dispatcher.close();
+
+        assertThatThrownBy(dispatcher::bindToCurrentThread)
+                .as("binding a closed dispatcher would accept records and never dispatch them - the silent "
+                        + "stall the revive guard exists to prevent")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("closed PC dispatcher");
+    }
+
+    /**
+     * Cooperative rebalancing changes a live task's partitions through {@code updateInputPartitions}, which
+     * never reached PC. A newly assigned partition therefore had no assignment epoch, and
+     * {@code EpochAndRecordsMap} drops every record of a partition whose epoch is null - zero registered, no
+     * exception, a topology that just looks idle.
+     */
+    @Test
+    void newlyAssignedPartitionsBecomeRegisterableAndRevokedOnesDoNot() {
+        final TopicPartition second = new TopicPartition(TOPIC, 1);
+        dispatcher = new PcTaskDispatcher("task-partition-update", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(second, records(second, 4, offset -> "k" + offset));
+        assertThat(dispatcher.getRecordsAccepted())
+                .as("control arm: before the update, records for an unassigned partition are silently "
+                        + "dropped for want of an epoch - this is the defect, asserted directly")
+                .isZero();
+
+        dispatcher.updatePartitions(UniSets.of(PARTITION, second));
+
+        dispatcher.registerRecords(second, records(second, 4, offset -> "k" + offset));
+        assertThat(dispatcher.getRecordsAccepted())
+                .as("after the update the new partition has an epoch and its records are accepted")
+                .isEqualTo(4);
+
+        assertThat(dispatcher.getWorkManager().getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("precondition: that work is queued and selectable")
+                .isEqualTo(4);
+
+        dispatcher.updatePartitions(UniSets.of(PARTITION));
+
+        assertThat(dispatcher.getWorkManager().getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("revocation discards the queued work for the revoked partition - it is the new owner's "
+                        + "to process now, and handing it to a worker here would duplicate it")
+                .isZero();
+    }
+
+    /**
+     * The epoch fence, which is the reason revocation can abandon in-flight work instead of draining it. An
+     * outcome arriving for a partition revoked while its record was running must not advance a frontier the
+     * new owner is now responsible for.
+     */
+    @Test
+    void anOutcomeForARevokedPartitionIsDroppedRatherThanCommitted() throws Exception {
+        final TopicPartition second = new TopicPartition(TOPIC, 1);
+        dispatcher = new PcTaskDispatcher("task-revoked-outcome", UniSets.of(PARTITION, second), 4);
+
+        final CountDownLatch inChain = new CountDownLatch(1);
+        final CountDownLatch releaseWorker = new CountDownLatch(1);
+        dispatcher.registerRecords(second, records(second, 1, offset -> "doomed"));
+        dispatcher.dispatchAvailable(record -> () -> {
+            inChain.countDown();
+            awaitLatch(releaseWorker);
+        });
+        assertThat(inChain.await(30, TimeUnit.SECONDS)).as("the record is in flight").isTrue();
+
+        // The rebalance lands while the record is still inside the chain.
+        dispatcher.updatePartitions(UniSets.of(PARTITION));
+        releaseWorker.countDown();
+
+        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+
+        assertThat(dispatcher.collectCommitData())
+                .as("the late outcome belongs to a partition this instance no longer owns - committing its "
+                        + "offset would tell the group that work the new owner has not done is done")
+                .doesNotContainKey(second);
+    }
+
+    /** A rebalance that changes nothing must not bump an epoch and strand live work. */
+    @Test
+    void anIdenticalPartitionSetIsANoOp() {
+        dispatcher = new PcTaskDispatcher("task-partition-noop", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "k" + offset));
+
+        dispatcher.updatePartitions(UniSets.of(PARTITION));
+
+        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        assertThat(dispatcher.getRecordsSucceeded())
+                .as("Kafka calls the assignment paths on every rebalance; a spurious epoch bump here would "
+                        + "discard work that was never reassigned")
+                .isEqualTo(3);
+    }
+
+    /**
+     * <b>The recycle leak, asserted as the contract that closes it.</b>
+     * <p>
+     * {@code prepareRecycle()} tore the task down without routing through {@code close(boolean)}, so a
+     * recycled task left four things behind: its entry in the live-dispatcher registry, its worker pool, its
+     * {@link PcWorkSignal} registration, and its partitions in the WorkManager. This pins all four to the one
+     * call {@code prepareRecycle} now makes, so a teardown path that forgets it is caught by whichever of the
+     * four the author did not think about.
+     */
+    @Test
+    void closingReleasesEveryResourceARecycleUsedToLeak() {
+        final int activeBefore = PcTaskDispatcher.activeDispatcherCount();
+        dispatcher = new PcTaskDispatcher("task-teardown-contract", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "k" + offset));
+        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+
+        assertThat(PcTaskDispatcher.activeDispatcherCount())
+                .as("precondition: the dispatcher is live in the JVM-wide registry")
+                .isEqualTo(activeBefore + 1);
+        assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                .as("precondition: and its owner's wake signal speaks for it")
+                .isEqualTo(1);
+
+        dispatcher.close();
+
+        assertThat(PcTaskDispatcher.activeDispatcherCount())
+                .as("leak 1: the registry entry is static, so a leaked dispatcher outlives the task forever")
+                .isEqualTo(activeBefore);
+        assertThat(dispatcher.isClosed())
+                .as("leak 2: the worker pool - close() shuts it down and awaits termination")
+                .isTrue();
+        assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                .as("leak 3: a stale signal registration keeps the StreamThread on the split-wait branch "
+                        + "for work that can never complete")
+                .isZero();
+        assertThat(dispatcher.getWorkManager().getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("leak 4: the WorkManager's partition state - close() revokes what it held")
+                .isZero();
+        assertThat(dispatcher.hasUncommittedWork())
+                .as("and the published dirty state follows the revoke, not just the drain that precedes it - "
+                        + "a closed dispatcher owns nothing and will never commit again, which is what "
+                        + "Kafka's shouldClearCommitStatusesInCloseDirty asserts through commitNeeded()")
+                .isFalse();
+
+        dispatcher = null; // already closed; keep the teardown from double-closing
+    }
+
+    /** Ownership having moved must not stop the teardown releasing the NEW owner's registration. */
+    @Test
+    void closingAfterARebindReleasesTheCurrentOwnersSignal() throws Exception {
+        dispatcher = new PcTaskDispatcher("task-teardown-after-rebind", INPUT_PARTITIONS, 4);
+
+        runOnNewThread("rebound-owner", () -> {
+            dispatcher.bindToCurrentThread();
+            dispatcher.close();
+            assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                    .as("the close must release whichever signal currently speaks for the dispatcher, not "
+                            + "the one it was constructed with")
+                    .isZero();
+        });
+
+        dispatcher = null;
+    }
+
+    /**
+     * KTD5's safety argument, encoded. The stale-ack hazard on {@code onOffsetCommitSuccess} stays
+     * unreachable only because the acknowledgement and the partition update are both owner-thread-only, so
+     * they cannot interleave. Pinning both is what turns that argument into something a later change can
+     * falsify loudly instead of silently.
+     */
+    @Test
+    void theCommitAckAndThePartitionUpdateAreBothOwnerThreadOnly() throws Exception {
+        dispatcher = new PcTaskDispatcher("task-epoch-reachability", INPUT_PARTITIONS, 4);
+
+        runOnNewThread("interloper", () -> {
+            assertThatThrownBy(() -> dispatcher.updatePartitions(UniSets.of(PARTITION)))
+                    .as("half the argument: a rebalance cannot be applied from another thread")
+                    .isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> dispatcher.onCommitSuccess(Collections.emptyMap()))
+                    .as("the other half: an ack cannot arrive from another thread. Two owner-thread-only "
+                            + "calls cannot interleave, so no ack can cross a revocation boundary")
+                    .isInstanceOf(IllegalStateException.class);
+        });
+    }
+
+    /**
+     * Runs the body on a fresh thread and rethrows whatever it threw on the caller's thread, so an assertion
+     * failure inside is a test failure rather than a stack trace on stderr and a green run.
+     */
+    private static void runOnNewThread(final String name, final Runnable body) throws Exception {
+        final AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread thread = new Thread(() -> {
+            try {
+                body.run();
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        }, name);
+        thread.start();
+        thread.join(60_000);
+        assertThat(thread.isAlive()).as("the helper thread must finish").isFalse();
+        if (thrown.get() != null) {
+            if (thrown.get() instanceof AssertionError) {
+                throw (AssertionError) thrown.get();
+            }
+            throw new IllegalStateException("thread '" + name + "' failed", thrown.get());
+        }
+    }
+
+    private static void awaitLatch(final CountDownLatch latch) {
+        try {
+            if (!latch.await(60, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("latch never released - the test would otherwise hang here");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
         }
     }
 

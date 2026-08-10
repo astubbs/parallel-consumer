@@ -59,6 +59,41 @@ import java.util.concurrent.atomic.AtomicReference;
  *       {@link #dispatchAvailable}. That mirrors PC's own {@code workMailBox}.</li>
  * </ul>
  *
+ * <h2>The thread model, stated rather than assumed (astubbs#255, U10)</h2>
+ * "One owner thread per task" is <b>not</b> the model, and believing it was cost a production-shaped defect.
+ * Kafka Streams drives a task from more than one thread by design: {@code DefaultStateUpdater} calls
+ * {@code StreamTask.maybeCheckpoint} from its own thread for restoring and standby tasks. So this class has
+ * two surfaces, and which one a method belongs to is a decision, not an accident:
+ *
+ * <table border="1">
+ *   <caption>Who may call what</caption>
+ *   <tr><th>Surface</th><th>Methods</th><th>Callable from</th><th>Why</th></tr>
+ *   <tr>
+ *     <td><b>Mutating</b></td>
+ *     <td>{@link #registerRecords}, {@link #dispatchAvailable}, {@link #pumpUntilQuiescent},
+ *         {@link #collectCommitData}, {@link #onCommitSuccess}, {@link #hasCommitDataOutstanding},
+ *         {@link #updatePartitions}</td>
+ *     <td><b>The owner thread only</b>, enforced by {@code assertOwnerThread}</td>
+ *     <td>Each one reaches {@code WorkManager}, its shards or its partition state, none of which is
+ *         thread-safe. A second caller corrupts offset bookkeeping without throwing.</td>
+ *   </tr>
+ *   <tr>
+ *     <td><b>Read-only</b></td>
+ *     <td>{@link #hasUncommittedWork}, {@link #isClosed}, {@link #getInFlightCount},
+ *         {@link #hasPendingCompletions}, {@link #isQuiescent}, the counters</td>
+ *     <td><b>Any thread</b></td>
+ *     <td>Answered from atomics, concurrent collections and volatiles. Never touches {@code WorkManager}.
+ *         This is what the state updater is allowed to ask, and the reason it may ask it.</td>
+ *   </tr>
+ * </table>
+ *
+ * <p>The rule that keeps the two apart: <b>a question is not allowed to mutate.</b> A query that drained the
+ * completion mailbox "just to be accurate" is how a field read became a cross-thread write.
+ *
+ * <p>Which thread is the owner is itself mutable - see {@link #bindToCurrentThread()}. A task can be handed
+ * to a different StreamThread, and the guard has to follow it rather than pin the task to whichever thread
+ * happened to construct it.
+ *
  * <h2>Decisions taken here, and what they cost</h2>
  * <ul>
  *   <li><b>KEY ordering, explicitly.</b> This is the whole reason the seam is interesting: a KEY-ordered
@@ -122,8 +157,7 @@ public class PcTaskDispatcher implements Closeable {
     static final Duration RETRIES_DISABLED_DELAY = Duration.ofDays(3650);
 
     /**
-     * The thread that constructed this dispatcher, and the only one allowed to touch {@link WorkManager}
-     * through it.
+     * The thread currently allowed to touch {@link WorkManager} through this dispatcher.
      *
      * <p>Several methods here already document "StreamThread only" in prose. This turns that comment into
      * a check, because the cost of getting it wrong is silent: {@code WorkManager} and its partition state
@@ -133,8 +167,19 @@ public class PcTaskDispatcher implements Closeable {
      * <p>Worth the guard specifically now that the commit surface exists. {@link #collectCommitData} and
      * {@link #onCommitSuccess} reach {@code WorkManager} directly and sit exactly where a caller wiring up
      * its own commit path is most likely to call from a commit or scheduler thread rather than the owner.
+     *
+     * <p><b>Bound at hand-off, not at construction, and this used to be the other way round</b>
+     * (astubbs#255, U10). Capturing the constructing thread is correct only while a {@code StreamTask} is
+     * created and driven by one StreamThread forever. A task object that outlives one thread assignment -
+     * recycled, or reassigned by a rebalance - then carries a stale owner, and the guard throws
+     * {@link IllegalStateException} on a <em>legitimate</em> call from its new thread. The constructor
+     * still binds, so nothing changes for the common case; {@link #bindToCurrentThread()} is what makes
+     * re-assignment expressible instead of fatal.
+     *
+     * <p>Volatile because the binding thread and the reading thread are by definition different ones
+     * during a hand-off.
      */
-    private final Thread ownerThread;
+    private volatile Thread ownerThread;
 
     private final Set<TopicPartition> inputPartitions;
 
@@ -156,12 +201,34 @@ public class PcTaskDispatcher implements Closeable {
     private final AtomicReference<Throwable> firstFailure = new AtomicReference<>();
 
     /**
-     * The condition the StreamThread waits on instead of sitting out the rest of {@code poll.ms}. Captured at
-     * construction, which runs on the StreamThread, so the signal this dispatcher's workers raise is the one
-     * that thread waits on. See {@link PcWorkSignal} for what happens if that ever stops being true (nothing
-     * bad: the thread reverts to the stock poll).
+     * PC's dirty state, published by the owner thread for readers that must not touch {@link WorkManager}.
+     *
+     * <p><b>Not a parallel copy of the run state, and the distinction matters</b> - this repository has a
+     * recorded silent-stall defect caused by exactly that anti-pattern. It is a <em>publication</em> of a
+     * single authoritative value: written only by the owner thread, only immediately after that thread has
+     * changed the value it mirrors ({@link #drainCompletions}, {@link #onCommitSuccess},
+     * {@link #updatePartitions}), and never consulted to decide whether to dispatch. Nothing derives from it
+     * that is not also derivable from {@code workManager.isDirty()} on the owner thread.
+     *
+     * <p>It exists because {@link #hasUncommittedWork()} has to answer from another thread - see that
+     * method for the {@code DefaultStateUpdater} call path that makes this non-negotiable.
      */
-    private final PcWorkSignal workSignal;
+    private volatile boolean pcDirty;
+
+    /**
+     * The condition the StreamThread waits on instead of sitting out the rest of {@code poll.ms}. Bound
+     * alongside {@link #ownerThread}, so the signal this dispatcher's workers raise is always the one its
+     * current owner waits on. See {@link PcWorkSignal} for what happens if that ever stops being true
+     * (nothing bad: the thread reverts to the stock poll).
+     *
+     * <p>Re-bound by {@link #bindToCurrentThread()} rather than fixed at construction, because the guard
+     * and the signal are <b>one seam</b>: move the owner without moving the signal and you get a dispatcher
+     * whose guard admits the new thread while its wake still goes to the old one, which is a stall rather
+     * than an exception and therefore worse.
+     *
+     * <p>Volatile for the same reason as {@link #ownerThread} - worker threads read it on every outcome.
+     */
+    private volatile PcWorkSignal workSignal;
 
     /**
      * How many records the last {@link #dispatchAvailable} consumed - dispatched to the pool, dropped, or
@@ -198,7 +265,6 @@ public class PcTaskDispatcher implements Closeable {
     public PcTaskDispatcher(final String taskName, final Set<TopicPartition> inputPartitions, final int poolSize) {
         this.inputPartitions = new LinkedHashSet<>(inputPartitions);
         this.poolSize = poolSize;
-        this.ownerThread = Thread.currentThread();
 
         ParallelConsumerOptions<byte[], byte[]> options = ParallelConsumerOptions.<byte[], byte[]>builder()
                 .consumer(new MockConsumer<byte[], byte[]>(OffsetResetStrategy.NONE))
@@ -225,12 +291,50 @@ public class PcTaskDispatcher implements Closeable {
         };
         this.workerPool = Executors.newFixedThreadPool(poolSize, threadFactory);
 
-        // Registered LAST, so that a StreamThread can never see a half-built dispatcher through the gate.
-        this.workSignal = PcWorkSignal.registerForCurrentThread(this);
+        // Bound LAST, so that a StreamThread can never see a half-built dispatcher through the gate.
+        bindToCurrentThread();
 
         ACTIVE.add(this);
         log.info("PC dispatch active for task {} over {} with a pool of {}, KEY ordering, retries disabled",
                 taskName, this.inputPartitions, poolSize);
+    }
+
+    /**
+     * Hand this dispatcher to the calling thread: it becomes the only thread allowed on the commit surface,
+     * and the thread whose {@link PcWorkSignal} this dispatcher's workers raise.
+     * <p>
+     * Called from the constructor, and again wherever a {@code StreamTask} is handed to a different thread.
+     * Both bindings move together on purpose - see {@link #workSignal} for why splitting them converts a
+     * loud exception into a silent stall.
+     * <p>
+     * Idempotent: re-binding to the thread that already owns this dispatcher does nothing, which matters
+     * because Kafka calls the task-assignment paths on every rebalance whether or not the owner changed.
+     *
+     * @throws IllegalStateException if the dispatcher is already closed - a closed dispatcher hands out no
+     *                               work, so binding one to a live thread can only be a wiring mistake, and
+     *                               the resulting silence is exactly the failure the revive guard exists for
+     */
+    public void bindToCurrentThread() {
+        if (closed) {
+            throw new IllegalStateException(
+                    "Cannot bind a closed PC dispatcher over " + inputPartitions + " to thread '"
+                            + Thread.currentThread().getName() + "' - it would accept records without ever "
+                            + "dispatching them");
+        }
+        final Thread newOwner = Thread.currentThread();
+        final Thread previousOwner = ownerThread;
+        if (previousOwner == newOwner) {
+            return;
+        }
+        if (previousOwner != null) {
+            // Leave the old owner's signal, or its gate keeps reporting work for a dispatcher it no longer
+            // drives, and that thread takes the split-wait branch forever.
+            workSignal.deregister(this);
+            log.info("PC dispatch over {} re-bound from thread '{}' to '{}'",
+                    inputPartitions, previousOwner.getName(), newOwner.getName());
+        }
+        this.workSignal = PcWorkSignal.registerForCurrentThread(this);
+        this.ownerThread = newOwner;
     }
 
     /**
@@ -384,9 +488,24 @@ public class PcTaskDispatcher implements Closeable {
      */
     private void drainCompletions() {
         WorkContainer<byte[], byte[]> work;
+        boolean handledAny = false;
         while ((work = completed.poll()) != null) {
             workManager.handleFutureResult(work);
+            handledAny = true;
         }
+        if (handledAny) {
+            // Publish for the cross-thread readers, on the thread that just changed the thing being
+            // published. See pcDirty for why this is a publication rather than a shadow.
+            publishDirtyState();
+        }
+    }
+
+    /**
+     * Re-read PC's authoritative dirty state and publish it. <b>Owner thread only</b> - it reads
+     * {@link WorkManager}, which is exactly what the readers of {@link #pcDirty} are forbidden from doing.
+     */
+    private void publishDirtyState() {
+        pcDirty = workManager.isDirty();
     }
 
     /**
@@ -428,6 +547,105 @@ public class PcTaskDispatcher implements Closeable {
     }
 
     /**
+     * Whether <b>any</b> work this dispatcher has taken on is not yet covered by a successful commit -
+     * including work still running.
+     *
+     * <h2>Why this is a second question and not a synonym</h2>
+     * {@link #hasCommitDataOutstanding} asks "is a commit worth attempting", which only completed work can
+     * answer. This asks "is it safe to walk away", which in-flight work also answers, and <b>on the stock
+     * path those are the same question</b> - processing is synchronous, so a record is either done or not
+     * yet started and there is no third state. Asynchronous dispatch creates that third state, and
+     * {@code StreamTask.validateClean()} is exactly the caller that must see it: a clean close while
+     * records are still inside the processor chain otherwise succeeds silently, where Kafka's contract is
+     * to throw {@code TaskMigratedException} so the TaskManager closes the task dirty instead
+     * (astubbs#255, U10).
+     *
+     * <h2>CALLABLE FROM ANY THREAD, and that is a requirement rather than a convenience</h2>
+     * <b>This must not drain, must not touch {@link WorkManager}, and must not be owner-thread-guarded.</b>
+     * Kafka Streams' {@code DefaultStateUpdater} calls {@code StreamTask.maybeCheckpoint} <em>from its own
+     * thread</em> for restoring and standby tasks, and {@code maybeCheckpoint} gates on this question. Under
+     * stock that gate is a plain {@code boolean} field read, which is why nobody had to think about it;
+     * routing it through a draining call turned a field read into concurrent mutation of PC's shard and
+     * partition state from a second thread. That produced
+     * {@code IllegalStateException: ... owner-thread-only, but was called from '...-StateUpdater-1'} - the
+     * guard doing its job, on a hazard that had been silent since the gate was introduced.
+     *
+     * <p>So the answer is assembled from three sources that are each safe to read concurrently: an
+     * {@code AtomicInteger}, a {@code ConcurrentLinkedQueue}, and {@link #pcDirty}, a volatile the owner
+     * thread publishes whenever it changes PC's authoritative dirty state. The drain still happens - in
+     * {@link #collectCommitData}, on the owner thread, which is where a commit actually needs it.
+     *
+     * <h2>What is deliberately NOT counted: records PC is still holding</h2>
+     * Not "does the WorkManager still have records". With retries disabled a failed record blocks its KEY
+     * shard permanently and the records queued behind it stay <em>available</em> in PC's accounting
+     * forever, so that definition would make a task with one poison pill impossible to ever close clean -
+     * the same trap {@link #isQuiescent()} exists to avoid. A failed record is not lost by closing: it was
+     * never completed, so the frontier never rose over it and whoever owns the partition next re-reads it.
+     *
+     * <p>The three terms leave no gap for a live record to hide in. A worker enqueues its outcome
+     * <em>before</em> it decrements the in-flight count, so at every instant a dispatched record is counted
+     * by {@code inFlight}, or sitting in {@code completed}, or already folded into {@link #pcDirty} by the
+     * owner thread's drain. A reader can therefore be stale in the direction of "yes, work exists" for a
+     * few microseconds, and never in the direction of "no, nothing outstanding" - which is the only
+     * direction that would be unsafe.
+     */
+    public boolean hasUncommittedWork() {
+        return pcDirty || inFlight.get() > 0 || !completed.isEmpty();
+    }
+
+    /**
+     * Track a change to this task's partition assignment, so PC's assignment and epoch bookkeeping follows
+     * a cooperative rebalance instead of staying on the set the dispatcher was built with. StreamThread
+     * only.
+     * <p>
+     * <b>Revoke before assign, which is Parallel Consumer's own order</b>
+     * ({@code AbstractParallelEoSStreamProcessor.onPartitionsRevoked} commits, then truncates). Revoking is
+     * what bumps the partition-assignment epoch, and the epoch is the whole safety mechanism here: an
+     * outcome that arrives for a partition revoked while its record was in flight is recognised as stale by
+     * {@code WorkManager.handleFutureResult} and dropped instead of advancing a frontier the new owner is
+     * now responsible for. <b>In-flight work on a revoked partition is abandoned, not awaited</b> - which is
+     * the at-least-once trade PC already makes, rather than a new policy invented here.
+     * <p>
+     * A no-op update revokes nothing. Kafka calls the assignment paths on every rebalance whether or not
+     * the set changed, and a spurious epoch bump would strand live work for no reason.
+     *
+     * @param newPartitions the task's input partitions after the rebalance
+     */
+    public void updatePartitions(final Set<TopicPartition> newPartitions) {
+        assertOwnerThread("updatePartitions");
+
+        final List<TopicPartition> revoked = new ArrayList<>();
+        for (TopicPartition held : inputPartitions) {
+            if (!newPartitions.contains(held)) {
+                revoked.add(held);
+            }
+        }
+        final List<TopicPartition> assigned = new ArrayList<>();
+        for (TopicPartition wanted : newPartitions) {
+            if (!inputPartitions.contains(wanted)) {
+                assigned.add(wanted);
+            }
+        }
+        if (revoked.isEmpty() && assigned.isEmpty()) {
+            return;
+        }
+
+        if (!revoked.isEmpty()) {
+            workManager.onPartitionsRevoked(revoked);
+            inputPartitions.removeAll(revoked);
+        }
+        if (!assigned.isEmpty()) {
+            workManager.onPartitionsAssigned(assigned);
+            inputPartitions.addAll(assigned);
+        }
+        // A revocation discards that partition's completed-but-uncommitted work, so the dirty answer can
+        // change here without any completion being drained.
+        publishDirtyState();
+        log.info("PC dispatch partitions updated: revoked {}, assigned {}, now over {}",
+                revoked, assigned, inputPartitions);
+    }
+
+    /**
      * The other half of the commit protocol: report a <em>successful</em> commit back, so PC can mark the
      * covered work clean. The only caller of PC's {@code setClean} - skip this and every partition stays
      * dirty forever, which turns "commit when needed" into "commit every interval, unconditionally".
@@ -436,6 +654,7 @@ public class PcTaskDispatcher implements Closeable {
     public void onCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
         assertOwnerThread("onCommitSuccess");
         workManager.onOffsetCommitSuccess(committed);
+        publishDirtyState();
     }
 
     /**
@@ -444,13 +663,20 @@ public class PcTaskDispatcher implements Closeable {
      * <p>Deliberately an {@link IllegalStateException} naming both threads rather than an assertion: an
      * assertion disappears without {@code -ea}, and this is exactly the class of mistake that produces no
      * symptom at the call site.
+     *
+     * <p>The message points at {@link #bindToCurrentThread()} because since U10 an off-owner call has two
+     * distinct causes - a genuinely wrong thread, and a task handed to a new thread without being re-bound -
+     * and they need different fixes.
      */
     private void assertOwnerThread(final String method) {
         final Thread current = Thread.currentThread();
-        if (current != ownerThread) {
+        final Thread owner = ownerThread;
+        if (current != owner) {
             throw new IllegalStateException(String.format(
-                    "%s touches WorkManager and is owner-thread-only, but was called from '%s'; the owner is '%s'",
-                    method, current.getName(), ownerThread.getName()));
+                    "%s touches WorkManager and is owner-thread-only, but was called from '%s'; the owner is "
+                            + "'%s'. If this task was handed to a new thread, bindToCurrentThread() on that "
+                            + "thread is what moves ownership.",
+                    method, current.getName(), owner == null ? "<unbound>" : owner.getName()));
         }
     }
 
@@ -545,6 +771,17 @@ public class PcTaskDispatcher implements Closeable {
      */
     private static final Set<PcTaskDispatcher> ACTIVE = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Test seam: how many dispatchers are live in this JVM.
+     * <p>
+     * Exists because a leaked dispatcher has no other observable signature - it keeps running, keeps its
+     * pool, and says nothing. The pool and the {@link PcWorkSignal} registration are each checkable on their
+     * own; this is the third, and a teardown path that forgets to close is only caught by all three.
+     */
+    static int activeDispatcherCount() {
+        return ACTIVE.size();
+    }
+
     /** Crash-injection for tests: {@link #abortClose()} every live dispatcher in the JVM. */
     public static void abortAllActive() {
         for (PcTaskDispatcher dispatcher : ACTIVE) {
@@ -592,6 +829,11 @@ public class PcTaskDispatcher implements Closeable {
         }
         drainCompletions();
         workManager.onPartitionsRevoked(new ArrayList<>(inputPartitions));
+        // The revoke is the LAST thing that changes PC's dirty answer, and it happens after the drain above
+        // published it - so without this the flag stays true for a dispatcher that owns nothing and will
+        // never commit again. Kafka's shouldClearCommitStatusesInCloseDirty caught exactly that: it asserts
+        // commitNeeded() is false once the task has closed dirty.
+        publishDirtyState();
         log.info("PC dispatch closed over {}", inputPartitions);
     }
 }
