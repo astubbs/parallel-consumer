@@ -218,7 +218,7 @@ class PcWorkSignalTest {
         CountDownLatch started = new CountDownLatch(1);
 
         registerOneRecord();
-        int dispatched = dispatcher.dispatchAvailable(record -> () -> {
+        int dispatched = dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             started.countDown();
             try {
                 release.await();
@@ -226,7 +226,7 @@ class PcWorkSignalTest {
                 Thread.currentThread().interrupt();
             }
             throw new IllegalStateException("processor blew up");
-        });
+        }));
         assertThat(dispatched).isEqualTo(1);
         awaitWorkerRunning(started);
 
@@ -447,14 +447,14 @@ class PcWorkSignalTest {
         registerOneRecord();
 
         CountDownLatch started = new CountDownLatch(1);
-        int dispatched = dispatcher.dispatchAvailable(record -> () -> {
+        int dispatched = dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             started.countDown();
             try {
                 release.await();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-        });
+        }));
         assertThat(dispatched)
                 .as("the fixture must actually dispatch, or every timing assertion below measures nothing")
                 .isEqualTo(1);

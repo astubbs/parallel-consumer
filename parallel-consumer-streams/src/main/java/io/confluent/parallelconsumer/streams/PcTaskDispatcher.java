@@ -299,12 +299,20 @@ public class PcTaskDispatcher implements Closeable {
      * The stream timestamp of every record handed to the pool and not yet drained (astubbs#255, U13). The
      * state Kafka Streams' {@code streamTime} is derived from on the PC path.
      *
-     * <p><b>Not owner-thread state - dispatching-thread state</b>, which is the third surface in the class
-     * javadoc's table alongside {@link #successesDrained} and {@link #lastDispatchCount}: written in
-     * {@link #dispatchAvailable} and in {@link #drainCompletions}, which runs inside it, and never touched by
-     * a worker. Plain {@link IdentityHashMap} rather than a concurrent map for exactly that reason, and the
-     * exception the class javadoc already names applies here unchanged - Streams' private
-     * {@code __processing.threads.enabled__} would drive {@code dispatchAvailable} off the StreamThread.
+     * <p><b>Owner thread only</b>, exactly like {@link #successesDrained}, and the call sites are worth
+     * naming because they are not all on one surface. Entries go in from {@link #dispatchAvailable}; they
+     * come out from {@link #drainCompletions}, which is reached from <em>four</em> places - that same
+     * {@code dispatchAvailable}, {@link #collectCommitData()}, {@link #close()}, and
+     * {@link #pumpUntilQuiescent}. The first and last sit on the unguarded StreamThread surface, the middle
+     * two on the guarded owner-thread commit surface. By default those are the same thread, which is what
+     * makes a plain {@link IdentityHashMap} sufficient; workers never touch it at all.
+     *
+     * <p><b>The exception the class javadoc names applies here, and this field raises its stakes.</b> With
+     * Streams' private {@code __processing.threads.enabled__} config on, {@code DefaultTaskExecutor} drives
+     * {@code task.process} - and therefore {@code dispatchAvailable} - off the owner thread. Where that
+     * already made a plain {@code long} go stale, it now makes a resizable hash table race. Accepted rather
+     * than overlooked: the config is private, off by default, and unreachable from this module's supported
+     * surface. It is recorded here so the next reader inherits the cost rather than rediscovering it.
      *
      * <p>Identity-keyed because {@link WorkContainer} is compared by topic-partition and offset, and two
      * containers for the same offset across an assignment epoch would collide on a value map.
@@ -332,11 +340,18 @@ public class PcTaskDispatcher implements Closeable {
      * flight</b>, or the highest timestamp dispatched when nothing is in flight, clamped monotone
      * (astubbs#255, U13).
      *
-     * <p><b>What it guarantees, stated narrowly:</b> when this reads {@code T}, no record <em>currently in
-     * flight</em> has a stream timestamp below {@code T}. It says nothing about records PC is holding but has
-     * not handed out, and nothing about records not yet fetched - the same silence stock keeps, since stock
-     * can sit at the timestamp of the record it just selected while older records wait in another partition's
-     * queue.
+     * <p><b>What it guarantees, and the guarantee is weaker than it first looks.</b> At the moment
+     * {@link #publishStreamTime()} computes it, no record <em>then</em> in flight is below it. It is
+     * <b>not</b> an order boundary: the monotone clamp means a record dispatched <em>later</em> can carry a
+     * lower timestamp and be in flight below the mark, and {@link #dispatchesBehindStreamTime} counts exactly
+     * those. So this is a conservative summary of progress, not Flink's guarantee that no earlier element
+     * follows a watermark. Do not restate it as one - a reader who believes it is an order boundary will
+     * conclude a windowed operator is safe behind it, which is precisely the condition under which a
+     * versioned store silently drops puts.
+     *
+     * <p>It also says nothing about records PC is holding but has not handed out, and nothing about records
+     * not yet fetched - the same silence stock keeps, since stock can sit at the timestamp of the record it
+     * just selected while older records wait in another partition's queue.
      *
      * <p><b>Never ahead of stock, equal to stock whenever the pool is empty.</b> Punctuation on this path can
      * therefore be late relative to stock, never early - and early is the direction that would close a window
