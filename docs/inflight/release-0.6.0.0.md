@@ -12,6 +12,42 @@ deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub rel
 **No longer blocked by the quarantine guard** - astubbs#80 emptied the registry when it merged, so
 `release.yml`'s "no release while tests are quarantined" gate now passes.
 
+## The experimental modules do not gate this release
+
+**Settled 2026-08-11.** Neither the Kafka Streams module (astubbs#255) nor the Kafka Connect one
+(astubbs#240) blocks 0.6.0.0, and neither needs to reach an MVP first. This reverses the working
+assumption that the release waits for them.
+
+The reasoning is a trade, stated plainly. 0.6.0.0 is a stability release and its content is the
+known-defect backlog - which is ready. Holding it for exploratory work would park a queue of finished
+bug fixes behind unfinished experiments, delaying the thing that is done for the thing that is not.
+Both directions of that trade are bad. **Whatever state the experimental modules are in when the
+release is cut is what ships.**
+
+Three consequences worth being explicit about, because each one silently reintroduces the pressure if
+left unstated:
+
+- **There is no MVP bar.** Do not scope experimental work by "what must be in for v6". Scope it by what
+  is demonstrably true, ship that, and describe the boundary honestly. For the Streams module the
+  interesting claim - that a Kafka Streams topology gets per-key concurrency inside a single partition
+  at all - is already evidenced: Kafka's own test suites pass with the seam off, crash safety is proven
+  with a red-then-green test, and the head-of-line measurement is published with the control that shows
+  where it does *not* help. Completeness is not what makes that land. Raw and real beats polished and
+  narrow.
+- **Merging and publishing are separate gates.** Merging an experimental module to master is cheap to
+  reverse: these are leaf modules, nothing depends on them, and removal is one `git rm` plus a pom line.
+  Publishing is not reversible once anyone depends on the coordinate. So merge freely and publish
+  deliberately - and only once a module does something interesting enough to be worth someone taking a
+  dependency on it. Until then, keep it in the reactor and out of the deploy set. **The publish decision
+  is expected before v6, but it is a decision, not a formality.**
+- **The honesty obligation gets larger, not smaller.** Shipping something raw is only defensible while
+  the limits are stated where a user will actually meet them. The Streams module's README leads with the
+  alpha status and points at its live shortcomings list rather than duplicating it, and known-broken APIs
+  are being physically refused rather than documented - see astubbs#255. That refusal work is what makes
+  "ships in whatever state it is in" a reasonable position instead of a reckless one.
+
+See `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md` for the Streams side of this decision.
+
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
 None of these has an issue of its own - they were found by reading code to diagnose something else.

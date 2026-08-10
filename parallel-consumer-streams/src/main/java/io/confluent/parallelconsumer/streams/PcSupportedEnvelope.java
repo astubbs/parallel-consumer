@@ -12,7 +12,9 @@ import org.apache.kafka.streams.state.internals.TimeOrderedKeyValueBuffer;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The backstop: what this module supports, checked once, at task construction.
@@ -77,7 +79,16 @@ public final class PcSupportedEnvelope {
             return;
         }
 
-        throw new UnsupportedOperationException("Task " + taskId + ": " + PcRefusalMessage.forConstructs(found));
+        // The recurrence sentence is not padding. This throw leaves StreamTask's constructor, is caught by
+        // nothing on the way out, and reaches KafkaStreams' uncaught-exception handler - which under
+        // StreamsUncaughtExceptionHandlerResponse.REPLACE_THREAD replaces the thread unconditionally, with no
+        // backoff and no attempt counter. The refusal is a property of the topology and the switch, so the
+        // replacement thread is refused too, and the application rebalances in a loop. Whoever reads this
+        // message is looking at that loop; the message has to tell them it will not stop on its own.
+        throw new UnsupportedOperationException("Task " + taskId + ": " + PcRefusalMessage.forConstructs(found)
+                + " This is a property of the topology and the switch, not a transient failure, so every task "
+                + "creation refuses again: a REPLACE_THREAD uncaught-exception handler will rebalance in a loop "
+                + "until the topology changes or the seam is turned off.");
     }
 
     /**
@@ -88,7 +99,11 @@ public final class PcSupportedEnvelope {
      */
     static List<PcUnsupportedConstruct> findUnsupported(final Collection<StateStore> stateStores,
                                                         final boolean eosEnabled) {
-        final List<PcUnsupportedConstruct> found = new ArrayList<>();
+        // A LinkedHashSet because both properties are load-bearing: de-duplicated, because three window stores
+        // in one topology is one problem rather than three lines of message; insertion-ordered, because the
+        // message should read in the order the constructs were found. An EnumSet would silently reorder them
+        // into declaration order.
+        final Set<PcUnsupportedConstruct> found = new LinkedHashSet<>();
 
         if (eosEnabled) {
             found.add(PcUnsupportedConstruct.EXACTLY_ONCE);
@@ -97,14 +112,13 @@ public final class PcSupportedEnvelope {
         if (stateStores != null) {
             for (final StateStore store : stateStores) {
                 final PcUnsupportedConstruct construct = classify(store);
-                // De-duplicated: three window stores in one topology is one problem, not three lines of message.
-                if (construct != null && !found.contains(construct)) {
+                if (construct != null) {
                     found.add(construct);
                 }
             }
         }
 
-        return found;
+        return new ArrayList<>(found);
     }
 
     /**

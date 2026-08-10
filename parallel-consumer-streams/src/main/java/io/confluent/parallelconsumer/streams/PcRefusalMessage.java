@@ -22,10 +22,18 @@ import java.util.List;
 final class PcRefusalMessage {
 
     /**
+     * The tracking issue, named once. Every refusal message carries it twice - as the prefix that says which
+     * subsystem is talking, and in the closing pointer - and the refusal tests assert on it, so a literal
+     * would have to be kept in step across four files by hand. Same treatment, for the same reason, as
+     * {@link PcDispatchSwitch#ENABLED_PROPERTY}.
+     */
+    static final String ISSUE = "astubbs#255";
+
+    /**
      * Where a reader goes for the full list and its rationale. The plan is the living document; the README
      * points at it rather than duplicating it.
      */
-    private static final String REFERENCE = "See parallel-consumer-streams/README.md and astubbs#255.";
+    private static final String REFERENCE = "See parallel-consumer-streams/README.md and " + ISSUE + ".";
 
     private PcRefusalMessage() {
     }
@@ -41,7 +49,7 @@ final class PcRefusalMessage {
                     + PcRefusalMessage.class.getName());
         }
 
-        final StringBuilder message = new StringBuilder("PC dispatch (astubbs#255): ");
+        final StringBuilder message = new StringBuilder("PC dispatch (" + ISSUE + "): ");
         final String supported;
         if (constructs.size() == 1) {
             message.append(constructs.get(0).getDisplayName())
@@ -50,8 +58,11 @@ final class PcRefusalMessage {
                     .append('.');
             supported = "which supports it";
         } else {
+            // "in this topology or its configuration", not "in this topology": exactly-once comes off the task
+            // config and is not a topology shape at all, so it can be one of the entries listed below.
             message.append(constructs.size())
-                    .append(" constructs in this topology are not supported on the Parallel Consumer dispatch path:");
+                    .append(" constructs in this topology or its configuration are not supported on the "
+                            + "Parallel Consumer dispatch path:");
             for (final PcUnsupportedConstruct construct : constructs) {
                 message.append("\n  - ")
                         .append(construct.getDisplayName())

@@ -187,13 +187,15 @@ config - so layer 3 costs **no new patched class**.
 
 Recorded rather than confirmed, because this plan was produced without an interactive user:
 
-- **A1.** The eight new shadowed classes are an acceptable cost. This takes `patched.classes` from 4 to
-  12, and `docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md`
+- **A1.** The eight new shadowed classes are an acceptable cost. This takes `patched.classes` from 5 to
+  13, and `docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md`
   names "roughly a dozen" as the point where the sprawl is itself the answer and you are maintaining a
-  fork by instalments. Twelve is *at* that line. The alternative that stays at five - drop layer 2 and put
-  everything in a single `InternalStreamsBuilder` graph-node check - is recorded in Open Questions.
+  fork by instalments. Thirteen is *past* that line, which is stated rather than absorbed. The smaller
+  alternative - drop layer 2 and put everything in a single `InternalStreamsBuilder` graph-node check - is
+  recorded in Open Questions; note that it does not get back to five, because R4's compile-time refusal
+  still needs the four DSL interfaces annotated wherever layer 2's logic lives.
 - **A2.** `NOTICE` may be edited. It is a repo-root file, outside `parallel-consumer-streams`, but Apache
-  2.0 §4(b) requires it to name every modified Apache Kafka class, and it currently names exactly four.
+  2.0 §4(b) requires it to name every modified Apache Kafka class, and it currently names exactly five.
 - **A3.** The `parallel-consumer-streams/README.md` "Known gaps" paragraph should be updated in this pass.
   It currently says these constructs "do not work"; after this change they refuse, which is a different
   and better claim.
@@ -271,9 +273,14 @@ every signature survives.
 - `parallel-consumer-streams/src/main/patch/pc-streams.patch` - regenerated
 
 **Approach:**
-1. Two lines per method, no more: `@Deprecated` and `@DoNotCall("<reason>")`. `@DoNotCall`'s optional
+1. ~~Two lines per method, no more: `@Deprecated` and `@DoNotCall("<reason>")`. `@DoNotCall`'s optional
    `value` carries the reason, so no javadoc edit is needed and the patch stays proportional to the method
-   count rather than to the file size.
+   count rather than to the file size.~~ **Wrong, and corrected in the branch.** `@DoNotCall`'s message is
+   read only by ErrorProne, and an ErrorProne build has already failed hard with a full error - so that
+   reasoning reached exactly the audience that needed it least. Everyone else got the `@Deprecated`
+   strikethrough with no reason attached, whose obvious reading is "Apache Kafka deprecated `join`" - false,
+   and alarming. Each refused overload therefore also carries a javadoc `@deprecated` tag: same reason,
+   naming this module as the refuser and the switch that turns it off. Three lines per method plus the tag.
 2. Group the reason strings by construct so the compile error a user sees matches the runtime message
    layer 2 produces for the same call.
 3. Do **not** annotate the impl overrides. See Scope Boundaries.
@@ -299,6 +306,11 @@ override these now-deprecated methods.
   weaker per-class assertion is what is available.
 - Assert a control: a supported method on the same interface (e.g. `KStream.mapValues`) is **not**
   deprecated, so the test would fail if the annotation were applied indiscriminately.
+- Assert that every `@Deprecated` the patch adds sits behind a javadoc block carrying a `@deprecated` tag,
+  by walking the patch's post-image. Structural rather than wording-based, so rephrasing a tag passes but
+  forgetting one on an overload a future Kafka adds does not. Pair it with a count of the javadoc lines
+  naming this module, which is the only way to cover the four overloads Kafka had already deprecated - for
+  those the patch adds no `@Deprecated` of its own, and appends to Kafka's existing tag instead.
 
 **Verification:** `KStream`, `KTable`, `KGroupedStream` and `CogroupedKStream` compile into
 `target/classes` and win over the jar.
@@ -425,7 +437,7 @@ topology does not.
 1. `ShadowedClassLoadingTest.GENERATED` carries a binding comment requiring it to match `patched.classes`.
    Add all eight new classes. A class that is generated but missing there is unguarded; one listed but not
    generated fails loudly - both are the behaviour we want.
-2. `NOTICE` names exactly four modified Apache Kafka classes today. Apache 2.0 §4(b) makes this an
+2. `NOTICE` names exactly five modified Apache Kafka classes today. Apache 2.0 §4(b) makes this an
    obligation, not bookkeeping. Add the eight.
 3. The README's "Known gaps" paragraph says windows, joins and suppression "do not work". After this
    change they *refuse*. Rewrite that sentence, and the field-report template bullet that asks reporters
@@ -484,9 +496,11 @@ existing test genuinely must change, that is a finding to report, not a change t
   landed first, or the refused surface is defined by what nobody has looked at. Deferred, not rejected.
 - **OQ2. Is thirteen shadowed classes the right trade for layer 2?** The cheaper shape is to drop the four
   DSL impls and put a single check in `InternalStreamsBuilder`, keyed on the graph-node types the DSL
-  builds (`StreamStreamJoinNode`, `StreamTableJoinNode`, and the windowed store builders) - five shadowed
+  builds (`StreamStreamJoinNode`, `StreamTableJoinNode`, and the windowed store builders) - ten shadowed
   classes instead of thirteen, at the cost of a slightly less direct message and a check that is one step
-  removed from the method the user called. Recorded here because the settled approach names the method
+  removed from the method the user called. Ten rather than five, because R4's compile-time refusal keeps the
+  four DSL *interfaces* patched no matter where layer 2's logic lives; only the four impls go away, and
+  `InternalStreamsBuilder` arrives. Recorded here because the settled approach names the method
   bodies explicitly, so this plan follows it; the alternative is real and cheap to switch to.
 - **OQ3. RESOLVED by running: yes.** `TopologyTestDriver` does propagate `processing.guarantee` into
   `TaskConfig.eosEnabled`, so `exactlyOnceIsRefusedOnAnOtherwiseSupportedTopology` exercises the real

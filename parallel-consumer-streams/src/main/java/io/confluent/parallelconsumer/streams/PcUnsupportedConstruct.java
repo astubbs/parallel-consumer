@@ -4,6 +4,9 @@ package io.confluent.parallelconsumer.streams;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+
 import java.util.Collections;
 
 /**
@@ -31,6 +34,7 @@ import java.util.Collections;
  * @see PcSupportedEnvelope
  * @see PcDispatchSwitch
  */
+@RequiredArgsConstructor
 public enum PcUnsupportedConstruct {
 
     KSTREAM_KSTREAM_JOIN(
@@ -104,26 +108,15 @@ public enum PcUnsupportedConstruct {
      * How this construct is named back to the user. Deliberately the name they would recognise from their own
      * topology, not the internal class that implements it.
      */
+    @Getter
     private final String displayName;
 
     /**
      * Why it is refused. Carried with the construct rather than written at the throw site, so the twelve
      * {@link #refuse()} call sites in the generated Kafka sources stay one line each and cannot drift apart.
      */
+    @Getter
     private final String reason;
-
-    PcUnsupportedConstruct(final String displayName, final String reason) {
-        this.displayName = displayName;
-        this.reason = reason;
-    }
-
-    public String getDisplayName() {
-        return displayName;
-    }
-
-    public String getReason() {
-        return reason;
-    }
 
     /**
      * Refuse this construct if - and only if - the PC dispatch seam is on.

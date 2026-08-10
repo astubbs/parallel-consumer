@@ -41,7 +41,20 @@ import static org.awaitility.Awaitility.await;
  * <b>The precondition is asserted, not assumed.</b> A close that happens to land while the StreamThread is
  * somewhere else would pass this test while proving nothing. So the topology is held with records genuinely
  * in flight, and {@link PcDispatchCounters#getSplitPollWaits()} - incremented only where the thread parks on
- * our own condition - is required to be non-zero <em>before</em> the close is attempted.
+ * our own condition - is required to <em>advance</em> immediately before the close is attempted, rather than
+ * merely to be non-zero. Non-zero is a historical fact that never becomes false again; an advancing count is
+ * the live one.
+ * <p>
+ * <b>What this test does not discriminate, and where that lives instead.</b> It cannot fail if
+ * {@code PcWorkSignal.wakeOwner} were made a no-op: at the default {@code poll.ms} of 100ms that regression
+ * costs at most ~100ms, and a broker-backed close of a draining topology is measured in seconds. Raising
+ * {@code poll.ms} to make the bill visible would not fix that, because it would make the control arm pay the
+ * same bill - stock {@code StreamThread.shutdown()} also only sets {@code PENDING_SHUTDOWN} and lets the loop
+ * notice - and both arms passing is the whole point of having a control here. The discriminating assertion on
+ * {@code wakeOwner} is {@code PcWorkSignalTest.wakeOwnerEndsTheWaitEvenWithNoWorkArriving}, which measures
+ * that wait directly against a budget three orders of magnitude wider than a correct wake. This test's claim
+ * is the narrower one, and the one only a broker can answer: closing <em>while parked on our own condition</em>
+ * still shuts down cleanly and completes rather than timing out.
  *
  * @author Antony Stubbs
  * @see io.confluent.parallelconsumer.streams.PcWorkSignal
@@ -158,10 +171,17 @@ class WakeOnWorkShutdownTest extends BrokerStreamsIntegrationTest {
             if (wakeOnWork) {
                 // THE PRECONDITION. Without this the close might land while the thread is anywhere at all, and
                 // a green result would say nothing about the wait this change introduced.
+                //
+                // Waited for a FRESH park, not for any park. The counter increments on ENTRY to the wait, so
+                // "> 0" says only that the thread parked at some point - which stays true forever afterwards,
+                // including long after the thread has moved on. Requiring the count to advance from a snapshot
+                // taken here proves it is still cycling into the wait as the close lands, which is the
+                // condition this test claims to be closing under.
+                long parkedBefore = PcDispatchCounters.getSplitPollWaits();
                 await().atMost(Duration.ofSeconds(60))
-                        .until(() -> PcDispatchCounters.getSplitPollWaits() > 0);
-                log.info("=== {} - StreamThread has parked on the wake condition {} time(s) before close",
-                        name, PcDispatchCounters.getSplitPollWaits());
+                        .until(() -> PcDispatchCounters.getSplitPollWaits() > parkedBefore);
+                log.info("=== {} - StreamThread parked on the wake condition again ({} total) immediately "
+                        + "before close", name, PcDispatchCounters.getSplitPollWaits());
             }
         } finally {
             long startNanos = System.nanoTime();
