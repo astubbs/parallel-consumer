@@ -298,13 +298,12 @@ Do not start one casually.
   CI coverage ever looks wrong, this is the first suspect - give each fork its own exec
   file (`destFile` with `${surefire.forkNumber}`) and add `jacoco:merge` before the report.
 
-### `MockConsumer.groupMetadata()` workaround - DONE
+### Drop the `MockConsumer.groupMetadata()` workaround on the Kafka 4.x upgrade
 
-- `CoreAppTest`, `CoreAppMetricsIntegrationTest`, `ReactorAppTest` and `VertxAppTest` used to each stub
-  `mockConsumer.groupMetadata()` with the same `// todo fix AK mock consumer` note - one Apache Kafka
-  defect, copy-pasted four times. Now folded into `ExampleMockConsumers` in the
-  `parallel-consumer-example-support` test-jar, so the workaround has one home and disappears in one
-  edit. Still worth re-checking on the Kafka 4.x upgrade - the behaviour may already have changed.
+- The examples' mock consumers stub `groupMetadata()` to work around an Apache Kafka defect; the
+  stub lives in `ExampleMockConsumers` (`parallel-consumer-example-support` test-jar), so it is one
+  edit to remove. Re-check the behaviour when the Kafka client moves to 4.x - if the mock now
+  returns group metadata on its own, delete the workaround.
 
 ## Abandoned draft branches (idea bank)
 

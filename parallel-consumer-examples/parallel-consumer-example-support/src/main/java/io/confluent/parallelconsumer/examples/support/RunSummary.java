@@ -196,7 +196,10 @@ public class RunSummary {
         if (windowSeconds <= 0d) {
             return "not observed - the processing window was too short to measure";
         }
-        return format("%.2f records/sec", observer.getCompleted() / windowSeconds);
+        // recordCount, NOT observer.getCompleted(): the latter counts user-function invocations, so in the
+        // examples that deliberately inject retries a record processed three times would be counted three
+        // times and the figure would overstate the record throughput its own label promises
+        return format("%.2f records/sec", recordCount / windowSeconds);
     }
 
     private String renderImpliedSerialTime() {

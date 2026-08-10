@@ -1601,9 +1601,12 @@ The metrics `CoreApp` above is this module's API reference - "how do I wire a re
                 .meterRegistry(meterRegistry) // <3>
                 // Tags added to every pc_* meter. Bounded values only - these multiply the series count
                 .metricsTags(Tags.of(Tag.of("service", "order-fulfilment"))) // <4>
-                // Distinguishes this instance's pc_* series from another instance's. Stable, not a random
-                // UUID per restart: a fresh value on each deploy churns the series set for no benefit
-                .pcInstanceTag(PC_INSTANCE) // <5>
+                // No pcInstanceTag, so Parallel Consumer generates a unique one. That uniqueness is a
+                // lifecycle requirement, not a nicety: the tag IS the meter identity PC registers and
+                // clears under, so two instances sharing a value means closing one deregisters meters the
+                // other is still publishing. The cost is one label value per instance - which is why a
+                // long-lived deployment should set this to something that identifies the INSTANCE (the
+                // pod name, say) rather than leaving it to a value that is fresh on every restart
                 .build();
 
         ParallelStreamProcessor<String, String> orderProcessor =
@@ -1619,8 +1622,11 @@ The metrics `CoreApp` above is this module's API reference - "how do I wire a re
 <3> Hand Parallel Consumer the *same* registry the application's own meters use, so the `pc_*` series sit beside the `order_*` series and one dashboard can put "orders in flight" next to "records in flight".
 <4> Tags added to every `pc_*` meter.
 Bounded values only - each one multiplies the series count.
-<5> Distinguishes this instance's `pc_*` series from another instance's.
-Stable, and not a random UUID per restart: a fresh value on every deploy churns the whole series set for no benefit.
+
+Note what is *not* set there: `pcInstanceTag`.
+That tag is the identity Parallel Consumer registers and clears its own meters under, so it has to be unique per instance - two instances sharing a value means closing one deregisters meters the other is still publishing.
+Left unset, as here, Parallel Consumer generates a unique one.
+It does cost a label value per instance, which is the one place this example accepts extra cardinality on purpose; a long-lived deployment should therefore set it to something that identifies the *instance* - the pod name, say - rather than leave it to a value that is fresh on every restart.
 
 .Publish the signals a fulfilment dashboard is built from
 [source,java,indent=0]
@@ -1663,11 +1669,16 @@ histogram_quantile(0.99, sum by (le) (rate(order_allocation_seconds_bucket[5m]))
 sum(order_allocation_active_seconds_active_count)
 ----
 
-.The same question from Parallel Consumer's own side, for the panel beside it
+.Work Parallel Consumer is holding - active *or* waiting - for the panel beside it
 [source,promql]
 ----
 sum by (pcinstance) (pc_inflight_records{service="order-fulfilment"})
 ----
+
+The two gauges are neighbours, not duplicates, and a dashboard should not label them as though either could replace the other.
+`order_allocation_active_seconds_active_count` counts calls currently *inside* the warehouse system.
+`pc_inflight_records` counts every record Parallel Consumer still has in flight, which includes records that failed and are sitting out their retry delay before the next attempt - no allocation call is running for those, so they show in the second gauge and not the first.
+That gap between the two is a signal in its own right: a persistent one is retry backlog.
 
 The failure rate comes from `order_allocation_outcomes_total`, tagged by a bounded `outcome` of `allocated`, `out_of_stock` or `error` - three time series for ever, whatever the traffic.
 Tagging that counter by order or customer id instead would give one series per order in production, and a query that is simultaneously unaffordable and useless, because nobody dashboards a single order's failure rate.
@@ -1676,7 +1687,7 @@ Identifiers belong in logs and traces, which are indexed for exactly that.
 TIP: The latency timer publishes a percentile *histogram* rather than client-side percentiles, because only buckets can be aggregated.
 Client-side quantiles are computed per process, and cannot be averaged or summed afterwards, so a fleet's 99th percentile is simply not recoverable from them - which is what the `histogram_quantile` query above depends on.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/io/confluent/parallelconsumer/examples/metrics/OrderFulfilmentApp.java[order fulfilment example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/OrderFulfilmentAppMetricsTest.java[test], which scrapes the endpoint with a real Prometheus and asserts that the two in-flight meters agree, that the latency series really are buckets, and that no order id ever became a tag value.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/io/confluent/parallelconsumer/examples/metrics/OrderFulfilmentApp.java[order fulfilment example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/OrderFulfilmentAppMetricsTest.java[test], which scrapes the endpoint with a real Prometheus and asserts that the two in-flight meters agree while a cohort is held open with nothing waiting to be retried, that the latency series really are buckets, and that no order id ever became a tag value.
 
 [[roadmap]]
 == Roadmap

@@ -177,12 +177,6 @@ public class OrderFulfilmentApp {
      */
     static final int MAX_CONCURRENCY = 100;
 
-    /**
-     * Stable and bounded, not a random UUID per restart. It is a tag value on every {@code pc_*} series,
-     * so a fresh value on every deploy would churn the series set for the same reason an order id would.
-     */
-    static final String PC_INSTANCE = "order-fulfilment";
-
     @Getter
     private final String inputTopic = "customer-orders";
 
@@ -351,9 +345,12 @@ public class OrderFulfilmentApp {
                 .meterRegistry(meterRegistry) // <3>
                 // Tags added to every pc_* meter. Bounded values only - these multiply the series count
                 .metricsTags(Tags.of(Tag.of("service", "order-fulfilment"))) // <4>
-                // Distinguishes this instance's pc_* series from another instance's. Stable, not a random
-                // UUID per restart: a fresh value on each deploy churns the series set for no benefit
-                .pcInstanceTag(PC_INSTANCE) // <5>
+                // No pcInstanceTag, so Parallel Consumer generates a unique one. That uniqueness is a
+                // lifecycle requirement, not a nicety: the tag IS the meter identity PC registers and
+                // clears under, so two instances sharing a value means closing one deregisters meters the
+                // other is still publishing. The cost is one label value per instance - which is why a
+                // long-lived deployment should set this to something that identifies the INSTANCE (the
+                // pod name, say) rather than leaving it to a value that is fresh on every restart
                 .build();
 
         ParallelStreamProcessor<String, String> orderProcessor =
@@ -467,7 +464,10 @@ public class OrderFulfilmentApp {
         this.emittedMetricFamilies = Optional.of(parallelConsumerMetricFamilies());
 
         if (parallelConsumer != null) {
-            parallelConsumer.close();
+            // DRAIN first: close() is closeDontDrainFirst(), which abandons orders that are already
+            // queued locally but not yet started - so the summary below would be built from work the
+            // example threw away, and would under-report its own run
+            parallelConsumer.closeDrainFirst();
         }
         stopPrometheusEndpoint();
 

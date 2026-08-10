@@ -265,7 +265,10 @@ public class ParcelTrackingApp {
      */
     public void close() {
         if (parallelConsumer != null) {
-            parallelConsumer.close();
+            // DRAIN first: close() is closeDontDrainFirst(), which abandons records that are already
+            // queued locally but not yet started - so the summary below would be built from work the
+            // example threw away, and would under-report its own run
+            parallelConsumer.closeDrainFirst();
         }
         this.emittedSummary = buildRunSummary();
         emittedSummary.ifPresent(RunSummary::log);

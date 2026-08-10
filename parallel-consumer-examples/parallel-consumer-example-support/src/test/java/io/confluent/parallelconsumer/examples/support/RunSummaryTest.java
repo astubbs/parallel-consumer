@@ -131,6 +131,26 @@ class RunSummaryTest {
                 .contains("excludes Parallel Consumer startup");
     }
 
+    /**
+     * The examples deliberately inject retries, so invocations exceed records. The field is labelled
+     * {@code records/sec}, and deriving it from the invocation count would have overstated it by exactly
+     * the retry rate - reporting the retries as though they were extra records delivered.
+     */
+    @Test
+    void throughputCountsRecordsNotUserFunctionInvocations() {
+        int invocations = RECORDS + 50; // 50 retries
+        ConcurrencyObserver observer = observer(DISTINCT_KEYS, invocations);
+        String rendered = summaryWith(ProcessingOrder.KEY, observer).render();
+
+        double windowSeconds = (observer.getLastExitNanos() - observer.getFirstEnterNanos()) / 1_000_000_000d;
+        assertThat(lineContaining(rendered, "throughput"))
+                .contains(String.format(Locale.ROOT, "%.2f records/sec", RECORDS / windowSeconds))
+                .doesNotContain(String.format(Locale.ROOT, "%.2f records/sec", invocations / windowSeconds));
+        assertThat(lineContaining(rendered, "user function invocations"))
+                .as("the retries are still reported - under the name that describes them")
+                .contains(String.valueOf(invocations));
+    }
+
     @Test
     void aRunThatProcessedNothingSaysSoRatherThanDividingByZero() {
         String rendered = summaryWith(ProcessingOrder.KEY, new ConcurrencyObserver()).render();
