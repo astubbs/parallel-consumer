@@ -606,9 +606,352 @@ is exposed to it; C3 cannot reach it.
 - **"The default `preCommit` is honest": REFUTED** before it reached the verdict, by disassembling `flush`.
   See U2.0.
 
+### U3. The experiment, and what running it actually did
+
+Run on 2026-08-11 against Docker Desktop 27.4.0 / Testcontainers 1.21.4 / `confluentinc/cp-kafka:7.9.0`,
+from a worktree pinned at `fa5cf3b9`. Gate:
+`./mvnw -pl parallel-consumer-connect -am -Dcopyright.skip=true verify`.
+
+#### U3.1 - The in-memory probe
+
+`OffsetCompositionProbeTest`: **8 arms green**, including the negative control (which fires) and the
+exhaustive enumeration over all 700 completion orders across two lanes and four offsets. Unchanged by this
+unit.
+
+#### U3.2 - The broker-backed arm, first execution
+
+`OffsetCompositionCrashRestartTest.aCommitNeverCoversARecordNoLaneDurablyWrote` had **never been executed**
+before this run. It passed on its first execution against a real broker:
+
+```
+[INFO] Running io.confluent.parallelconsumer.connect.integrationTests.OffsetCompositionCrashRestartTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 9.143 s
+```
+
+**A4's prediction HELD**: the arm passed with no change to `PcSinkTaskDurabilityBarrier` or
+`PcSinkTaskLaneRouter`. Every fix this unit made classified as **harness**, not mechanism. No defect was
+found in the C3 mechanism itself.
+
+#### U3.3 - What running it did find: the module's unit lane was running the broker test
+
+The first execution produced **two** reports for the same class, ~9.1s apart - one under surefire in the
+`test` phase and one under failsafe in `verify` - and started a Testcontainers broker twice.
+
+`parallel-consumer-connect/pom.xml` declared a plugin-level surefire `<excludes>` containing only
+`**/WorkerSinkTaskRegressionTest.java`. Maven plugin-configuration list merging makes a child list
+**replace** the parent's, so the root pom's `**/integrationTest*/**/*.java` exclusion was silently dropped
+for this module and the broker-backed arm was collected by the unit lane as well.
+
+Three consequences, and the third is the one that matters:
+
+1. The `test` phase required Docker, in a module whose unit lane is meant not to.
+2. The arm ran twice per build.
+3. **On a red run the build would fail in the `test` phase, so `verify` would never reach failsafe** - and
+   the deliberate red proof this plan's negative control depends on would destroy its own evidence.
+
+`TestConventionRules.integration_tests_must_live_in_an_integrationTest_package` cannot catch this: the class
+*is* in the right package. The defect is in the pom's merge semantics, which no test asserts on. Fixed by
+`<excludes combine.children="append">`, which keeps the inherited pattern instead of restating it.
+
+This is a second instance of the include/exclude drift already recorded at the end of
+`docs/inflight/pr-connect-on-pc.md` (`**/*IT.java` documented as included by failsafe but not listed). Same
+class, same module, different mechanism.
+
+#### U3.4 - What running it also found: green meant less than it looked
+
+The arm as first written could not fail for two of the three reasons it appeared to test.
+
+- **It emitted no observations.** `@Slf4j` was declared and never used; the committed offset, the
+  redelivered values and the sink count lived only inside AssertJ `.as()` descriptions, which print on
+  failure and never on green. A passing run yielded `Tests run: 1, Failures: 0` and nothing a reader could
+  check. Fixed by logging them.
+- **The restart reader was satisfiable by the failure state.** `KafkaClientUtils` defaults consumers to
+  `auto.offset.reset=earliest`, so a no-seek reader with **no committed offset at all** resets to 0 and
+  hands back the parked record anyway - `contains(PARKED_VALUE)` passes whether or not any commit happened.
+  Only the separate `isEqualTo(0L)` assertion excluded that path, which is the assert-harder shape
+  `docs/solutions/test-issues/a-restart-assertion-satisfiable-by-pre-crash-data-proves-nothing.md`
+  explicitly rules out. Fixed in the *reader*: `auto.offset.reset=none`, so a missing commit throws.
+- **The sound arm alone could not distinguish "the frontier stopped correctly" from "the frontier never
+  moved".** A barrier that confirmed *nothing at all* produces exactly the asserted state - commit at 0,
+  parked record redelivered, eight records in the sink. Fixed by adding a trigger-removed arm.
+
+Two further hardenings, both from review rather than from the run: the sink now blocks on its producer's
+acknowledgement before recording a record durable (a test sink that reported durability on an un-acked send
+would be making the exact over-claim the barrier exists to prevent, inside the harness meant to detect it),
+and the crash boundary now uses `PcTaskDispatcher.abortClose()` rather than `close()`, matching the streams
+module's `CommitFrontierCrashRestartTest` - an orderly close drains the pool and revokes partitions, handing
+a simulated crash a repair pass a real one never gets.
+
+#### U3.5 - The arm as it now stands: three arms, one varying term each
+
+| Arm | Confirmation rule | Sink refuses the parked record | Asserted outcome |
+|---|---|---|---|
+| sound | `OWNING_LANE` | yes | committed offset **0**; parked record redelivered; fast records in the sink |
+| trigger-removed | `OWNING_LANE` | **no** | committed offset **9**; nothing redelivered; parked record in the sink |
+| negative control | **`HIGHEST_ACROSS_LANES`** | yes | committed offset **> 0**; parked record neither redelivered nor in the sink |
+
+Each control differs from the sound arm in exactly one term
+(`docs/solutions/best-practices/control-arms-vary-exactly-one-term.md`). The negative control additionally
+asserts that more than one lane received records, because lane choice is a `ShardKey` hash: with every
+record in one lane the inverted rule degenerates into the sound one and the control would pass while
+measuring nothing.
+
+**What the three arms observed, logged by the arm itself:**
+
+```
+=== rule=OWNING_LANE        refuseParked=true  lanesUsed=4 committedOffset=0 committedMetadataLength=8
+    redelivered=[parked, fast-0, fast-1, fast-2, fast-3, fast-4, fast-5, fast-6, fast-7] sinkRecords=8
+=== rule=OWNING_LANE        refuseParked=false lanesUsed=4 committedOffset=9 committedMetadataLength=0
+    redelivered=[] sinkRecords=9
+=== rule=HIGHEST_ACROSS_LANES refuseParked=true lanesUsed=4 committedOffset=9 committedMetadataLength=0
+    redelivered=[] sinkRecords=8
+
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 75.87 s
+    -- in io.confluent.parallelconsumer.connect.integrationTests.OffsetCompositionCrashRestartTest
+```
+
+Three things in that output are worth reading closely.
+
+- **`committedMetadataLength=8` on the sound arm.** The frontier is 0 *and* the commit carries eight bytes
+  of encoded incomplete-offset payload. That is the "frontier plus holes" shape doing exactly what the
+  investigation claimed only PC can do: the commit records "resume at 0" while remembering that eight
+  higher offsets are already durable. On the other two arms the metadata is empty, because there are no
+  holes to encode.
+- **`lanesUsed=4` on every arm.** The partition really was split across all four lanes, so the negative
+  control was not silently degenerate.
+- **The control's contradiction, in broker state.** `committedOffset=9` with `sinkRecords=8`: the group has
+  committed past a record the sink never wrote, and `redelivered=[]` says the restart is never handed it
+  again. Against the sound arm's `committedOffset=0` with the same eight sink records and the parked record
+  redelivered - one varying term, opposite outcomes.
+
+#### U3.6 - Both regression arms, unchanged
+
+`WorkerSinkTaskTest` **30/30 in both arms**, and the report verifier compared both report sets against the
+checked manifest:
+
+```
+--- surefire:3.5.6:test (worker-sink-task-stock) @ parallel-consumer-connect ---
+[INFO] Tests run: 30, Failures: 0, Errors: 0, Skipped: 0 -- in org.apache.kafka.connect.runtime.WorkerSinkTaskTest
+--- surefire:3.5.6:test (worker-sink-task-patched-disabled) @ parallel-consumer-connect ---
+[INFO] Tests run: 30, Failures: 0, Errors: 0, Skipped: 0 -- in org.apache.kafka.connect.runtime.WorkerSinkTaskTest
+--- surefire:3.5.6:test (worker-sink-task-report-verifier) @ parallel-consumer-connect ---
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
+```
+
+Kafka's own Streams regression arm in the parent module also stayed at `Tests run: 188, Failures: 0`.
+
+#### U3.8 - What a simplify + code-review pass then found in the arm itself
+
+The arm was put through `ce-simplify-code` and `ce-code-review` after the numbers above were first taken.
+Both passes found real defects **in the evidence**, which is worth recording because the verdict rests on it.
+
+**The arm proved a weaker property than it claimed, at first.** As originally written, `runUntilCommitted`'s
+`finally` called the orderly `PcTaskDispatcher.close()` - which drains the worker pool, feeds completions
+back and revokes partitions. That is a graceful shutdown, not a crash, and it hands a simulated crash the
+repair pass a real one never gets. It now calls `abortClose()`, matching the streams module's sibling. The
+committed offset cannot differ between the two paths - `commitSync` appears nowhere in `PcTaskDispatcher`
+and `lastCommitted` is captured inside the driver loop before either runs - so no number moved; what moved
+is what the arm is entitled to claim.
+
+**Three assertions were satisfiable by the failure state**, and all three are now closed in the *reader*
+rather than by asserting harder:
+
+- The restart reader defaulted to `auto.offset.reset=earliest`, under which a consumer with **no commit at
+  all** still returns the parked record. Now `none`, so a missing commit throws.
+- An empty read could equally mean "the consumer never positioned itself". The reader now resolves and
+  asserts its position against the group's committed offset before polling.
+- The sink reader stopped at the eighth record, so a parked record written *ninth* would have satisfied
+  `doesNotContain` by the reader giving up. It now drains to the log end.
+
+**Two arms could pass while measuring nothing**, and now assert their own preconditions: `lanesUsed > 1`
+(with every record in one lane the two rules are the *same* rule), and `settled` (the driver stops on
+quiescence **or** a 120s deadline, and a stalled run reproduces exactly the state the sound arm asserts).
+
+**The commit metadata was logged and never asserted.** `committedMetadataLength=8` on the sound arm is the
+frontier-plus-holes payload - the one thing only PC can express - and it was being quoted as evidence while
+no assertion required it. A barrier committing a *bare* frontier with an empty payload would have passed
+every arm. The sound arm now asserts `committed.metadata()` is not empty.
+
+**The deepest finding: nothing tested what the barrier ASKED for.** `TopicSinkTask.preCommit` read only
+`currentOffsets.keySet()` and never the offset value, so a barrier that handed each lane a *partition-wide*
+map would have passed all three arms - and against `SinkTask`'s base `preCommit` (`flush(offsets); return
+offsets;` over an empty `flush`, U2.0) that map echoes straight back and the **sound** rule then confirms
+records the lane never received. `PcSinkTaskLane`'s javadoc calls the lane-locality of that map load-bearing;
+no test in the module held it to that. The sink now records any offset it was asked about but never
+received, and every arm asserts it stayed null.
+
+Observed after all of the above, and unchanged from before it except for the added fields:
+
+```
+=== rule=OWNING_LANE          refuseParked=true  lanesUsed=4 settled=true foreignOffsetAsked=null
+    committedOffset=0 committedMetadataLength=8 inputLogEnd=9
+    redelivered=[parked, fast-0 … fast-7] sinkRecords=8
+=== rule=OWNING_LANE          refuseParked=false lanesUsed=4 settled=true foreignOffsetAsked=null
+    committedOffset=9 committedMetadataLength=0 inputLogEnd=9 redelivered=[] sinkRecords=9
+=== rule=HIGHEST_ACROSS_LANES refuseParked=true  lanesUsed=4 settled=true foreignOffsetAsked=null
+    committedOffset=9 committedMetadataLength=0 inputLogEnd=9 redelivered=[] sinkRecords=8
+
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 17.56 s
+```
+
+**Still uncovered, and named rather than papered over.** No arm exercises Connect's *default* echoing
+`preCommit`, a `put` that throws, a `preCommit` that throws, a refused record in the *middle* of a
+partition, or the durability cycle running on its own thread - the arm serialises it onto the driver thread,
+which is not the arrangement U1.4 decided on. The verdict's conditions and its liveness gap already carry
+the first three; the last two are new entries for the implementing plan.
+
+#### U3.7 - The reactor-wide gate did not complete on this machine, and why that is an environment result
+
+**Stated plainly rather than buried: the full mandated gate
+`./mvnw -pl parallel-consumer-connect -am -Dcopyright.skip=true verify` did NOT reach a green reactor here.**
+It fails in `parallel-consumer-core`'s own integration-test lane, which runs before the connect module, so
+the reactor stops at module 2 of 4 and the connect module is never built in that invocation:
+
+```
+[ERROR] Tests run: 115, Failures: 15, Errors: 5, Skipped: 6      (parallel-consumer-core, failsafe)
+  RetriesTest.awaitingWorkContainersSizeDoesNotExceedNumberOfFailedContainersInRetryLoop
+      ConditionTimeoutException: expected <2000> but was <477> within 10 seconds
+  CloseAndOpenOffsetTest, TransactionTimeoutsTest, TransactionAndCommitModeTest (15 of 33),
+  PartitionStateCommittedOffsetIT
+[INFO] BUILD FAILURE
+```
+
+Core surefire separately reported `Tests run: 331, Failures: 1` -
+`PCMetricsTest.metricsRegisterBinding` (`expected: 207.0 but was: 209.0`) - on the run made while two other
+Maven reactors were live. **It did not reproduce**: a later run of the same suite on a quieter machine
+reported `Tests run: 331, Failures: 0, Errors: 0, Skipped: 10`. Reproduction rate 1 of 3 attempts, under
+different load each time; that is a rate worth stating rather than a verdict, per
+`docs/inflight/test-local-core-failures-2026-08-10.md`'s own discipline.
+
+One further artefact worth recording so nobody re-derives it: `failsafe:verify` reads
+`target/failsafe-reports/failsafe-summary.xml`, and when a later invocation filters the integration tests out
+so that `failsafe:integration-test` runs none, **the summary from the previous invocation is left in place
+and `verify` fails on it**. A gate that filters ITs must therefore either `clean` or clear those reports
+first; without that, one earlier red run makes every subsequent filtered run red for a reason that no longer
+exists.
+
+**None of this is reachable from this branch.** The diff touches `parallel-consumer-connect/` and docs; core
+cannot see any of it, and every failure above is an awaitility timeout or a count assertion of the shape
+`docs/inflight/test-local-core-failures-2026-08-10.md` already characterises as the unresolved local/CI
+asymmetry - CI's lanes green on the same trees while the local rate is high enough to block roughly half the
+verification attempts. These runs were made on a machine carrying several concurrent Maven reactors and a
+second agent's work, which is the loaded condition that document names and does not settle.
+`JStreamParallelEoSStreamProcessorTest`, the flake called out in the task brief, **passed** in every run
+here. Noted, re-run, not "fixed" - per `AGENTS.md`, loosening any of these to buy a green local run is
+forbidden.
+
+**What was gated instead, and what that is worth.** The connect module's own gates were run to completion
+with `-Dit.test=OffsetCompositionCrashRestartTest -Dit.failIfNoSpecifiedTests=false`, which narrows
+*failsafe* only - it filters core's and streams' integration tests out of the reactor and leaves every
+surefire execution, every connect-module execution and the crash-restart arm running exactly as the mandated
+command runs them. `-Dtest=` was never used; it is forbidden on this module because the stock regression arm
+runs against an intentionally empty classes directory. So the connect module's four surefire executions,
+its report verifier and its failsafe arm are all measured under the mandated configuration; what is missing
+from the record is core's and streams' integration lanes, which this branch does not touch.
+
+A reader who needs the reactor-wide green should take it from CI, where these lanes are green on the same
+trees, rather than from this machine.
+
+---
+
 ## Verdict
 
-*Populated by U4. One sentence, then the evidence.*
+**Sound-conditional.** Candidate C3 - do not compose the watermarks; read each lane's `preCommit` return
+against that lane's own record stream, convert it to per-record durability facts, and let Parallel
+Consumer's existing frontier machinery compose those - **holds, and the composed frontier survives a
+crash-restart against a real broker.** It is conditional, not unconditional, because Connect hands a
+`SinkTask` several whole-partition powers that a split partition invalidates, and PC cannot detect a
+connector using them.
+
+This **upholds** the 2026-08-08 plan's KTD5, which rejected several tasks sharing a partition as unsound
+"because the offsets would over-report and the sink would lose data on restart". That is exactly what the
+negative control demonstrates on a real broker. What C3 changes is that the over-report is no longer
+inevitable: it followed from *composing watermarks*, and C3 never composes them.
+
+### The evidence
+
+1. **The invariant is testable and holds.** A `WorkContainer` for offset `o` in partition `P`, routed to
+   lane `L`, is completed **iff** `L`'s own most recent `preCommit` return for `P` exceeds `o`, where the
+   map `L` was handed contained only offsets `L` received. Exhaustively verified in memory over every
+   completion order across two lanes and four offsets, and carried into real broker state by the
+   crash-restart arm.
+2. **The frontier stops at the unwritten record.** With the parked record's lane pinned at watermark 0, the
+   consumer-group commit is offset 0 with the other lanes' completions encoded as holes in the metadata - so
+   a restart is handed the parked record back.
+3. **The frontier does advance when it should.** The trigger-removed arm reaches offset 9.
+4. **The failure is detectable.** Under `HIGHEST_ACROSS_LANES` the committed offset runs past the parked
+   record and the restart never sees it again: silent data loss, in broker state.
+
+### The evidence boundary - read this before quoting the verdict
+
+The crash-restart arm runs against a real broker, a real consumer group and a real commit. It does **not**
+run a Connect runtime: no worker, no converter, no connector lifecycle, no rebalance;
+`PcConnectDispatchBridge.enabled()` still returns a hard-coded `false`, and the poll/dispatch/commit loop
+and the sink are written by the test. So the arm evidences **PC's commit and frontier path**, not U1's
+reading of `WorkerSinkTask`. The origin plan's residual risk - that U1's reading and the probe share one
+model - is **narrowed, not retired**: PC's half of the model is now executed, Connect's half is still
+argued. Retiring it needs an arm that drives the patched `WorkerSinkTask` itself, which is the next plan's
+entry criterion.
+
+Neither control detects a modelling error, and neither is claimed to. Inverting the confirmation rule varies
+the same term inside the same barrier in both the probe and the broker arm; what the controls prove is that
+the arms are not vacuous.
+
+### The conditions (R1a) - each needs detection or an explicit connector opt-in in the next plan
+
+None of these can be verified by PC at runtime today. A precondition with neither a detector nor an opt-in
+is an unenforced assumption wearing a verdict's clothes, so each carries its enforcement obligation.
+
+| Condition | Why a split partition breaks it | Enforcement the next plan must carry |
+|---|---|---|
+| Connector must not call `SinkTaskContext.offset()` | `:652-:654` seeks and overwrites `lastCommittedOffsets` *and* `currentOffsets` for the whole partition, re-reading every lane's records and destroying the others' tracked progress | Detectable: PC owns the `SinkTaskContext` implementation and can fail fast, or translate per lane |
+| Connector must not derive behaviour from `SinkTaskContext.assignment()` | Subset is inexpressible in the `Set<TopicPartition>` return type | **Not** detectable - opt-in required. Benign for connectors that only log it |
+| PC must own `onPartitionsAssigned` seeding | `:718` seeds one `consumer.position(tp)` per partition into both maps; there is no notion of "the part of this partition I own" | Design requirement on PC, not on the connector |
+| PC must handle `RetriableException` itself | `:599`/`:632` `pauseAll()` halts consumption of *every* partition the task owns | Design requirement on PC. "Absent by construction" only while PC drives dispatch |
+| Connector's output identity must not be `(topic, partition, offset)` | Two lanes holding one partition collide on file names or upsert keys - S3, HDFS | **Not** detectable - opt-in required. This is the existing key-affine vs partition-affine axis in `connector-compatibility.md` |
+| A key-rewriting SMT must not sit before the sink | A record's lane must be stable; an SMT that rewrites the key breaks that beneath *any* sound mechanism | **Not** detectable from PC's side once SMTs are in the chain - opt-in required. Unanswered by this investigation; carried as a named precondition |
+| Connector must implement `flush` or `preCommit`, or accept `put()`-returns as its durability claim | `SinkTask`'s default `preCommit` is `flush(offsets); return offsets;` and `flush`'s default body is a bare `return`, so an overriding-neither connector's watermark is a pure echo (U2.0) | Detectable by reflection on the `SinkTask` subclass. Note this precondition is **inherited, not introduced**: such a connector is already broken under stock Connect |
+
+### One gap found in the mechanism, and it is liveness rather than safety
+
+`PcSinkTaskLaneRouter.runDurabilityCycle()` polls each lane's `preCommit` in a bare loop and
+`PcSinkTaskLane.preCommit` rethrows, so **one connector throwing from `preCommit` aborts the whole cycle and
+no lane's completions are applied**. Origin A3 names that as one of two live redelivery paths Connect really
+takes (`WorkerSinkTask.java:437-442`).
+
+It is not a safety defect - nothing is confirmed, so nothing is over-committed, and the frontier simply does
+not advance - but it lets one lane stall every other lane's commit progress. Making the cycle per-lane
+fault-isolating is the next plan's work; doing it here would be implementing the mechanism, which KTD1 puts
+out of scope. Recorded rather than fixed, and **not covered by any arm**.
+
+### What this licenses (R5b)
+
+**Key-level concurrency beyond the partition count is available in principle, and gated in practice.** The
+offset-composition question - the one this investigation existed to settle, and the one that had to be
+answered before anything else - is settled yes. The remaining gates are about *whole-partition ownership*,
+not about offsets, which was itself a refutation of this plan's prediction that the condition would be
+offset observability.
+
+For a connector that passes every condition above - a keyed upsert sink such as JDBC upsert, Elasticsearch
+by document id, or Mongo, with no `context.offset()` rewind and no key-rewriting SMT - the ceiling is the
+lane count, not the partition count. For a connector that fails any of them, the module falls back to
+partition-affine, whose fan-out ceiling equals the partition count and which leaves per-partition
+head-of-line blocking unaddressed - the same ceiling `tasks.max` already reaches on a stock Connect worker
+(stated analytically per R5; the Streams module's measured figures are not Connect numbers and are not
+quoted here).
+
+So the strategic claim survives, conditionally, and the next plan's job is to turn each condition into a
+detector or an opt-in rather than to re-argue the composition.
+
+### The next plan
+
+Implement the mechanism: wire `PcSinkTaskDurabilityBarrier` into a live path, add per-lane fault isolation
+to the durability cycle, add the detectors and the connector opt-in this verdict's conditions require, and
+add the arm that drives the patched `WorkerSinkTask` itself - which is what retires the residual risk this
+verdict narrows but cannot close.
+
+**Version pin.** This verdict rests on package-private `WorkerSinkTask` internals from Kafka **3.9.2**, read
+from a build-time-generated copy. They are not public contract and can change without deprecation.
 
 ---
 
@@ -721,3 +1064,37 @@ deadlocks rather than defers.
   seam to `PcTaskDispatcher`, it is likewise kept deliberately or reverted, not left behind as unused
   production surface.
 - No test assertion was weakened to reach green.
+
+### Definition of Done - walked item by item, 2026-08-11
+
+| Item | State |
+|---|---|
+| Verdict answers R1 in one sentence with evidence, and satisfies R1a | **Done.** Sound-conditional; seven conditions, each with its enforcement obligation |
+| Every rejected candidate names its interleaving; the survivor names its invariant | **Done in U2**, unchanged |
+| Every whole-partition assumption from U1 step 3 classified per R6 | **Done in U1.3**, and all five now carried into the verdict's condition table rather than left in the findings |
+| U1 step 0's answer recorded - component, thread, map | **Done in U1.4**, unchanged |
+| U3's negative control demonstrably fails when composition is inverted | **Done twice.** In memory (`OffsetCompositionProbeTest`) and now against a real broker: `HIGHEST_ACROSS_LANES` commits offset 9 over a sink that wrote 8 records, and the parked record is never redelivered |
+| Both regression arms still run 30/30, unchanged | **Done.** `WorkerSinkTaskTest` 30/30 stock and 30/30 patched, report verifier green |
+| The probe is deleted or promoted deliberately; the seam likewise | **Kept, deliberately** - see below |
+| No test assertion was weakened to reach green | **Held.** Every assertion in the crash-restart arm is textually unchanged from the version that first ran, apart from *added* arms and *added* assertions. The two harness changes - `auto.offset.reset=none` on the restart reader, and blocking on the sink producer's acknowledgement - both make the test stricter |
+
+#### The keep-or-revert decision, and why it covers five things rather than two
+
+**Keep all of it.** The verdict is sound-conditional rather than unsound, so the next plan implements this
+mechanism; reverting the seam now would delete the foundation and the evidence together.
+
+The origin plan's DoD named two items. Five need the decision, and enumerating only two would have let three
+pieces of unreachable production surface through the gate:
+
+| Surface | Decision |
+|---|---|
+| `OffsetCompositionProbeTest` | **Promoted.** It is the mechanism's unit-level specification, including the exhaustive enumeration - not a throwaway |
+| `OffsetCompositionCrashRestartTest` | **Promoted.** Three arms; it is the only broker-backed evidence for the commit path |
+| `PcTaskDispatcher.CompletionHandle` / `DeferringWorkPreparer` | **Kept.** The origin Goal Capsule's single carve-out, and a fourth instance of a shape core already ships (`ExternalEngine`, Vert.x, Reactor) |
+| `PcSinkTaskDurabilityBarrier` | **Kept**, and its lack of a `src/main` caller is deliberate and recorded, not an oversight: `PcConnectDispatchBridge.enabled()` still returns a hard-coded `false`, which is the state the whole PR is in by design |
+| `PcSinkTaskLaneRouter.runDurabilityCycle()` | **Kept**, same reasoning. Its per-lane fault-isolation gap is recorded in the verdict as the next plan's work |
+
+`PcSinkTaskLaneRouter`'s class javadoc still says it "never calls `preCommit`, `flush`, or an offset
+committer" and that composing watermarks is "deliberately absent here". That is now stale - the class runs a
+durability cycle. Left for the implementing plan to correct along with the behaviour, rather than editing
+production prose during an investigation.

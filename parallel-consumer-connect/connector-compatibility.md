@@ -36,6 +36,37 @@ delivers. So this table is not a compatibility footnote. **It is the list of con
 claim actually applies to**, and a connector landing in the partition-affine column is one this work
 cannot help, however correctly it runs.
 
+## The second exclusion axis: whole-partition ownership
+
+**Added 2026-08-11, from the offset-composition verdict**
+(`docs/plans/2026-08-10-001-investigate-connect-offset-composition.md`, section `## Verdict`).
+
+The table below sorts connectors on **output identity** - whether a record's destination is derived from its
+key (key-affine, splittable) or from its topic-partition-offset (partition-affine, not splittable). That was
+the only axis this catalogue had, and it is not sufficient.
+
+The verdict is **sound-conditional**, and its conditions are about a second, independent property: whether
+the connector relies on **owning a whole partition**. A connector can be perfectly key-affine in its output
+and still be excluded, so a green key-affine row is not on its own a claim that the connector works.
+
+A connector is excluded on this axis if it does any of:
+
+- calls `SinkTaskContext.offset()` to request a rewind - it would re-read every lane's records and destroy
+  the other lanes' tracked progress. PC owns the `SinkTaskContext` implementation, so this one is
+  **detectable at runtime**;
+- derives behaviour from `SinkTaskContext.assignment()` - a lane's subset is inexpressible in the
+  `Set<TopicPartition>` return type. **Not detectable**; benign for connectors that only log it;
+- implements neither `flush` nor `preCommit` *and* buffers inside `put()` - its watermark is then a pure
+  echo carrying no durability information. Detectable by reflection on the `SinkTask` subclass. Note such a
+  connector is already broken under stock Connect, so this precondition is inherited, not introduced.
+
+And independently of the connector: a **key-rewriting SMT** ahead of the sink breaks lane stability beneath
+any sound mechanism, because a record's lane must not change. That is a pipeline property rather than a
+connector property, and it is not detectable from PC's side.
+
+Until a row records both axes, read every "Key-affine" prediction below as "key-affine *in its output* -
+ownership axis unassessed".
+
 ## Predicted compatibility - UNTESTED
 
 | Connector | Predicted mode | Basis for the prediction | Status |

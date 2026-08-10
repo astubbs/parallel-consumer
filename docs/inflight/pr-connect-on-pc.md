@@ -16,15 +16,41 @@ dispatch, reconciled against the parent's commit surface) is next; the module RE
 write-up land with the plan's U3. Publication of both experimental modules is disabled — see
 `release-experimental-modules-publication-disabled.md`; do not reverse before merge.
 
-## The step after U2: frontier-composed commit (designed, not yet planned as units)
+## The step after U2: frontier-composed commit — SETTLED, verdict written 2026-08-11
 
-The parent's U9 made the patched runtime commit PC's **frontier plus encoded holes** and acknowledge
-success back through the dispatcher — the machinery the Connect commit design needs. The Connect delta:
-complete a record's `WorkContainer` only when the owning task's `preCommit()` watermark covers it, each
-watermark read against that task's own record stream. PC's frontier is then the *durable* frontier and
-U9's commit path works unchanged — no offset clamping, no metadata stripping, no partial-commit dirty
-flags. Non-buffering sinks degenerate to U9 semantics exactly. Open design point: PC must never retry a
-record that was `put()` but not yet durable — it is in the sink's buffer, not failed.
+**The verdict is in `docs/plans/2026-08-10-001-investigate-connect-offset-composition.md`, section
+`## Verdict`. Read it before planning the implementation.** Summary: **sound-conditional**. Candidate C3
+holds — do not compose the watermarks at all; read each lane's `preCommit()` return against *that lane's
+own* record stream, turn it into per-record durability facts, and let PC's existing frontier machinery
+compose those. This upholds the 2026-08-08 plan's KTD5 rather than overturning it: the over-report KTD5
+predicted is real, and is exactly what the investigation's negative control demonstrates on a real broker —
+but it followed from *composing watermarks*, which C3 never does.
+
+The conditions are about **whole-partition ownership**, not offsets: `SinkTaskContext.offset()` rewind,
+`assignment()`, `onPartitionsAssigned` seeding, `RetriableException` handling, output identity derived from
+`(topic, partition, offset)`, and a key-rewriting SMT ahead of the sink. The verdict says, for each, whether
+PC can detect it or whether the next plan must carry an explicit connector opt-in.
+
+Evidence: `OffsetCompositionProbeTest` (8 arms, surefire, including an exhaustive enumeration over every
+completion order across two lanes and four offsets) and `OffsetCompositionCrashRestartTest` (failsafe,
+Docker) — three broker-backed arms: the sound one, a trigger-removed control proving the frontier does
+advance, and a negative control proving an over-commit reaches broker state as silent data loss.
+
+**Evidence boundary, and it matters for what the next plan must build:** the broker arm runs no Connect
+runtime. `PcConnectDispatchBridge.enabled()` still returns a hard-coded `false`; the poll/dispatch/commit
+loop and the sink are written by the test. PC's half of the model is executed, Connect's half is still
+argued from source. The arm that drives the patched `WorkerSinkTask` itself is the next plan's entry
+criterion.
+
+**One gap found and deliberately not fixed:** `PcSinkTaskLaneRouter.runDurabilityCycle()` polls each lane's
+`preCommit` in a bare loop and `PcSinkTaskLane.preCommit` rethrows, so one connector throwing aborts the
+cycle for *every* lane. Not a safety defect — nothing is confirmed, so nothing is over-committed — but one
+lane can stall every other lane's commit progress. Per-lane fault isolation belongs to the implementation
+plan; fixing it during an investigation would have been implementing the mechanism.
+
+The original design note this section carried is now the verdict's, and the open design point it ended on —
+PC must never retry a record that was `put()` but not yet durable — is settled by the
+`DeferringWorkPreparer`/`CompletionHandle` seam plus the barrier's staged-then-promoted shape.
 
 ## Direction
 
