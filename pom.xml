@@ -105,6 +105,7 @@
         <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
         <pitest.version>1.25.8</pitest.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
+        <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
 
         <!-- core -->
         <slf4j.version>2.0.18</slf4j.version>
@@ -271,7 +272,8 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.11.0</version>
+                        <!-- version comes from pluginManagement below, so the examples module's
+                             skipPublishing declaration inherits it outside this profile too -->
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -897,6 +899,13 @@
                                 <reactorModuleConvergence />
                                 <banDuplicatePomDependencyVersions />
                                 <requireSameVersions />
+                                <!-- Catches the "version declared only inside a profile, consumed from a child
+                                     module" trap: Maven only degrades that to a build WARNING, which scrolls past.
+                                     central-publishing-maven-plugin was in exactly that state - versioned in the
+                                     `maven-central` profile, declared version-less in the examples module - so every
+                                     ordinary build printed six malformed-model warnings. Verified to fail on the
+                                     unfixed tree, so this rule guards the fix rather than rubber-stamping it. -->
+                                <requirePluginVersions />
                             </rules>
                         </configuration>
                     </execution>
@@ -1058,6 +1067,11 @@
         <!-- Management -->
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.sonatype.central</groupId>
+                    <artifactId>central-publishing-maven-plugin</artifactId>
+                    <version>${central-publishing-maven-plugin.version}</version>
+                </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-site-plugin</artifactId>
