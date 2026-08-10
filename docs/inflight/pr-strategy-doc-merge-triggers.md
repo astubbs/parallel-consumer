@@ -44,6 +44,16 @@ the client-side bet stops being about your application and starts being about th
 it. Whichever of these lands first should decide whether the persona widens or a second persona is
 named, so the later one inherits a decision rather than reopening it.
 
+**Watch the commit-metadata field as these progress.** PC keeps its state in the commit metadata
+field, which is free-form and shared with anything else that has ever owned the group. astubbs#118
+names Kafka Streams *first* among the things that leave bytes PC cannot decode - and the Streams
+spike is putting PC underneath Kafka Streams. Today that exposure is a handled robustness issue and
+belongs nowhere near `STRATEGY.md`: the crash is fixed, the recovery path works, and a guiding policy
+should not carry a caveat for a risk that has not materialised. But if PC becomes the engine hosting
+frameworks that also want that field, an isolation footnote turns into a question about whether the
+client-side bet holds in the substrate role - and *that* is a claim in "Our approach". The trigger to
+revisit is a spike hitting a metadata collision it cannot simply survive, not the spikes merging.
+
 ## Change what the tracks contain
 
 **`feats/web-gui`** - the Observability track names a web GUI as an investment. Once the branch

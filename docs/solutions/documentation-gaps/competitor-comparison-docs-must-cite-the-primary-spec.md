@@ -258,6 +258,22 @@ atomic bulk transaction -- and the README says elsewhere that external side effe
 usual idempotency, exactly as with core Kafka EoS. Sharpening a comparison is an invitation to
 overclaim; the guard is that your own side of the table must be as spec-sourced as theirs.
 
+**And the guard failed, in the same change that wrote it down.** The `Broker cost` row first shipped
+as: *"None beyond an ordinary consumer group. State is client-side, piggybacked onto commit
+metadata."* Every word true, and incomplete in the flattering direction. What it omits is that the
+commit metadata field is free-form and shared -- astubbs#118 exists because a Kafka Streams app,
+another framework or operator tooling that previously owned the group can leave bytes there that PC
+cannot decode. Share Groups have no equivalent exposure: `__share_group_state` is theirs alone. So on
+that row they hold an isolation property PC lacks, while the row read as though the whole cost were
+theirs. The corrected version names the real shape -- they pay load, PC pays isolation.
+
+Two things this instance is worth remembering for. First, the failure was **asymmetric attention**,
+not ignorance: the competitor's column was researched from the spec and our own column was written
+from familiarity, which is the same summary-awareness failure pointed inward. Second, it was caught
+only by reading what had merged to `master` while the branch was open -- the fix that proves the cost
+had already landed. A comparison's own project moves too, and re-sourcing only the competitor's side
+leaves half the table stale.
+
 ## Related
 
 - astubbs#223 -- the PR that re-sourced the section from KIP-932 and added `STRATEGY.md`. Open and
