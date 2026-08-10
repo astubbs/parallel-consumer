@@ -30,8 +30,17 @@ package io.confluent.parallelconsumer.streams;
  * Global mutable static state is normally a smell. Here it is the only thing that reaches the call site:
  * {@code StreamTask} is constructed several layers inside {@code KafkaStreams}, with no seam through which a
  * test could hand it a collaborator. An alpha gets to pay that price; a stable product would not.
+ * <p>
+ * <b>Since astubbs#255 this is the JVM-wide <em>fallback</em>, not the whole story.</b> There is a seam
+ * after all - the {@code StreamTask} constructor is handed an {@code InternalProcessorContext}, whose
+ * {@code appConfigs()} carries the instance's own {@code StreamsConfig} - so a task first asks
+ * {@link PcDispatchSettings} what <em>its</em> instance was configured with, and only falls through to this
+ * class when the instance said nothing. That is what lets two {@code KafkaStreams} instances in one JVM run
+ * different arms at once, which is the whole point of being able to benchmark and test the seam against your
+ * own topology. Everything below still works exactly as it did, and is still what a whole-JVM run uses.
  *
  * @author Antony Stubbs
+ * @see PcDispatchSettings for the per-instance configuration this falls back from
  * @see PcTaskDispatcher
  */
 public final class PcDispatchSwitch {
@@ -40,6 +49,9 @@ public final class PcDispatchSwitch {
      * Set {@code -Dpc.streams.dispatch.enabled=false} to turn the seam off for a whole JVM and get stock
      * Kafka Streams dispatch back. Unset, or {@code =true}, means the seam is on. Tests should call
      * {@link #disable()} / {@link #enable(int)} instead, so they can put it back afterwards.
+     * <p>
+     * The same string is also the per-instance {@code StreamsConfig} key
+     * ({@link PcDispatchSettings#ENABLED_CONFIG}) - one name, usable in either place.
      */
     public static final String ENABLED_PROPERTY = "pc.streams.dispatch.enabled";
 
@@ -47,6 +59,12 @@ public final class PcDispatchSwitch {
      * Worker threads per task, and simultaneously PC's {@code maxConcurrency} - see
      * {@link PcTaskDispatcher}, which uses it for both so that PC never hands out more work than the pool
      * can start.
+     * <p>
+     * <b>The older spelling.</b> camelCase is not the Kafka Streams convention, so the documented name is
+     * the dot-separated {@link PcDispatchSettings#POOL_SIZE_CONFIG}, which works both as a
+     * {@code StreamsConfig} key and as a system property. This one is already published in the module's
+     * README and {@code pom.xml} description, so it stays honoured rather than being broken; it is read only
+     * when the dot-separated name is absent.
      */
     public static final String POOL_SIZE_PROPERTY = "pc.streams.dispatch.poolSize";
 
@@ -54,7 +72,7 @@ public final class PcDispatchSwitch {
 
     private static volatile boolean enabled = readEnabledProperty();
 
-    private static volatile int poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
+    private static volatile int poolSize = readPoolSizeProperty();
 
     private PcDispatchSwitch() {
     }
@@ -95,7 +113,7 @@ public final class PcDispatchSwitch {
      * exactly the implicit-default coupling that flipping this default was meant to remove.
      */
     public static void resetToDefault() {
-        poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
+        poolSize = readPoolSizeProperty();
         enabled = readEnabledProperty();
     }
 
@@ -110,13 +128,27 @@ public final class PcDispatchSwitch {
         if (raw == null) {
             return true;
         }
-        if ("true".equalsIgnoreCase(raw)) {
-            return true;
+        return PcDispatchSettings.parseEnabled(raw, PcDispatchSettings.systemPropertySource(ENABLED_PROPERTY));
+    }
+
+    /**
+     * The dot-separated name first, then the older camelCase one, then the default.
+     * <p>
+     * Deliberately not {@code Integer.getInteger}, which returns the default for anything it cannot parse -
+     * so {@code -Dpc.streams.dispatch.pool.size=eight} would silently run a pool of 4 and the measurement
+     * taken from that run would be attributed to a configuration that never existed.
+     */
+    private static int readPoolSizeProperty() {
+        final String dotted = System.getProperty(PcDispatchSettings.POOL_SIZE_CONFIG);
+        if (dotted != null) {
+            return PcDispatchSettings.parsePoolSize(dotted,
+                    PcDispatchSettings.systemPropertySource(PcDispatchSettings.POOL_SIZE_CONFIG));
         }
-        if ("false".equalsIgnoreCase(raw)) {
-            return false;
+        final String legacy = System.getProperty(POOL_SIZE_PROPERTY);
+        if (legacy != null) {
+            return PcDispatchSettings.parsePoolSize(legacy,
+                    PcDispatchSettings.systemPropertySource(POOL_SIZE_PROPERTY));
         }
-        throw new IllegalArgumentException("System property " + ENABLED_PROPERTY + " must be 'true' or "
-                + "'false', was '" + raw + "'. The seam is ON unless this property says 'false'.");
+        return DEFAULT_POOL_SIZE;
     }
 }

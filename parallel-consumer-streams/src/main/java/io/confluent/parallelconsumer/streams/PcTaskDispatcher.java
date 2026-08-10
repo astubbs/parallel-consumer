@@ -92,7 +92,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * </ul>
  *
  * @author Antony Stubbs
- * @see PcDispatchSwitch
+ * @see PcDispatchSettings for the per-instance decision of whether a task gets one of these at all
+ * @see PcDispatchSwitch for the JVM-wide fallback that decision falls through to
  * @see PcDispatchCounters
  */
 @Slf4j
@@ -177,14 +178,35 @@ public class PcTaskDispatcher implements Closeable {
     private volatile boolean closed;
 
     /**
-     * @return a dispatcher, or null when the switch is off - null being the patched {@code StreamTask}'s
-     *         signal to keep using its own {@code PartitionGroup}.
+     * The per-instance entry point, and the one the patched {@code StreamTask} uses.
+     *
+     * @param streamsConfigs this instance's configuration, as {@code ProcessorContext#appConfigs()} returns
+     *                       it. Null or empty means the instance said nothing, and the decision falls
+     *                       through to the JVM-wide {@link PcDispatchSwitch}.
+     * @return a dispatcher, or null when dispatch is off for this instance - null being the patched
+     *         {@code StreamTask}'s signal to keep using its own {@code PartitionGroup}.
+     * @throws IllegalArgumentException if a PC dispatch property is set to something unintelligible. Thrown
+     *                                  here rather than defaulted, because the property that turns the seam
+     *                                  off is the last place a typo may pass silently.
      */
-    public static PcTaskDispatcher createIfEnabled(final String taskName, final Set<TopicPartition> inputPartitions) {
-        if (!PcDispatchSwitch.isEnabled()) {
+    public static PcTaskDispatcher createIfEnabled(final String taskName,
+                                                   final Set<TopicPartition> inputPartitions,
+                                                   final Map<String, ?> streamsConfigs) {
+        final PcDispatchSettings settings = PcDispatchSettings.resolve(streamsConfigs);
+        if (!settings.isEnabled()) {
             return null;
         }
-        return new PcTaskDispatcher(taskName, inputPartitions, PcDispatchSwitch.getPoolSize());
+        return new PcTaskDispatcher(taskName, inputPartitions, settings.getPoolSize());
+    }
+
+    /**
+     * For callers with no {@code StreamsConfig} to hand - the decision comes from the JVM-wide
+     * {@link PcDispatchSwitch} alone.
+     *
+     * @return a dispatcher, or null when the switch is off
+     */
+    public static PcTaskDispatcher createIfEnabled(final String taskName, final Set<TopicPartition> inputPartitions) {
+        return createIfEnabled(taskName, inputPartitions, null);
     }
 
     public PcTaskDispatcher(final String taskName, final Set<TopicPartition> inputPartitions, final int poolSize) {
