@@ -1,0 +1,154 @@
+# Whole-tree dependency vulnerability audit against Sonatype OSS Index.
+#
+# WHAT THIS COVERS THAT NOTHING ELSE DOES
+#
+# `deps: vulnerabilities` (maven.yml, actions/dependency-review-action) gates PRs, but only on the
+# dependencies a PR *changes*. Dependabot alerts cover the standing tree, but miss transitive
+# components entirely - `netty-codec-http`, `lz4-java` and `HdrHistogram` all carry advisories here
+# and have no Dependabot alert in any state. The gap is a **whole-tree scan, on a schedule**, which
+# is what the `schedule:` trigger below is for: an unchanged tree acquires new advisories, and
+# nothing else in this repo would ever notice.
+#
+# This is the one exception to AGENTS.md's "there is no scheduled build, deliberately". That rule
+# rejects cron lanes that RE-RUN suites the PR gate already covers. This lane covers something the
+# gate cannot: the passage of time.
+#
+# ONE JOB, DELIBERATELY. `ossindex-maven-plugin` is bound to `validate`, which every Maven job in
+# this repo runs, so "enabled in CI" would mean six-plus scans per PR from a single account and a
+# burnt rate limit for zero extra signal. It is off by default in the pom
+# (`ossindex.skip`, astubbs/parallel-consumer#259) and switched on only here.
+#
+# A GREEN MAVEN RUN IS NOT EVIDENCE THE SCAN HAPPENED. The plugin's `fail` parameter covers
+# "vulnerable components were found", not "the request failed" - with an expired token it prints a
+# WARNING and reports BUILD SUCCESS. That silent-green is the exact defect this repo already shipped
+# once. `bin/check-ossindex-audit.sh` is what makes the job honest; read its header before changing
+# anything here, and note its self-test runs FIRST, per the house pattern in repo-hygiene.yml.
+#
+# RED MEANS "THE CHECK BROKE", NOT "WE HAVE CVEs". Findings are written to the job summary and do
+# not fail the job. The tree has a standing backlog of them; a job red on every PR for known debt is
+# ignored within a week. See bin/check-ossindex-audit.sh for the full reasoning.
+#
+# Required repo secrets: OSSINDEX_USERNAME (the account email), OSSINDEX_TOKEN (API token from
+# ossindex.sonatype.org -> account settings). Both already exist.
+
+name: Dependency Audit
+
+on:
+  schedule:
+    # Weekly, Mondays 06:17 UTC - findings land at the start of the week. Weekly rather than daily
+    # because the result only moves when the advisory database does, and a digest nobody reads is
+    # worth less than one they do. Off the hour on purpose: GitHub drops scheduled runs that pile up
+    # at :00. Cron only fires from the default branch, so this does nothing until it is on master.
+    - cron: '17 6 * * 1'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: dependency-audit-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Read-only. Findings go to the job summary rather than a PR comment specifically so this job never
+# needs `pull-requests: write` - it runs PR-authored build code in the same job that holds the OSS
+# Index token, and every permission it does not have is one that cannot be turned against it.
+# See docs/inflight/ci-review-agent.md for the same exposure question on the review job.
+permissions:
+  contents: read
+
+jobs:
+  ossindex:
+    name: "deps: ossindex audit"
+    # Fork PRs receive no secrets, so the audit would 401 and the guard would correctly go red on
+    # every one of them - a permanent false alarm that teaches people to ignore the check. Skip
+    # instead. Same test the self-hosted lanes use.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # `server-id` must match the plugin's `authId`, which is `ossindex`. setup-java writes a
+          # settings.xml whose <server> reads these two env var NAMES at Maven runtime, so the
+          # secrets have to be in `env:` on the Maven step - not here.
+          server-id: ossindex
+          server-username: OSSINDEX_USERNAME
+          server-password: OSSINDEX_TOKEN
+          # No `cache: maven` - see the caching note at the top of maven.yml.
+
+      # Restore-only, off maven.yml's rotating prepare-deps key. This job must not SAVE a cache: it
+      # would compete with the key the build lanes own, and it resolves a different (smaller) set.
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Before the guard runs, prove the guard still works - the sequencing repo-hygiene.yml and
+      # copyright.yml both use. A guard nobody has watched fail is decoration.
+      - name: Self-test the did-it-actually-scan guard
+        run: bash bin/test-check-ossindex-audit.sh
+
+      # An empty secret produces a 401, which the guard catches - but it names three possible causes
+      # where this step names the actual one. Cheap, and it fails before spending a build.
+      - name: Preflight - credentials must be present
+        env:
+          OSSINDEX_USERNAME: ${{ secrets.OSSINDEX_USERNAME }}
+          OSSINDEX_TOKEN: ${{ secrets.OSSINDEX_TOKEN }}
+        run: |
+          if [ -z "${OSSINDEX_USERNAME}" ] || [ -z "${OSSINDEX_TOKEN}" ]; then
+            echo "::error::OSSINDEX_USERNAME / OSSINDEX_TOKEN are not both set as repo secrets. The audit cannot authenticate, and OSS Index no longer serves anonymous component-report requests."
+            exit 1
+          fi
+
+      # `test-compile`, not `validate`: the audit mojo resolves TEST-scope dependencies and the
+      # modules depend on `parallel-consumer-core:jar:tests`, so on a runner with no PC snapshots
+      # installed a bare `ossindex:audit` (or a `validate`-only run) dies at the second module with
+      # "Could not resolve dependencies". Verified locally against a repository with those snapshots
+      # removed - the reactor has to have compiled them.
+      #
+      # Every property is passed explicitly so this command behaves identically whether or not
+      # astubbs/parallel-consumer#259 has merged. `ossindex.skip`, `ossindex.fail` and
+      # `ossindex.authId` are all user properties of the plugin ITSELF, so they work against the
+      # pom as it stands today (which hardcodes `fail=false` and declares no `authId`) and against
+      # the one that PR leaves behind (which wires all three to properties, defaulting skip on).
+      # So this job has no ordering dependency on that PR - and must NOT copy its pom edits here.
+      - name: Audit dependencies against OSS Index
+        shell: bash
+        env:
+          OSSINDEX_USERNAME: ${{ secrets.OSSINDEX_USERNAME }}
+          OSSINDEX_TOKEN: ${{ secrets.OSSINDEX_TOKEN }}
+        run: |
+          # pipefail, or `tee` swallows a Maven BUILD FAILURE and the step goes green on a broken run.
+          set -o pipefail
+          ./mvnw --batch-mode test-compile \
+            -Dossindex.skip=false \
+            -Dossindex.fail=false \
+            -Dossindex.authId=ossindex \
+            -Dossindex.reportFile=target/ossindex-report.json \
+            | tee ossindex-audit.log
+
+      # The whole point of the job. Renders findings into the run summary, and goes RED only when it
+      # cannot prove the scan actually happened.
+      - name: Verify the scan ran, and report what it found
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          bash bin/check-ossindex-audit.sh ossindex-audit.log | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Kept so a finding can be triaged from the structured report rather than re-run by hand, and
+      # so a failed run can be diagnosed from the log that produced the verdict.
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ossindex-reports
+          path: |
+            ossindex-audit.log
+            **/target/ossindex-report.json
+          if-no-files-found: warn

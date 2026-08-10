@@ -11,10 +11,14 @@
   question. Needs confirmation from the action's docs or maintainers about token scrubbing before it
   spawns Bash subprocesses. Until then: trusted authors only. (`pull-requests: write` may also be
   droppable back to `read` if the action posts via its own app token.)
-- **Two grants still missing:** `actionlint`, so the reviewer cannot lint workflow PRs - it said so
-  itself on astubbs#102, and it ships on `ubuntu-latest` with `.github/actionlint.yaml` already present; and
-  `bin/todo-index.sh`, whose script merged with astubbs#103 while the grant did not follow. Land both in a
-  **non-workflow** PR, or the validation skip above means they are never exercised.
+- **Four grants still missing:** `actionlint`, so the reviewer cannot lint workflow PRs - it said so
+  itself on astubbs#102, and it ships on `ubuntu-latest` with `.github/actionlint.yaml` already present;
+  `bin/todo-index.sh`, whose script merged with astubbs#103 while the grant did not follow; and
+  `bin/check-ossindex-audit.sh` + `bin/test-check-ossindex-audit.sh`, which arrived with the OSS Index
+  audit lane and were left ungranted for the same reason the others were - editing
+  `claude-code-review.yml` in the PR that adds a script forfeits that PR's own review. Land all four in
+  a **non-workflow** PR, or the validation skip above means they are never exercised. Grant **both
+  spellings** of each script path (`bin/x.sh:*` and `./bin/x.sh:*`), per `bin/AGENTS.md`.
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap - Testcontainers
   on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than a
   misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
