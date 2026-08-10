@@ -510,6 +510,102 @@ The plan could not skip this and it decides the answer.
   already completes deferred work from an arbitrary thread
   (`VertxParallelEoSStreamProcessor.java:191-:195`).
 
+### U2. Candidates
+
+#### U2.0 - A prediction refuted before the candidates, and it is the load-bearing fact
+
+I was about to write that the default `preCommit` is *honest* - that `flush(offsets); return offsets;` makes
+it a genuine durability barrier, so an echoed map means "written". Disassembling `SinkTask.flush` first:
+
+```
+  public void flush(java.util.Map<TopicPartition, OffsetAndMetadata>);
+    Code:
+       0: return
+```
+
+**`flush`'s default body is a no-op.** So `SinkTask`'s default `preCommit` calls nothing and returns its
+argument verbatim - a pure echo carrying **zero** durability information. Had I not checked, the verdict
+below would have rested on a durability barrier that does not exist.
+
+This splits the connector population three ways, and the split - not the splitting of partitions - is what
+governs the answer:
+
+| Connector overrides | What its watermark means | Usable as a durability signal |
+|---|---|---|
+| Neither `flush` nor `preCommit` | Nothing. Pure echo of what we handed it | **No** - but see below |
+| `flush` only (the common older shape) | Everything pending in *that task instance* was written | **Yes** |
+| `preCommit` | Its own tracked durable watermark | **Yes** |
+
+The first row looks fatal and is not, for a reason worth stating plainly: **a connector that buffers inside
+`put()` while implementing neither `flush` nor `preCommit` is already broken under stock Connect**, whose
+own at-least-once guarantee runs through exactly those two methods. Implementing neither is an assertion
+that `put()` returning *is* the durability claim. So for that population, completing a record when `put()`
+returns is not a weaker guarantee than Connect's - it is identical to it. We inherit the precondition
+rather than introducing it.
+
+#### U2.1 - Rejections, each with its interleaving
+
+- **C1 (min across lanes) - REJECTED, and not for the reason it was filed under.** The prediction that it
+  is *safe* held: with each lane handed only its own subset (U1.4), a minimum over honest per-lane
+  watermarks never claims an unwritten record. The prediction that its filed objection ("likely useless")
+  was wrong also held - a lagging frontier costs replay after a crash, not throughput, since lanes keep
+  processing regardless of where the committed offset sits.
+  Its actual defect is that it **collapses to one scalar per partition and so discards PC's
+  incomplete-offset encoding entirely**. *Interleaving:* P holds offsets 0-99 across lanes A and B. Lane A
+  takes offset 5 and blocks on it permanently (a poison key, retries exhausted); lane B durably writes
+  6-99. Under C1 the composed value is pinned at 5 forever - the committed offset for the whole partition
+  never advances past a single stuck record, which is precisely the head-of-line blocking on the commit
+  path that PC's frontier exists to remove. C3 commits 5 with 6-99 encoded as complete.
+  Second, independent defect: the minimum is **not monotonic**. A lane that acquires its first record for P
+  late contributes a low watermark and drags the composed value *down*; `WorkerSinkTask` has no floor
+  (`:467-:468`) and would commit it backwards silently.
+- **C2 (synthetic offset space) - REJECTED.** *Interleaving:* lanes A and B each assign synthetic offset 0
+  to their first record for P. A sink whose idempotency key is `(topic, partition, offset)` - the standard
+  shape for an exactly-once upsert - now sees two distinct records claiming one identity and overwrites one
+  with the other. No ordering is needed to produce it; the first record in each lane suffices. The
+  observability problem is real and unfixable from PC's side: `SinkRecord.kafkaOffset()` reaches connector
+  output, and Connect's own DLQ and error-reporting records carry the offset.
+- **C5 (split partition identity) - REJECTED, as predicted.** *Interleaving:* lane A holds P as `P#0`, lane
+  B as `P#1`; both return watermarks under those names. Those `TopicPartition`s do not exist on the broker,
+  so either they reach `consumer.commitSync` (`:368`) and the commit fails, or they never reach it - in
+  which case the offsets are composed by PC and mapped back, which is C3 with a fabricated partition
+  identity handed to the connector as well. `SinkRecord.kafkaPartition()` becomes a lie, inheriting C2's
+  observability defect, and `open()`/`close()` receive partitions that do not exist.
+- **C4 (partition-affine) - retained as the baseline** per KTD4, exempt from KTD2's interleaving test per
+  the KTD2 exemption.
+
+#### U2.2 - The survivor and its invariant
+
+**C3 (durability barrier) survives**, as predicted, and for the predicted reason: it never composes
+watermarks at all. Each lane's watermark is converted into per-record durability facts about *that lane's
+own record stream*, and PC's existing frontier machinery composes those. The interleaving that defeats
+every watermark scheme - lane A completing offset 50 after lane B completed 100 - is exactly what PC's
+incomplete-offset encoding already exists to express.
+
+**Invariant (required by U2 step 3, and what U3 must test):** a `WorkContainer` for record at offset `o` in
+partition `P`, routed to lane `L`, is completed **iff** `L`'s most recent `preCommit` return for `P` is
+strictly greater than `o`, where the map `L` was given contained only offsets `L` itself received. PC never
+commits an offset as complete on the strength of any *other* lane's watermark, and never routes a returned
+watermark into a consumer commit.
+
+That last clause earns its place: because C3 never feeds a returned value to `doCommit`, it is **immune to
+the no-floor hazard (U1.2)** that a returned offset below the last committed one is accepted silently. C1
+is exposed to it; C3 cannot reach it.
+
+#### U2.3 - Predictions scored
+
+- C1 safe: **HELD**. C1's filed objection wrong: **HELD** - its real defect is the lost hole encoding.
+- C2 rejected on observability: **HELD**.
+- C3 sound, wins by not composing watermarks, needs the deferred seam: **HELD**.
+- C5 refuted on the return path: **HELD**.
+- **"The condition will be connector observability of offsets rather than anything about ordering":
+  REFUTED.** C3 does not perturb offsets at all, so nothing observable changes for the connector and C2's
+  observability condition never applies to the survivor. The real conditions are the whole-partition
+  ownership gates in U1.3 - `context.offset()` rewind and `assignment()` - which are about lane ownership,
+  not offsets. I had the right shape of answer and the wrong reason for it.
+- **"The default `preCommit` is honest": REFUTED** before it reached the verdict, by disassembling `flush`.
+  See U2.0.
+
 ## Verdict
 
 *Populated by U4. One sentence, then the evidence.*
