@@ -27,6 +27,31 @@
 # Editing generated files feels wrong, and it is the honest cost of not committing Apache Kafka source
 # into this repository (see the plan's KTD-S4). This script is what keeps that cost small.
 #
+# PARALLEL BRANCHES ARE FINE. RECONCILE AT THE SOURCE, NOT AT THE PATCH.
+# Two branches regenerating this file will conflict, and the conflicts look terrible: they land on `@@`
+# hunk headers, which are arithmetic rather than text. Do NOT conclude from that appearance that the
+# work must be serialised. Measured on astubbs#255, two feature branches run concurrently plus
+# reconciliation beat running them in sequence, and the reconciliation was mechanical.
+#
+# The trick is to never merge the patch. Merge the GENERATED JAVA and re-derive:
+#
+#   1. resolve the ordinary source files (pom `patched.classes` to the UNION first, so the unpack
+#      covers every file either side patches)
+#   2. `./mvnw -pl .,parallel-consumer-streams process-sources` for a pristine tree and a patched one
+#   3. reconstruct each side's tree by applying its patch to a fresh copy of pristine, then
+#      `git merge-file --diff3` the Java. Files only one side touches are taken wholesale.
+#   4. copy the merged tree over target/kafka-patched and run this script - NO maven in between
+#   5. check the hunk count is the per-file union of the inputs, not less
+#
+# Where the patch showed 8 conflict blocks of offset arithmetic, the same change merged as Java had
+# ZERO conflicts - the two edits were simply in different methods. The conflict was an artifact of the
+# representation, and merging the representation git is good at makes it vanish.
+#
+# And a conflict here is worth having. When the two astubbs#255 branches met, the merge exposed a test
+# asserting that `StreamThread` loads from the kafka-streams jar - true until the other branch started
+# patching `StreamThread`. Serialising would have hidden that: the second branch would have been
+# written against the new reality and nobody would have learned the assertion was fragile.
+#
 # !! FOOT-GUN, READ THIS !!
 # The unpack step runs with overWriteReleases=true, so ANY maven invocation between step 2 and step 3
 # silently restores target/kafka-patched to (released sources + the *tracked* patch) and discards
