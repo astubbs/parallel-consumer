@@ -434,6 +434,56 @@ class PcTaskDispatcherTest {
     // ------- the commit surface -------------------------------------------------------------------------
 
     /**
+     * The return value is a progress signal the caller paces on, not a count of pool submissions - and the
+     * two only agree on the happy path, which is why every other test here agreed with the broken definition.
+     * The patched {@code process()} returns this, and stock's {@code TaskExecutor} reads a false as "this task
+     * made no progress" and hands the StreamThread back to a blocking poll. So a batch consumed entirely by
+     * routes that never reach the pool must still report its full count: reporting zero there is the lie that
+     * stalls a topology for a poll cycle per batch of corrupted records.
+     * <p>
+     * Both no-pool routes are covered because they are separate branches with separate bookkeeping - a drop
+     * completes the work, a preparation failure records a failure - and a regression could plausibly hit one
+     * and not the other.
+     */
+    @Test
+    void recordsConsumedWithoutReachingThePoolStillCountAsProgress() {
+        dispatcher = new PcTaskDispatcher("task-dropped", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(6, offset -> "key-" + offset));
+
+        // Returns null for every record: consumed and completed on this thread, nothing handed to a worker.
+        int consumed = dispatcher.dispatchAvailable(record -> null);
+
+        assertThat(consumed)
+                .as("all six were taken off the WorkManager, so all six are progress - counting pool "
+                        + "submissions instead would report 0 and stall the caller that paces on this")
+                .isEqualTo(6);
+        assertThat(PcDispatchCounters.getRecordsDispatchedToPool())
+                .as("and none of them reached the pool, which is precisely why the two definitions differ")
+                .isZero();
+    }
+
+    @Test
+    void recordsThatFailPreparationStillCountAsProgress() {
+        dispatcher = new PcTaskDispatcher("task-prep-failure", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(6, offset -> "key-" + offset));
+
+        // Throws for every record: preparation failed on the StreamThread, as a deserialisation error would.
+        int consumed = dispatcher.dispatchAvailable(record -> {
+            throw new IllegalStateException("deserialisation blew up");
+        });
+
+        assertThat(consumed)
+                .as("a record consumed by failing preparation has still left the queue, so it is progress")
+                .isEqualTo(6);
+        assertThat(PcDispatchCounters.getRecordsDispatchedToPool())
+                .as("none reached the pool")
+                .isZero();
+        assertThat(PcDispatchCounters.getRecordsFailed())
+                .as("and the failures must be accounted for, not silently swallowed")
+                .isEqualTo(6);
+    }
+
+    /**
      * The commit protocol's read side, seen from the StreamThread: a worker's completion becomes visible to
      * hasCommitDataOutstanding and collectCommitData through the mailbox drain those methods perform, and the
      * collected map carries the frontier - the lowest incomplete offset - not the highest completed one.
