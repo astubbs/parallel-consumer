@@ -154,7 +154,7 @@ that gets dropped once the artefact exists and looks finished.
 
 | Step | Skill | Notes |
 |---|---|---|
-| 1 | `ce-worktree` | One worktree per idea, off the branch settled below, held for the whole cycle |
+| 1 | `ce-worktree` | Only once this idea runs concurrently with another. A solo wave works in `v6-ideas` directly. See Mechanics |
 | 2 | `ce-ideate` | Seeded by the note plus the shared brief. Bounded to the shape of the artefact |
 | 3 | *user picks* | A check-in, not a step. The agent stops here |
 | 4 | `ce-plan` | Only where the chosen direction is more than one artefact. M and R will not need it; F almost certainly will |
@@ -181,11 +181,19 @@ tick.
 
 ## Mechanics
 
-**Worktrees.** One per idea, off `docs/v6-release-ideas`, living for that idea's whole cycle rather
-than being recreated per CE step. Nothing runs in the main checkout. Each writes a `.worktree-owner`
-marker at creation recording owner, branch and idea letter, per AGENTS.md "Worktree ownership".
-Without it `bin/worktree-status.sh` cannot tell four concurrent worktrees apart, and the pre-deletion
-safety check has nothing to read when they are torn down.
+**Worktrees: branch when the concurrency arrives, not before.** The isolation exists for one reason,
+which is that agents writing files at the same time in one checkout share an index and see each
+other's half-finished work. A wave running a single agent has no concurrency to isolate from, so it
+works in the `v6-ideas` worktree directly: the note it edits and the plan it is seeded from are
+already there, its commits land on `docs/v6-release-ideas` with nothing to merge back, and no
+integration cost is incurred. Wave 0 is exactly this case.
+
+The moment a wave runs more than one agent, each gets its own worktree off `docs/v6-release-ideas`,
+held for that idea's whole cycle rather than recreated per CE step, and each writes a
+`.worktree-owner` marker at creation recording owner, branch and idea letter, per AGENTS.md "Worktree
+ownership". Without the marker `bin/worktree-status.sh` cannot tell concurrent worktrees apart, and
+the pre-deletion safety check has nothing to read when they are torn down. Nothing runs in the main
+checkout in either case.
 
 **File ownership**, so no two agents ever hold the same file:
 
@@ -205,12 +213,13 @@ M and T may both want to edit `README_TEMPLATE.adoc` in the implementation phase
 piece where it belongs and resolve the conflict at convergence rather than relocating content to avoid
 it.
 
-**Integration, after all four cycles finish.** Merge the idea branches into `docs/v6-release-ideas` in
-the order M, T, R, F. M first because the other three quote it; T second because that is where the
+**Integration, for whichever ideas ran on their own branch.** Merge them into `docs/v6-release-ideas`
+in the order M, T, R, F. M first because the other three quote it; T second because that is where the
 `README_TEMPLATE.adoc` conflict lands, and resolving it against one prior change is cheaper than
 against three. Regenerate `README.adoc` once, after the last merge, then run the shipping tail on the
-integrated branch. Wave 2 is not this step and cannot be: a wave stops at ideation, so when wave 2 runs
-no artefact has been written and there is no template collision to resolve yet.
+integrated branch. An idea that ran solo in `v6-ideas` is already integrated and skips this entirely.
+Wave 2 is not this step and cannot be: a wave stops at ideation, so when wave 2 runs no artefact has
+been written and there is no template collision to resolve yet.
 
 **Shared scratchpad.** One scratchpad for the run, not one per agent, with every temp file namespaced
 by agent letter. Every agent gets the same preamble naming who else is running concurrently and which
@@ -262,3 +271,7 @@ Two findings were deliberately not applied, because answering them is not the ag
   the ownership table, the shared scratchpad. The stated reason to parallelise is that the agents read
   the same repository and answer comparable questions, which is also precisely the condition a single
   agent amortises best. The coordination apparatus is currently unpriced against that alternative.
+
+  First evidence, from wave 0: a solo wave needs none of it. No worktree, no ownership marker, no merge
+  order, no integration step, no reconcile. That is not an answer, but it is a data point, and the
+  answer should account for it.
