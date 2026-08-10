@@ -55,7 +55,7 @@ is the grouping.
 Below `#1000`, **name the repo**: `astubbs#NNN` for this fork, `confluentinc#NNN` for the original.
 The fork's numbering sits entirely inside upstream's range, so a bare number is a coin flip - and one
 that resolves to the wrong issue looks fine. See
-[AGENTS.md, "Issue references"](../../AGENTS.md#issue-references) for the full rule;
+[`docs/issue-references.md`](../issue-references.md) for the full rule;
 `.github/scripts/issue-ref-gate.js` enforces it on added lines, so a note written the old way fails CI.
 Fork branch names encode the *upstream* number (`bugs/857-...`, `fix/909-...`, `upstream-pr-905`), so
 a number in a branch name is `confluentinc#NNN`, never a fork issue.
