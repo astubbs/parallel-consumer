@@ -284,14 +284,6 @@ class HeadOfLineBlockingBenchmarkTest extends BrokerStreamsIntegrationTest {
         return startAndAwaitRunning(builder, props);
     }
 
-    private static void sleep(final Duration duration) {
-        try {
-            Thread.sleep(duration.toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while simulating processing cost", e);
-        }
-    }
 
     /**
      * Times each record's completion relative to the moment the first record entered the chain.

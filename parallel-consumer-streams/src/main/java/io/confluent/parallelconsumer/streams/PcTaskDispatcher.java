@@ -231,8 +231,18 @@ public class PcTaskDispatcher implements Closeable {
     private volatile boolean failureSeen;
 
     /**
-     * How many records this dispatcher holds for each partition that <b>no worker has started</b>. The
-     * owner thread's copy; {@link #publishedBufferedCounts} is what everyone else reads.
+     * How many records this dispatcher holds for each partition that <b>no worker has started</b>.
+     *
+     * <p><b>Written only by the owner thread; readable from any thread.</b> A {@link ConcurrentHashMap}
+     * rather than a plain map published as an immutable snapshot, and the difference is worth stating
+     * because the snapshot came first: nothing needs a <em>coherent</em> view across partitions. The pause
+     * in {@code StreamTask.addRecords} reads exactly one key, and the memory-bound proof's sampler wants a
+     * peak rather than an instant. Once that is true, the concurrent map already provides everything the
+     * snapshot did, without allocating a copy on every poll batch and every pump.
+     *
+     * <p>This mirrors what U10 did to {@code pcDirty} - it replaced a republished volatile with counters
+     * that are inherently safe to read - and lands in the same place for the same reason: the safest
+     * publication is the one you do not have to remember to perform.
      *
      * <p><b>"Buffered" means accepted-and-not-yet-handed-out, not accepted-and-not-yet-completed</b>, and
      * that is the whole design (astubbs#255, U14). Kafka Streams' {@code RecordQueue.size()} counts records
@@ -256,36 +266,13 @@ public class PcTaskDispatcher implements Closeable {
      * rather than a trap: they genuinely are in memory and will never be handed out. Their partition stays
      * paused, and the task is already dying, because the failure surfaces through {@link #pollFailure()}.
      */
-    private final Map<TopicPartition, Integer> bufferedByPartition = new HashMap<>();
-
-    /**
-     * {@link #bufferedByPartition}, published for readers that are not the owner thread: written only by the
-     * owner, only immediately after it has changed the map this mirrors, and never consulted to decide
-     * whether to dispatch. An immutable snapshot rather than a shared mutable map, so a reader can never
-     * observe a half-updated view.
-     *
-     * <p><b>Why this is a publication where the commit state no longer needs one.</b> U10 retired the
-     * {@code pcDirty} volatile by replacing it with {@link #successesPublished} against
-     * {@link #successesCommitted} - counting two events is inherently safe to read from any thread, so the
-     * republication apparatus that existed to make a {@code WorkManager} read safe went with it. That
-     * substitution is not available here: occupancy is a <em>per-partition map</em>, not a monotonic count,
-     * and the pause decision needs the current value for one partition rather than a difference between two
-     * totals. A snapshot is the cheapest shape that stays safe to read off-thread.
-     *
-     * <p>It has to be readable off-thread rather than merely conveniently so: the memory-bound proof samples
-     * occupancy from a watcher thread while the run is in flight.
-     *
-     * <p>A sibling unit is adding a stream-time low-water mark to this class. If that also needs publishing,
-     * the two belong in one immutable record rather than two volatiles - but note the sets differ, and
-     * merging the fields must not merge the sets: occupancy <em>excludes</em> in-flight records, while a
-     * low-water mark must include them or it advances stream time past records still running.
-     */
-    private volatile Map<TopicPartition, Integer> publishedBufferedCounts = Collections.emptyMap();
+    private final Map<TopicPartition, Integer> bufferedByPartition = new ConcurrentHashMap<>();
 
     /**
      * How many times {@link #dispatchAvailable} consumed a record with no buffered count left to decrement.
-     * Owner thread only, and exposed so a test can assert the accounting balanced rather than merely that
-     * nothing crashed. Non-zero is expected after a revocation and suspicious otherwise.
+     * Written and read on the owner thread only - the test accessor is called from the thread that drove the
+     * pump - and exposed so a test can assert the accounting balanced rather than merely that nothing
+     * crashed. Non-zero is expected after a revocation and suspicious otherwise.
      */
     private int bufferedUnderflows;
 
@@ -487,7 +474,6 @@ public class PcTaskDispatcher implements Closeable {
         workManager.registerWork(epochTagged);
         if (willBeQueued > 0) {
             bufferedByPartition.merge(partition, willBeQueued, Integer::sum);
-            publishBufferedCounts();
         }
     }
 
@@ -523,14 +509,6 @@ public class PcTaskDispatcher implements Closeable {
         return queued;
     }
 
-    /**
-     * Republish {@link #bufferedByPartition} for the cross-thread readers. <b>Owner thread only</b>, and
-     * called immediately after every change to the map it mirrors, so a reader is never left looking at a
-     * value the owner has already moved past.
-     */
-    private void publishBufferedCounts() {
-        publishedBufferedCounts = Collections.unmodifiableMap(new HashMap<>(bufferedByPartition));
-    }
 
     /**
      * Take whatever PC will hand out, prepare each record on this thread, and run it on a worker. Called from
@@ -641,7 +619,6 @@ public class PcTaskDispatcher implements Closeable {
         }
         lastDispatchCount = consumed;
         if (consumed > 0) {
-            publishBufferedCounts();
         }
         return consumed;
     }
@@ -965,7 +942,6 @@ public class PcTaskDispatcher implements Closeable {
         // The buffered counts ARE adjusted, and the asymmetry is the point: they are per-partition, so the
         // revoked partition's entry can be dropped exactly (it was, above) without touching the others. A
         // count left behind would keep a partition paused by a task that no longer owns it.
-        publishBufferedCounts();
         log.info("PC dispatch partitions updated: revoked {}, assigned {}, now over {}",
                 revoked, assigned, inputPartitions);
     }
@@ -1024,12 +1000,12 @@ public class PcTaskDispatcher implements Closeable {
      * Streams' {@code RecordQueue.size()} for the PC path, and what the patched {@code StreamTask} compares
      * against {@code buffered.records.per.partition} to decide whether to pause the consumer.
      * <p>
-     * <b>Callable from any thread</b>, answered from {@link #publishedBufferedCounts}. See
+     * <b>Callable from any thread</b>, answered from a concurrent map. See
      * {@link #bufferedByPartition} for what "buffered" means here and why it is not PC's incomplete-offset
      * count.
      */
     public int getBufferedRecordCount(final TopicPartition partition) {
-        return publishedBufferedCounts.getOrDefault(partition, 0);
+        return bufferedByPartition.getOrDefault(partition, 0);
     }
 
     /**
@@ -1038,7 +1014,7 @@ public class PcTaskDispatcher implements Closeable {
      */
     public int getBufferedRecordCount() {
         int total = 0;
-        for (Integer held : publishedBufferedCounts.values()) {
+        for (Integer held : bufferedByPartition.values()) {
             total += held;
         }
         return total;
@@ -1227,7 +1203,6 @@ public class PcTaskDispatcher implements Closeable {
         // Same reason, for the other published thing: a closed dispatcher holds nothing, and a count left
         // behind would keep a partition paused after the task that paused it has gone.
         bufferedByPartition.clear();
-        publishBufferedCounts();
         log.info("PC dispatch closed over {}", inputPartitions);
     }
 }

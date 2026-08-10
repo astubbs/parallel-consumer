@@ -44,7 +44,7 @@ import static org.awaitility.Awaitility.await;
  * processing drains, so any assertion made afterwards sees the same zero whether the run stayed bounded or
  * first accumulated the entire topic. The watcher thread below reads
  * {@link PcTaskDispatcher#bufferedRecordsAcrossActive()} throughout and keeps the maximum - which is also
- * the reason that value is published rather than merely computed on the owner thread.
+ * the reason the dispatcher's occupancy is held somewhere safe to read from a thread that does not own it.
  *
  * @author Antony Stubbs
  * @see PcTaskDispatcher#bufferedRecordsAcrossActive()
@@ -255,12 +255,4 @@ class BackpressureBoundIntegrationTest extends BrokerStreamsIntegrationTest {
                 .isGreaterThanOrEqualTo(TOTAL);
     }
 
-    private static void sleep(final Duration duration) {
-        try {
-            Thread.sleep(duration.toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while simulating processing cost", e);
-        }
-    }
 }
