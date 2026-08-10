@@ -59,6 +59,31 @@ import java.util.concurrent.atomic.AtomicReference;
  *       {@link #dispatchAvailable}. That mirrors PC's own {@code workMailBox}.</li>
  * </ul>
  *
+ * <h3>The commit surface really is driven from two threads</h3>
+ * The three commit methods once said "StreamThread only" in their javadoc, and {@link #ownerThread} turned
+ * that comment into a check. The comment was false, and the check is what proved it: Kafka Streams'
+ * {@code DefaultStateUpdater} calls {@code StreamTask.maybeCheckpoint} <b>from its own thread</b> for every
+ * task it is restoring, and the patched {@code maybeCheckpoint} asks whether a commit is outstanding before
+ * it refreshes changelog offsets. The honest model, established by walking every caller in
+ * {@code kafka-streams} 3.9.2:
+ * <ul>
+ *   <li>{@link #hasCommitDataOutstanding()} - <b>any thread</b>. The StreamThread reaches it through
+ *       {@code prepareCommit}, {@code validateClean} and {@code commitNeeded()}; the state-updater thread
+ *       reaches it through {@code maybeCheckpoint} on a RESTORING task. It is therefore written as a genuine
+ *       query - it reads two counters and touches neither {@code WorkManager} nor the mailbox.</li>
+ *   <li>{@link #collectCommitData()} and {@link #onCommitSuccess} - <b>owner thread only</b>, still enforced
+ *       by {@link #assertOwnerThread}. Both reach {@code WorkManager}, and Streams only reaches them through
+ *       {@code StreamTask.prepareCommit} and {@code StreamTask.updateCommittedOffsets}, which the state
+ *       updater cannot call: it holds tasks as {@code ReadOnlyTask}, whose {@code prepareCommit} throws and
+ *       whose {@code commitNeeded} throws for an active task. {@code maybeCheckpoint} is the one method it
+ *       calls on the real object.</li>
+ *   <li>{@link #registerRecords} and {@link #dispatchAvailable} - StreamThread, and unguarded because
+ *       {@code addRecords} and {@code process} are hot-path. One known exception, out of scope here and not
+ *       reachable by default: with Streams' private {@code __processing.threads.enabled__} config on,
+ *       {@code DefaultTaskExecutor} calls {@code task.process} from its own thread, which would drive
+ *       {@link #dispatchAvailable} off the owner thread.</li>
+ * </ul>
+ *
  * <h2>Decisions taken here, and what they cost</h2>
  * <ul>
  *   <li><b>KEY ordering, explicitly.</b> This is the whole reason the seam is interesting: a KEY-ordered
@@ -133,6 +158,10 @@ public class PcTaskDispatcher implements Closeable {
      * <p>Worth the guard specifically now that the commit surface exists. {@link #collectCommitData} and
      * {@link #onCommitSuccess} reach {@code WorkManager} directly and sit exactly where a caller wiring up
      * its own commit path is most likely to call from a commit or scheduler thread rather than the owner.
+     *
+     * <p>{@link #hasCommitDataOutstanding()} was guarded too, and is not any more - not because the rule was
+     * relaxed for it, but because the method no longer breaks it. Kafka Streams asks that question from the
+     * state-updater thread (see the class javadoc), so the answer had to stop coming from a mailbox drain.
      */
     private final Thread ownerThread;
 
@@ -154,6 +183,42 @@ public class PcTaskDispatcher implements Closeable {
     private final AtomicInteger inFlight = new AtomicInteger();
 
     private final AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+
+    /**
+     * Successful completions <b>published</b> into {@link #completed}, counted by whichever thread publishes
+     * one, before it publishes it. With {@link #successesCommitted} this is what lets
+     * {@link #hasCommitDataOutstanding()} answer from any thread without touching {@link WorkManager}.
+     * <p>
+     * Not a second copy of PC's dirty flag that could drift out of step with it: this dispatcher owns both of
+     * that flag's edges. PC turns a partition dirty on exactly the successes that pass through
+     * {@link #completed} ({@code PartitionState.onSuccess}) and clean on exactly the acknowledgements that
+     * pass through {@link #onCommitSuccess} ({@code PartitionState.onOffsetCommitSuccess}). Counting those two
+     * events is the same information as the flag, published where a second thread may read it safely.
+     * <p>
+     * Counted at publication rather than at drain on purpose: the whole point is that a worker finishing must
+     * make the answer true <em>immediately</em>, with no owner-thread drain in between. A count taken at drain
+     * would be thread-safe and wrong, which is worse than the crash it replaced.
+     */
+    private final AtomicLong successesPublished = new AtomicLong();
+
+    /**
+     * Successes {@link #drainCompletions} has fed back to PC. Owner thread only, so a plain field.
+     * <p>
+     * Counted at the drain rather than assumed equal to {@link #successesPublished}, so that a collection can
+     * mark covered exactly what it collected: a worker publishing between the drain and the collection is not
+     * in the collected map, and must stay outstanding.
+     */
+    private long successesDrained;
+
+    /** {@link #successesDrained} as of the last {@link #collectCommitData()}. Owner thread only. */
+    private long successesCollected;
+
+    /**
+     * The completed work a successful commit has actually covered: {@link #successesCollected} as of the last
+     * {@link #onCommitSuccess}. Volatile because {@link #hasCommitDataOutstanding()} reads it from whichever
+     * thread asks; only the owner thread ever writes it.
+     */
+    private volatile long successesCommitted;
 
     /**
      * How many records the last {@link #dispatchAvailable} consumed - dispatched to the pool, dropped, or
@@ -305,9 +370,10 @@ public class PcTaskDispatcher implements Closeable {
                 }
 
                 if (chainExecution == null) {
-                    // Dropped during preparation - consumed, nothing to run.
+                    // Dropped during preparation - consumed, nothing to run. Still a success as far as PC is
+                    // concerned, and so still commit-outstanding, hence publishSuccess and not a bare add.
                     work.onUserFunctionSuccess();
-                    completed.add(work);
+                    publishSuccess(work);
                     syncCompleted++;
                     continue;
                 }
@@ -333,7 +399,7 @@ public class PcTaskDispatcher implements Closeable {
             work.onUserFunctionSuccess();
             recordsSucceeded.incrementAndGet();
             PcDispatchCounters.onCompletedSuccessfully();
-            completed.add(work);
+            publishSuccess(work);
         } catch (Throwable t) {
             recordFailure(work, t);
         } finally {
@@ -341,6 +407,32 @@ public class PcTaskDispatcher implements Closeable {
         }
     }
 
+    /**
+     * Publish a successful outcome to the owner thread, and make it visible to
+     * {@link #hasCommitDataOutstanding()} in the same movement.
+     * <p>
+     * The count goes up <b>before</b> the container is queued, never after: the invariant the commit query
+     * rests on is that nothing sits in {@link #completed} uncounted. Reversed, a completion could be drained
+     * and folded into PC while the counter still said nothing had happened.
+     * <p>
+     * The single publication point for successes is the point. Failures deliberately do not come through here
+     * - see {@link #recordFailure}.
+     */
+    private void publishSuccess(final WorkContainer<byte[], byte[]> work) {
+        successesPublished.incrementAndGet();
+        completed.add(work);
+    }
+
+    /**
+     * A failure is published to the owner thread like a success, but is <b>not</b> counted towards
+     * {@link #hasCommitDataOutstanding()}, because it does not make a commit worth attempting: PC leaves the
+     * offset incomplete and {@code PartitionState.onFailure} is a no-op, so the partition never turns dirty.
+     * <p>
+     * That asymmetry is why the query counts successes and not the mailbox's size. Counting the mailbox would
+     * report a commit outstanding after a poison pill - forever, since retries are disabled and the record
+     * never succeeds - and {@code validateClean} would turn that into a spurious {@code TaskMigratedException}
+     * on an otherwise clean close.
+     */
     private void recordFailure(final WorkContainer<byte[], byte[]> work, final Throwable cause) {
         work.onUserFunctionFailure(cause);
         recordsFailed.incrementAndGet();
@@ -350,13 +442,21 @@ public class PcTaskDispatcher implements Closeable {
     }
 
     /**
-     * Feed worker outcomes back to PC. StreamThread only - {@code handleFutureResult} mutates shard and
-     * partition state and PC's in-flight counter, none of which tolerate concurrent callers.
+     * Feed worker outcomes back to PC. Owner thread only - {@code handleFutureResult} mutates shard and
+     * partition state and PC's in-flight counter, none of which tolerate concurrent callers. This is the one
+     * place that reaches PC on behalf of another thread's work, which is why every caller of it carries the
+     * owner-thread rule, and why {@link #hasCommitDataOutstanding()} is no longer one of them.
      */
     private void drainCompletions() {
         WorkContainer<byte[], byte[]> work;
         while ((work = completed.poll()) != null) {
+            // Read the outcome before handing the container over - handleFutureResult ends the flight and
+            // hands the container to shard and partition state, and nothing promises it stays readable.
+            final boolean succeeded = work.isUserFunctionSucceeded();
             workManager.handleFutureResult(work);
+            if (succeeded) {
+                successesDrained++;
+            }
         }
     }
 
@@ -372,7 +472,8 @@ public class PcTaskDispatcher implements Closeable {
 
     /**
      * The frontier and its encoded holes, for every dirty partition - what the consumer-group commit should
-     * carry. StreamThread only, like every WorkManager touch.
+     * carry. Owner thread only, like every WorkManager touch: Streams reaches this only through
+     * {@code StreamTask.prepareCommit}, which the state updater cannot call.
      * <p>
      * Completions are drained first, so work that has already finished is folded into the answer - but
      * nothing waits: records still in flight stay incomplete, which is precisely what keeps the frontier
@@ -385,28 +486,52 @@ public class PcTaskDispatcher implements Closeable {
     public Map<TopicPartition, OffsetAndMetadata> collectCommitData() {
         assertOwnerThread("collectCommitData");
         drainCompletions();
+        // What this collection covers is what the drain just folded in - the DRAINED count, never the
+        // published one. A worker that publishes from here on is not in the map below, so pinning the
+        // published count instead would let onCommitSuccess mark its record covered by a commit that never
+        // carried it, and the record would be lost on the next crash.
+        successesCollected = successesDrained;
         return workManager.collectCommitDataForDirtyPartitions();
     }
 
     /**
      * Whether a commit is worth attempting: completed work exists that no successful commit has covered.
-     * StreamThread only. This is PC's own dirty flag, not a parallel copy of it - see KTD-S7's grain.
+     * <p>
+     * <b>Callable from any thread</b>, alone on this surface, and the only reason it may be is that it is a
+     * genuine query - it compares two counters and touches neither {@link WorkManager} nor the completion
+     * mailbox, so it mutates nothing and races nothing. It has to be: Kafka Streams' {@code DefaultStateUpdater}
+     * asks a restoring task this question from its own thread, through {@code StreamTask.maybeCheckpoint}.
+     * While the answer came from a mailbox drain, that call reached non-thread-safe {@code WorkManager} and
+     * partition state from a second thread, concurrently with the StreamThread.
+     * <p>
+     * The drain stays where it belongs, on the owner-thread paths - {@link #dispatchAvailable} every pump, and
+     * {@link #collectCommitData()} immediately before it reads the frontier - so removing it from here strands
+     * nothing. Kafka Streams always follows a true answer here with {@code prepareCommit}, which collects, and
+     * collection drains.
+     * <p>
+     * Still PC's dirty question rather than a parallel answer to it (KTD-S7's grain): see
+     * {@link #successesPublished} for why counting these two events is the same information as PC's flag, and
+     * why the count is taken at publication rather than at drain.
      */
     public boolean hasCommitDataOutstanding() {
-        assertOwnerThread("hasCommitDataOutstanding");
-        drainCompletions();
-        return workManager.isDirty();
+        return successesPublished.get() > successesCommitted;
     }
 
     /**
      * The other half of the commit protocol: report a <em>successful</em> commit back, so PC can mark the
      * covered work clean. The only caller of PC's {@code setClean} - skip this and every partition stays
      * dirty forever, which turns "commit when needed" into "commit every interval, unconditionally".
-     * StreamThread only.
+     * Owner thread only.
+     * <p>
+     * Marks covered only what {@link #collectCommitData()} last collected, never what has completed since.
+     * That is the same window PC protects internally with
+     * {@code PartitionState.stateChangedSinceCommitStart}: a worker finishing between collection and this
+     * acknowledgement was not in the committed map, so it stays outstanding and the next cycle commits it.
      */
     public void onCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
         assertOwnerThread("onCommitSuccess");
         workManager.onOffsetCommitSuccess(committed);
+        successesCommitted = successesCollected;
     }
 
     /**
