@@ -21,11 +21,11 @@ Master's reactor is five modules (`pom.xml`): `parallel-consumer-core`, `-vertx`
 
 None of the open PRs add a module. They are core fixes, tests, CI, docs, a health-check surface and virtual threads. The module set changes only through the experiments.
 
-The table sits beside `=== Java Version per Module` (`src/docs/README_TEMPLATE.adoc:1072-1090`), which establishes the house pattern: an asciidoc `|===` table stating the fact, followed by a `WARNING:` admonition stating what goes wrong if the reader ignores it. That table omits `parallel-consumer-examples`, a live uncaught omission sitting where the new table goes.
+The table sits beside `=== Java Version per Module` (`src/docs/README_TEMPLATE.adoc`, anchor `[[java-version-per-module]]`), which establishes the house pattern: an asciidoc `|===` table stating the fact, followed by a `WARNING:` admonition stating what goes wrong if the reader ignores it. That table omits `parallel-consumer-examples`, a live uncaught omission sitting where the new table goes.
 
 The README currently makes no stability, maturity or production-readiness claim at all. This table is additive, not corrective: there is no misleading badge to fix, only silence. There is no precedent anywhere in the template for a status or badge column.
 
-The adapters are thin. Core is 11,498 lines against vertx 650, reactor 137 and mutiny 151, and they all drive the same engine. `parallel-consumer-examples` is never published (`maven.deploy.skip` and `maven.install.skip` at `parallel-consumer-examples/pom.xml:34-35`, `skipPublishing` at line 45).
+The adapters are thin. Core is 11,498 lines against vertx 650, reactor 137 and mutiny 151, and they all drive the same engine. `parallel-consumer-examples` is never published (`maven.deploy.skip`, `maven.install.skip` and `skipPublishing` in `parallel-consumer-examples/pom.xml`).
 
 The quarantine machinery is on master, not a branch: `docs/QUARANTINED_TESTS.md`, `bin/check-quarantine-registry.sh`, `bin/check-quarantine-owners.sh` and the `release.yml` guard. The registry is empty there. It is real, but it currently gates nothing, and it is engineering-system machinery, which the run plan's own contract assigns to the testing-as-product artefact rather than to this table.
 
@@ -68,7 +68,7 @@ Decomposition skipped - atomic subject. The candidate axes here are the delivera
 
 **Description:** "Pre-1.0 reserves the API surface, not reliability" is the load-bearing content of this whole effort, and it needs one prominent sentence rather than a table structure. Both axes move together across the stable/experiment line - the experiments are neither reliable nor API-stable, and the shipped modules are reliable with a reserved API - so two columns would be perfectly correlated and would carry the same single distinction twice.
 
-**Basis:** `direct:` the README makes no stability claim at all today, so the baseline is silence and one good sentence is already a large improvement. `direct:` the house pattern at `src/docs/README_TEMPLATE.adoc:1074` does exactly this - "Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny itself is built for Java 17" states the default in prose and lets the table carry the exception. `external:` no source found states the pre-1.0 framing this way, so it is a differentiating sentence rather than a borrowed one.
+**Basis:** `direct:` the README makes no stability claim at all today, so the baseline is silence and one good sentence is already a large improvement. `direct:` the house pattern in the prose above `[[java-version-per-module]]` does exactly this - "Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny itself is built for Java 17" states the default in prose and lets the table carry the exception. `external:` no source found states the pre-1.0 framing this way, so it is a differentiating sentence rather than a borrowed one.
 
 **Rationale:** The risk being managed is a reader seeing `0.6.0` and inferring the library is not ready. A sentence corrects that inference directly. A two-column table asks the reader to infer it from structure, which is slower and, on this row set, structurally redundant.
 
@@ -128,7 +128,7 @@ Decomposition skipped - atomic subject. The candidate axes here are the delivera
 
 **Description:** Add a seconds-fast CI check that fails when the table's rows drift from the reactor's published modules. The neighbouring Java table already omits `parallel-consumer-examples` and nobody caught it, and three modules are about to be added by three separate PRs.
 
-**Basis:** `direct:` master's reactor lists five modules; the Java table at `src/docs/README_TEMPLATE.adoc:1072-1090` lists four. `direct:` exact precedent in the repo - `bin/check-quarantine-registry.sh` "fails on any drift between the `@Quarantined` annotations in the code and the entries below", enforced by a seconds-fast audit job on every PR.
+**Basis:** `direct:` master's reactor lists five modules; the Java table at `src/docs/README_TEMPLATE.adoc`, anchor `[[java-version-per-module]]` lists four. `direct:` exact precedent in the repo - `bin/check-quarantine-registry.sh` "fails on any drift between the `@Quarantined` annotations in the code and the entries below", enforced by a seconds-fast audit job on every PR.
 
 **Rationale:** The cheapest and most certain source of staleness is a module landing with nobody remembering its row, and that is precisely what is about to happen three times. It also means an experiment cannot land without declaring itself.
 

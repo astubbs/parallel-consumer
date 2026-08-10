@@ -88,6 +88,13 @@ folded in here, so no agent has to wonder whether it is missing context a siblin
 - Issue references below `#1000` name the repo: `astubbs#NNN` or `confluentinc#NNN`. Enforced on added
   lines by `.github/scripts/issue-ref-gate.js`.
 - No em-dashes or double-dashes. No mechanical counts in prose.
+- **Never cite a line number.** Cite the file, the anchor, the heading or the quoted text instead. Line
+  numbers are mechanical counts wearing a citation's clothes: a single merge from master shifted every
+  one this run had written, silently, within minutes of writing them, and nothing catches it.
+- **A contract can be wrong, and saying so is your job.** These contracts exist to stop four agents
+  renegotiating the brief in four directions, not to make the brief true. If evidence contradicts one,
+  stop and say so rather than working around it or quietly satisfying its letter. Wave 0 broke two of
+  its own contracts and both breaks were improvements; neither was found by an agent inside the brief.
 - `docs/inflight/AGENTS.md` governs the ledger, including retirement by `git rm`.
 
 ### The reader standard

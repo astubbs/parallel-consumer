@@ -134,6 +134,10 @@ This library lets you process messages in parallel via a single Kafka Consumer m
 For many use cases this improves both throughput and latency by reducing load on your brokers.
 It also opens up new use cases like extreme parallelism, external data enrichment, and queuing.
 
+NOTE: Below 1.0 does not mean unproven.
+The same core engine has been in production use for years.
+What 1.0 is waiting on is a settled API surface, the functionality still intended for it, and confidence that reaches beyond the defects already known.
+
 .Consume many messages _concurrently_ with a *single* consumer instance:
 [source,java,indent=0]
 ----
