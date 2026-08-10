@@ -1,6 +1,6 @@
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java kafka-patched/org/apache/kafka/streams/kstream/CogroupedKStream.java
 --- a/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-08-11 10:53:37.570319938 +1200
++++ b/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-08-11 10:57:47.291272145 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -53,7 +53,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java 
  }
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-08-11 10:53:37.571854643 +1200
++++ b/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-08-11 10:57:47.292050256 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -97,7 +97,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/CogroupedKSt
              builder,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-08-11 10:53:37.573106348 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-08-11 10:57:47.293003531 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -141,7 +141,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KGroupedStre
              windows,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-08-11 10:53:37.575034884 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-08-11 10:57:47.295273783 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -185,7 +185,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KStreamImpl.
  
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KTableImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KTableImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-08-11 10:53:37.577647794 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-08-11 10:57:47.297356372 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -229,7 +229,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KTableImpl.j
          Objects.requireNonNull(joiner, "joiner can't be null");
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java kafka-patched/org/apache/kafka/streams/kstream/KGroupedStream.java
 --- a/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-08-11 10:53:37.579203415 +1200
++++ b/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-08-11 10:57:47.299011676 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -280,7 +280,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java ka
      /**
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-patched/org/apache/kafka/streams/kstream/KStream.java
 --- a/org/apache/kafka/streams/kstream/KStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KStream.java	2026-08-11 10:53:37.600028318 +1200
++++ b/org/apache/kafka/streams/kstream/KStream.java	2026-08-11 10:57:47.306200176 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -683,7 +683,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-pat
                                           final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> valueJoiner,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patched/org/apache/kafka/streams/kstream/KTable.java
 --- a/org/apache/kafka/streams/kstream/KTable.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KTable.java	2026-08-11 10:53:37.604250015 +1200
++++ b/org/apache/kafka/streams/kstream/KTable.java	2026-08-11 10:57:47.311625956 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -1044,7 +1044,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patc
                                          final ValueJoiner<V, VO, VR> joiner,
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
 --- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-11 10:53:37.604960597 +1200
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-11 10:57:47.312443775 +1200
 @@ -44,8 +44,13 @@
      private final Serde<?> keySerde;
      private final Serde<?> valueSerde;
@@ -1173,7 +1173,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractPr
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
 --- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-11 10:53:37.605695762 +1200
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-11 10:57:47.313461174 +1200
 @@ -243,7 +243,11 @@
                      "multiple times.");
          }
@@ -1219,7 +1219,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorC
      }
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
 --- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-11 10:53:37.606618634 +1200
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-11 10:57:47.314571738 +1200
 @@ -64,6 +64,7 @@
  import java.util.Objects;
  import java.util.Optional;
@@ -1253,7 +1253,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordColl
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
 --- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-11 10:54:08.737441875 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-11 10:57:47.409248915 +1200
 @@ -16,6 +16,8 @@
   */
  package org.apache.kafka.streams.processor.internals;
@@ -1790,7 +1790,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  
          // if the timestamp is not known yet, meaning there is not enough data accumulated
          // to reason stream partition time, then skip.
-@@ -1189,11 +1506,34 @@
+@@ -1189,11 +1506,38 @@
      }
  
      public boolean canPunctuateStreamTime() {
@@ -1809,11 +1809,15 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +     * fired and {@code ProcessorContext.currentStreamTimeMs()} returned -1 forever, both silently.
 +     * <p>
 +     * The PC value is the dispatcher's <b>low-water mark over work in flight</b>: the lowest stream timestamp
-+     * still executing, or the highest dispatched when nothing is. It is never ahead of what stock would hold
-+     * at the same point and is equal to it whenever the pool drains, so punctuation here can be late relative
-+     * to stock but never early - and early is the direction that would close a window over a record still
-+     * running. See {@code PcTaskDispatcher#getStreamTimeLowWaterMark()} for what it does and does not
-+     * promise.
++     * still executing, or the highest dispatched when nothing is.
++     * <p>
++     * <b>It is not a drop-in for stock's value, and an earlier version of this comment said it was.</b>
++     * Within a batch it lags stock. Between batches the pool empties and it rises to the highest timestamp
++     * ever dispatched - and PC hands records out per KEY shard rather than in stock's timestamp order, so
++     * wherever those orders differ the mark overtakes what stock would hold. What it still guarantees is
++     * narrower: it never passes a record that is <em>currently in flight</em>, so a punctuation cannot close
++     * a window over work still inside the chain. See
++     * {@code PcTaskDispatcher#getStreamTimeLowWaterMark()} for the full statement and the measurement.
 +     * <p>
 +     * Both paths start at {@link RecordQueue#UNKNOWN}, which is why the UNKNOWN guard in
 +     * {@link #maybePunctuateStreamTime()} needed no change.
@@ -1826,7 +1830,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
       * Possibly trigger registered system-time punctuation functions if
       * current system timestamp has reached the defined stamp
       * Note, this is called irrespective of the presence of new records
-@@ -1288,8 +1628,43 @@
+@@ -1288,8 +1632,43 @@
          return sb.toString();
      }
  
@@ -1870,7 +1874,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          // we need to do an extra check if the flag was false, that
          // if the consumer position has been updated; this is because
          // there may be non data records such as control markers bypassed
-@@ -1357,6 +1732,16 @@
+@@ -1357,6 +1736,16 @@
  
      public void updateCommittedOffsets(final TopicPartition topicPartition, final Long offset) {
          committedOffsets.put(topicPartition, offset);
@@ -1887,7 +1891,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      public void updateEndOffsets(final TopicPartition topicPartition, final Long offset) {
-@@ -1377,7 +1762,12 @@
+@@ -1377,7 +1766,12 @@
      }
  
      long streamTime() {
@@ -1903,7 +1907,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      private class RecordQueueCreator {
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamThread.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamThread.java
 --- a/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-08-11 10:53:37.610325500 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-08-11 10:57:47.319801271 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.processor.internals;

@@ -34,7 +34,9 @@ at selection; the PC path never calls it, so `partitionGroup.streamTime()` stays
 This plan advances stream time from Parallel Consumer's own completion tracking instead: **the lowest
 timestamp still in flight, or the highest timestamp dispatched when nothing is in flight**, clamped
 monotonically. Under sequential processing that is bit-for-bit stock behaviour. Under concurrency it is
-the conservative generalisation - never ahead of stock, equal to stock whenever the pool drains.
+the conservative generalisation. **It is not, however, "never ahead of stock"** - that was this plan's
+headline claim and adversarial review refuted it with the plan's own measurement. See
+[What execution refuted](#what-execution-refuted).
 
 **Two corrections to the brief, measured before any code was written**, both of which change what
 "pile F moving" can mean:
@@ -103,7 +105,7 @@ windowing" is not a claim this plan will make.
 | ID | Requirement | Source |
 |---|---|---|
 | R1 | Task stream time advances on the PC path, from PC's own completion tracking rather than from `partitionGroup`. | Master plan U13; inflight `pr-ks-spike-next-work.md` item 5 |
-| R2 | Over the same set of consumed records, the advertised value is never **ahead** of what stock would report, and is **equal** to it whenever nothing is in flight. The exception is named rather than hidden: on a multi-partition task PC's per-shard dispatch order can put the mark ahead of stock's *at the same record count*, because stock selects in timestamp order and PC does not (U13.6 item 3). | This plan; the conservative-direction argument |
+| R2 | **REVISED after measurement.** The mark never passes a record that is *currently in flight*, so a punctuation cannot close a window over work inside the chain. It is **not** bounded by stock: PC dispatches per KEY shard, so between batches the empty-pool arm can raise it above what stock would hold at the same record - on one partition, without concurrency. The divergence is pinned by `theMarkOvertakesStockWhereDispatchOrderDiffers` and counted by `dispatchesBehindStreamTime`. | Measurement; adversarial review |
 | R3 | The value is monotonically non-decreasing, and starts at `RecordQueue.UNKNOWN` until the first record is prepared - so `maybePunctuateStreamTime()`'s existing UNKNOWN guard keeps working unchanged. | `StreamTask.maybePunctuateStreamTime`; `PartitionGroup` semantics |
 | R4 | An empty pool must neither stall punctuation forever nor advance the mark past a record **currently in flight**. Records PC holds but has not dispatched are deliberately outside the mark's scope - see KTD1 - and the lateness that creates is recorded in U13.6 item 3 rather than forbidden here. | Brief; master plan U13 |
 | R5 | `ProcessorContext.currentStreamTimeMs()` returns the same advancing value, not -1. | `ProcessorContextImpl:342`; `ProcessingContext:211` |
@@ -924,6 +926,25 @@ restarted at UNKNOWN because nothing seeded the dispatcher from the committed pa
 seeding, which also shrinks KTD7's gap - stream time now survives a restart wherever the commit metadata
 still carries it. **The plan's own rule found this**: "a pile B win bought with a pile A regression is
 not a win", applied to the full failing-set diff rather than to the two cases under study.
+
+---
+
+**The headline claim was false, and this plan shipped the measurement that refutes it.** R2 said the
+mark is "never ahead of what stock would report". Adversarial review found the counter-example in the
+plan's own commit history: writing the pool-of-one test measured `[0, 2, 2]` against stock's
+`[0, 1, 2]` on **one partition with three keys** - no concurrency, no second partition, the module's
+core case. PC hands records out per KEY shard, so between shards the pool empties and the empty-pool
+arm publishes the highest ever dispatched, putting the mark above a record that has not run yet.
+
+Two things make this worse than an incorrect sentence. First, **the response at the time was to narrow
+the test to a single key** so it would pass - deleting the only coverage of the divergence rather than
+pinning it, which is changing the test to fit the code. Second, the class already shipped
+`dispatchesBehindStreamTime`, a counter whose value can only be non-zero if the claim is false; the
+refutation was sitting in the same file as the claim.
+
+What survives is narrower and still worth having: the mark never passes a record **currently in
+flight**. Both javadocs and R2 now say that instead, and
+`theMarkOvertakesStockWhereDispatchOrderDiffers` pins `[0, 2, 2]` as a characterisation test.
 
 ---
 

@@ -55,6 +55,25 @@ should be *refused* when the topology also declares a state store, rather than w
 the right call while the punctuator is the only thing that can reach the hazard; it stops being the right
 call if anyone finds a way to hit it without registering one.
 
+Adversarial review found the worst one, also **fixed**: **"never ahead of stock" was false**, and the
+counter-example was in this branch's own history. Writing the pool-of-one test measured `[0, 2, 2]`
+against stock's `[0, 1, 2]` on one partition with three keys; the response at the time was to narrow the
+test to a single key so it passed, deleting the only coverage of the divergence. Both javadocs now state
+the narrower property that is actually true - the mark never passes a record *currently in flight* - and
+`theMarkOvertakesStockWhereDispatchOrderDiffers` pins the `[0, 2, 2]` sequence.
+
+**The largest thing still open, and it is a decision rather than a task:**
+**a punctuator's effects never become commit-covered, and WALL_CLOCK_TIME has the same defect with no
+warning at all.** Kafka's unmodified `maybePunctuateStreamTime` *and* `maybePunctuateSystemTime` both set
+`commitNeeded = true`; `pcAwareCommitNeeded()` discards that field on the PC path, so an interval in
+which the task only punctuated does no `prepareCommit()`, hence no `flush()` and no checkpoint. Combined
+with stream time restarting at UNKNOWN, punctuators **re-fire over event time they already covered** on
+every rebalance - and "may not survive a rebalance" in the warning understates it. The one-line candidate
+is `hasUncommittedWork() || commitNeeded` in `pcAwareCommitNeeded()`, which closes both instances; it
+changes commit cadence for every PC-path caller, which is U10's KTD2 territory and needs its own
+evidence. Note also that WALL_CLOCK_TIME punctuators fire on this path **today**, unwarned - that half is
+pre-existing, not introduced by U13.
+
 Still open:
 
 - **`seedStreamTime`'s call site has no coverage at all.** Delete the
@@ -90,6 +109,33 @@ Still open:
 - **No test pins the `dispatchedToPool > 0` guard** - a pump that dispatches nothing because the pool is
   full must leave the mark unchanged. That is the pump where the map is fullest.
 - **`seedStreamTime` arriving while records are in flight** is untested; only the empty-pool case is.
+- **The seed reaches the dispatcher but not `pcRecordQueues`.** `RecordQueue.updateHead` passes its own
+  `partitionTime` to `timestampExtractor.extract(record, partitionTime)`, and the PC path's queues are
+  created lazily at UNKNOWN. A topology using Kafka's shipped `UsePartitionTimeOnInvalidTimestamp` throws
+  on the first record after a restart with an invalid embedded timestamp, where stock recovers from the
+  committed value. Candidate fix is one line beside the `seedStreamTime` call:
+  `pcRecordQueues.computeIfAbsent(partition, recordQueueCreator::createQueue).setPartitionTime(committedTimestamp)`.
+- **`close()`'s drain can advance the mark over work a forced shutdown killed**, which is precisely what
+  `dropStreamTimeHoldsWithoutPublishing()` is named for preventing. `awaitTermination` expires,
+  `shutdownNow()` interrupts the chains, each throws into `recordFailure`, and the very next statement is
+  `drainCompletions()` - which releases those holds and publishes. Bounded today only because a closed
+  dispatcher has no reader. The clean fix is a freeze flag checked in `publishStreamTime()`, set at the
+  top of both close paths.
+- **`RejectedExecutionException` from `workerPool.execute` leaks a hold.** `holdStreamTime` and the
+  `inFlight` increment both happen before the submit, with no compensation - so an `abortClose()` racing a
+  pump (which `abortAllActive()` does by design) pins the mark at that record's timestamp forever. The
+  `inFlight` half predates U13; the stream-time half is new and converts a wrong counter into a stopped
+  punctuation clock.
+- **`PreparedRecord` validates neither field.** A preparer returning a null `Runnable` gets an NPE
+  misclassified as a *processing* failure, which with retries disabled blocks that KEY shard for the life
+  of the task and reports a topology error. This is the module's public extension seam;
+  `Objects.requireNonNull` at the constructor is the right place to fail.
+- **The `__processing.threads.enabled__` hazard is now a hash-table race, not a stale long** - and
+  `PcSupportedEnvelope` already refuses a *configuration* (EOS), so converting this from an accepted
+  silent hang into a named refusal is one boolean away.
+- **STREAM_TIME punctuations may be SKIPPED, not merely delayed.** `PunctuationSchedule.next` collapses
+  every interval crossed in one jump into a single firing; on this path the jump is the normal case
+  rather than a data gap. The warning says "firing times lag", which does not convey that.
 
 Two things correctness review checked and cleared, worth not re-deriving: both publish guards **are**
 equivalent to unconditional publishing (a skipped publish would need a hold added-then-drained, and the

@@ -367,9 +367,21 @@ public class PcTaskDispatcher implements Closeable {
      * not yet fetched - the same silence stock keeps, since stock can sit at the timestamp of the record it
      * just selected while older records wait in another partition's queue.
      *
-     * <p><b>Never ahead of stock, equal to stock whenever the pool is empty.</b> Punctuation on this path can
-     * therefore be late relative to stock, never early - and early is the direction that would close a window
-     * over a record still running.
+     * <p><b>It CAN sit above what stock would hold, and an earlier version of this javadoc claimed
+     * otherwise.</b> Within a batch it is a low-water mark, so it lags. But between batches the pool empties
+     * and it rises to {@link #maxDispatchedStreamTimestamp} - and PC dispatches per KEY shard, not in stock's
+     * timestamp order, so wherever those orders differ the mark overtakes stock. It needs no concurrency and
+     * no second partition: three records on one partition with three distinct keys give a mark of
+     * {@code [0, 2, 2]} where stock reports {@code [0, 1, 2]}, which is measured by
+     * {@code theMarkOvertakesStockWhereDispatchOrderDiffers}. {@link #dispatchesBehindStreamTime} counts
+     * exactly the records this strands - a counter that could not have a non-zero value if the old claim
+     * were true.
+     *
+     * <p>What survives is narrower and still worth having: <b>the mark never passes a record that is
+     * currently in flight</b>, so a punctuation cannot close a window over work still inside the chain. It
+     * says nothing about records PC has accepted and not yet handed out. A user computing lateness as
+     * {@code currentStreamTimeMs() - record.timestamp()} can therefore see a negative-grace result here that
+     * stock would never produce.
      *
      * <p>Volatile because {@code TaskExecutor.punctuate()} may run on a task-executor thread rather than the
      * StreamThread, so this belongs on the query surface with {@link #getInFlightCount()}. Written only by

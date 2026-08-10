@@ -1249,6 +1249,44 @@ class PcTaskDispatcherTest {
     }
 
     /**
+     * <b>The divergence, pinned rather than deleted.</b> This case was measured while writing
+     * {@link #withOneWorkerTheMarkIsTheRunningRecordsTimestampJustAsStockHolds}, diagnosed correctly as PC's
+     * shard ordering, and then narrowed away to make that test pass - which removed the only coverage of the
+     * one behaviour a reader most needs to know about. Code review caught the deletion.
+     * <p>
+     * Three records on <b>one partition</b> with three distinct keys, a pool of one. Stock walks them in
+     * order and reports {@code [0, 1, 2]}. PC hands them out per KEY shard, so between shards the pool empties
+     * and the empty arm publishes the highest ever dispatched: {@code [0, 2, 2]}. <b>At step two the mark sits
+     * above a record that has not run yet</b>, which is what makes "never ahead of stock" false - no
+     * concurrency, no second partition, and the module's core use case.
+     * <p>
+     * The exact sequence is PC's shard iteration order and is not itself a contract; what is asserted is the
+     * property that survives - the mark ends where stock ends, and reaches stock's final value early.
+     */
+    @Test
+    void theMarkOvertakesStockWhereDispatchOrderDiffers() {
+        dispatcher = new PcTaskDispatcher("task-st-overtake", INPUT_PARTITIONS, 1);
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "key-" + offset));
+
+        List<Long> markAfterEachDispatch = new ArrayList<>();
+        for (int record = 0; record < 3; record++) {
+            dispatcher.dispatchAvailable(noOpPreparer());
+            markAfterEachDispatch.add(dispatcher.getStreamTimeLowWaterMark());
+            await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getInFlightCount() == 0);
+        }
+
+        assertThat(markAfterEachDispatch)
+                .as("stock reports [0, 1, 2] here. PC reaches 2 one record early, because it dispatches per "
+                        + "KEY shard and the empty pool publishes the highest ever dispatched - so the mark "
+                        + "is ABOVE a record that has not run yet")
+                .containsExactly(0L, 2L, 2L);
+
+        assertThat(markAfterEachDispatch.get(markAfterEachDispatch.size() - 1))
+                .as("and it converges on stock's final value rather than overshooting it")
+                .isEqualTo(2L);
+    }
+
+    /**
      * Kafka's {@code streamTime} only ever rises, and {@code PunctuationQueue} reschedules off the timestamp
      * it fired at - so a mark that went backwards would re-fire punctuators over windows already closed.
      */
