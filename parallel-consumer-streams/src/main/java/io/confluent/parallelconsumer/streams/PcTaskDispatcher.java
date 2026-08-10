@@ -1150,6 +1150,27 @@ public class PcTaskDispatcher implements Closeable {
         return ACTIVE.size();
     }
 
+    /**
+     * Records held but not yet started, summed over every live dispatcher in this JVM - the number the
+     * memory-bound proof samples while a run is in flight (astubbs#255, U14).
+     * <p>
+     * Static and public for the same reason {@link #abortAllActive()} is: a broker-backed test drives a real
+     * {@code KafkaStreams}, and the dispatchers it wants to read are buried several layers inside it with no
+     * seam to reach them by. <b>Safe from any thread</b> - it reads each dispatcher's published snapshot and
+     * touches no {@code WorkManager}, which is precisely why that publication is not optional.
+     * <p>
+     * A sampler is the only honest instrument for this. The interesting quantity is a <em>peak</em>, and a
+     * peak is invisible to any assertion made after the run: by the time processing finishes, occupancy is
+     * zero whether it was bounded throughout or grew to the whole topic first.
+     */
+    public static int bufferedRecordsAcrossActive() {
+        int total = 0;
+        for (PcTaskDispatcher dispatcher : ACTIVE) {
+            total += dispatcher.getBufferedRecordCount();
+        }
+        return total;
+    }
+
     /** Crash-injection for tests: {@link #abortClose()} every live dispatcher in the JVM. */
     public static void abortAllActive() {
         for (PcTaskDispatcher dispatcher : ACTIVE) {
