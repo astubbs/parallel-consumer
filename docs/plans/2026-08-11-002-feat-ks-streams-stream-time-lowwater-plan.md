@@ -880,6 +880,53 @@ Recorded here so refutations are reportable rather than quietly absorbed, per U1
 
 ---
 
+## What execution refuted
+
+Kept rather than edited away, because the plan's value as a record is mostly in where it was wrong.
+
+**P1 held exactly.** `shouldPunctuateOnceStreamTimeAfterGap` still fails at `StreamTaskTest:1209`,
+`assertEquals(7, task.numBuffered())` - the same line, unmoved. It is a pile C failure wearing a
+punctuation name, and no amount of stream-time work will touch it.
+
+**P2 and P3 both held, and P3 is the more interesting one.**
+`shouldRespectPunctuateCancellationStreamTime` got past its old failure at `:1303`
+(`assertTrue(task.canPunctuateStreamTime())`) - stream time now reaches the punctuation queue. Its
+failure **relocated to `:1307`**, the next `assertTrue(task.process(0L))`, exactly as predicted: two
+records are still in flight, both KEY shards are blocked, the pump consumes nothing and correctly
+returns false. **And it is racy, which we observed rather than argued** - one run had it green and the
+next had it red at `:1307`, on identical code. Recorded UNRESOLVED, not claimed.
+
+**P4 and P5 held on `StreamTaskTest`: 30 before, 30 after, composition identical case-for-case (N=3
+each side).** No case got worse and none got better; the movement is entirely *within*
+`shouldRespectPunctuateCancellationStreamTime`, from one failing line to a later one.
+
+**And the plan's most useful refutation is about the instrument, not the change.
+`StreamThreadTest`'s seam-ON count is not a measurement at all.** Across four runs of the same suite it
+read **41, 37, 37 and 1** - a forty-case swing, twice on byte-identical code. An interim draft of this
+section reported "41 to 37, four punctuation cases fixed" as a result; that was noise being read as
+signal, and it is retracted. The final run had only the documented
+`shouldLogAndRecordSkippedRecordsForInvalidTimestamps[3]` flake failing, which is intriguing and is one
+observation.
+
+**So the honest statement of the outcome is uncomfortable and worth writing down: the Kafka upstream
+suites cannot demonstrate this unit.** `StreamTaskTest`'s two punctuation cases are structurally
+stock-shaped (P1, P3), and `StreamThreadTest`'s numbers are dominated by run-to-run variance. The
+evidence that stream time actually advances is *indirect* - the failure line moved from a stream-time
+assertion to an asynchronous-dispatch one, and the case was observed green once. That is exactly why the
+plan puts the gate on module-owned tests, and it means **U13 is not done until U13.3's integration test
+and U13.4's measurements exist**. Anyone tempted to read the upstream counts as the result should read
+this paragraph instead.
+
+**A regression was introduced and caught by Kafka's own suite, exactly where the plan said to look.**
+Routing `streamTime()` through the dispatcher broke
+`shouldReadCommittedStreamTimeAndProcessorMetadataOnInitialize` and its merge variant: stream time
+restarted at UNKNOWN because nothing seeded the dispatcher from the committed partition time. Fixed by
+seeding, which also shrinks KTD7's gap - stream time now survives a restart wherever the commit metadata
+still carries it. **The plan's own rule found this**: "a pile B win bought with a pile A regression is
+not a win", applied to the full failing-set diff rather than to the two cases under study.
+
+---
+
 ## Assumptions
 
 Inferred rather than confirmed, because this run had no interactive user.
