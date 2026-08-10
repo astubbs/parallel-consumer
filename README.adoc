@@ -134,6 +134,10 @@ This library lets you process messages in parallel via a single Kafka Consumer m
 For many use cases this improves both throughput and latency by reducing load on your brokers.
 It also opens up new use cases like extreme parallelism, external data enrichment, and queuing.
 
+NOTE: Below 1.0 does not mean unproven.
+The same core engine has been in production use for years.
+What 1.0 is waiting on is a settled API surface, the functionality still intended for it, and confidence that reaches beyond the defects already known.
+
 .Consume many messages _concurrently_ with a *single* consumer instance:
 [source,java,indent=0]
 ----
@@ -170,6 +174,7 @@ image::{talk_preview_image}[Talk]
 
 toc::[]
 
+[[motivation]]
 == Motivation
 
 === Why would I need this?
@@ -294,7 +299,11 @@ The end-to-end latency of the responses to these answers needs to be as low as t
 We can break out as described below into the tool for processing that step, then return to the Kafka Streams context.
 * Provisioning extra machines (either virtual machines or real machines) to run multiple clients has a cost, using this library instead avoids the need for extra instances to be deployed in any respect.
 
+[[features-list]]
 == Features List
+
+Renderer-ready source data for every capability in this list lives in link:docs/features/[`docs/features/`].
+This README remains the current presentation until the separate documentation-site work renders that data.
 
 * Have massively parallel consumption processing without running hundreds or thousands of:
 ** Kafka consumer clients,
@@ -924,6 +933,7 @@ This will put the message back in the queue.
         });
 ----
 
+[[head-of-line-blocking]]
 === Head of Line Blocking
 
 In order to have a failing record not block progress of a partition, one of the ordering modes other than `PARTITION` must be used, so that the system is allowed to process other messages that are perhaps in `KEY` order or in the case of `UNORDERED` processing - any message.
@@ -1131,7 +1141,9 @@ For a code example, see the <<streams-usage-code>> section.
 
 .Example usage with Kafka Streams
 image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fbf/image.png[Kafka Streams Usage,align="center"]
+// [[mertics]] is a long-standing misspelling. Kept so existing links still resolve.
 [[mertics]]
+[[metrics]]
 == Metrics
 
 Metrics collection subsystem is implemented using Micrometer. This allows for flexible configuration of target metrics backend to be used. See below on example of how to configure MeterRegistry for Parallel Consumer to use for metrics collection.
@@ -1345,11 +1357,11 @@ The original {base_confluent_url}[confluentinc/parallel-consumer] is no longer a
 
 For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
 
-For what is planned, in progress, or known-broken, the {issues_link}[issue tracker on this repository]
-is the single place to look. We mirrored every open issue from the upstream tracker into it (all 78 of
-them, labelled `upstream-mirror` and titled `confluentinc#NNN: ...`), so an upstream report you are
-following has a counterpart here that reflects its real status on this fork. Please raise new issues
-here rather than upstream - see <<Support and Issues>>.
+For the direction of the project, see link:docs/data/roadmap.yaml[the roadmap data]. For work in progress and
+known defects, use the {issues_link}[issue tracker on this repository]. We mirrored every open issue from
+the upstream tracker into it (labelled `upstream-mirror` and titled
+`confluentinc#NNN: ...`), so an upstream report you are following has a counterpart here that reflects its
+real status on this fork. Please raise new issues here rather than upstream - see <<Support and Issues>>.
 
 == Usage Requirements
 
@@ -1385,11 +1397,79 @@ Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny 
 
 | `parallel-consumer-mutiny`
 | 17
+
+| `parallel-consumer-streams-spike`
+| 8
+
+| `parallel-consumer-connect`
+| 8
 |===
 
 WARNING: Adding `parallel-consumer-mutiny` to a Java 8 or Java 11 application will build without complaint and then fail at runtime with an `UnsupportedClassVersionError`, because its SmallRye Mutiny dependency is compiled for Java 17.
 Maven cannot warn you about this, so check the table before picking the module.
 The other modules are unaffected, and using them does not pull Mutiny in.
+
+=== Module maturity
+
+Maturity belongs to a module, not to one project-wide version number. Reliability and API stability are separate:
+0.6.0.0 ships only once every known defect in the stable-module release scope is resolved and evidenced, while their public APIs remain pre-1.0. An
+alpha artifact is a separate, explicit opt-in and cannot change an application that does not depend on it.
+
+This makes v6 a special stability release. Virtual threads, micro-batching and a dead-letter queue are intentionally
+deferred capabilities, not exceptions to the known-defect gate. The claim does not deny that unknown defects can exist;
+it says the known defect ledger is cleared before the release is cut.
+
+|===
+| Module | Status | Reliability confidence | API expectation | Use this if
+
+| `parallel-consumer-core`
+| Stable
+| Release-gated for all known defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| You need ordered concurrent Kafka consumption in a standard Java application.
+
+| `parallel-consumer-vertx`
+| Stable
+| Release-gated for all known defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Vert.x asynchronous APIs.
+
+| `parallel-consumer-reactor`
+| Stable
+| Release-gated for all known defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Project Reactor.
+
+| `parallel-consumer-mutiny`
+| Stable (Java 17)
+| Release-gated for all known defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses SmallRye Mutiny.
+
+| `parallel-consumer-examples`
+| Reference examples
+| Exercises supported use cases; not a runtime dependency
+| Changes with the APIs it demonstrates
+| You want runnable examples before choosing an integration module.
+
+| `parallel-consumer-streams-spike`
+| Alpha / experimental
+| Module-specific evidence only; does not inherit stable confidence
+| Volatile while the experiment is evaluated
+| You want to evaluate the Kafka Streams integration and can tolerate changing behaviour and APIs.
+
+| `parallel-consumer-connect`
+| Alpha / experimental
+| Module-specific evidence only; does not inherit stable confidence
+| Volatile while the experiment is evaluated
+| You want to evaluate running supported Kafka Connect sink tasks in-process.
+|===
+
+The experimental artifacts are opt-in leaves. Their rows in link:docs/data/module-maturity.yaml[the
+module-maturity data] carry what is and is not claimed for each, and should be read before depending on
+either one. For the reliability evidence and release-time limits behind the stable
+module claim, see link:docs/data/testing-evidence.yaml[the testing evidence data] and
+link:docs/data/module-maturity.yaml[the module-maturity data].
 
 == Development Information
 
@@ -1690,5 +1770,3 @@ https://www.google.com/url?q=https://www.yourkit.com/.net/profiler/&source=gmail
 == Change Log
 
 Release notes for every version live in link:CHANGELOG.adoc[CHANGELOG.adoc].
-
-
