@@ -1,0 +1,3 @@
+# Generated at build time from the kafka-streams sources jar - never tracked.
+# Verification Contract item 3: `git ls-files | grep 'org/apache/kafka/.*\.java'` must return nothing.
+target/

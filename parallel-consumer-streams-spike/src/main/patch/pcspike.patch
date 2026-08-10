@@ -1,0 +1,7 @@
+# pcspike.patch - the ONLY place Kafka changes are expressed in this repository.
+#
+# Empty by design at U3: the control arm proves the generate-and-patch harness is behaviour-neutral
+# before any change is applied, so a later failure can be attributed. U4 fills it in.
+#
+# Regenerate with bin/regen-patch.sh after editing target/generated-sources/kafka-patched/.
+# Pinned to kafka-streams ${kafka.version}; a version bump will require re-deriving it.

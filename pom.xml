@@ -37,6 +37,10 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
+        <!-- Throwaway experiment (astubbs#255), never published. Deliberately ordered before
+             parallel-consumer-examples: the examples pom records a central-publishing-maven-plugin bug
+             where a skipPublishing module LAST in reactor order suppressed the entire bundle upload. -->
+        <module>parallel-consumer-streams-spike</module>
         <module>parallel-consumer-examples</module>
     </modules>
 
