@@ -122,9 +122,9 @@ The two are not strict alternatives -- they solve different problems.
 
 [TIP]
 ====
-* If you want unordered queue semantics on Kafka 4.2+, reach for *Share Groups*. The "partitions are fixed, I need more consumers" motivation is now solved at the broker -- and if you need a *single* partition's throughput spread across several machines, they are the only option.
-* If you need *key-level ordering with concurrency beyond partition count*, reach for *Parallel Consumer*. Nothing else does that cleanly today.
-* Also reach for *Parallel Consumer* if you need exactly-once together with parallelism, if your processing step can outlive a 30 second lock, or if you are not on Kafka 4.2 yet -- which includes every cluster still running 3.x.
+* *Both* solve "partitions are fixed, I need more consumers" -- so the choice between them is about *ordering*, not about concurrency. Reach for *Share Groups* on Kafka 4.2+ when ordering genuinely does not matter to you: that condition is the whole trade, not a footnote to it. You get consumers decoupled from partition count at the broker, in exchange for delivery that may be out of order, and for redelivery of a record another consumer may still be working on.
+* Reach for *Parallel Consumer* when you need *key-level ordering with concurrency beyond partition count* -- nothing else does that cleanly today. Also when you need exactly-once together with parallelism, when a processing step can outlive a 30 second lock, or when you are simply not on Kafka 4.2 yet, which includes every cluster still running 3.x.
+* Spreading a *single* partition's throughput across several machines is genuinely theirs alone. Worth putting in perspective, though: that requirement is largely inherited from an era when adding consumers was the only way to add concurrency at all. Parallel Consumer already drives one partition at high concurrency inside a single instance, so what actually remains is throughput beyond what one instance can carry, or a deliberate want for machine-level isolation.
 ====
 
 NOTE: For the reasoning behind the project as a whole -- the problem it exists to solve, why it is solved in the client rather than the broker, and where effort is currently going -- see link:STRATEGY.md[STRATEGY.md].

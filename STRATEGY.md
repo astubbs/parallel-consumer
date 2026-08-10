@@ -17,7 +17,7 @@ low latency and guaranteed per-key ordering at the same time.
 
 We win by doing it in the client. Modifying the broker is extremely difficult, politically and
 engineering-wise, and no broker-side answer to high-performance key ordering exists or may ever.
-Parallel Consumer is a client-side sub-broker: a library you add to a pom, invisible to the
+Parallel Consumer works like a client-side sub-broker: a library you add to a pom, invisible to the
 cluster, needing no broker version, no feature flag, and nobody's permission to deploy.
 
 ## Who it's for
@@ -74,4 +74,4 @@ application does not. This is where the backflips are.
 
 ## Marketing
 
-**One-liner:** A client-side sub-broker that can do backflips.
+**One-liner:** Like a client-side sub-broker that can do backflips.
