@@ -32,8 +32,7 @@ reporter).
 Rules (full discipline in [`docs/testing.md`](testing.md), and the `@Quarantined` javadoc):
 
 1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose.
-2. **Quarantine is master-state, not PR-state** - stated in AGENTS.md, Testing, because no script
-   checks it.
+2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **Re-enable = the owning fix PR deletes the annotation AND this entry in the same commit**, after
    merging master - atomically restoring the test to the gating lane.
 4. Every entry needs an owning fix PR. An entry without one is diagnosed-but-unowned: flag it, find it

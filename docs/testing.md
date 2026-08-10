@@ -61,8 +61,7 @@ exists, is open, and eventually removes the quarantine).
 Rules:
 
 1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose.
-2. **Quarantine is master-state, not PR-state** - stated in AGENTS.md, Testing, because no script
-   checks it.
+2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
    merging master, atomically restoring the test to the gating lane.
 
