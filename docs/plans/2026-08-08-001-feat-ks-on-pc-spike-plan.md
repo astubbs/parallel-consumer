@@ -1219,6 +1219,99 @@ consequence of a decision recorded in this plan or in the result document's §8.
 
 They live here rather than in `parallel-consumer-streams/README.md` on purpose: implementation has
 not stopped, so this list will move, and a README that enumerates it goes stale the week it is written.
+
+### Shipping two Kafka Streams jars on one classpath - PARKED, blocks publication
+
+**Deliberately not being solved now.** Recorded because it gates publication rather than development, and
+because the refusal work (item 4) moved the numbers enough to change the answer. The packaging options
+are in `docs/inflight/next-fork-packaging-docs-and-licensing.md` §2; this entry is the problem statement.
+
+The mechanism requires **both** jars on the classpath, always. This module ships around a dozen classes
+in Apache Kafka's own packages and depends on `kafka-streams` for the other thousand; ours win because
+they precede it. That is controlled and asserted inside our build (`ShadowedClassLoadingTest` fails the
+build if a patched class loads from the `kafka-streams` jar instead of ours). As a published dependency
+it is not defensible, and there are three distinct failures rather than one:
+
+1. **Order is a convention, not a guarantee.** Maven, Gradle, IDEs, shaded uber-jars and Spring Boot's
+   loader may order entries differently. When ours lose, the user silently gets pure stock Kafka Streams
+   with no PC and no error - the worst shape a failure can take.
+2. **Class loading is per class, so the result is always a mixture** - our dozen plus their thousand,
+   never one coherent library. This is the load-bearing point. It works only while the two halves are
+   the *same version*, and nothing checks that they are. A user who upgrades `kafka-streams` to 3.10
+   without upgrading this module runs our 3.9.2-derived `StreamTask` against their 3.10 internals -
+   package-private APIs that change between minors, mixed at runtime. That is the default outcome of a
+   routine dependency bump, not an exotic misconfiguration.
+3. **It is illegal on the module path.** JPMS forbids split packages outright, so this cannot be
+   consumed as a module at all.
+
+#### The crux is the COORDINATES, not the fork
+
+The instinct is that publishing a whole patched `kafka-streams` fixes this. It is necessary but not
+sufficient, and the reason is worth stating before the options, because it is what separates them.
+
+Maven's conflict resolution dedupes on `groupId:artifactId`. Publish a fork as
+`bz.stub.parallelconsumer:kafka-streams-pc` and Maven has **no idea** it is the same library as
+`org.apache.kafka:kafka-streams` - so a user who takes our module *and* anything pulling `kafka-streams`
+transitively (Spring Kafka, a test utility, a sibling internal library) gets **both jars again**, with the
+same split package and the same ordering coin-flip. We would have shipped 5MB of Apache Kafka and fixed
+nothing for that user.
+
+Keeping the *same* coordinates and varying only the version - `org.apache.kafka:kafka-streams:3.9.2-pc1` -
+makes nearest-wins do the work: exactly one jar, automatically, with no action from the user. That is
+precisely why Confluent ships `<version>-ccs` rather than a renamed artifact, and why they serve it from
+their own repository rather than Central.
+
+#### Build feasibility, checked rather than assumed
+
+Lower than assumed. The published sources jar carries **all 678 `.java` files**, and critically it
+**includes the pre-generated message classes** (`org/apache/kafka/streams/internals/generated/`, e.g.
+`SubscriptionInfoData.java`). Those are normally produced by Kafka's message generator from JSON schemas,
+which would have dragged in Kafka's Gradle build; shipped pre-generated, they do not. The only non-class
+resources are four files (`common/message/SubscriptionInfoData.json`,
+`kafka/kafka-streams-version.properties`, `LICENSE`, `NOTICE`).
+
+So a full build is what this module already does for twelve classes, scaled up: unpack, apply the patch,
+compile against `kafka-streams`' own declared dependencies, copy four resources, jar it. Cloning Kafka's
+repository and building the module properly is also open to us and may end up simpler; the sources jar is
+merely the faster path and is what makes the cheap version credible.
+
+#### Options considered
+
+| | Option | Removes the collision? | Cost |
+|---|---|---|---|
+| **A** | **Shadow ~12 classes** (today) | No - manages it | Free, but order-dependent, JPMS-illegal, and silently version-skewed |
+| **B** | Full fork, **our** groupId, on Central | Only with user action | Needs documented `<exclusions>`; a transitive `kafka-streams` still arrives silently |
+| **C** | **Full fork, `org.apache.kafka:kafka-streams:<ver>-pc`, self-hosted repo** | **Yes, automatically** | Users add a repository; trademark question on the groupId; not on Central |
+| **D** | Relocate/shade into our own package | Yes, but destroys the feature | Shadowing works *because* the package matches; relocation breaks the mechanism, and rewrites every user import |
+| **E** | Keep shadowing, alpha-only, never transitive | No | A promise rather than a property |
+
+**C is the leading option**, and it only became available on realising we need not publish to Central.
+Serving from our own repository (GitHub Packages, or a static Maven repo on Pages) costs an experimental
+adopter one `<repository>` block - nobody willing to run patched Kafka Streams internals will object to
+that - and in exchange the deduplication becomes automatic rather than instructional. It is also the only
+option where a user who never reads our documentation still gets a correct classpath.
+
+Central remains available later, under B's coordinates, once the module is no longer experimental. The two
+are not exclusive: shipping C now does not foreclose B.
+
+**If B is ever chosen, it needs a fail-fast runtime check** to be safe: assert at startup that the patched
+classes loaded from our artifact and fail loudly, naming the required exclusion, when they did not. This
+module already makes exactly that assertion in tests (`ShadowedClassLoadingTest`), so shipping it as a
+runtime guard is cheap. It converts the failure from "silently runs stock Kafka Streams" into a startup
+error, which is the difference that matters. Worth having as defence in depth under C as well.
+
+#### Still open
+
+- **Trademark**, which is separate from the licence and is the only genuinely unresolved legal question.
+  Apache 2.0 plainly permits the modification and redistribution given §4 notices (`NOTICE` already carries
+  the changed-files statement). What needs checking is whether option C's use of the `org.apache.kafka`
+  groupId on a self-hosted repository implies endorsement. Confluent's `-ccs` is the precedent to examine.
+- **CVE ownership.** A fork means our users wait for *our* rebuild after a Kafka CVE, not Apache's release.
+  Real ongoing obligation rather than a one-off cost.
+- **The version matrix** - one fork artifact per supported Kafka version, rebuilt and re-verified.
+
+**Whatever is chosen has to work for the Kafka Connect module the same way** - it is doing the same thing
+in a second worktree, so this is one decision for a family of modules rather than for this one.
 The README points here.
 
 **The size of the gap is measured, not estimated.** With the seam **off**, Apache Kafka's own
