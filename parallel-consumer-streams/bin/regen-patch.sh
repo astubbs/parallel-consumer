@@ -52,6 +52,19 @@
 # patching `StreamThread`. Serialising would have hidden that: the second branch would have been
 # written against the new reality and nobody would have learned the assertion was fragile.
 #
+# THE HUNK COUNT IS A PROXY, NOT THE INVARIANT - A DROP IS NOT PROOF OF LOSS.
+# The comparison printed at the end of this script is a cheap tripwire, and it has a known false
+# positive: adding lines can MERGE hunks. Insert a few lines into each of three edits that sit close
+# together and they fall inside diff's 3-line context window and become one hunk, so the count falls
+# while nothing whatsoever was lost. Seen for real on astubbs#255 - adding javadoc to three compact
+# `windowedBy` blocks took KGroupedStream from 4 hunks to 2, and the count went 112 -> 110.
+#
+# So when the count drops, INVESTIGATE, do not assume either way. The actual invariant is about
+# content, not structure: every line the old patch ADDED must still be added by the new one, and the
+# removed lines must be identical. Compare those two sets (the `^+` and `^-` bodies, ignoring the
+# `+++`/`---` headers) between the old and new patch and you have an answer rather than a hint.
+# A rise is equally weak evidence in the other direction.
+#
 # !! FOOT-GUN, READ THIS !!
 # The unpack step runs with overWriteReleases=true, so ANY maven invocation between step 2 and step 3
 # silently restores target/kafka-patched to (released sources + the *tracked* patch) and discards
@@ -84,7 +97,9 @@ patch_file="$module_dir/$patch_rel"
 for d in "$pristine" "$patched"; do
     if [[ ! -d "$d" ]]; then
         echo "regen-patch: missing $d" >&2
-        echo "regen-patch: run './mvnw -pl parallel-consumer-streams generate-sources' first" >&2
+        # Both the phase and the `.` matter - see the header. generate-sources only UNPACKS, so
+        # regenerating from that tree deletes every hunk, and the leaf module alone fails enforcer.
+        echo "regen-patch: run './mvnw -pl .,parallel-consumer-streams process-sources' first" >&2
         exit 1
     fi
 done

@@ -35,15 +35,23 @@ is the honest headline limit, and it is bigger than the feature list.
 
 7. **The dispatcher's owner-thread guard binds at construction, and task recycling breaks that.**
    `PcTaskDispatcher` captures `Thread.currentThread()` in its constructor and rejects calls to
-   `collectCommitData`, `hasCommitDataOutstanding` and `onCommitSuccess` from any other thread. That is
-   correct today, because a `StreamTask` is created and driven by one StreamThread - the guard was
-   cherry-picked from the Connect work (astubbs#240) and fires on nothing in the current suite. It stops
-   being correct the moment a task object outlives its thread assignment: a recycled or reassigned task
-   carries a stale owner, and the guard then throws `IllegalStateException` on a **legitimate** call.
-   The fix is to bind explicitly where the task is handed to a thread rather than at construction - the
-   same seam as item 1's recycle leak, so both should be done in one visit. Flagged by the guard's
-   author as the one judgement call worth revisiting, and recorded here rather than there because this
-   is where the assumption gets falsified.
+   `collectCommitData` and `onCommitSuccess` from any other thread. It stops being correct the moment a
+   task object outlives its thread assignment: a recycled or reassigned task carries a stale owner, and
+   the guard then throws `IllegalStateException` on a **legitimate** call. The fix is to bind explicitly
+   where the task is handed to a thread rather than at construction - the same seam as item 3's recycle
+   leak, so both should be done in one visit.
+
+   ~~fires on nothing in the current suite~~ - **it fired, and it was right.** The guard (astubbs#240,
+   cherry-picked) originally covered `hasCommitDataOutstanding` too, on the strength of a javadoc saying
+   "StreamThread only". That was false: `DefaultStateUpdater` calls `StreamTask.maybeCheckpoint` from its
+   own thread for every restoring task, and U9 had put `pcAwareCommitNeeded()` in that gate, so a
+   `boolean` field read had become a mailbox drain touching `WorkManager` from a second thread. The guard
+   converted a silent race into a deterministic integration-suite failure. Settled by making
+   `hasCommitDataOutstanding` a genuine query - counters, no drain, no `WorkManager` - so it is callable
+   from any thread; the guard is unchanged on the two methods that really do reach `WorkManager`. The
+   real thread model is now written into `PcTaskDispatcher`'s class javadoc. **Still open here:** the
+   construction-time binding above, and the fact that the module's unit suite could not see any of this -
+   it has no Kafka Streams in it, so no second thread ever asks the question.
 
 ## What this blocks, and what it does not
 

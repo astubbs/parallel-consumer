@@ -82,6 +82,29 @@ not global. This reverses an earlier
 non-goal ("merging the spike code into the product; the spike branch is kept, not landed") - see KTD-S5.
 The result documents land in the same PR as the code (R5).
 
+**THIS MODULE DOES NOT GATE 0.6.0.0.** Settled 2026-08-11, and it reverses the working assumption that
+the release waits for a Streams (and Connect) MVP. It does not. 0.6.0.0 is a stability release whose
+content is the known-defect backlog, and that backlog is ready; holding it for an experimental module
+would delay a queue of finished bug fixes behind unfinished exploratory work, which is the wrong trade in
+both directions. Whatever state these modules are in when the release is cut is what ships.
+
+Two consequences worth stating, because they change what "done" means here:
+
+- **There is no MVP bar to clear.** Do not scope work by "what must be in for v6". Scope it by what is
+  demonstrably true, ship that, and describe the boundary honestly. Raw and real beats polished and
+  narrow: the interesting claim is that a Kafka Streams topology gets per-key concurrency inside one
+  partition at all, and that claim is already evidenced (Kafka's own suites green with the seam off,
+  crash safety red-then-green, the head-of-line measurement with its control). Completeness is not what
+  makes it land.
+- **Publishing stays a separate, later gate.** Merging to master is cheap to reverse - this is a leaf
+  module, nothing depends on it, and removing it is one `git rm` plus a pom line. Publishing to a
+  repository is not reversible once anyone depends on the coordinate. So: merge freely, publish
+  deliberately, and only once the module does something interesting enough to be worth someone's
+  dependency. Keep it in the reactor and out of the deploy set until then.
+
+`docs/inflight/release-0.6.0.0.md` is the authoritative record of what gates the release and needs to
+agree with this.
+
 #### Deferred to Follow-Up Work
 - Everything the report ranks Tier 2 beyond the thread-confinement, and all of Tier 3.
 - Whatever U6/U7 name as the next experiment.
