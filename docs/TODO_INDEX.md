@@ -3,7 +3,7 @@
 **Generated file - do not edit by hand.** Regenerate with `bin/todo-index.sh`
 (`bin/todo-index.sh --check` fails if this file is stale).
 
-Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **87 marker(s)** at
+Every `TODO` / `FIXME` / `XXX` marker in the tracked tree, grouped by module. **84 marker(s)** at
 the time of generation.
 
 ## Prioritised? See the refactoring backlog
@@ -248,32 +248,11 @@ that line, leave it in the code - it will show up here.
 - todo check legacy's also contribute to subject graph
 
 
-### parallel-consumer-examples/parallel-consumer-example-core
+### parallel-consumer-examples/parallel-consumer-example-support
 
-**`parallel-consumer-examples/parallel-consumer-example-core/src/test/java/io/confluent/parallelconsumer/examples/core/CoreAppTest.java`**
+**`parallel-consumer-examples/parallel-consumer-example-support/src/test/java/io/confluent/parallelconsumer/examples/support/ExampleMockConsumers.java`**
 
-- .thenReturn(new ConsumerGroupMetadata("groupid")); // todo fix AK mock consumer
-
-
-### parallel-consumer-examples/parallel-consumer-example-metrics
-
-**`parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java`**
-
-- when(mockConsumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("groupid")); // todo fix AK mock consumer
-
-
-### parallel-consumer-examples/parallel-consumer-example-reactor
-
-**`parallel-consumer-examples/parallel-consumer-example-reactor/src/test/java/io/confluent/parallelconsumer/examples/reactor/ReactorAppTest.java`**
-
-- Mockito.when(mockConsumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("groupid")); // todo fix AK mock consumer
-
-
-### parallel-consumer-examples/parallel-consumer-example-vertx
-
-**`parallel-consumer-examples/parallel-consumer-example-vertx/src/test/java/io/confluent/parallelconsumer/examples/vertx/VertxAppTest.java`**
-
-- Mockito.when(mockConsumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("groupid")); // todo fix AK mock consumer
+- .thenReturn(new ConsumerGroupMetadata(groupId)); // todo fix AK mock consumer
 
 
 ### parallel-consumer-vertx
