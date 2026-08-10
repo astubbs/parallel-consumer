@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-examples</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-example-streams-pc</artifactId>
+    <name>Kafka Parallel Consumer Example - Kafka Streams driven by PC</name>
+
+    <properties>
+        <demo.mainClass>io.confluent.parallelconsumer.examples.streams.pc.StreamsOnPcDemo</demo.mainClass>
+    </properties>
+
+    <dependencies>
+        <!-- MUST BE FIRST, and org.apache.kafka:kafka-streams MUST NOT be declared here at all.
+             This is the whole mechanism. parallel-consumer-streams ships patched copies of six Apache
+             Kafka classes (StreamTask, ProcessorContextImpl, RecordCollectorImpl, ...) in Kafka's OWN
+             package, inside its ordinary jar. They win over the stock kafka-streams jar purely by
+             classpath ORDER, and Maven orders direct dependencies by declaration order in this file.
+
+             So: kafka-streams arrives TRANSITIVELY from the dependency below (compile scope), which is
+             both how the topology compiles and how the ~1000 classes we did NOT patch are supplied.
+             Declaring it directly would put the stock jar ahead of the patched classes and the demo
+             would silently measure stock Kafka Streams against itself. Excluding it would break the
+             mechanism outright, because the patched module supplies only six of the classes.
+
+             StreamsOnPcDemo asserts all of this at runtime before measuring anything - see
+             ClasspathGuard. Order is a convention, not a guarantee (docs/inflight/next-fork-packaging-docs-and-licensing.md). -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-streams</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Testcontainers at COMPILE scope, deliberately and explicitly. The root pom's
+             dependencyManagement pins every testcontainers artifact to <scope>test</scope>; a
+             declaration here that omitted the scope would silently inherit test, and this module's
+             main() lives in src/main/java and would not compile. Versions are omitted on purpose so
+             ${testcontainers.version} still comes from root dependencyManagement. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- Same trap, different dependency, and it bites harder here. The root pom manages logback at
+             <scope>test</scope> in dependencyManagement, so re-declaring it WITHOUT a scope - which is
+             what parallel-consumer-example-metrics does - still inherits test. That is fine for a module
+             that only logs in tests, but this module's main() then runs with no SLF4J binding at all and
+             prints "No SLF4J providers were found" instead of honouring src/main/resources/logback.xml,
+             leaving Kafka's INFO logging to bury the report. Hence the explicit compile scope. -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-core</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>compile</scope>
+        </dependency>
+    </dependencies>
+
+    <!-- The demo is run by activating this profile, NOT by invoking exec:java from the command line.
+
+         Two reasons. Invoking `exec:java` as a CLI goal runs it against every module the reactor
+         selected, and `-am` necessarily selects parallel-consumer-parent, which has no mainClass, so the
+         build fails before reaching this module. And binding exec:java to a lifecycle phase
+         unconditionally would mean a plain `mvn verify` over the repo starts a Docker broker and runs a
+         multi-minute benchmark - CI does exactly that.
+
+         Inside a profile bound to process-classes, neither happens: the binding exists only in this
+         module's pom, so no sibling tries to run it, and it is inert unless -Pdemo is passed.
+
+             ./mvnw -Pdemo -pl parallel-consumer-examples/parallel-consumer-example-streams-pc -am \
+                    -DskipTests -Dcopyright.skip=true process-classes
+
+         process-classes (not package) is deliberate: the reactor then supplies parallel-consumer-streams
+         as target/classes, so the demo runs against classes just built from the patch rather than
+         whatever is installed in ~/.m2. -->
+    <profiles>
+        <profile>
+            <id>demo</id>
+            <build>
+                <plugins>
+                    <!-- Version pinned explicitly. The root pom declares exec-maven-plugin with
+                         <inherited>false</inherited> and does NOT list it in <pluginManagement>, so an
+                         unpinned declaration here would resolve to whatever the latest release is. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>run-demo</id>
+                                <phase>process-classes</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <mainClass>${demo.mainClass}</mainClass>
+                            <!-- exec:java runs main() in a thread it owns, and by default interrupts any
+                                 non-daemon threads still alive when main returns, reporting the resulting
+                                 InterruptedException as a build failure. Kafka's admin, producer and
+                                 Testcontainers' shutdown threads outlive main() by design, so the demo
+                                 would print a complete, correct report and then fail the build. -->
+                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+</project>

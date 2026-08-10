@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<!--
+    The demo's report is written to System.out, because here the console output IS the deliverable.
+    This config exists to stop everything else competing with it.
+
+    Kafka, Kafka Streams and Parallel Consumer are all chatty at INFO, and a run produces several hundred
+    lines of rebalance, assignment and commit logging that would bury the twenty lines a reader actually
+    came for. They are held at WARN, so anything genuinely wrong still surfaces.
+
+    Testcontainers is held at WARN for the same reason - at INFO it prints a dozen lines of Docker
+    daemon inventory before the broker even starts. Its WARN output is kept because the one message it
+    emits at that level ("Reuse was requested but the environment does not support it") tells the reader
+    how to make repeat runs faster, which is worth their attention.
+-->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%-5level %logger{25} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="org.apache.kafka" level="WARN"/>
+    <logger name="io.confluent.parallelconsumer" level="WARN"/>
+    <logger name="org.testcontainers" level="WARN"/>
+    <logger name="tc" level="WARN"/>
+    <logger name="com.github.dockerjava" level="WARN"/>
+
+    <root level="WARN">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>
