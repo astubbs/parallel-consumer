@@ -945,13 +945,22 @@ should still be paused there: one record consumed leaves four held against a thr
 put it in the resume set anyway, so either more than one record was consumed by that pump or the occupancy
 read at resume time is lower than four.
 
-Two candidates, neither confirmed:
+Two candidates were raised. **The second is now refuted, by a test written for the purpose.**
 
-1. The resume loop offers **every** input partition at or below the threshold, where stock offers only the
-   partition it just processed from. That is a real difference from stock and the more likely of the two,
-   but it does not obviously explain this case, because partition1 was the partition processed from.
-2. The pump consumed two records rather than one, which would put occupancy at exactly the threshold and
-   make the resume correct-by-its-own-rule but wrong against the test.
+1. **Still open.** The resume loop offers **every** input partition at or below the threshold, where stock
+   offers only the partition it just processed from. A real difference from stock, and now the only
+   surviving candidate - though it does not obviously explain this case on its own, because partition1 *was*
+   the partition processed from and its occupancy was above the threshold.
+2. **REFUTED.** The theory was that the pump consumed two records rather than one, putting occupancy at
+   exactly the threshold and making the resume correct by its own rule.
+   `onePumpOverOneKeyConsumesExactlyOneRecord` drives the same shape - five same-key records, one pump - and
+   shows the pump consumes exactly **one**, leaving **four** held. `buffered.records.per.partition` is `3`
+   in that config, read from Kafka's own `createConfig`. So four against three is genuinely above the
+   threshold and the dispatcher's arithmetic is right.
+
+**What that refutation buys is a much smaller search area.** The occupancy count and its publication are
+correct in isolation, so the defect is on the `StreamTask` side of the seam - in how `pcProcess` decides
+what to put in `partitionsToResume` - and not in the counter, the publication, or PC's shard behaviour.
 
 **Resolve this before U4**, because the memory bound depends on the resume being no more eager than the
 pause: a resume that fires early un-pauses a partition that is still full, and the bound degrades quietly

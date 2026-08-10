@@ -1168,6 +1168,36 @@ class PcTaskDispatcherTest {
                 .isZero();
     }
 
+    /**
+     * Locates the resume-fires-early finding: Kafka's own
+     * {@code shouldResumePartitionWhenSkippingOverRecordsWithInvalidTs} drives five same-key records against
+     * a threshold of three and expects the partition to still be paused after one pump. Under KEY ordering
+     * one shard hands out one record at a time, so one pump must consume exactly one and leave four held -
+     * if it consumes more, the occupancy falls to the threshold and the resume is correct by its own rule
+     * while being wrong against the test.
+     */
+    @Test
+    void onePumpOverOneKeyConsumesExactlyOneRecord() {
+        dispatcher = new PcTaskDispatcher("task-buffered-one-key", INPUT_PARTITIONS, 4);
+        CountDownLatch release = new CountDownLatch(1);
+
+        dispatcher.registerRecords(PARTITION, records(5, offset -> "the-one-key"));
+
+        int consumed = dispatcher.dispatchAvailable(blockingPreparer(release));
+
+        try {
+            assertThat(consumed)
+                    .as("KEY ordering hands out at most one record per key at a time")
+                    .isEqualTo(1);
+            assertThat(dispatcher.getBufferedRecordCount(PARTITION))
+                    .as("four of the five are still held, which is above a threshold of three - so a resume "
+                            + "computed from this number cannot fire yet")
+                    .isEqualTo(4);
+        } finally {
+            release.countDown();
+        }
+    }
+
     @Test
     void aDispatchedRecordLeavesTheBufferEvenWhileItIsStillRunning() {
         dispatcher = new PcTaskDispatcher("task-buffered-inflight", INPUT_PARTITIONS, 2);
