@@ -636,8 +636,6 @@ public class PcTaskDispatcher implements Closeable {
             drainCompletions();
         }
         lastDispatchCount = consumed;
-        if (consumed > 0) {
-        }
         return consumed;
     }
 

@@ -463,8 +463,8 @@
                             <!-- The 419 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only
                                  means that with the seam OFF. Stated here rather than inherited: the
                                  seam now defaults ON (PcDispatchSwitch - depending on the artifact is
-                                 the opt-in), and with it on Kafka's StreamTaskTest is 65/101, recorded
-                                 separately as the measured gap - 30 of those 36 are the gap and 6 are EOS
+                                 the opt-in), and with it on Kafka's StreamTaskTest is 72/101, recorded
+                                 separately as the measured gap - 23 of those 29 are the gap and 6 are EOS
                                  tests hitting the refusal, which is the mechanism working. Nothing about
                                  this execution may depend on what the default happens to be. -->
                             <systemPropertyVariables>

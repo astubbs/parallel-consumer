@@ -261,7 +261,7 @@ This is a substantiated claim, available for release notes and other promotional
   weaker than stock.
 - **The condition:** dispatch switch **off** - set explicitly on that surefire execution, not inherited
   from a default. This is a *behaviour-preservation* claim about the patch, not a claim about the parallel
-  path. The parallel path's number is 65/101 on `StreamTaskTest`, and is stated everywhere the 419 is.
+  path. The parallel path's number is 72/101 on `StreamTaskTest`, and is stated everywhere the 419 is.
 - **How to reproduce:** it runs in this module's **normal** test run, no profile and no flag:
 
   ```
