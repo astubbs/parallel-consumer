@@ -123,9 +123,10 @@ class PcDrivenStatefulProofTest extends PcDrivenProofSupport {
         probe = new AmbientContextProbe(fixture.getProbeHeader(), PROCESSING_COST.toMillis(), PROBE_STORE);
     }
 
+    /** Hand the JVM back at the artifact's default (on), so the next test states its own requirement. */
     @AfterEach
-    void turnDispatchOff() {
-        PcDispatchSwitch.disable();
+    void restoreDefaultDispatch() {
+        PcDispatchSwitch.resetToDefault();
     }
 
     @Test
@@ -184,6 +185,7 @@ class PcDrivenStatefulProofTest extends PcDrivenProofSupport {
      */
     @Test
     void withDispatchOffTheSameHarnessStillMatchesTheStockBaseline() {
+        // Explicit, and load-bearing: the seam defaults ON, so without this line this arm is not a control.
         PcDispatchSwitch.disable();
 
         Run run = runTopology("pc-stateful-off");

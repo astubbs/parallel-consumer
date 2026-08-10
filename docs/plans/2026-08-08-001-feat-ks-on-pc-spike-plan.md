@@ -49,7 +49,7 @@ spike is designed so a red or ambiguous result sends the question back to the al
 | R3 | Output is correct against a stock Kafka Streams baseline: multiset equality across the whole run, and sequence equality within each key. |
 | R4 | A control arm exists proving the generate-and-patch harness is behaviour-neutral before any patch content is applied. |
 | R5 | The outcome - including a failure or an early stop - is recorded durably **on master**, with enough detail that the next person does not repeat it. |
-| R6 | Nothing in the spike is published to Maven Central or changes the behaviour of any shipped module. |
+| R6 | The spike module publishes to Maven Central as an **alpha/experimental artifact**, clearly labelled as such, with its seam **on by default** and a documented way to turn it off - and changes the behaviour of no **other** module. *(Reversed twice in revision; see KTD-S5 and KTD-S6. It previously read "nothing in the spike is published", and then "with its seam off by default".)* |
 | R7 | No Apache Kafka source is committed to this repository. The CI gates pass without being bypassed or weakened. |
 | R8 | The spike reports the size and shape of the change set. The patch file is that report: its line count, the classes it touches, and whether any new PC API was required. |
 | R9 | The spike exercises at least one code path where the thread-confinement fix is actually load-bearing, so a green result distinguishes "confinement works" from "confinement was never needed here". |
@@ -68,7 +68,14 @@ minimal stateful arm (U7) so the result can discriminate.
 - Caching-enabled state, and therefore the cache-layer concurrency problems entirely.
 - Throughput measurement. "Faster" is not the question.
 - The Web GUI stretch goal on astubbs#255 - it needs the parallel-safe tagging pass.
-- Merging the spike *code* into the product. The result *documents* land on master (R5).
+
+**Ships as alpha.** The module lands on master and publishes as an alpha/experimental artifact alongside
+release 0.6.0.0, with its seam **on by default** (KTD-S6 - depending on the artifact is the opt-in) and
+its known gaps tracked in [Current Shortcomings](#current-shortcomings), which
+`parallel-consumer-streams-spike/README.md` points at rather than duplicating. Maturity is per-module,
+not global. This reverses an earlier
+non-goal ("merging the spike code into the product; the spike branch is kept, not landed") - see KTD-S5.
+The result documents land in the same PR as the code (R5).
 
 #### Deferred to Follow-Up Work
 - Everything the report ranks Tier 2 beyond the thread-confinement, and all of Tier 3.
@@ -80,8 +87,8 @@ minimal stateful arm (U7) so the result can discriminate.
 
 ### Key Technical Decisions
 
-Three decisions below carry a `session-settled:` annotation - the user closed them in conversation and
-they are not to be re-opened. **Everything else here, including KTD0, was chosen during planning.** A
+The decisions below carrying a `session-settled:` annotation were closed by the user in conversation and
+are not to be re-opened. **Everything else here, including KTD0, was chosen during planning.** A
 later reviewer should challenge the unannotated ones freely.
 
 **KTD-S1. The question is "how little must change to make it work".**
@@ -103,6 +110,23 @@ Kafka into this repository - see KTD-S4.
 which an earlier draft of this plan proposed: the user rejected it outright.)*
 This is what makes KTD1 the only remaining question, and it deletes an entire unit of licensing
 machinery the vendoring approach required.
+
+**KTD-S5. The module ships, as a published alpha/experimental artifact.**
+*(session-settled: user-directed - chosen over keeping it an unmerged throwaway, which is what KTD-S3,
+R6 and the Scope Boundaries originally said. The user reversed that decision after the result was in:
+maturity is per-module, not global, so an experimental module can publish alongside a stable release
+provided it is labelled honestly and is inert unless switched on.)*
+Consequences, recorded so nothing silently keeps the old posture: KTD6 is rewritten (it publishes);
+R6 is rewritten (it publishes, and must not change any **other** module's behaviour); the "not for merge"
+non-goal is deleted; the docs land in the same PR as the code rather than a separate docs-only one; and
+Apache Kafka's own 188-test suite moves from an opt-in profile into the module's normal test run, because
+a shipped artifact's behaviour-preservation gate should run on every build.
+**One obligation the throwaway posture did not have:** the published jar contains *compiled, modified*
+Apache Kafka classes, so Apache 2.0 s4(b)/s4(c) now apply to the distribution - `NOTICE` names the four
+classes, attributes the ASF, and states that they were changed. KTD-S4 is untouched: still no Apache
+source in the repository, only the patch.
+This does **not** reverse KTD-S3's *posture* - the code is still an experiment and says so on the tin. It
+reverses only what happens to the artifact.
 
 **KTD0. Cut the seam inside `processor/internals`.** Drive the processor chain from PC's `WorkManager`
 rather than supplying a PC-backed client or building a PC-native API.
@@ -130,7 +154,9 @@ The three plugins needed - `maven-dependency-plugin:unpack`, `exec-maven-plugin`
 
 *Rejected:* **vendoring the classes into the repo** (KTD-S4). It would have required a new copyright-gate
 provenance class and a `NOTICE` change - a whole unit of machinery to make committing ~110KB of ASF
-source legal and CI-clean.
+source legal and CI-clean. (Under KTD-S5 the `NOTICE` change became necessary anyway, because the
+published jar distributes the *compiled* modified classes. The copyright-gate machinery did not: the gate
+only scans tracked `.java` files, and there still are none.)
 *Rejected:* **forking and publishing Kafka locally.** It works, but a locally-published version is
 **unresolvable on a CI runner**, so the branch could never go green; it also costs a clone, a ~3 minute
 cold build, and a `dependencyManagement` pin to stop the forked POM dragging in an unpublished
@@ -167,20 +193,51 @@ class.
 *Still rejected:* windowed operators, joins and suppression - they change semantics under out-of-order
 processing, which would make a failure ambiguous.
 
-**KTD6. A top-level module that explicitly skips publishing.** New module
-`parallel-consumer-streams-spike` carrying the three publish-skip **properties** (`maven.deploy.skip`,
-`maven.install.skip`, `gpg.skip`) **plus a `<build><plugins>` block** setting
-`central-publishing-maven-plugin`'s `<skipPublishing>true</skipPublishing>`. There is no
-`central-publishing-maven-plugin.skipPublishing` property - the plugin exposes only an unqualified
-`${skipPublishing}` expression - so a properties-only copy would silently fail to protect R6.
-*Rejected:* placing it under `parallel-consumer-examples` to inherit the skips. A spike is not an
-example, and inheriting protection by accident of location is less legible than copying it.
+**KTD6. A top-level module that publishes, as an alpha/experimental artifact.** New module
+`parallel-consumer-streams-spike`, publishing like any other module - no publish-skip properties, no
+`central-publishing-maven-plugin` `<skipPublishing>` block - with its alpha status carried in the pom
+`<name>`/`<description>` and in `parallel-consumer-streams-spike/README.md`.
+*(This decision originally continued "and its seam off by default so the artifact is inert unless a user
+opts in" - reversed by KTD-S6: taking the dependency **is** the opt-in.)*
+*Reversal, recorded rather than quietly edited (KTD-S5):* this decision originally read "a top-level
+module that explicitly skips publishing", carrying the three publish-skip **properties**
+(`maven.deploy.skip`, `maven.install.skip`, `gpg.skip`) **plus** a `<build><plugins>` block setting
+`<skipPublishing>true</skipPublishing>` - because there is no
+`central-publishing-maven-plugin.skipPublishing` property (the plugin exposes only an unqualified
+`${skipPublishing}` expression), so a properties-only copy would have protected nothing. That machinery
+is now removed. The note about `skipPublishing` being plugin *configuration* rather than a property is
+kept here because it is still true and still a trap for the modules that **do** skip.
+*Still relevant:* the module stays ordered **before** `parallel-consumer-examples` in `<modules>`.
+That ordering was originally about the spike's own skip; it still matters because `examples` is the
+skipPublishing module and the recorded plugin bug is about a skipPublishing module being **last**.
+*Rejected:* placing it under `parallel-consumer-examples`. It is not an example, and being there would
+now actively suppress its publication.
+
+**KTD-S6. The dispatch seam defaults ON. Depending on the artifact is the opt-in.**
+*(session-settled: user-directed - reverses KTD8's "defaulting to stock" and the off-by-default posture
+in KTD6, R6 and the Risks table.)*
+Nobody puts a separate, loudly-labelled alpha artifact called `parallel-consumer-streams-spike` on their
+classpath by accident. Having done so deliberately, they wanted the PC seam; requiring them to *also*
+set `-Dpc.streams.spike.dispatch.enabled=true` is a second opt-in that buys nothing and costs every user
+a support question. The property survives as the way to turn the seam **off**
+(`-Dpc.streams.spike.dispatch.enabled=false`), which is what an A/B comparison needs anyway.
+*What the old default was actually paying for:* keeping U3's control arm stock without it having to say
+so. That is a **test** concern, and tests can state their requirement explicitly - so they now do, at
+each site, with a comment saying why. The Kafka upstream-test surefire execution sets the property to
+`false` on the execution itself rather than inheriting any default, because its 188/188 is a
+behaviour-preservation claim that is only true with the seam off.
+*Consequence, accepted:* a control arm that forgets to disable the seam is now wrong rather than right by
+accident. `PcDispatchSwitch.resetToDefault()` exists so test teardown hands the JVM back at the
+artifact's default instead of parking it wherever the last test left it, and a bad value for the
+property fails loudly rather than being read as "off" - a typo in the one property whose job is to
+disable the seam would otherwise produce a run that looks like a control and is not.
 
 **KTD7. At-least-once, not EOS.** Keeps `StreamsProducer` out of the patch entirely.
 
 **KTD8. Single record path, switched - never both at once.** `addRecords` feeds `WorkManager`
-*instead of* `partitionGroup.addRawRecords`, with a bridge flag selecting stock or PC dispatch,
-defaulting to stock.
+*instead of* `partitionGroup.addRawRecords`, with a bridge flag selecting stock or PC dispatch.
+*(Originally "defaulting to stock"; reversed by KTD-S6 - the flag now defaults to PC dispatch. The
+single-path property is unaffected: it is a switch either way, never a fan-out.)*
 *Rejected:* registering into both paths "so they can be compared". Nothing would drain the partition
 group, `StreamTask.addRecords` pauses a partition once its buffer fills, and the run would stall with
 the consumer paused and no error. `streamTime` would also never advance, since it advances at selection.
@@ -269,7 +326,7 @@ which KTD-S4 makes unnecessary. The gap in unit numbering is intentional.)*
 ### U1. Spike module and the generate-and-patch harness
 
 **Goal:** A module that unpacks four Kafka source files, applies a patch, compiles the result ahead of
-the jar, and never publishes - with no Kafka source tracked.
+the jar, and publishes as an alpha artifact (KTD-S5) - with no Kafka source tracked.
 
 **Requirements:** R6, R7
 
@@ -289,9 +346,10 @@ the jar, and never publishes - with no Kafka source tracked.
 1. Add to the root `<modules>` list (`pom.xml:35-41`), before `parallel-consumer-examples` - that pom
    records a central-publishing bug where a skipPublishing module last in reactor order suppressed the
    whole bundle upload.
-2. Apply KTD6 exactly: copy both the `<properties>` block
-   (`parallel-consumer-examples/pom.xml:33-37`) **and** the `central-publishing-maven-plugin` `<build>`
-   block (lines 39-49). **No `release.target` override** - see Assumptions.
+2. Apply KTD6: **no** publish-skip properties and **no** `central-publishing-maven-plugin`
+   `<skipPublishing>` block - the module publishes like any other. Carry the alpha framing in the pom
+   `<name>`/`<description>` and in the module README instead. **No `release.target` override** - see
+   Assumptions.
 3. Wire the harness, all three plugins already used elsewhere in this build:
    - `maven-dependency-plugin:unpack` in `generate-sources`, artifact
      `org.apache.kafka:kafka-streams:${kafka.version}` classifier `sources`, `includes` limited to the
@@ -310,9 +368,10 @@ the jar, and never publishes - with no Kafka source tracked.
 
 **Test scenarios:** `Test expectation: none` - harness only; U3's control arm is the first real test.
 
-**Verification:** `./mvnw -pl parallel-consumer-streams-spike -am install` succeeds; no
-`parallel-consumer-streams-spike` artifact appears under `~/.m2`; `git status` shows no `.java` file
-under `org/apache/kafka/` tracked anywhere; `bin/ci-unit-test.sh` passes.
+**Verification:** `./mvnw -pl parallel-consumer-streams-spike -am install` succeeds and the
+`parallel-consumer-streams-spike` artifact **does** appear under
+`~/.m2/repository/bz/stub/parallelconsumer/`; `git status` shows no `.java` file under
+`org/apache/kafka/` tracked anywhere; `bin/ci-unit-test.sh` passes.
 
 ---
 
@@ -529,7 +588,7 @@ choice, and land the verdict where the next person will find it.
 **Files:**
 - `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/PcDrivenStatefulProofTest.java` (create)
 - `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (create - **lands on master**)
-- `docs/inflight/branch-ks-on-pc-spike.md` (create - **lands on master**)
+- `parallel-consumer-streams-spike/README.md` (create - the alpha module's front door; **lands on master**)
 - `docs/plans/2026-08-07-002-investigate-kafka-streams-on-pc-report.md` (modify - link the result)
 
 **Approach:**
@@ -546,9 +605,12 @@ choice, and land the verdict where the next person will find it.
    Kafka version bump against classes carrying no compatibility guarantee; the DSL emission-semantics
    change that disabling caching forces on the parallel path; and the distribution shape a shipped
    version would need, since build-time patching is a spike technique, not a product one.
-4. **Land the documents on master via a docs-only PR**, separate from the spike branch, plus
-   `docs/inflight/branch-ks-on-pc-spike.md` per that directory's conventions (`branch-` prefix is for
-   work on a branch with no PR). Without this the back-link points at nothing from master and R5 is unmet.
+4. **Land the documents in the same PR as the code** (KTD-S5 - the module ships, so there is no longer a
+   separate docs-only PR, and no `branch-`-prefixed inflight note, since that prefix is for work on a
+   branch with **no** PR). Add `parallel-consumer-streams-spike/README.md` as the module's own front
+   door: what it is, that it is alpha and wants field testers, how to switch the seam **off** (KTD-S6 -
+   it is on by default), a signpost to [Current Shortcomings](#current-shortcomings) rather than a copy
+   of it, and how to report findings.
 5. Record the caveats: 3.9-only; caching-disabled only; optimistic commit; retries disabled; the patch
    is pinned to 3.9.2 and will need re-deriving on any bump.
 
@@ -562,7 +624,116 @@ is a successful spike and gets the same care.
 - The stateful run is repeatable across executions.
 
 **Verification:** The verdict is stated plainly with evidence and reproduction rate; the result document
-and inflight note are on master.
+and the module README are on master.
+
+---
+
+## Current Shortcomings
+
+**This is a worklist, not a list of permanent limitations.** Each item below is something the PC path
+does not do, or does differently from stock Kafka Streams, as of the alpha. Some are cheap to close, some
+are not, and a few are genuinely hard; **the next working session's first job is to judge which is
+which** and pick off the cheap ones. Nothing here is a defect discovered late - every item is a
+consequence of a decision recorded in this plan or in the result document's §8.
+
+They live here rather than in `parallel-consumer-streams-spike/README.md` on purpose: implementation has
+not stopped, so this list will move, and a README that enumerates it goes stale the week it is written.
+The README points here.
+
+**The size of the gap is measured, not estimated.** With the seam **off**, Apache Kafka's own
+`StreamTaskTest` is 101/101 against the patched classes; with it **on**, it is **68/101**. Those 33
+failures - clustered in the result document's §9 - are what this list looks like when written by Kafka's
+own authors, and working this section top-down is the same thing as working that table top-down. Offset
+and commit accounting is the largest cluster (11) and the one blocking crash-safety.
+
+### Stream time never advances
+
+`streamTime` moves only inside `PartitionGroup.nextRecord()`, which advances it by picking the
+lowest-timestamp record across the task's partitions. The PC path never calls it - selection is
+`WorkManager`'s job now - so stream time stays where it started and `PunctuationType.STREAM_TIME`
+punctuators never fire. Wall-clock punctuators are unaffected and work normally.
+
+This is a **silent** behavioural absence: nothing throws, nothing logs, the punctuator simply never runs.
+It is also the root of the four items below it, which is what makes it the most valuable one to fix.
+
+### Consumer pausing - Kafka Streams', not PC's
+
+`StreamTask.addRecords` pauses a partition once its buffer passes `maxBufferedSize`, and resumes it as
+the buffer drains. That is Streams' backpressure onto the consumer. The PC path never fills that buffer,
+so the pause never fires, and PC's own limits (max concurrency, per-shard in-flight) are the only inflow
+control there is - and they do not reach back to the consumer.
+
+### Failures surface a pump cycle late
+
+PC's retries are deliberately disabled: a retry re-runs a processor chain that has already called
+`forward()` downstream, producing duplicates that stock Streams never produces. The consequence is that a
+failure surfaces when the dispatcher next pumps and observes the failed work container, not synchronously
+at the moment of the throw - and records dispatched into the worker pool in that window will have run.
+Stock Streams throws straight to the uncaught-exception handler.
+
+### Offset commit is optimistic - a crash can lose records
+
+`consumedOffsets.put(...)` fires when `doProcess` returns. Workers finish out of order, so Streams can
+commit offset N for a partition while a *lower* offset from that same partition is still in flight; crash
+at that moment and those records are gone. Parallel Consumer's own `WorkManager` already does this
+correctly - it is the problem PC exists to solve - but offset ownership was deliberately left on the
+stock Streams path as deferred work. **The largest `StreamTaskTest` cluster (11 tests) is this item.**
+
+### Caching must be disabled on stateful stores
+
+Three separate reasons, any one of which is sufficient: `CachingKeyValueStore` takes a whole-store
+exclusive lock; `ThreadCache`'s eviction budget is per-**thread** and shared across every task on that
+thread; and eviction runs downstream `forward()` calls on whichever thread happened to call `put`. None
+of that survives concurrent dispatch.
+
+Disabling it is not free, and the cost is user-visible rather than internal: with caching on, the DSL
+emits roughly one record per key per commit interval; with it off, it emits **every** update. Downstream
+volume and output-topic retention change accordingly.
+
+### Windowed operators
+
+Window close and emission are driven by each operator's `observedStreamTime`, and
+`windowCloseTime = observedStreamTime - gracePeriod` decides what is dropped as late - so out-of-order
+processing changes the *results*, not merely their timing. Worse, those fields are plain non-volatile
+`long`s doing read-modify-write: under concurrency they are corrupted, not just reordered.
+
+### Joins
+
+`KStreamKStreamJoin.sharedTimeTracker` is shared across both sides of the join within a task and mutated
+from both paths with no synchronisation. Join emission is stream-time gated as well, so it inherits the
+first item too.
+
+### Suppression
+
+`.suppress(...)` buffers updates and decides when to emit from `observedStreamTime` - "only the final
+result per window" is a stream-time statement. It therefore inherits both the stream-time problem and the
+non-volatile-`long` problem.
+
+### Exactly-once (EOS)
+
+**Not a Parallel Consumer limitation** - PC supports EOS. The obstacle is on the Streams side: the
+transaction is per-**`StreamThread`** (unconditionally so in 4.x), so a worker's send joins a transaction
+that covers every task on that thread. You cannot commit one task's work without committing every
+in-flight worker's. `StreamsProducer.transactionInFlight` is also a non-volatile check-then-act.
+
+This is composable with more work; it was scoped out (KTD7 chose at-least-once) to keep the spike
+bounded, which is also what kept `StreamsProducer` out of the patch entirely.
+
+### Carried over from the result document and the branch's own commits
+
+- **`StreamTask.record` has the same reuse defect as `recordInfo`, and is untouched.** `recordInfo` was
+  made per-record; `record` was not, because the PC path passes the record as a parameter and never reads
+  the field. It is left standing, and it is a latent trap for anyone extending the PC path.
+- **`commitNeeded` and `partitionsToResume` still have read-modify-write races.** Making them
+  `volatile`/concurrent fixed *corruption*, not *atomicity*. Benign for a spike; not benign for a
+  product.
+- **One `StreamThread`, one partition, one task.** Multi-task and rebalance behaviour under PC dispatch
+  is untested rather than known-broken.
+- **Kafka 3.9.2 only**, and the patch needs re-deriving on any bump - see U1 and the result document's
+  §7.1. On trunk/4.x the four classes have already diverged materially.
+- **No distribution shape.** The patched classes only win where `target/classes` precedes the
+  `kafka-streams` jar, which is true inside this module's build and is not something a user's application
+  can rely on. Result document §7.3; this is the single biggest reason the module is alpha.
 
 ---
 
@@ -574,8 +745,11 @@ and inflight note are on master.
    nothing (R7).
 4. `.github/scripts/issue-ref-gate.test.js` exits 0, and no added line carries an unqualified sub-1000
    issue reference.
-5. No artifact from `parallel-consumer-streams-spike` is installed or deployed (R6).
-6. U3's control arm is green before U4, after U4, and after U5 with the dispatch flag off.
+5. `parallel-consumer-streams-spike` installs and is publishable, and no **other** module's behaviour
+   changed (R6). Apache Kafka's own 188 tests run in the module's normal `test` phase - no profile flag -
+   and are green with nothing skipped.
+6. U3's control arm is green before U4, after U4, and after U5 with the dispatch flag off - which, under
+   KTD-S6, it turns off itself rather than inheriting from a default.
 7. `pcspike.patch` applies cleanly from a clean checkout, and the build fails loudly if it does not.
 8. The result document and inflight note exist **on master**, whatever the verdict.
 
@@ -593,7 +767,8 @@ and inflight note are on master.
 | Patch iteration friction makes the spike unpleasant enough to abandon. | U1 ships `regen-patch.sh`; KTD1 states the cost openly rather than pretending it away. |
 | A half-applied patch produces an incoherent build. | U1 runs `patch --dry-run` first and fails on any rejected hunk. |
 | Optimistic commit means the spike is not crash-safe. | Deliberate and in Scope Boundaries; U7 records it. |
-| The result never reaches anyone because the branch does not land. | U7 lands the documents on master via a separate docs-only PR. |
+| The result never reaches anyone because the branch does not land. | Resolved by KTD-S5: the module and its documents land together in one PR. |
+| A published alpha artifact is mistaken for a supported one. | The artifact's own name says `-spike`; the pom `<name>`/`<description>` lead with ALPHA/EXPERIMENTAL; the README leads with it and points at [Current Shortcomings](#current-shortcomings), which names the optimistic offsets and the absent distribution shape. *(Under KTD-S6 the off-by-default seam is no longer part of this mitigation - taking the dependency is the opt-in, so labelling carries the whole load.)* |
 
 ---
 
@@ -601,9 +776,11 @@ and inflight note are on master.
 
 - The question in the Summary has an answer, positive or negative, backed by a test that runs - or an
   explicit stop at U3 or U5 with its verdict written down.
-- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` and `docs/inflight/branch-ks-on-pc-spike.md` are
-  **on master**, recording the verdict, the evidence, `pcspike.patch`'s size and the classes it touches
-  (R8), what a green result would commit to, which KTD0 alternative the result points back to, and the
-  reproduction rate.
+- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` and `parallel-consumer-streams-spike/README.md`
+  are **on master**, recording the verdict, the evidence, `pcspike.patch`'s size and the classes it
+  touches (R8), what a green result would commit to, which KTD0 alternative the result points back to,
+  and the reproduction rate.
 - The Verification Contract passes in full - including item 3, no tracked Kafka source.
-- No shipped module's behaviour changed, and nothing new publishes.
+- No **other** module's behaviour changed. `parallel-consumer-streams-spike` publishes as an alpha
+  artifact, labelled as such (KTD-S5), with the seam on by default and a documented way to turn it off
+  (KTD-S6).

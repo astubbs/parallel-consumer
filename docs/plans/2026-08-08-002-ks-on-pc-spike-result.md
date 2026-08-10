@@ -13,8 +13,16 @@ title: "Result: can PC's work-shard manager drive a Kafka Streams processor chai
 
 **Spike:** [`2026-08-08-001-feat-ks-on-pc-spike-plan.md`](2026-08-08-001-feat-ks-on-pc-spike-plan.md) ·
 **Origin analysis:** [`2026-08-07-002-investigate-kafka-streams-on-pc-report.md`](2026-08-07-002-investigate-kafka-streams-on-pc-report.md) ·
-**Issue:** astubbs#255 · **Branch:** `feats/ks-on-pc-spike` (no PR - the code is a throwaway experiment;
-this document is the deliverable)
+**Issue:** astubbs#255 · **Branch:** `feats/ks-on-pc-spike`
+
+**Status update, 2026-08-08 (user-directed reversal - plan KTD-S5):** this was written as the deliverable
+of a throwaway experiment that would not merge. It now merges: `parallel-consumer-streams-spike` **ships
+as a published alpha/experimental artifact** alongside release 0.6.0.0, with its seam **on** by default
+(plan KTD-S6 - taking the dependency is the opt-in; `-Dpc.streams.spike.dispatch.enabled=false` turns it
+off).
+Maturity is per-module, not global. Nothing in the technical result below changes - the caveats in §7,
+§8 and §9 are exactly the reasons it ships as *alpha*. The module's own front door is
+[`parallel-consumer-streams-spike/README.md`](../../parallel-consumer-streams-spike/README.md).
 
 Written for someone who was not there. It assumes no knowledge of the branch and none of the
 conversation.
@@ -70,9 +78,12 @@ consumer poll
 outcomes through a queue that the StreamThread drains, mirroring PC's own controller/mailbox
 discipline. `WorkManager` is not thread-safe and is never touched from a worker.
 
-The switch (`PcDispatchSwitch`) defaults **off**, so the stock path remains the one that runs unless a
-test turns it on. That default is what makes "with the flag off, zero records reached the pool" a real
-assertion rather than a tautology.
+The switch (`PcDispatchSwitch`) is process-wide, and every arm below states which path it wants rather
+than inheriting a default - `enable(n)` or `disable()`, at the site, with a comment. That explicitness is
+what makes "with the flag off, zero records reached the pool" a real assertion rather than a tautology.
+*(It defaulted **off** while this was written, which is what the control arms leaned on; plan KTD-S6
+later flipped the default to **on** - taking the dependency is the opt-in - and made every control arm
+disable the seam itself.)*
 
 ---
 
@@ -127,7 +138,7 @@ What each assertion buys, in order of what it is worth:
 | `PcDrivenStreamsProofTest` | U6 stateless output equality vs the external stock fixture | 3 PC-ON repeats + control, green (24 further PC-ON repetitions recorded across 8 runs during U6) |
 | `PcDrivenStatefulProofTest` | this unit | see §3.1 |
 | `ShadowedClassLoadingTest`, `ProcessorContextConfinementTest`, `PcTaskDispatcherTest` | unit-level: the patched classes are the ones loaded; confinement mechanics | green |
-| Apache Kafka's `StreamTaskTest` + `ProcessorContextImplTest` + `RecordCollectorTest` (`-Pkafka-upstream-tests`) | Kafka's own behaviour oracle, run against the patched classes | 188/188, **0 skipped** |
+| Apache Kafka's `StreamTaskTest` + `ProcessorContextImplTest` + `RecordCollectorTest` (the module's normal test run - no profile, no flag) | Kafka's own behaviour oracle, run against the patched classes | 188/188, **0 skipped** |
 
 **Reproduction rate, stated plainly:** the stateful arm reproduced 9/9 under PC dispatch, across three
 separate builds and broker containers, on one machine (macOS, arm64, Docker). Nine is not a
@@ -165,10 +176,10 @@ verbatim, so the two arms cannot drift in what they were fed.
 | `RecordCollectorImpl` | `offsets` and `producedSensorByTopic` are written from every worker thread through the `to()` sink. **The compiler never demands this class** - it is constructed outside `StreamTask` - so it had to be named up front rather than discovered |
 | `StreamTask` | the seam itself, plus per-record `recordInfo`, concurrent `consumedOffsets`/`partitionsToResume`, `volatile commitNeeded`, `LongAdder processTimeMs` |
 
-A second, separate 167-line patch (`pcspike-testfixtures.patch`, 5 hunks, 1 class) exists only under
-the opt-in `-Pkafka-upstream-tests` profile: Kafka's own `InternalMockProcessorContext` fixture does
-`getfield` on the field this spike made private, and needs the same accessor conversion in order to run
-at all.
+A second, separate 167-line patch (`pcspike-testfixtures.patch`, 5 hunks, 1 class) covers the test side:
+Kafka's own `InternalMockProcessorContext` fixture does `getfield` on the field this spike made private,
+and needs the same accessor conversion in order to run at all. It is generated at
+`generate-test-sources` in every build, alongside the main patch.
 
 **The class set did not have to grow.** The plan set a stop-threshold of "roughly a dozen classes" and
 said sprawl past it would itself be the answer. Four was enough, and a bytecode scan of the whole
@@ -419,6 +430,26 @@ With PC dispatch **off**, Apache Kafka's own tests pass against the patched clas
 skipped** (`StreamTaskTest` 101, `RecordCollectorTest` 59, `ProcessorContextImplTest` 28). Nothing was
 excluded and no assertion was relaxed.
 
+> **Substantiated claim, available for release notes and other promotional use:**
+> *"188 of Apache Kafka's own Streams tests pass unmodified against the patched classes, zero skipped."*
+>
+> **Provenance.** The tests are Apache Kafka's own, taken as **compiled classes** from the `kafka-streams`
+> `test` jar published to Maven Central - not re-written, not re-compiled, not excluded, no assertion
+> relaxed. They run against the patched `StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`
+> and `RecordCollectorImpl`, which precede the `kafka-streams` jar on the classpath (proven independently
+> by `ShadowedClassLoadingTest`, and cross-checked by the fact that turning the dispatch flag on changes
+> the result - the released classes have no such flag). The condition is dispatch **off**: this is a
+> *behaviour-preservation* claim about the patch, not a claim about the parallel path.
+>
+> **Reproduce it** - it runs in the module's normal test run, no profile and no flag:
+> `./mvnw -pl parallel-consumer-streams-spike -am test`. Kafka's execution reports separately under
+> `parallel-consumer-streams-spike/target/surefire-reports-kafka-upstream/`.
+>
+> **Do not quote it without the counterpart.** The parallel path's number is the 68/101 below, and the
+> honest form of the claim carries both. The count lives in three places - the surefire execution's
+> comment in `parallel-consumer-streams-spike/pom.xml`, that module's README, and here. If it changes,
+> change all three.
+
 Re-running `StreamTaskTest` with PC dispatch **on** gives **68/101**. That 33-test delta is not a
 defect report. It is the best thing this spike produced after the verdict itself: **a quantified,
 executable specification of the gap between the PC path and stock Streams**, written by Kafka's own
@@ -456,8 +487,9 @@ every module with integration tests - silently inherits 20x JUnit parallelism it
 
 That is how Apache Kafka's serial-by-design `StreamTaskTest` ended up failing 159 tests on state-directory
 locks before anyone had looked at the patch. Surefire's `configurationParameters` outrank the file and
-were used to pin it off for the Kafka execution, but the leak itself is the bug. **Being fixed
-separately.**
+were used to pin it off for the Kafka execution, but the leak itself is the bug and is still open -
+tracked at
+[`docs/inflight/bug-core-tests-jar-junit-parallelism-leak.md`](../inflight/bug-core-tests-jar-junit-parallelism-leak.md).
 
 ### 10.2 `dependency:unpack` restores original file timestamps, which can fabricate a "confirmed regression"
 
@@ -510,15 +542,22 @@ can consume is worth less than a topic hop everybody can.
 
 ## 12. Where the code is, and what happens to it
 
-- Branch `feats/ks-on-pc-spike`. **Not for merge** - the plan's scope boundaries exclude merging the
-  spike code into the product, and the module never publishes (`maven.deploy.skip`,
-  `maven.install.skip`, `gpg.skip`, plus `central-publishing-maven-plugin`'s `skipPublishing`, which is
-  plugin *configuration* and not a property - a properties-only copy protects nothing).
+- **It ships, as alpha** (plan KTD-S5, user-directed - this reverses the original "not for merge, never
+  publishes" posture, which is what §1 through §11 above were written under).
+  `parallel-consumer-streams-spike` publishes like any other module, alongside release 0.6.0.0, with the
+  dispatch seam **on by default** - taking the dependency is the opt-in (plan KTD-S6), and
+  `-Dpc.streams.spike.dispatch.enabled=false` turns it off. Its known limitations - §7, §8 and §9 - are
+  exactly why it is labelled alpha rather than supported. They are carried forward as the plan's
+  [Current Shortcomings](2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings), which is the
+  living list;
+  [`parallel-consumer-streams-spike/README.md`](../../parallel-consumer-streams-spike/README.md) points
+  users there and asks for field testers.
 - `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` is the artefact worth keeping. It is
   the answer to R8 and the starting point for anyone re-deriving against a newer Kafka.
 - To work on it: `./mvnw -pl parallel-consumer-streams-spike generate-sources`, edit
   `target/kafka-patched/`, then `bin/regen-patch.sh`. **Any Maven run between those two steps silently
   reverts your edits** - `unpack` runs with `overWriteReleases`. `regen-patch.sh` warns when the hunk
   count drops, which is the tripwire.
-- Open follow-ups are tracked in
-  [`docs/inflight/branch-ks-on-pc-spike.md`](../inflight/branch-ks-on-pc-spike.md).
+- Open follow-ups: the user-facing ones are §8 and the §9 worklist, restated for users in the module
+  README. The one defect this spike found in *other* code is tracked at
+  [`docs/inflight/bug-core-tests-jar-junit-parallelism-leak.md`](../inflight/bug-core-tests-jar-junit-parallelism-leak.md).

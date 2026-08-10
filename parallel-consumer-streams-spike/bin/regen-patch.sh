@@ -26,8 +26,8 @@
 #
 # The patch is the deliverable: its line count is the spike's answer to "how little had to change".
 #
-# There is a second tree, generated only under -Pkafka-upstream-tests: Kafka's own test fixtures, which
-# need the same accessor conversion for the same reason. Re-derive that one with:
+# There is a second tree, generated at generate-test-sources in every build: Kafka's own test fixtures,
+# which need the same accessor conversion for the same reason. Re-derive that one with:
 #
 #   bin/regen-patch.sh kafka-test-pristine kafka-test-patched src/main/patch/pcspike-testfixtures.patch
 #

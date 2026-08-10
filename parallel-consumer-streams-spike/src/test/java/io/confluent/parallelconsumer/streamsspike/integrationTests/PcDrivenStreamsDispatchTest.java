@@ -83,9 +83,10 @@ class PcDrivenStreamsDispatchTest extends BrokerIntegrationTest<String, String> 
         probe.reset();
     }
 
+    /** Hand the JVM back at the artifact's default (on), so the next test states its own requirement. */
     @AfterEach
-    void turnDispatchOff() {
-        PcDispatchSwitch.disable();
+    void restoreDefaultDispatch() {
+        PcDispatchSwitch.resetToDefault();
     }
 
     @Test
@@ -126,6 +127,7 @@ class PcDrivenStreamsDispatchTest extends BrokerIntegrationTest<String, String> 
      */
     @Test
     void withTheSwitchOffNothingIsDispatchedAndTheOutputIsStillCorrect() {
+        // Explicit, and load-bearing: the seam defaults ON, so without this line this arm is not a control.
         PcDispatchSwitch.disable();
 
         Map<String, List<String>> received = runTopology("pc-off");
