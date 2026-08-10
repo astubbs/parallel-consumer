@@ -115,6 +115,25 @@ require_modifications_line() { # <file> <header> <reason>
 
 while IFS= read -r f; do
     [ -f "$f" ] || continue
+
+    # THIRD-PARTY SOURCE TEMPORARILY TRACKED FOR A MERGE - skipped, not judged.
+    #
+    # parallel-consumer-streams generates its patched Apache Kafka classes at build time and tracks
+    # only the patch (the plan's KTD-S4), so these trees are normally untracked and this loop never
+    # sees them. The exception is deliberate: when two branches both regenerate the patch, the cheap
+    # way to reconcile them is to commit the full generated Java on each branch, let git merge it as
+    # ordinary source, then re-derive the patch and drop the files again (see
+    # parallel-consumer-streams/bin/regen-patch.sh). While that is in flight the files ARE tracked.
+    #
+    # They carry Apache's headers and must keep them - they are Apache Kafka's code, not fork-original
+    # and not upstream-Confluent-derived, so every rule below is the wrong question to ask of them.
+    # Without this skip the technique fails the gate on its first commit, which is exactly the moment
+    # someone would decide the technique does not work. Redistribution of the modified classes is
+    # covered by NOTICE under Apache 2.0 section 4(b), not by this check.
+    case "$f" in
+        */kafka-patched/*|*/kafka-pristine/*|*/src/main/kafka-merge/*) continue ;;
+    esac
+
     checked=$((checked + 1))
     header=$(head -"$HEADER_WINDOW" "$f")
 

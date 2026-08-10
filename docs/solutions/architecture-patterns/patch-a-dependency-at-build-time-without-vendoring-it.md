@@ -150,7 +150,7 @@ override inherited tag filters, which would otherwise silently drop every one of
 fails on shared fixtures and tells you nothing about your patch (`:416-428`). The count
 this produces is a citable claim in the module README, and it is only meaningful with
 zero exclusions and zero relaxed assertions - the moment you exclude a test, the claim is
-void. `parallel-consumer-streams/README.md:112-138`.
+void. `parallel-consumer-streams/README.md` (the evidence section).
 
 **4. Design around the regeneration foot-gun, and make it detectable.** The unpack step
 runs with `overWriteReleases=true`, so *any* build invocation between editing the
@@ -181,7 +181,7 @@ classes in the third party's package namespace. Any consumer holding both your a
 and the original gets behaviour decided by classpath order, which build tools do not
 guarantee. The technique is sound inside your own module's build and is *not* a
 distribution mechanism. Say so where users will read it, rather than discovering it for
-them. `parallel-consumer-streams/README.md:92-95`, and
+them. `parallel-consumer-streams/README.md` (the build section), and
 `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md:382-397` enumerates the three
 expensive ways out (publish a forked artifact under a different coordinate, ship a
 classloader or agent trick, or upstream the change) and picks none of them.
@@ -225,7 +225,7 @@ here wrote. The only remaining obligation attaches to the published artifact, an
   different coordinate, or upstream the change.
 - **Do not apply when** the target is a moving trunk rather than a pinned release. These
   patched classes have already diverged materially on Kafka 4.x, so a green result on 3.9
-  does not transfer unexamined. `parallel-consumer-streams/README.md:140-152`.
+  does not transfer unexamined. `parallel-consumer-streams/README.md` (the limitations section).
 
 ## Examples
 

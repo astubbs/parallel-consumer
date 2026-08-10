@@ -27,6 +27,44 @@
 # Editing generated files feels wrong, and it is the honest cost of not committing Apache Kafka source
 # into this repository (see the plan's KTD-S4). This script is what keeps that cost small.
 #
+# PARALLEL BRANCHES ARE FINE. RECONCILE AT THE SOURCE, NOT AT THE PATCH.
+# Two branches regenerating this file will conflict, and the conflicts look terrible: they land on `@@`
+# hunk headers, which are arithmetic rather than text. Do NOT conclude from that appearance that the
+# work must be serialised. Measured on astubbs#255, two feature branches run concurrently plus
+# reconciliation beat running them in sequence, and the reconciliation was mechanical.
+#
+# The trick is to never merge the patch. Merge the GENERATED JAVA and re-derive:
+#
+#   1. resolve the ordinary source files (pom `patched.classes` to the UNION first, so the unpack
+#      covers every file either side patches)
+#   2. `./mvnw -pl .,parallel-consumer-streams process-sources` for a pristine tree and a patched one
+#   3. reconstruct each side's tree by applying its patch to a fresh copy of pristine, then
+#      `git merge-file --diff3` the Java. Files only one side touches are taken wholesale.
+#   4. copy the merged tree over target/kafka-patched and run this script - NO maven in between
+#   5. check the hunk count is the per-file union of the inputs, not less
+#
+# Where the patch showed 8 conflict blocks of offset arithmetic, the same change merged as Java had
+# ZERO conflicts - the two edits were simply in different methods. The conflict was an artifact of the
+# representation, and merging the representation git is good at makes it vanish.
+#
+# And a conflict here is worth having. When the two astubbs#255 branches met, the merge exposed a test
+# asserting that `StreamThread` loads from the kafka-streams jar - true until the other branch started
+# patching `StreamThread`. Serialising would have hidden that: the second branch would have been
+# written against the new reality and nobody would have learned the assertion was fragile.
+#
+# THE HUNK COUNT IS A PROXY, NOT THE INVARIANT - A DROP IS NOT PROOF OF LOSS.
+# The comparison printed at the end of this script is a cheap tripwire, and it has a known false
+# positive: adding lines can MERGE hunks. Insert a few lines into each of three edits that sit close
+# together and they fall inside diff's 3-line context window and become one hunk, so the count falls
+# while nothing whatsoever was lost. Seen for real on astubbs#255 - adding javadoc to three compact
+# `windowedBy` blocks took KGroupedStream from 4 hunks to 2, and the count went 112 -> 110.
+#
+# So when the count drops, INVESTIGATE, do not assume either way. The actual invariant is about
+# content, not structure: every line the old patch ADDED must still be added by the new one, and the
+# removed lines must be identical. Compare those two sets (the `^+` and `^-` bodies, ignoring the
+# `+++`/`---` headers) between the old and new patch and you have an answer rather than a hint.
+# A rise is equally weak evidence in the other direction.
+#
 # !! FOOT-GUN, READ THIS !!
 # The unpack step runs with overWriteReleases=true, so ANY maven invocation between step 2 and step 3
 # silently restores target/kafka-patched to (released sources + the *tracked* patch) and discards
@@ -59,7 +97,9 @@ patch_file="$module_dir/$patch_rel"
 for d in "$pristine" "$patched"; do
     if [[ ! -d "$d" ]]; then
         echo "regen-patch: missing $d" >&2
-        echo "regen-patch: run './mvnw -pl parallel-consumer-streams generate-sources' first" >&2
+        # Both the phase and the `.` matter - see the header. generate-sources only UNPACKS, so
+        # regenerating from that tree deletes every hunk, and the leaf module alone fails enforcer.
+        echo "regen-patch: run './mvnw -pl .,parallel-consumer-streams process-sources' first" >&2
         exit 1
     fi
 done
