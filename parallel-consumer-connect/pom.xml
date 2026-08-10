@@ -72,6 +72,39 @@
             <classifier>test</classifier>
             <scope>test</scope>
         </dependency>
+
+        <!-- The crash-restart arm in integrationTests/ is broker-backed. It cannot extend the streams
+             module's BrokerStreamsIntegrationTest - that class is package-private in that module's test
+             sources and streams publishes no tests classifier - so it extends core's BrokerIntegrationTest,
+             which arrives via the parallel-consumer-core tests classifier above. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- BrokerIntegrationTest (core tests classifier) uses commons-lang3, and test-scope dependencies
+             are not transitive - without this the container fails to start with NoClassDefFoundError.
+             parallel-consumer-streams/pom.xml records having learned the same thing. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
