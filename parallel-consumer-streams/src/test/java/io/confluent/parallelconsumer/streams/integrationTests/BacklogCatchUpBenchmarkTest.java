@@ -32,14 +32,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li><b>It is the situation operators actually sweat about.</b> Restart after downtime, a new consumer
  *       group, a replay, recovery after an incident, a rebalance handing a partition to an instance that is
  *       behind.</li>
- *   <li><b>It was expected to neutralise this module's own most recent optimisation, and it does not.</b> The
- *       prediction was that a full backlog would leave wake-on-work idle, because the poll would never have to
- *       wait. Measured, the split-wait branch fires on roughly nine records in ten: a backlog keeps the
- *       <em>broker</em> supplied, but Parallel Consumer's max concurrency still bounds what one pass may take,
- *       so the StreamThread goes back to a poll while its workers are mid-flight and waits on them instead.
- *       The refutation is recorded here rather than quietly dropped, and
- *       {@link #howMuchOfTheAdvantageSurvivesWithoutWakeOnWork()} replaces the assumption with a control arm
- *       that measures how much of the advantage the optimisation actually accounts for.</li>
+ *   <li><b>It was expected to neutralise this module's own most recent optimisation. It does the opposite,
+ *       and that is the most important thing measured here.</b> The prediction was that a full backlog would
+ *       leave wake-on-work idle, because the poll would never have to wait - which would have made this result
+ *       independent of a fix landed days earlier. Measured, the split-wait branch fires on 94% of records, and
+ *       the control arm in {@link #howMuchOfTheAdvantageSurvivesWithoutWakeOnWork()} shows the advantage
+ *       collapsing from 3.76x to <b>1.31x</b> without it. A backlog keeps the <em>broker</em> supplied, but
+ *       Parallel Consumer's max concurrency still bounds what one pass may take, so a StreamThread that blocks
+ *       for a full poll budget is not there to refill the pool when a worker finishes, and the pool starves.
+ *       Concurrent dispatch only pays if something keeps it fed. Both ship and both default on, so the
+ *       headline is what a user gets - but it must never be described as independent of the poll fix.</li>
  * </ul>
  *
  * <h2>The statistic, chosen before the run</h2>
@@ -92,13 +94,21 @@ class BacklogCatchUpBenchmarkTest extends StreamsBenchmarkHarness {
      * The workload every test here varies from. Skewed keys by default, because that is what real traffic
      * looks like and because skew is the axis that costs Parallel Consumer most.
      */
+    /**
+     * The scenario's defaults, then the reader's overrides - {@code applySystemPropertyOverrides()} last, so a
+     * flag typed on the command line actually takes effect rather than being silently outranked.
+     * <p>
+     * The depth sweep re-applies its own {@code recordCount} afterwards, because sweeping depth IS that
+     * experiment and an ambient {@code --records} would collapse three points into one.
+     */
     private static BenchmarkWorkload.Builder backlogWorkload(final String name, final int depth) {
-        return BenchmarkWorkload.fromSystemProperties(name)
+        return BenchmarkWorkload.builder(name)
                 .recordCount(depth)
                 .keyDistribution(KeyDistribution.ZIPF)
                 .keyCount(200)
                 .zipfExponent(1.0d)
-                .ratePerSecond(0d);
+                .ratePerSecond(0d)
+                .applySystemPropertyOverrides();
     }
 
     /**
@@ -197,7 +207,9 @@ class BacklogCatchUpBenchmarkTest extends StreamsBenchmarkHarness {
 
         for (int i = 0; i < DEPTH_SWEEP.length; i++) {
             int depth = DEPTH_SWEEP[i];
-            BenchmarkWorkload workload = backlogWorkload("depth" + depth, depth).build();
+            // recordCount re-applied after the overrides: sweeping depth is this experiment, so an ambient
+            // --records would collapse the three points into one and the sweep would prove nothing.
+            BenchmarkWorkload workload = backlogWorkload("depth" + depth, depth).recordCount(depth).build();
             List<GeneratedRecord> records = workload.generate();
 
             ArmResult stock = runArm("depth" + depth + "-stock", workload, records, false);

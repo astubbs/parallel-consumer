@@ -104,15 +104,24 @@ class PaymentAuthorisationBenchmarkTest extends StreamsBenchmarkHarness {
      */
     private static final double STEADY_RATE = 9d;
 
+    /**
+     * The domain's own defaults, then whatever the reader typed on the command line - in that order.
+     * <p>
+     * {@code applySystemPropertyOverrides()} comes LAST on purpose. This is the demonstration, its
+     * documentation invites the reader to try {@code --skew 2.0}, and a flag that is silently outranked by the
+     * test's own value would report a configuration nobody asked for. The matrix wants the opposite precedence,
+     * because there each cell's value is the experiment.
+     */
     private static BenchmarkWorkload.Builder authorisations(final String name) {
-        return BenchmarkWorkload.fromSystemProperties(name)
+        return BenchmarkWorkload.builder(name)
                 .recordCount(AUTHORISATIONS)
                 .keyDistribution(KeyDistribution.ZIPF)
                 .keyCount(CARDS)
                 .zipfExponent(1.0d)
                 .cost(SCORING_P50, SCORING_P99)
                 .blockingFraction(1.0d)
-                .payloadBytes(512);
+                .payloadBytes(512)
+                .applySystemPropertyOverrides();
     }
 
     /**

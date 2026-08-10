@@ -426,9 +426,9 @@ abstract class StreamsBenchmarkHarness extends BrokerStreamsIntegrationTest {
     /**
      * How many payload-hashing passes this machine manages per nanosecond when nothing else is running.
      * <p>
-     * Measured once at class load, which is before any test constructs a {@code CpuSaturator} - calibrating
-     * against an already-loaded machine would size the work unit too small and quietly turn the CPU-bound
-     * cells back into something cheaper than they claim to be.
+     * Measured once at class load, before any arm runs - calibrating against an already-loaded machine would
+     * size the work unit too small and quietly turn the CPU-bound cells into something cheaper than they
+     * claim to be.
      */
     private static final double ITERATIONS_PER_NANOSECOND = calibrateSpin();
 

@@ -280,6 +280,37 @@ class BenchmarkWorkloadTest {
                 .contains("seed=" + BenchmarkWorkload.DEFAULT_SEED);
     }
 
+    /**
+     * The demonstration's documentation tells a reader to try {@code --skew 2.0}. If the test's own value
+     * outranked the flag, the run would report a configuration nobody asked for while looking perfectly
+     * healthy - the same silent-wrong-experiment failure that the runner script's unknown-flag guard exists to
+     * prevent, arriving by a different route.
+     */
+    @Test
+    void anOverrideAppliedLastBeatsTheTestsOwnValue() {
+        String property = BenchmarkWorkload.PROPERTY_PREFIX + "skew";
+        String previous = System.getProperty(property);
+        try {
+            System.setProperty(property, "2.0");
+
+            assertThat(BenchmarkWorkload.builder("demo").zipfExponent(1.0d).applySystemPropertyOverrides()
+                    .build().getZipfExponent())
+                    .as("applySystemPropertyOverrides() is called LAST, so the command line wins")
+                    .isEqualTo(2.0d);
+
+            assertThat(BenchmarkWorkload.fromSystemProperties("cell").zipfExponent(1.0d).build().getZipfExponent())
+                    .as("fromSystemProperties() loads defaults FIRST, so an experiment sweeping this axis keeps "
+                            + "the value that names its cell")
+                    .isEqualTo(1.0d);
+        } finally {
+            if (previous == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, previous);
+            }
+        }
+    }
+
     private static BenchmarkWorkload.Builder defaults() {
         return BenchmarkWorkload.builder("unit").recordCount(RECORDS);
     }

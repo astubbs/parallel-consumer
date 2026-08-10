@@ -26,6 +26,10 @@ worked through it.
 
 **31 seconds saved on a 47-second backlog, a 3.72x catch-up rate.**
 
+Run twice, hours apart, on a machine that had been doing other work in between: 25.8/s against 96.0/s the
+first time and 26.0/s against 96.6/s the second, both 3.72x. That is a reproduction, not a spread - see §7 for
+which figures in this document have one and which do not.
+
 That is the whole claim, and it needs no explanation of key ordering or head-of-line blocking to act on. The
 scenario is the one every operator has met at an uncomfortable hour: the consumer was down, or a replay was
 started, or a rebalance handed a partition to an instance that was behind, and the only question is how long
@@ -48,30 +52,52 @@ The workload was not chosen to flatter it:
 concurrency for Kafka Streams, built by unrelated parties, report three- to six-fold gains on the same
 mechanism. 3.72x sits inside that range rather than above it.
 
+**One caveat travels with this figure and is not optional.** It is the product of concurrent dispatch *and*
+wake-on-work together. With the poll optimisation disabled the same experiment measures 1.31x, not 3.76x -
+see §2.1. Both ship, both default on, so 3.72x is what a user gets; but the seam alone does not produce it.
+
 ---
 
 ## 2. Refuted predictions, first
 
-Four of the nine predictions written before the run were refuted. Two of them changed what the benchmark
-measures, and one of them found a defect in the benchmark itself.
+Five of the predictions written before the run were refuted, and a sixth problem was found in the measurement
+rather than in the thing measured. Two of them changed what this benchmark measures at all, and two were
+caught by a control arm failing rather than by review.
 
-### 2.1 REFUTED - "a saturated backlog barely uses wake-on-work"
+### 2.1 REFUTED, twice, and the second one is the most important number in this document
 
-The plan predicted that a cold-start backlog would leave this module's own most recent optimisation idle,
-because with work always available the poll would never have to wait. That mattered: it would have meant the
-headline owed nothing to a fix landed days earlier, which is stronger evidence than a result that depends on
-it.
+The plan predicted that a cold-start backlog would leave this module's own most recent optimisation -
+wake-on-work - idle, because with work always available the poll would never have to wait. That mattered a
+great deal: it would have meant the headline owed nothing to a fix landed days earlier, and a result that
+survives the removal of your own optimisation is far stronger than one that depends on it.
 
-**Measured: the split-wait branch fired on 1122 of 1200 records - roughly nine in ten.**
+**First refutation: the split-wait branch fired on 1132 of 1200 records - 94%.** A backlog keeps the *broker*
+supplied, but Parallel Consumer's max concurrency still bounds what the StreamThread may take in one pass, so
+the thread returns to the poll while its workers are mid-flight and finds itself waiting on *them* rather than
+on the broker. **Saturating the topic does not saturate the thread.** Obvious in hindsight, and not predicted.
 
-The mechanism is obvious in hindsight and was not predicted. A backlog keeps the *broker* supplied, but
-Parallel Consumer's max concurrency still bounds what the StreamThread may take in one pass, so the thread
-returns to the poll while its workers are still running and finds itself waiting on *them* rather than on the
-broker. **Saturating the topic does not saturate the thread.**
+That made the counter worthless as evidence, so it was replaced by a control arm that varies wake-on-work as
+its single term. **Second refutation, and it is the one that matters:**
 
-The counter is therefore not evidence of anything, and the test that counted it has been replaced by a control
-arm that varies wake-on-work as its single term and measures how much of the advantage survives without it -
-which is the honest form of the question.
+| Arm (1200-record backlog) | Rate | vs stock |
+|---|---|---|
+| Stock, seam off | 25.9/s | - |
+| Seam on, **wake-on-work OFF** | 33.8/s | **1.31x** |
+| Seam on, wake-on-work ON | 97.2/s | 3.76x |
+
+**The backlog headline does not survive without wake-on-work. It depends on it overwhelmingly** - concurrent
+dispatch alone accounts for 1.31x of the 3.76x, and the poll fix accounts for the remaining 2.45x. The claim
+"a backlog result cannot be attributed to that optimisation" was not merely unproven, it was backwards.
+
+The mechanism is the same one the first refutation exposed. Without wake-on-work the StreamThread, having
+handed out all the work its concurrency limit allows, blocks in `poll()` for the whole budget - so it is not
+there to refill the pool the moment a worker finishes, and the pool starves. Concurrent dispatch can only pay
+off if something keeps it fed.
+
+**What this changes about how the result should be quoted.** The seam and wake-on-work are one mechanism for
+this purpose, not two, and they ship together and default on - so the 3.76x is what a user actually gets, and
+the headline stands. But nobody may write "this result does not depend on our recent poll optimisation", and
+anyone tempted to disable wake-on-work should know it costs roughly two thirds of the benefit.
 
 ### 2.2 REFUTED - "CPU-bound work shows little or no gain"
 
@@ -176,9 +202,14 @@ they answer different questions, and §6 says which one carries the claim and wh
   handoff through a pool costs when there is nothing to parallelise. A control that goes marginally the wrong
   way for a principled reason is stronger evidence than one that ties. Had this cell won, every other number
   here would have been measuring a faster harness and would have had to be withdrawn.
-- **Skew degrades the advantage monotonically**, as predicted, and substantially.
+- **Skew degrades the advantage monotonically**, as predicted, and substantially - 4.03x at s=1.0 down to
+  2.00x at s=1.5.
+- **The result is not JVM warm-up.** Running the arms stock-first gave 3.75x and PC-first gave 3.72x, a
+  disagreement of 0.03x. This is the only one of the three warm-up defences that could have falsified the
+  others, and it did not. A discarded warm-up pass runs before any measured arm, and the sustained-rate
+  statistic trims the first and last decile of each drain.
+- **The mixed profile falls between the two pure profiles**, as an Amdahl split predicts.
 - **The advantage is a rate, not an artefact of backlog depth** - see §6.
-- **The mixed profile falls between the two pure profiles.**
 
 ---
 
@@ -246,6 +277,42 @@ Two earlier attempts at this control failed, and both are recorded in §2.4 rath
 
 ---
 
+## 4b. The narrow domain workload
+
+Card-payment authorisation screening: an authorisation arrives, a fraud-scoring service is called, a decision
+is emitted. Stateless, non-windowed, no joins - the surface this module supports. Keyed by card, because that
+is what an issuer would key on and because velocity rules need one card's authorisations in order.
+
+Chosen as though a hostile reviewer chose it: it is the canonical Kafka Streams enrichment shape, this
+repository already models it independently of any benchmark (a screening example on another branch fixes its
+scoring call at 200ms, the same order of magnitude), and it is the project's stated second persona. What is
+*not* favourable about it: the keyspace is skewed, and real screening has genuine CPU work either side of the
+call, both of which cost the seam.
+
+**Catching up after an outage** - 900 queued authorisations, 123 distinct cards, scoring call 60ms p50 /
+400ms p99:
+
+| | Time to clear the queue | Authorisations per second |
+|---|---|---|
+| Stock | 84s | 10.8/s |
+| Seam on | 28s | 40.6/s |
+| | **3.00x** | **3.76x** |
+
+**Steady state** - the same workload offered as a Poisson stream at 9 authorisations a second, roughly 84% of
+what one stock instance can carry:
+
+| Statistic | Stock | Seam on | Ratio |
+|---|---|---|---|
+| End-to-end p50 | 68ms | 67ms | 0.99x |
+| End-to-end p99 | 411ms | 405ms | 0.99x |
+| Achieved rate | 9.1/s | 9.0/s | 0.99x |
+
+**Nothing. Below saturation this buys you nothing at all**, and that pair of tables side by side is the most
+useful thing in this document for someone deciding whether to adopt it. The same workload, the same code, the
+same keys: a large difference when there is a queue, and none when there is not.
+
+---
+
 ## 5. The objection that matters most: "just add partitions"
 
 Every experiment here runs **one partition**, which is the configuration that makes the seam look best.
@@ -307,8 +374,19 @@ which was written after the first benchmark asserted on a p99 that at n=24 was s
 **A second piece of evidence for the same choice, and it is the one that surprised:** in-chain latency
 percentiles are nearly identical in the two arms (p50 26ms against 25ms, p99 204ms against 207ms). That is not
 a null result - it is the measurement showing where the queueing lives. Once a record has entered the chain it
-costs what it costs in either arm; the waiting a backlog creates happens *before* entry. A latency percentile
-cannot see it. The rate can.
+costs what it costs in either arm; the waiting a backlog creates happens *before* entry, and in-chain latency
+starts too late to see it.
+
+Every arm now also records **end-to-end latency from the send** (§2.6), which does see that wait. It is the
+right statistic for the paced experiments, and it is still the wrong one for a backlog: with everything
+produced before the topology starts, a record's end-to-end latency is dominated by how deep in the queue it
+happened to sit, which is a restatement of the drain rather than an independent measurement of it. Three
+statistics, three different questions - and the discipline is choosing which one an assertion rests on, not
+collecting more of them.
+
+**Whole-batch drain is now printed in every cell** beside the rate, because it is the statistic a reader
+computes first and the one on which a claim can silently regress while the others look fine. §2b is what that
+change was for.
 
 ---
 
@@ -334,8 +412,14 @@ The benchmarks are `@Tag("performance")` and excluded from the default build, be
 minutes to every pull request is a benchmark that gets deleted.
 
 **Machine:** Apple Silicon, 12 cores, 32 GB, Java 17, Kafka 3.9.2 in Testcontainers, everything else idle.
-**Reproduction:** every figure here is from a single run of each arm unless stated. That is an anecdote per
-cell, not a distribution - `--repeat` exists precisely because this document cannot claim otherwise.
+**Reproduction, stated per figure rather than as a blanket claim:**
+
+- The **headline** was run twice, hours apart: 3.72x both times (§1). Reproduced.
+- The **single-key floor** was measured four times across different runs - 0.99x, 0.99x, 1.00x, 1.01x. The
+  falsifier is the most-repeated figure here, which is the right way round.
+- **Every other cell is a single run of each arm.** That is an anecdote per cell, not a distribution.
+  `--repeat N` exists precisely because this document cannot claim otherwise, and anyone quoting a matrix cell
+  should run it themselves first.
 
 ---
 

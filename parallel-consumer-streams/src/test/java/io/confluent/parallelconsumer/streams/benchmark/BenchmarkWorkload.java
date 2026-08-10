@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
 
@@ -95,29 +96,19 @@ public final class BenchmarkWorkload {
     }
 
     /**
-     * A builder pre-loaded from {@code -Dpc.bench.*} system properties, so {@code bin/streams-benchmark.sh} can
-     * re-run any experiment under a different configuration without editing a test.
+     * A builder pre-loaded from {@code -Dpc.bench.*} system properties, for a test whose own terms must win.
      * <p>
-     * The properties are the defaults, not an override of what a test asks for: a test that sets a parameter
-     * explicitly is stating a term of its experiment and must win over ambient configuration, or the same
-     * committed test would measure different things on different machines without saying so.
+     * Here the properties are <b>defaults</b>: anything the caller sets afterwards overrides them. That is
+     * what an experiment sweeping an axis needs - a matrix cell that measures "blocking fraction 0.0" must
+     * measure that whatever the ambient configuration says, or the committed test would silently report a
+     * different experiment than the one it names.
+     * <p>
+     * For a test the user is invited to reconfigure - the demonstration, the backlog scenario - use
+     * {@link Builder#applySystemPropertyOverrides()} at the END of the chain instead, so the flags a human
+     * typed actually take effect.
      */
     public static Builder fromSystemProperties(final String name) {
-        Builder builder = new Builder(name);
-        builder.recordCount = intProperty("records", builder.recordCount);
-        builder.keyCount = intProperty("keys", builder.keyCount);
-        builder.zipfExponent = doubleProperty("skew", builder.zipfExponent);
-        builder.costP50 = millisProperty("costP50Ms", builder.costP50);
-        builder.costP99 = millisProperty("costP99Ms", builder.costP99);
-        builder.blockingFraction = doubleProperty("blockingFraction", builder.blockingFraction);
-        builder.payloadBytes = intProperty("payloadBytes", builder.payloadBytes);
-        builder.ratePerSecond = doubleProperty("rate", builder.ratePerSecond);
-        builder.seed = longProperty("seed", builder.seed);
-        String distribution = System.getProperty(PROPERTY_PREFIX + "keyDistribution");
-        if (distribution != null) {
-            builder.keyDistribution = KeyDistribution.valueOf(distribution.trim().toUpperCase(java.util.Locale.ROOT));
-        }
-        return builder;
+        return new Builder(name).applySystemPropertyOverrides();
     }
 
     public String getName() {
@@ -387,6 +378,36 @@ public final class BenchmarkWorkload {
 
         public Builder seed(final long value) {
             this.seed = value;
+            return this;
+        }
+
+        /**
+         * Applies every {@code -Dpc.bench.*} system property that is set, overwriting whatever this builder
+         * currently holds.
+         * <p>
+         * <b>Call this LAST</b>, on any workload a human is invited to reconfigure from
+         * {@code bin/streams-benchmark.sh}. Called first - or not at all - the test's own explicit values win
+         * and the flag silently does nothing, which is the same failure as accepting an unknown flag: the run
+         * reports a configuration nobody asked for. The demonstration's documentation tells readers to try
+         * {@code --skew 2.0}, and it has to work.
+         * <p>
+         * An experiment sweeping an axis wants the opposite precedence and uses
+         * {@link BenchmarkWorkload#fromSystemProperties(String)} instead.
+         */
+        public Builder applySystemPropertyOverrides() {
+            recordCount = intProperty("records", recordCount);
+            keyCount = intProperty("keys", keyCount);
+            zipfExponent = doubleProperty("skew", zipfExponent);
+            costP50 = millisProperty("costP50Ms", costP50);
+            costP99 = millisProperty("costP99Ms", costP99);
+            blockingFraction = doubleProperty("blockingFraction", blockingFraction);
+            payloadBytes = intProperty("payloadBytes", payloadBytes);
+            ratePerSecond = doubleProperty("rate", ratePerSecond);
+            seed = longProperty("seed", seed);
+            String distribution = System.getProperty(PROPERTY_PREFIX + "keyDistribution");
+            if (distribution != null) {
+                keyDistribution = KeyDistribution.valueOf(distribution.trim().toUpperCase(Locale.ROOT));
+            }
             return this;
         }
 
