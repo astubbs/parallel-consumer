@@ -50,17 +50,51 @@ public final class PcDispatchSwitch {
      */
     public static final String POOL_SIZE_PROPERTY = "pc.streams.dispatch.poolSize";
 
+    /**
+     * Set {@code -Dpc.streams.wakeOnWork.enabled=false} to put the patched {@code StreamThread} back on a
+     * single full-budget {@code Consumer#poll()} - see {@link PcWorkSignal} for what that costs.
+     * <p>
+     * Two reasons this exists rather than the seam being the only switch. It is an escape hatch on a fifth
+     * patched Kafka class, which is the one with the widest blast radius if a future Kafka changes the poll
+     * phase under us. And it is the <b>control arm</b>: the before/after measurement for wake-on-work has to
+     * vary exactly one term, and flipping this leaves the build, the JVM, the broker and the warm-up
+     * identical in a way that comparing against a parent commit never can.
+     */
+    public static final String WAKE_ON_WORK_PROPERTY = "pc.streams.wakeOnWork.enabled";
+
     private static final int DEFAULT_POOL_SIZE = 4;
 
     private static volatile boolean enabled = readEnabledProperty();
 
     private static volatile int poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
 
+    private static volatile boolean wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY);
+
     private PcDispatchSwitch() {
     }
 
     public static boolean isEnabled() {
         return enabled;
+    }
+
+    /**
+     * Whether the patched {@code StreamThread} should split its poll wait and let a worker completion end it.
+     * <p>
+     * Reports false whenever the seam is off, unconditionally: with records going through Kafka's own
+     * {@code PartitionGroup} there are no workers, nothing can raise the signal, and a split wait would be
+     * pure cost. That keeps the patch's condition to a single call - a seam-off run takes the stock poll
+     * without the patch having to ask two questions.
+     */
+    public static boolean isWakeOnWorkEnabled() {
+        return enabled && wakeOnWork;
+    }
+
+    /**
+     * Turn wake-on-work off (or back on) for this JVM. Intended for the control arm of the benchmark; the
+     * system property is the equivalent for a whole run.
+     */
+    public static void setWakeOnWork(final boolean wakeOnWorkEnabled) {
+        wakeOnWork = wakeOnWorkEnabled;
     }
 
     public static int getPoolSize() {
@@ -97,6 +131,7 @@ public final class PcDispatchSwitch {
     public static void resetToDefault() {
         poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
         enabled = readEnabledProperty();
+        wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY);
     }
 
     /**
@@ -106,7 +141,16 @@ public final class PcDispatchSwitch {
      * look like a control arm while being nothing of the kind.
      */
     private static boolean readEnabledProperty() {
-        final String raw = System.getProperty(ENABLED_PROPERTY);
+        return readBooleanProperty(ENABLED_PROPERTY);
+    }
+
+    /**
+     * Absent means on, and anything that is not {@code true}/{@code false} throws. Shared by both switches
+     * rather than copied, because the loud-failure rule above is the whole point and two copies is how one of
+     * them quietly stops enforcing it.
+     */
+    private static boolean readBooleanProperty(final String property) {
+        final String raw = System.getProperty(property);
         if (raw == null) {
             return true;
         }
@@ -116,7 +160,7 @@ public final class PcDispatchSwitch {
         if ("false".equalsIgnoreCase(raw)) {
             return false;
         }
-        throw new IllegalArgumentException("System property " + ENABLED_PROPERTY + " must be 'true' or "
-                + "'false', was '" + raw + "'. The seam is ON unless this property says 'false'.");
+        throw new IllegalArgumentException("System property " + property + " must be 'true' or "
+                + "'false', was '" + raw + "'. The feature is ON unless this property says 'false'.");
     }
 }

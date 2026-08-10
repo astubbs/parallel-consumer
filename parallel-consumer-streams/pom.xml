@@ -47,9 +47,10 @@
         <!-- The classes this module patches. Named deliberately, not discovered: RecordCollectorImpl is
              required (its non-concurrent maps are written from every worker thread via the to() sink)
              but is constructed outside StreamTask, so the compiler never demands it. ProcessorContextImpl
-             is required because it reads/writes AbstractProcessorContext's fields directly.
+             is required because it reads/writes AbstractProcessorContext's fields directly. StreamThread
+             is required for wake-on-work: it owns the poll wait, and nothing else can split it (astubbs#255).
              If this list has to grow much past a dozen, that sprawl is itself the answer to "how little had to change". -->
-        <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java</patched.classes>
+        <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamThread.java</patched.classes>
 
         <!-- Module-local and explicitly versioned on purpose: pinning jackson-databind in root
              dependencyManagement forces WireMock (parallel-consumer-vertx) onto an incompatible Jackson and
@@ -360,12 +361,19 @@
             <!-- 4. Apache Kafka's OWN test suite, run against our patched classes, in the module's
                     NORMAL test run - no profile, no flag, every build.
 
-                    THE COUNT IS A DELIBERATE, CITABLE CLAIM: 188 of Apache Kafka's own tests
-                    (StreamTaskTest 101, RecordCollectorTest 59, ProcessorContextImplTest 28) pass
-                    unmodified against the patched classes, ZERO skipped. That sentence appears in the
-                    module README and in the result document as a substantiated claim; this execution is
-                    its provenance. If the number here ever changes, change it there too - and if a test
-                    is ever excluded or an assertion relaxed, the claim is void.
+                    THE COUNT IS A DELIBERATE, CITABLE CLAIM: 419 of Apache Kafka's own tests
+                    (StreamTaskTest 101, RecordCollectorTest 59, ProcessorContextImplTest 28,
+                    StreamThreadTest 231) pass unmodified against the patched classes, ZERO failures.
+                    That sentence appears in the module README and in the result document as a
+                    substantiated claim; this execution is its provenance. If the number here ever
+                    changes, change it there too - and if a test is ever excluded or an assertion
+                    relaxed, the claim is void.
+
+                    21 of StreamThreadTest's cases are SKIPPED, by Kafka's own annotations and not by
+                    anything here. That is stated rather than hidden because the honest form of the claim
+                    has to survive someone reading the surefire output: a control run against the
+                    UNPATCHED StreamThread skips exactly the same 21 (measured, astubbs#255), so the
+                    skips predate this module and the patched arm is no weaker than stock.
 
                     This is the strongest behaviour-preservation gate available: Kafka publishes its
                     compiled tests to Central, our patched classes precede the kafka-streams jar on the
@@ -407,6 +415,11 @@
                                 <include>org/apache/kafka/streams/processor/internals/StreamTaskTest.java</include>
                                 <include>org/apache/kafka/streams/processor/internals/ProcessorContextImplTest.java</include>
                                 <include>org/apache/kafka/streams/processor/internals/RecordCollectorTest.java</include>
+                                <!-- Added with the fifth patched class (wake-on-work, astubbs#255). The rule
+                                     is "the tests of the classes we patch", so patching StreamThread without
+                                     this would have left the widest-blast-radius class as the one part of the
+                                     patch with no upstream suite behind it. -->
+                                <include>org/apache/kafka/streams/processor/internals/StreamThreadTest.java</include>
                             </includes>
                             <reportsDirectory>${project.build.directory}/surefire-reports-kafka-upstream</reportsDirectory>
                             <!-- The 188 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only

@@ -10,12 +10,13 @@ This fork is maintained independently at:
   https://github.com/astubbs/parallel-consumer
 
 The parallel-consumer-streams artifact additionally contains MODIFIED versions of
-four classes from Apache Kafka:
+five classes from Apache Kafka:
 
   org.apache.kafka.streams.processor.internals.StreamTask
   org.apache.kafka.streams.processor.internals.AbstractProcessorContext
   org.apache.kafka.streams.processor.internals.ProcessorContextImpl
   org.apache.kafka.streams.processor.internals.RecordCollectorImpl
+  org.apache.kafka.streams.processor.internals.StreamThread
 
 Apache Kafka
 Copyright 2024 The Apache Software Foundation

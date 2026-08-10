@@ -9,6 +9,7 @@ import org.apache.kafka.streams.processor.internals.ProcessorContextImpl;
 import org.apache.kafka.streams.processor.internals.RecordCollectorImpl;
 import org.apache.kafka.streams.processor.internals.StreamTask;
 import org.apache.kafka.streams.processor.internals.StreamThread;
+import org.apache.kafka.streams.processor.internals.TaskManager;
 import org.junit.jupiter.api.Test;
 
 import java.net.URL;
@@ -38,13 +39,20 @@ class ShadowedClassLoadingTest {
             AbstractProcessorContext.class,
             ProcessorContextImpl.class,
             RecordCollectorImpl.class,
+            StreamThread.class,
     };
 
     /**
      * A class we deliberately do <em>not</em> generate. It must still load from the jar - that is what makes
      * this "shadowing" rather than "a fork": the two sets have to coexist in one runtime package.
+     * <p>
+     * This was {@code StreamThread} until wake-on-work (astubbs#255) had to patch the poll wait, which is
+     * {@code StreamThread}'s to own. {@code TaskManager} replaces it as the honest control: public, in the
+     * same package, and already reached into by the patch ({@code TaskManager.executeAndMaybeSwallow}, from
+     * the patched {@code StreamTask.close}) without ever being generated - so it proves the two sets really
+     * do coexist rather than merely sitting side by side unused.
      */
-    private static final Class<?> JAR_RESIDENT = StreamThread.class;
+    private static final Class<?> JAR_RESIDENT = TaskManager.class;
 
     @Test
     void generatedClassesWinOverTheJar() {

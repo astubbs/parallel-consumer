@@ -156,6 +156,14 @@ public class PcTaskDispatcher implements Closeable {
     private final AtomicReference<Throwable> firstFailure = new AtomicReference<>();
 
     /**
+     * The condition the StreamThread waits on instead of sitting out the rest of {@code poll.ms}. Captured at
+     * construction, which runs on the StreamThread, so the signal this dispatcher's workers raise is the one
+     * that thread waits on. See {@link PcWorkSignal} for what happens if that ever stops being true (nothing
+     * bad: the thread reverts to the stock poll).
+     */
+    private final PcWorkSignal workSignal;
+
+    /**
      * How many records the last {@link #dispatchAvailable} consumed - dispatched to the pool, dropped, or
      * failed during preparation - or -1 before the first one.
      * <p>
@@ -216,6 +224,9 @@ public class PcTaskDispatcher implements Closeable {
             return thread;
         };
         this.workerPool = Executors.newFixedThreadPool(poolSize, threadFactory);
+
+        // Registered LAST, so that a StreamThread can never see a half-built dispatcher through the gate.
+        this.workSignal = PcWorkSignal.registerForCurrentThread(this);
 
         ACTIVE.add(this);
         log.info("PC dispatch active for task {} over {} with a pool of {}, KEY ordering, retries disabled",
@@ -338,6 +349,14 @@ public class PcTaskDispatcher implements Closeable {
             recordFailure(work, t);
         } finally {
             inFlight.decrementAndGet();
+            // ORDER MATTERS, and it looks arbitrary: the signal goes AFTER the decrement, not with the
+            // completion above. Signal first and the woken StreamThread drains the completion, then computes
+            // capacity = poolSize - inFlight against a count this thread has not yet decremented, dispatches
+            // nothing, and parks again - with an empty completions queue and no further signal coming. That is
+            // a full poll-budget stall, microseconds wide, and it would never reproduce on demand.
+            // Raised on the failure path too, via this finally: a failed record frees a pool slot exactly like
+            // a successful one, and the failure branch is the one a later refactor forgets.
+            workSignal.signalWorkAvailable();
         }
     }
 
@@ -434,6 +453,18 @@ public class PcTaskDispatcher implements Closeable {
         return inFlight.get();
     }
 
+    /**
+     * Whether a worker outcome is sitting in the mailbox waiting for the StreamThread to feed it back to PC.
+     * <p>
+     * This is {@link PcWorkSignal}'s wake predicate, and it is level-triggered on purpose - the queue is
+     * drained only by the StreamThread inside {@link #dispatchAvailable}, so a StreamThread that is waiting is
+     * by definition not draining, and a completion enqueued at any point before or during the wait is still
+     * here to be seen. That is what makes a lost wakeup impossible without any extra state.
+     */
+    public boolean hasPendingCompletions() {
+        return !completed.isEmpty();
+    }
+
     /** Records this dispatcher handed to {@code registerWork}. */
     public long getRecordsOffered() {
         return recordsOffered.get();
@@ -523,6 +554,9 @@ public class PcTaskDispatcher implements Closeable {
         }
         closed = true;
         ACTIVE.remove(this);
+        // Deregistered on BOTH close paths: a closed dispatcher that still answered PcWorkSignal's gate would
+        // keep its StreamThread on the split-wait branch for work that can never complete.
+        workSignal.deregister(this);
         workerPool.shutdownNow();
         log.info("PC dispatch ABORTED over {} - simulating a crash, nothing drained, nothing reported",
                 inputPartitions);
@@ -535,6 +569,7 @@ public class PcTaskDispatcher implements Closeable {
         }
         closed = true;
         ACTIVE.remove(this);
+        workSignal.deregister(this);
         workerPool.shutdown();
         try {
             if (!workerPool.awaitTermination(30, TimeUnit.SECONDS)) {

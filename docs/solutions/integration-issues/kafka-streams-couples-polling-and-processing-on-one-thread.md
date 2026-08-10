@@ -11,7 +11,7 @@ symptoms:
   - "A no-concurrency control arm measures the asynchronous path SLOWER than stock Kafka Streams (0.69x) instead of tying with it"
   - "Roughly 74ms of per-record overhead that no profiler attributes to the user function"
 root_cause: async_timing
-resolution_type: config_change
+resolution_type: code_fix
 severity: high
 related_components:
   - kafka-streams
@@ -117,15 +117,49 @@ busy-spins an idle consumer, which is what the 100ms default exists to prevent. 
 one-thread model and an asynchronous model want opposite values from that one setting, and no
 constant satisfies both. The fix is to **wake the loop when a completion arrives** rather than waiting
 out the poll: poll with a short timeout to collect broker records, then block on your own condition
-for the remainder of the configured budget, signalled by a worker completion or a retry timer. That
-work is open here, ranked as item 3 in `docs/inflight/pr-ks-spike-next-work.md:49-61`, with the design
-and its trap in `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md:1345-1382`.
+for the remainder of the configured budget, signalled by a worker completion or a retry timer.
+
+**This has now been built, and the numbers are in.** `parallel-consumer-streams` patches
+`StreamThread.pollPhase()` to do exactly that, gated so an idle dispatcher keeps the stock full-budget
+poll (`PcWorkSignal`, `-Dpc.streams.wakeOnWork.enabled`). At the **default** `poll.ms`, three runs each,
+varying only that switch: the single-key control went from **0.70x to 0.99x** - the penalty is gone
+rather than reduced - and the head-of-line experiment's p50 went from 5.5x to 17.1x, p99 3.0x to 9.2x.
+The design and its trap are in `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md:1345-1382`.
+
+Two implementation notes worth carrying to any other framework, because both are ways to build this and
+still lose:
+
+- **Make the wake predicate a level-triggered read of live state**, not an edge-triggered "a completion
+  happened" flag. The flag has to be armed before the wait, and the arming point is necessarily *after*
+  the previous dispatch pass, so a completion landing in that gap is discarded and the thread waits out
+  the full budget with work in hand. Reading the completions queue directly cannot lose a wake, because
+  only the parked thread drains it and it is not draining while parked.
+- **Signal after the in-flight count is decremented, not with the completion.** Signal first and the
+  woken thread drains the completion, computes its free capacity against a count not yet decremented,
+  dispatches nothing, and parks again with an empty queue and no further signal coming. That is a
+  full-budget stall, microseconds wide, that will never reproduce on demand.
 
 **6. Do not reach for `Consumer#wakeup()` as the signal.** It is the obvious mechanism and it is the
-wrong one. `wakeup()` throws `WakeupException`, and Kafka Streams already uses it to mean *shutdown*.
-A wake delivered while the thread is not polling arms the *next* poll instead, so a stray completion
-signal can swallow the shutdown one. That is a failure that appears once in a thousand shutdowns and
-will never be reproduced on demand.
+wrong one. `wakeup()` throws `WakeupException`, and it is the framework's word for *shutdown*. A wake
+delivered while the thread is not polling arms the *next* poll instead, so a stray completion signal
+can swallow the shutdown one. That is a failure that appears once in a thousand shutdowns and will
+never be reproduced on demand.
+
+**Correction of a detail, recorded so nobody "discovers" it and throws out the rule.** An earlier
+revision of this note said Kafka Streams *already* calls `wakeup()` on the shutdown path. It does not,
+in 3.9.2: `grep -rn "wakeup" ` over the sources jar returns only `TopologyMetadata.wakeupThreads()`,
+which is a `Condition.signalAll` for the empty-topology park, and `StreamThread.shutdown()` merely sets
+`PENDING_SHUTDOWN` and lets the run loop notice. So the collision is **latent rather than live**. The
+rule is unchanged and the reasoning is stronger, not weaker: `wakeup()`'s meaning belongs to the
+framework, which is free to start using it in any patch release, and a signal you own costs one small
+class. Building on the absence of a call would be building on the framework's current implementation
+rather than on its contract.
+
+An incidental benefit of owning the condition: because you own it, shutdown can *end* the wait. That
+needs a wake path distinct from "work arrived" - a `notifyAll` against a work predicate that is still
+false will not release the waiter, so the shutdown wake has to be a state change the waiter also
+checks. Confirm the shutdown path with a test that closes mid-dispatch, and assert the thread was
+provably parked on your condition first, or a green result proves nothing.
 
 **7. Check whether the framework already offers a supported decoupling.** Kafka has a second loop,
 `runOnceWithProcessingThreads()` (`StreamThread.java:1102`), selected by `processingThreadsEnabled`
@@ -246,6 +280,8 @@ of a thread it believes it owns exclusively, and your integration has just made 
   way, and chasing that anomaly rather than filing it is what found this.
 - `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md:1315-1386` - the full finding, the
   measurements, the wake-on-work design, and the `wakeup()` trap.
-- `docs/inflight/pr-ks-spike-next-work.md:49-61` - the open item for the proper fix, ranked.
+- `docs/inflight/pr-ks-spike-next-work.md` item 3 - the fix, landed, with its measurements.
+- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcWorkSignal.java` - the
+  condition itself, and the reasoning for every choice in it.
 - `astubbs/parallel-consumer#271` - the PR the finding came out of.
 - `astubbs/parallel-consumer#255` - the tracking issue for the Kafka Streams dispatch spike.

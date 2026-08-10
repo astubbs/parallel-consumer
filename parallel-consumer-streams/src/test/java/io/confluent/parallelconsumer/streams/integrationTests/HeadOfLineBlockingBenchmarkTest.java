@@ -4,6 +4,7 @@ package io.confluent.parallelconsumer.streams.integrationTests;
  */
 
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import io.confluent.parallelconsumer.streams.PcDispatchCounters;
 import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -195,6 +196,13 @@ class HeadOfLineBlockingBenchmarkTest extends BrokerStreamsIntegrationTest {
         assertThat(PcDispatchSwitch.isEnabled())
                 .as("%s arm must run with the seam %s", name, pcDispatch ? "ON" : "OFF")
                 .isEqualTo(pcDispatch);
+        // Wake-on-work (astubbs#255) is reported, never set here: the arms of THIS experiment differ in the
+        // seam and in key cardinality, and a benchmark that also chose its own poll behaviour would be
+        // measuring two terms. It is varied from the command line instead, so the same committed test
+        // produces the before and the after.
+        PcDispatchCounters.reset();
+        log.info("=== {} arm | seam {} | wake-on-work {}",
+                name, pcDispatch ? "ON" : "OFF", PcDispatchSwitch.isWakeOnWorkEnabled() ? "ON" : "OFF");
 
         String inputTopic = setupTopic(name + "-in");
         String outputTopic = setupTopic(name + "-out");
@@ -213,6 +221,13 @@ class HeadOfLineBlockingBenchmarkTest extends BrokerStreamsIntegrationTest {
         } finally {
             streams.close(Duration.ofSeconds(30));
         }
+
+        // The mechanism marker. A wake-on-work arm that reports zero split waits never took the branch, so any
+        // improvement in its numbers came from something else and the comparison is void - the instrumentation
+        // has to be seen to have reached the run before its result is believed.
+        log.info("=== {} arm | split poll waits {} | wakes on work {} | records dispatched to pool {}",
+                name, PcDispatchCounters.getSplitPollWaits(), PcDispatchCounters.getWakesOnWork(),
+                PcDispatchCounters.getRecordsDispatchedToPool());
 
         List<Long> fastLatencies = timer.fastRecordLatencies();
         assertThat(fastLatencies)

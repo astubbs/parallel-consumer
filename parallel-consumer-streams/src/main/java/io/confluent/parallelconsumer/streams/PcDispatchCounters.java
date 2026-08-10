@@ -34,6 +34,8 @@ public final class PcDispatchCounters {
     private static final AtomicLong RECORDS_DISPATCHED_TO_POOL = new AtomicLong();
     private static final AtomicLong RECORDS_COMPLETED_SUCCESSFULLY = new AtomicLong();
     private static final AtomicLong RECORDS_FAILED = new AtomicLong();
+    private static final AtomicLong SPLIT_POLL_WAITS = new AtomicLong();
+    private static final AtomicLong WAKES_ON_WORK = new AtomicLong();
 
     private PcDispatchCounters() {
     }
@@ -69,6 +71,31 @@ public final class PcDispatchCounters {
         return RECORDS_FAILED.get();
     }
 
+    /**
+     * <b>The wake-on-work marker.</b> How many times a {@code StreamThread} took the split-wait branch -
+     * short poll, then wait on {@link PcWorkSignal} - instead of blocking in {@code Consumer#poll()} for the
+     * whole {@code poll.ms}.
+     * <p>
+     * Zero means the mechanism never ran, which makes any timing improvement in the same run somebody else's
+     * doing. A benchmark that reads zero here has measured something other than what it claims to measure,
+     * however good the number looks.
+     */
+    public static long getSplitPollWaits() {
+        return SPLIT_POLL_WAITS.get();
+    }
+
+    /**
+     * How many of those waits ended because work became available rather than because the budget ran out.
+     * <p>
+     * Deliberately a second field rather than a flag on the first: {@link #getSplitPollWaits()} answers "did
+     * the code path run", this answers "did it help", and one counter cannot say both. A run with many split
+     * waits and no wakes is the mechanism firing and never paying - a real finding, and invisible if the two
+     * were merged.
+     */
+    public static long getWakesOnWork() {
+        return WAKES_ON_WORK.get();
+    }
+
     static void onOfferedToWorkManager(final long count) {
         RECORDS_OFFERED_TO_WORK_MANAGER.addAndGet(count);
     }
@@ -89,6 +116,14 @@ public final class PcDispatchCounters {
         RECORDS_FAILED.incrementAndGet();
     }
 
+    static void onSplitPollWait() {
+        SPLIT_POLL_WAITS.incrementAndGet();
+    }
+
+    static void onWakeOnWork() {
+        WAKES_ON_WORK.incrementAndGet();
+    }
+
     /**
      * Tests reset before each scenario - the counters are process-wide, and surefire reuses forks.
      */
@@ -98,5 +133,7 @@ public final class PcDispatchCounters {
         RECORDS_DISPATCHED_TO_POOL.set(0);
         RECORDS_COMPLETED_SUCCESSFULLY.set(0);
         RECORDS_FAILED.set(0);
+        SPLIT_POLL_WAITS.set(0);
+        WAKES_ON_WORK.set(0);
     }
 }

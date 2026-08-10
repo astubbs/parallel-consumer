@@ -1,6 +1,6 @@
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
 --- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-10 21:33:30.334157788 +1200
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-10 21:49:06.966443627 +1200
 @@ -44,8 +44,13 @@
      private final Serde<?> keySerde;
      private final Serde<?> valueSerde;
@@ -129,7 +129,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractPr
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
 --- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-10 21:33:30.335138181 +1200
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-10 21:49:06.967279358 +1200
 @@ -243,7 +243,11 @@
                      "multiple times.");
          }
@@ -175,7 +175,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorC
      }
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
 --- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-10 21:33:30.336098117 +1200
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-10 21:49:06.968609326 +1200
 @@ -64,6 +64,7 @@
  import java.util.Objects;
  import java.util.Optional;
@@ -209,7 +209,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordColl
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
 --- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-10 21:33:40.852147539 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-10 21:49:06.970931395 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.processor.internals;
@@ -655,3 +655,66 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      public void updateEndOffsets(final TopicPartition topicPartition, final Long offset) {
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamThread.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamThread.java
+--- a/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-08-10 21:52:34.585817465 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.processor.internals;
+ 
++import io.confluent.parallelconsumer.streams.PcWorkSignal;
+ import org.apache.kafka.clients.admin.Admin;
+ import org.apache.kafka.clients.consumer.Consumer;
+ import org.apache.kafka.clients.consumer.ConsumerConfig;
+@@ -1223,9 +1224,33 @@
+             // other useful work while waiting for the join response
+             records = pollRequests(Duration.ZERO);
+         } else if (state == State.RUNNING || state == State.STARTING || (state == State.PARTITIONS_ASSIGNED && stateUpdaterEnabled)) {
+-            // try to fetch some records with normal poll time
+-            // in order to get long polling
+-            records = pollRequests(pollTime);
++            // PC dispatch (astubbs#255): WAKE ON WORK. This is the only blocking wait in the run loop, and it
++            // is the one that prices everything else. Kafka polls and processes on this one thread, so
++            // blocking here for the full poll.ms costs stock nothing - there is no work it could be doing
++            // instead. Under PC dispatch that is false: workers are completing in the background, and a
++            // blocked poll stalls DISPATCH, not just this thread. Measured at 0.69x against stock on the
++            // single-key arm - the asynchronous path SLOWER than the synchronous one.
++            //
++            // Worse, the inner work loop below breaks back out to poll whenever a pass dispatched nothing,
++            // and under an async dispatcher "dispatched nothing" also means "the pool is full" or "every key
++            // is already in flight" - states that resolve on a worker completion and never on a broker fetch.
++            // So the loop chooses to block precisely when a completion is imminent.
++            //
++            // So: poll briefly to collect whatever the broker already has, then wait on OUR OWN condition for
++            // the rest of the budget, woken the instant a worker completes. Deliberately NOT wakeup(), which
++            // means shutdown to Kafka Streams and would arm the next poll if delivered while not polling.
++            // Only taken while PC actually has work outstanding - idle, the stock full-budget poll below is
++            // exactly right, and shortening it would delay broker records for nothing.
++            if (PcWorkSignal.hasActiveWorkOnCurrentThread()) {
++                records = pollRequests(PcWorkSignal.SHORT_POLL);
++                if (records.isEmpty()) {
++                    PcWorkSignal.awaitWorkForRemainderOf(pollTime);
++                }
++            } else {
++                // try to fetch some records with normal poll time
++                // in order to get long polling
++                records = pollRequests(pollTime);
++            }
+         } else if (state == State.PENDING_SHUTDOWN) {
+             // we are only here because there's rebalance in progress,
+             // just poll with zero to complete it
+@@ -1433,6 +1458,14 @@
+     public void shutdown() {
+         log.info("Informed to shut down");
+         final State oldState = setState(State.PENDING_SHUTDOWN);
++
++        // PC dispatch (astubbs#255): end this thread's wake-on-work wait now rather than letting it run out.
++        // Shutdown here only sets the state and lets the loop notice, so a thread parked in pollPhase would
++        // otherwise sit out the rest of poll.ms - the same bill stock pays while blocked in the consumer, but
++        // there is no reason to pay it once we own the wait. Runs on the CALLING thread, not on this one,
++        // which is why the signal is addressed by owner rather than read from a thread local.
++        PcWorkSignal.wakeOwner(this);
++
+         if (oldState == State.CREATED) {
+             // The thread may not have been started. Take responsibility for shutting down
+             completeShutdown(true);

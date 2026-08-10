@@ -430,8 +430,15 @@ With PC dispatch **off**, Apache Kafka's own tests pass against the patched clas
 skipped** (`StreamTaskTest` 101, `RecordCollectorTest` 59, `ProcessorContextImplTest` 28). Nothing was
 excluded and no assertion was relaxed.
 
+> **UPDATED by wake-on-work (astubbs#255 item 3).** That work added `StreamThread` as a fifth patched
+> class and `StreamThreadTest` (231 cases) to the same execution, so the current figure is **419/419, 0
+> failures, 21 skipped**. The 21 skips are Kafka's own annotations, not ours: a control run against the
+> **unpatched** `StreamThread` passes exactly the same 231 and skips exactly the same 21. The numbers in
+> this section are the ones as of the spike's close, kept for the record; the live count is in the module
+> README and the surefire execution's comment.
+
 > **Substantiated claim, available for release notes and other promotional use:**
-> *"188 of Apache Kafka's own Streams tests pass unmodified against the patched classes, zero skipped."*
+> *"419 of Apache Kafka's own Streams tests pass unmodified against the patched classes, zero failures."*
 >
 > **Provenance.** The tests are Apache Kafka's own, taken as **compiled classes** from the `kafka-streams`
 > `test` jar published to Maven Central - not re-written, not re-compiled, not excluded, no assertion

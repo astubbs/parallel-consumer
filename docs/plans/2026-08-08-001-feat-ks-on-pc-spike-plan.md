@@ -1411,7 +1411,16 @@ in-flight worker's. `StreamsProducer.transactionInFlight` is also a non-volatile
 This is composable with more work; it was scoped out (KTD7 chose at-least-once) to keep the spike
 bounded, which is also what kept `StreamsProducer` out of the patch entirely.
 
-### The StreamThread's poll wait throttles dispatch - confirmed, and the largest single win available
+### The StreamThread's poll wait throttles dispatch - confirmed, and FIXED
+
+**Status: built and measured.** Wake-on-work landed as designed below - the full mechanism, not the
+adaptive-timeout interim. `StreamThread` became the fifth patched class; `PcWorkSignal` is the condition;
+`-Dpc.streams.wakeOnWork.enabled=false` is the kill switch and was the control arm. At the **default**
+`poll.ms`, three runs each: the single-key arm went **0.70x -> 0.99x**, experiment A's p50 5.5x -> 17.1x
+and p99 3.0x -> 9.2x. The R8 cost was paid and bought `StreamThreadTest` into the upstream execution
+(188 -> 419 citable tests). Everything below is the design as written before the work, kept because the
+reasoning is what makes the result readable.
+
 
 Found by U8's negative control, which was not looking for it, and then confirmed by a one-term
 experiment.

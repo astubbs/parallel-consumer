@@ -46,18 +46,37 @@ completion tracking is what Parallel Consumer *is*.
 `recordCollector.offsets()` (changelog, producer-side) with `consumedOffsets`. Only the input-partition
 half should come from PC - the changelog half is already correct and must not be disturbed.
 
-## 3. Wake on work, so there is no penalty when PC cannot parallelise
+## 3. Wake on work, so there is no penalty when PC cannot parallelise - LANDED
 
-Measured, confirmed by a one-term experiment: the `StreamThread` poll wait costs ~74ms per record
-whenever PC can only dispatch one at a time, and throttles every workload besides. With `poll.ms = 1`
-the single-key penalty falls from ~1695ms to ~24ms and experiment A's p50 goes from 8.0x to 19.1x.
+**Done.** The full mechanism, not the adaptive-timeout interim: the patched `StreamThread.pollPhase()`
+polls for 1ms to collect what the broker already has, then blocks on Parallel Consumer's own condition
+(`PcWorkSignal`) for the rest of the configured budget, woken the instant a worker completes. Only while
+PC has work outstanding - idle, the stock full-budget poll is kept, so an idle consumer does not spin.
+`wakeup()` is untouched.
 
-Design and its trap are in the plan. Short version: build wake-on-work - poll briefly, then block on
-our own condition for the rest of the budget - rather than repurposing `wakeup()`, which Kafka Streams
-already uses for shutdown. Adaptive timeout is a legitimate interim.
+Measured at the **default** `poll.ms`, three runs each, one term varied via
+`-Dpc.streams.wakeOnWork.enabled`:
 
-**This gates a promotional claim**, so it is not merely an optimisation: "no penalty when you fall
-back to traditional Kafka Streams usage" is false while the single-key case measures 0.69x.
+| | Single key, p50 | Experiment A p50 | Experiment A p99 |
+|---|---|---|---|
+| without wake-on-work | 0.70x | 5.5x | 3.0x |
+| **with wake-on-work** | **0.99x** | **17.1x** | **9.2x** |
+
+So the promotional claim is now true and quotable: **"no penalty when you fall back to traditional Kafka
+Streams usage"** - the single-key arm ties with stock at 0.99x, against 0.70x before.
+
+Cost, as priced by R8: a **fifth patched class**. That brought `StreamThreadTest` into the upstream
+execution (231 cases, and a control run against the *unpatched* class passes exactly the same 231 with
+exactly the same 21 Kafka-annotated skips), so the citable count moves from 188 to **419**.
+
+Two things this did **not** settle, and they are follow-ups rather than gaps in the fix:
+
+- **The retry timer still cannot raise the signal.** `PcWorkSignal.signalWorkAvailable()` is named and
+  shaped for it, but retries are disabled, so today only a worker outcome raises it. When retries return,
+  the backoff timer has to call it or a retried record waits out a poll budget.
+- **One StreamThread.** The signal is scoped to the thread that constructed the dispatcher, and the
+  registry degrades to the stock poll if that assumption is ever false - safe, but unproven under
+  multi-thread and multi-task, which is the module's standing limit anyway.
 
 ## 4. Remove the APIs that do not work, rather than documenting them
 
@@ -135,7 +154,8 @@ Two lines that survived scrutiny and belong in whatever gets written for the rel
   Consumer is already best in the world at."** True, and it reframes the largest open risk as the
   project's core competency rather than a gap.
 - **"Evolutionary for the workloads it targets, with no penalty when you fall back to traditional
-  Kafka Streams usage."** Accurate *only once item 3 lands* - see above.
+  Kafka Streams usage."** Now accurate: item 3 landed, and the single-key arm measures 0.99x against
+  stock at the default configuration. Quote it with the measurement, not on its own.
 - **"Try doing this with your Share Groups."** The sharpest line available, and it is not just a jab -
   it names a real structural difference. KIP-932 Share Groups decouple consumption from partition
   count, which is the same problem PC solves, but they operate at the *consumer* layer: nothing in

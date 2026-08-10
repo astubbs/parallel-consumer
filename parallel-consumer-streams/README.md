@@ -26,14 +26,50 @@ consumer poll
 Under PC's KEY ordering, at most one record per key is in flight, so records on distinct keys of the same
 partition run concurrently while per-key order is preserved.
 
-The Kafka side of the change is a **530-line patch across 4 `processor.internals` classes**
-(`StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`, `RecordCollectorImpl`), and it needed
-**no new Parallel Consumer API**.
+The Kafka side of the change is a **716-line patch across 5 `processor.internals` classes**
+(`StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`, `RecordCollectorImpl`, `StreamThread`),
+and it needed **no new Parallel Consumer API**.
 
-**No Apache Kafka source is committed to this repository.** The four classes are unpacked from the
+**No Apache Kafka source is committed to this repository.** The five classes are unpacked from the
 published `kafka-streams` sources jar at `generate-sources`, patched with the tracked
 `src/main/patch/pc-streams.patch`, and compiled into `target/classes`, which precedes the `kafka-streams` jar
 on the classpath.
+
+### Wake on work
+
+`StreamThread` polls the consumer and runs the topology on **one thread**. Under stock Kafka Streams,
+blocking in `Consumer#poll()` for up to `poll.ms` (default **100ms**) is free - while the thread is parked
+there is by definition no processing it could be doing instead, because it is the same thread.
+
+Hand records to a worker pool and that inverts. Workers complete *during* the poll wait, and neither their
+completions nor the records they unblock can move until poll returns, so throughput starts tracking poll
+cadence rather than the work. It is charged on every workload and concurrency merely hides it: with every
+record forced onto one key, so no concurrency was available to pay the bill, the seam measured **0.69x
+against stock** - the asynchronous path *slower* than the synchronous one, which absence of concurrency can
+never explain.
+
+So the patched `pollPhase()` splits the wait: poll briefly to collect whatever the broker already has, then
+block on **Parallel Consumer's own condition** for the rest of the budget, woken the instant a worker
+completes. Only while PC actually has work outstanding - idle, the stock full-budget poll is exactly right,
+and shortening it would delay broker records for nothing.
+
+Measured at the **default** `poll.ms`, three runs each (`HeadOfLineBlockingBenchmarkTest`):
+
+| | Single key - no concurrency available (p50) | Head-of-line blocking (p50) | (p99) |
+|---|---|---|---|
+| without wake-on-work | 0.70x | 5.5x | 3.0x |
+| **with wake-on-work** | **0.99x** | **17.1x** | **9.2x** |
+
+The first column is the point: **no penalty when PC cannot parallelise**. The other two are what the poll
+wait was costing every other workload while concurrency masked it.
+
+Deliberately **not** `KafkaConsumer#wakeup()`, which is the obvious mechanism and the wrong one - it throws
+`WakeupException` and is Kafka Streams' own word for *shutdown*, and a wake delivered while the thread is
+not polling arms the *next* poll instead, so a stray completion could swallow a shutdown. Owning the
+condition costs one small class and removes that failure mode entirely.
+
+**To turn it off**, without turning the seam off: `-Dpc.streams.wakeOnWork.enabled=false`. That restores one
+full-budget poll, and it is how the before/after above was measured as a one-term control.
 
 ## Status
 
@@ -43,8 +79,10 @@ in [`docs/plans/2026-08-08-002-ks-on-pc-spike-result.md`](../docs/plans/2026-08-
 - Output is identical to a provably-external stock Kafka Streams baseline, for a stateless topology and
   for a non-windowed aggregation over a state store, under 4 worker threads with 4 records demonstrably
   inside the chain at once.
-- **188 of Apache Kafka's own Streams tests pass unmodified against the patched classes, zero skipped**
-  (see [The 188-test claim](#the-188-test-claim)).
+- **419 of Apache Kafka's own Streams tests pass unmodified against the patched classes, zero failures**
+  (see [The 419-test claim](#the-419-test-claim)).
+- **No penalty when Parallel Consumer cannot parallelise**: with every record on one key, so the seam can
+  offer nothing, it ties with stock at the default configuration (see [Wake on work](#wake-on-work)).
 - The thread-confinement that makes it work is *proven* load-bearing by a controlled experiment, not
   merely undisturbed.
 
@@ -68,6 +106,7 @@ Other settings:
 
 ```
 -Dpc.streams.dispatch.poolSize=4      # worker threads per task; also PC's maxConcurrency. Default 4.
+-Dpc.streams.wakeOnWork.enabled=false # back to one full-budget poll - see Wake on work. Default on.
 ```
 
 From a test, so each arm states which path it wants rather than inheriting a default:
@@ -115,23 +154,28 @@ still fail - not because anything can be lost, but because they assert Kafka's *
 metadata, and this module deliberately owns that field. A failing test there is the divergence being
 detected, not data being lost.
 
-## The 188-test claim
+## The 419-test claim
 
-**"188 of Apache Kafka's own Streams tests pass unmodified against the patched classes, zero skipped."**
+**"419 of Apache Kafka's own Streams tests pass unmodified against the patched classes, zero failures."**
 
 This is a substantiated claim, available for release notes and other promotional use. Its provenance:
 
 - **The tests:** `org.apache.kafka.streams.processor.internals.StreamTaskTest` (101),
-  `RecordCollectorTest` (59), `ProcessorContextImplTest` (28) - Apache Kafka's own, taken as compiled
-  classes from the `kafka-streams` `test` jar published to Maven Central. Not re-written, not re-compiled,
-  not excluded, no assertion relaxed.
-- **What they run against:** our patched `StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`
-  and `RecordCollectorImpl`, which precede the `kafka-streams` jar on the classpath - proven separately by
-  `ShadowedClassLoadingTest`, and cross-checked by the fact that turning the dispatch flag on changes the
-  result (the released classes have no such flag).
+  `RecordCollectorTest` (59), `ProcessorContextImplTest` (28), `StreamThreadTest` (231) - Apache Kafka's
+  own, taken as compiled classes from the `kafka-streams` `test` jar published to Maven Central. Not
+  re-written, not re-compiled, not excluded, no assertion relaxed.
+- **What they run against:** our patched `StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`,
+  `RecordCollectorImpl` and `StreamThread`, which precede the `kafka-streams` jar on the classpath - proven
+  separately by `ShadowedClassLoadingTest`, and cross-checked by the fact that turning the dispatch flag on
+  changes the result (the released classes have no such flag).
+- **The skips:** 21 of `StreamThreadTest`'s cases are skipped, by Kafka's own annotations and not by
+  anything here. That is stated rather than hidden, because the honest form of the claim has to survive
+  someone reading the surefire output. A control run against the **unpatched** `StreamThread` skips exactly
+  the same 21 and passes exactly the same 231 - so the skips predate this module, and the patched arm is no
+  weaker than stock.
 - **The condition:** dispatch switch **off** - set explicitly on that surefire execution, not inherited
   from a default. This is a *behaviour-preservation* claim about the patch, not a claim about the parallel
-  path. The parallel path's number is 68/101 on `StreamTaskTest`, and is stated everywhere the 188 is.
+  path. The parallel path's number is 68/101 on `StreamTaskTest`, and is stated everywhere the 419 is.
 - **How to reproduce:** it runs in this module's **normal** test run, no profile and no flag:
 
   ```
@@ -147,14 +191,14 @@ The count lives in exactly three places - the surefire execution's comment in `p
 
 The module is pinned to the reactor's `${kafka.version}` (currently **3.9.2**), and the patch is derived
 against exactly those sources. `org.apache.kafka.streams.processor.internals` is package-private,
-unsupported and explicitly not an API - the four classes are free to change shape in any patch release.
+unsupported and explicitly not an API - the five classes are free to change shape in any patch release.
 
 **On a Kafka bump the patch will need re-deriving.** The build fails *loudly* when it no longer applies -
 `bin/apply-patch.sh` dry-runs first and fails on any rejected hunk - rather than drifting silently into a
 runtime `NoSuchMethodError`, which is what a vendored copy would do. That is a real improvement and it is
-still a recurring maintenance obligation, with a 188-test regression run behind each one.
+still a recurring maintenance obligation, with a 419-test regression run behind each one.
 
-On Kafka trunk/4.x the four classes have already diverged materially: `ProcessorContextImpl` is `final`
+On Kafka trunk/4.x the patched classes have already diverged materially: `ProcessorContextImpl` is `final`
 and the record context is mutated in place. A green result on 3.9 does **not** transfer unexamined.
 
 To re-derive:
