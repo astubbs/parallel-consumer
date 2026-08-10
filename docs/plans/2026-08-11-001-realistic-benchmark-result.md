@@ -60,9 +60,9 @@ see §2.1. Both ship, both default on, so 3.72x is what a user gets; but the sea
 
 ## 2. Refuted predictions, first
 
-Five of the predictions written before the run were refuted, and a sixth problem was found in the measurement
-rather than in the thing measured. Two of them changed what this benchmark measures at all, and two were
-caught by a control arm failing rather than by review.
+Six of the predictions written before the run were refuted, and a seventh problem was found in the measurement
+rather than in the thing measured. Two of them changed what this benchmark measures at all, two were caught by
+a control arm failing rather than by review, and two contradict expectations this work was commissioned with.
 
 ### 2.1 REFUTED, twice, and the second one is the most important number in this document
 
@@ -98,6 +98,33 @@ off if something keeps it fed.
 this purpose, not two, and they ship together and default on - so the 3.76x is what a user actually gets, and
 the headline stands. But nobody may write "this result does not depend on our recent poll optimisation", and
 anyone tempted to disable wake-on-work should know it costs roughly two thirds of the benefit.
+
+### 2.1b REFUTED - the advantage does not grow with backlog depth. It shrinks.
+
+The expectation this work was commissioned with was that the advantage would compound with depth, since stock
+drains a partition one record at a time however deep the queue is. The plan predicted something narrower: that
+the *absolute* saving would compound, the *time-to-drain ratio* would rise as startup was amortised, and the
+*rate ratio* would be flat. Measured across three depths:
+
+| Backlog depth | Stock | Seam on | Rate ratio | Drain ratio | Seconds saved |
+|---|---|---|---|---|---|
+| 200 | 21.9/s | 90.0/s | **4.11x** | 3.07x | 6s |
+| 1200 | 25.8/s | 97.5/s | **3.78x** | 3.12x | 32s |
+| 3000 | 26.2/s | 90.3/s | **3.45x** | 2.88x | 75s |
+
+**Only the absolute saving behaved as expected.** The rate ratio *declines* monotonically with depth - 4.11x
+to 3.45x - and the drain ratio is roughly flat rather than rising. Both halves of the plan's prediction were
+wrong, and the commissioning expectation was wrong in the other direction: nothing here compounds except the
+seconds on the clock.
+
+The decline is small but consistent, and this benchmark does not establish its cause. The candidate worth
+testing first is that Parallel Consumer's own bookkeeping grows with the number of records registered but not
+yet complete, so a deeper backlog costs slightly more per record on the seam's side than on stock's. That is a
+hypothesis, not a finding, and it is recorded as one.
+
+**Why this matters for anyone sizing this:** the mechanism is at its best on moderate backlogs, and a very deep
+one erodes the ratio somewhat. It never erodes the absolute benefit, which is what an operator actually feels -
+75 seconds saved at depth 3000 against 6 at depth 200.
 
 ### 2.2 REFUTED - "CPU-bound work shows little or no gain"
 
@@ -209,7 +236,8 @@ they answer different questions, and §6 says which one carries the claim and wh
   others, and it did not. A discarded warm-up pass runs before any measured arm, and the sustained-rate
   statistic trims the first and last decile of each drain.
 - **The mixed profile falls between the two pure profiles**, as an Amdahl split predicts.
-- **The advantage is a rate, not an artefact of backlog depth** - see §6.
+- **The absolute time saved compounds with backlog depth** - 6s, 32s, 75s at depths 200, 1200 and 3000. This
+  was the only part of the depth prediction that held; see §2.1b for the two parts that did not.
 
 ---
 
@@ -357,17 +385,24 @@ an argument about operational cost, not a number.
 
 ## 6. Why the claim rests on the catch-up rate and not on the time to drain
 
-Three figures are reported and they do not agree, which is the point.
+Three figures are reported, they do not agree, and the disagreement is the point. The depth sweep in §2.1b is
+what settled which of them to trust:
 
-- **Absolute time saved** compounds with backlog depth without limit.
-- **Time-to-drain ratio** rises with depth, because a fixed startup cost - assignment, first poll, and Parallel
-  Consumer's own load factor which deliberately does not scale for the first two seconds of a run - is
-  amortised over more work.
-- **Sustained catch-up rate is flat in depth**, because both arms are throughput-limited from the first second:
-  stock at roughly one record per mean cost, the seam at roughly pool-size records per mean cost. There is
-  nothing left in that ratio to compound.
+- **Absolute time saved** compounds with backlog depth - 6s, 32s, 75s across the sweep. It is the figure an
+  operator feels, and it is the only one that behaved as predicted.
+- **Time-to-drain ratio** was predicted to rise with depth as the fixed startup cost is amortised. It does not;
+  it is roughly flat (3.07x, 3.12x, 2.88x). It still carries no assertion, because it mixes startup - assignment,
+  first poll, and Parallel Consumer's own load factor which deliberately does not scale for the first two
+  seconds - into a number about dispatch.
+- **Sustained catch-up rate** was predicted to be flat in depth, on the reasoning that both arms are
+  throughput-limited from the first second. It declines instead (4.11x, 3.78x, 3.45x).
 
-Only the third is a property of the dispatch mechanism, so only the third carries an assertion. This follows
+So the statistic chosen for the claim turned out to be *less* depth-invariant than predicted, and saying so
+matters more than defending the choice. It is still the right one to assert on - it is the only one of the
+three that excludes startup and speaks about dispatch alone - but the honest form of the claim is "3.4x to 4.1x
+depending on backlog depth" rather than a single figure that happens to have been measured at 1200.
+
+This follows
 [`choose-the-statistic-that-states-the-claim.md`](../solutions/best-practices/choose-the-statistic-that-states-the-claim.md),
 which was written after the first benchmark asserted on a p99 that at n=24 was simply the maximum.
 
