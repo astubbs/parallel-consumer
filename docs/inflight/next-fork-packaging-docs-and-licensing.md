@@ -42,6 +42,41 @@ Two further caveats belong with any published version: the comparison is **withi
 (stock Streams parallelises across partitions, and that is not what is being measured), and the
 workload is **blocking IO**, which is the case PC is for - CPU-bound work would not behave this way.
 
+**Publish the benchmark's rationale, not only its numbers.** A reader who cannot see *why* the
+experiment measures what it measures has no way to judge the result, and the reasoning currently exists
+only in the plan: why the latency distribution rather than throughput, why the **minimum** is the
+statistic that states the claim while the p99 measures queueing depth, why both arms run in one JVM on
+the same patched classes with only the seam switched, and why the per-record cost is a block rather
+than a spin. Write that up as the explanation of what the simulation is trying to show.
+
+The same write-up should carry the converging case explicitly - the workload where PC's advantage
+disappears should cost **nothing** against stock, which is the reassurance a cautious reader actually
+wants before adopting anything. ("No cost for convergence state" is read here as the single-key or
+otherwise degenerate case, where key concurrency cannot help; if the owner meant something else, this
+is the place to correct it.) That half of the claim is **not true yet**: single-key still measures
+0.69x until the poll-wait fix lands, item 3 of `pr-ks-spike-next-work.md`. Write the explanation now,
+publish the no-cost claim after.
+
+**Also build a realistic-domain benchmark, as devil's-advocate cover for the synthetic one.** The
+head-of-line blocking experiment was designed to expose PC's advantage - one blocker, fast records on
+other keys, blocking IO. That is legitimate experiment design, because isolating the property is the
+whole point, but it is also exactly the shape a sceptical reader dismisses as rigged: attack the design
+and you never have to engage with the number. So design a second benchmark around a plausible business
+workload - a domain where this data flow is what someone would genuinely build - and publish it
+alongside. Its job is not to beat the synthetic figure. Its job is to leave "synthetic, unfair, false
+advertising" nowhere to land, and to show what the effect looks like on a workload nobody chose to
+flatter it. Pick the domain as though the hostile reviewer picked it.
+
+**Once the implementation settles, write the key points of the user-facing explanation** - leading with
+*why this is possible at all* and *why we know it works*, in terms a reader who does not know
+`StreamTask` from `PartitionGroup` can follow. Those are the two questions anyone hearing "we patch
+Kafka Streams internals so Parallel Consumer drives the processor chain" asks immediately, and both
+answers already exist in scattered technical form: the mechanism (a seam at the point where a task
+hands records to the processor chain, with key ordering preserved), and the evidence trail (Kafka's own
+tests with the seam off, the benchmarks with their controls, the crash-safety test). Deliberately
+*after* the work settles, because written earlier it documents a moving target - but before release,
+since this is the material the README section gets built from.
+
 Remember `README.adoc` is generated - edit `src/docs/README_TEMPLATE.adoc`. Its "Java Version per
 Module" table also does not yet list the new module.
 
@@ -87,6 +122,17 @@ Options to weigh:
 - **Keep shadowing, alpha-only**, and never let it become a transitive dependency of anything.
 
 Whatever we pick has to work for Streams and Connect the same way.
+
+**Our own names carry "spike", and that should not ship.** The module is
+`parallel-consumer-streams-spike` and its code lives in `io.confluent.parallelconsumer.streamsspike`.
+"Spike" describes how the work started, not what it is now that it is published. The concrete ask is to
+rename the package - at minimum take "spike" out of it - and it wants settling together with the
+groupId and artifactId above rather than separately, because all three are one naming decision and a
+rename is far cheaper before anyone depends on the coordinates. Two things left open: whether the
+module and artifact names change in the same pass as the package, and what replaces "spike" - a
+maturity word such as `-alpha` or `-experimental` bakes a status into a name that then has to change
+again, while a plain `parallel-consumer-streams` does not but claims more than the module currently
+earns. See `next-streams-module-graduation.md` for the rest of the spike-to-module work.
 
 ## 3. Licensing legality
 

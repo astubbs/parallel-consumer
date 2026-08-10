@@ -475,6 +475,78 @@ the fix.
 
 ---
 
+## 9b. U9 executed: the commit carries the frontier - measured results against the predictions
+
+U9 (commit data from PC, not `consumedOffsets`; plan KTD-S7, R10) was implemented with
+prediction-first discipline: the pile-A per-test predictions were written before any code, the
+baseline was run three times (identical 33-failure sets), and the after-measurement was run three
+times at each step. This section records what held and what did not, refuted predictions first.
+
+### The refuted predictions, and what each refutation taught
+
+**Predicted GREEN with high confidence, stayed red: the all-corrupted and all-invalid-timestamp
+tests.** The prediction modelled the drop path as synchronous and the content assert as an offset
+check. Both halves were wrong in instructive ways:
+
+1. Corrupted records were not dropped at preparation at all - `pcRunChain` shipped them to workers as
+   no-op executions, making corruption handling asynchronous where stock's is synchronous. Chasing
+   this found a real liveness defect: under KEY ordering a poison pill stalled its key's successor by
+   a full pump cycle. Fixed - corruption now consumes inline, and the pump feeds synchronous outcomes
+   back within the same pass.
+2. `process()` reported progress as dispatched-to-pool, so consuming a batch of corrupted records
+   reported "no progress" to the caller that paces on it. Fixed - progress is records consumed.
+3. Even with both fixed and the committed OFFSET exactly right (offset 2, matching stock to the
+   digit), the tests stay red because Kafka's asserts compare the full `OffsetAndMetadata` INCLUDING
+   the metadata bytes - `equalTo(...encode())`. KTD-S7 deliberately writes PC's payload (or nothing,
+   when there are no holes) instead of Streams' encoding, so every pile-A test that reaches its
+   content assert fails on metadata bytes alone.
+
+**The by-design pile is therefore much larger than the two tests predicted.** The prediction named
+two metadata-encoding tests as by-design red; in fact the metadata-bytes divergence contaminates
+essentially all of pile A's content asserts. The prediction underestimated where Kafka's tests
+assert equality of encodings rather than equality of offsets.
+
+**Predicted-GREEN-low `shouldCheckpointWhileUpdateSnapshot...` is UNRESOLVED**: it flipped green in
+one after-run of three and red in the others. Per the plan's rule, a test that flips across runs is
+recorded as unresolved, not resolved.
+
+### The headline numbers, honestly
+
+| Measurement | Result |
+|---|---|
+| Pile-A test-name delta, seam-on `StreamTaskTest`, N=3 both sides | **0 of 14 flipped** (33 failures before and after, stable sets) |
+| Committed offset correctness in the synchronous cases | **exact** - offset 2 vs stock's 2 in the all-corrupted case |
+| Commit-frontier IT | red-then-green: committed 11 (consumer position) before, 0 (frontier) after |
+| Kill-restart IT (R10) | green: crash with frontier committed, restart redelivers the in-flight record, nothing lost |
+| Stock takeover IT | green: seam-off restart on a PC-committed group runs, no crash |
+| Kafka's 188 seam-off | untouched, green |
+| Patch size (R8) | 4 files, 29 hunks, 594 lines (was 25/530 before U9) |
+
+The zero test-name delta is not a failure of the offset work - it is the measurement discovering
+that pile A's unit tests assert Streams' metadata ENCODING, which KTD-S7 deliberately does not
+write. The crash-safety property the unit exists for cannot be proven by those tests at all; it is
+proven by the three integration tests, where it is red-then-green.
+
+### Execution-time resolutions the plan left open
+
+- `checkpointableOffsets()`: the input-partition half is simply ABSENT on the PC path (an empty
+  `consumedOffsets` contributes nothing), rather than translated from PC's frontier. Input-partition
+  entries in the local checkpoint only serve the source-topic-as-changelog optimisation, which is
+  outside the spike's scope; the changelog half is untouched, verified by the U7 fixture.
+- `commitNeeded()` coverage semantics: covered-by-successful-commit, implemented as PC's own dirty
+  flag queried through the dispatcher - collection does not clear, only the postCommit
+  acknowledgement does.
+- The kill-restart "crash" is the dispatcher's abort-close (no drain, no feed-back, immediate
+  shutdownNow), reached via a crash-injection registry, because the orderly close path drains and
+  commits on the way down - a clean close would hand the simulated crash a repair pass a real one
+  never gets.
+
+### One classified flake, not masked
+
+Core's `inFlightMessagesCommittedIfProcessedDuringShutdown` failed once in a full `-am` run during
+U9, with zero core changes in the tree, and passed 3 of 3 on rerun - the known load-tightness flake
+family, unrelated to this work.
+
 ## 10. Two findings worth having regardless of this spike
 
 Both were discovered while building the spike and are independent of whether the route is ever taken.

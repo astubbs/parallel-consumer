@@ -304,8 +304,26 @@ class ProcessorContextConfinementTest {
                         + "record' for a task at all, there are up to poolSize of them at once.")
                 .isNotNull();
 
+        // U9 strengthened this from "the cross-thread write must be volatile" to "the cross-thread write
+        // must not exist" for RECORD-COMPLETION state: workers report completion only through the
+        // dispatcher's mailbox, PC's frontier is the commit source, and commitNeeded went back to being a
+        // plain stock-path field. Volatile reappearing here would mean a worker-side completion write
+        // crept back in - which is exactly what this assertion refuses.
         assertThat(Modifier.isVolatile(fieldOf(StreamTask.class, "commitNeeded").getModifiers()))
-                .as("commitNeeded is set by worker threads and read by the committing thread")
+                .as("commitNeeded must be a plain field again: since U9 workers report record completion "
+                        + "only through the dispatcher's mailbox and PC's frontier. If this is volatile "
+                        + "again, a cross-thread completion write came back, and the mailbox discipline has "
+                        + "been broken.")
+                .isFalse();
+
+        // The ONE sanctioned cross-thread commit write, found by the U9 review: a processor calling
+        // context.commit() runs ProcessorContextImpl.commit -> requestCommit on a PC WORKER thread, so
+        // commitRequested is genuinely written cross-thread and must stay volatile. This pairs with the
+        // assertion above: completion state has no cross-thread writes, the commit REQUEST has exactly one.
+        assertThat(Modifier.isVolatile(fieldOf(StreamTask.class, "commitRequested").getModifiers()))
+                .as("commitRequested is written from PC worker threads (context.commit() -> requestCommit) "
+                        + "and read by the StreamThread - it must be volatile, and it is the only commit "
+                        + "field allowed a cross-thread write")
                 .isTrue();
 
         assertThat(fieldOf(StreamTask.class, "processTimeMs").getType())

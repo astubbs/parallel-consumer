@@ -272,6 +272,19 @@ eyes open:
 *Rejected:* merging both encodings into one metadata field - two decoders would each see the other's
 bytes as corruption, and the field would carry two owners forever.
 
+**Future coexistence, when something of Streams' genuinely needs to persist across restarts**
+*(session-settled: user-directed - chosen over re-admitting Streams as a second writer of the field)*:
+extend **PC's own codec** with a generalised opaque rider - the embedder hands PC a byte blob, PC
+carries it inside its versioned payload and hands it back on read. Not Streams-specific by design:
+PC's encoding grows one extension slot, and the Streams bridge is merely its first customer. One
+owner, one decoder, and the rider's contents are the embedder's problem. Notably both of the field's
+displaced tenants are time watermarks - partition time, and emit-final's per-processor
+last-emitted-window-close timestamps - so the natural moment to build the rider is the stream-time
+work (see [Current Shortcomings](#current-shortcomings)), which will need somewhere to persist its
+low-water mark anyway. One budget caveat when that day comes: the broker caps commit metadata
+(offsets.metadata.max.bytes, default 4096), and every rider byte competes with PC's own hole
+encoding - the too-large fallback must account for both.
+
 ### Assumptions
 
 - **Corrected from an earlier draft:** `kafka-streams:3.9.2` ships class-file **major 52 (Java 8)** -
@@ -1023,6 +1036,10 @@ punctuators never fire. Wall-clock punctuators are unaffected and work normally.
 This is a **silent** behavioural absence: nothing throws, nothing logs, the punctuator simply never runs.
 It is also the root of the four items below it, which is what makes it the most valuable one to fix.
 
+When this is addressed, the persistence half has a settled direction: KTD-S7's generalised rider -
+Streams-side watermarks ride inside PC's versioned payload as an opaque blob, never as a second
+writer of the metadata field.
+
 ### Consumer pausing - Kafka Streams', not PC's
 
 `StreamTask.addRecords` pauses a partition once its buffer passes `maxBufferedSize`, and resumes it as
@@ -1161,6 +1178,24 @@ for the dispatch latency and cannot adapt.
 **Meanwhile the alpha understates itself**, and users can recover most of the gap today by setting
 `poll.ms` low themselves. Worth documenting as a known workaround rather than leaving the default to
 speak for the design.
+
+### Found by U9's code review - suspend, revive, and the drain timeout
+
+Three related divergences on the shutdown/rebalance paths, surfaced by the U9 review (one in-scope
+design call, two pre-existing relatives it validated as predating U9). All three live in the same
+territory: what happens to in-flight PC work when Kafka Streams tears a task down.
+
+- **The suspend-drain pump runs after every flow's final commit.** In 3.9.2, revocation and clean
+  close commit BEFORE `suspend()` runs, so the records the patched `suspend()` drains produce outputs
+  that post-date the final commit: duplicates on routine rebalances, and recycled tasks are
+  force-dirtied when a backlog exists. Design call, not a bug fix: either the PC path commits the
+  post-drain frontier itself after the pump (at-least-once only), or the drain moves ahead of the
+  commit in the teardown order. Decide in the next working session.
+- **A revived task keeps its closed dispatcher** (pre-existing): `closeDirtyAndRevive` resurrects the
+  same `StreamTask`, whose final `pcDispatcher` is closed - records register forever, dispatch never
+  runs, no error. Fail fast on revive, or recreate the dispatcher.
+- **`suspend()` ignores a timed-out drain** (pre-existing): after the warn, `closeTopology()` runs
+  while workers may still be inside the chain. Route to the dirty-close path instead of proceeding.
 
 ### Carried over from the result document and the branch's own commits
 

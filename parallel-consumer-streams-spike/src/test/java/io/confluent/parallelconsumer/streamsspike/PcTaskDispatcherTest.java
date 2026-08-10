@@ -425,6 +425,98 @@ class PcTaskDispatcherTest {
         }
     }
 
+    // ------- the commit surface (U9 review finding: previously IT-only coverage) -------------------------
+
+    /**
+     * The commit protocol's read side, seen from the StreamThread: a worker's completion becomes visible to
+     * hasCommitDataOutstanding and collectCommitData through the mailbox drain those methods perform, and the
+     * collected map carries the frontier - the lowest incomplete offset - not the highest completed one.
+     */
+    @Test
+    void completedWorkBecomesCommitDataAtTheFrontier() {
+        dispatcher = new PcTaskDispatcher("task-commit", INPUT_PARTITIONS, 4);
+
+        // Three same-key records: offsets 0..2. Workers complete them; the frontier follows contiguity.
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "one-key"));
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("nothing has completed yet - registration alone is not commit-worthy")
+                .isFalse();
+
+        boolean quiescent = dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        assertThat(quiescent).as("three no-op records must drain").isTrue();
+
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("completed, uncommitted work must report as commit-outstanding")
+                .isTrue();
+        assertThat(dispatcher.collectCommitData())
+                .as("the frontier after 0..2 all complete is 3 - the next offset to resume from")
+                .containsKey(PARTITION)
+                .satisfies(map -> assertThat(map.get(PARTITION).offset()).isEqualTo(3L));
+    }
+
+    /**
+     * The write side: only {@link PcTaskDispatcher#onCommitSuccess} clears the dirty state - collection alone
+     * must not, or a failed commit would strand its records (collection is a read, success is the ack).
+     */
+    @Test
+    void collectionDoesNotClearDirtyButTheSuccessAckDoes() {
+        dispatcher = new PcTaskDispatcher("task-ack", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "one-key"));
+        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+
+        var collected = dispatcher.collectCommitData();
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("collecting is a READ - a commit that later fails must find the partition still dirty")
+                .isTrue();
+        assertThat(dispatcher.collectCommitData())
+                .as("and a second collection (the retry after a failed commit) returns the same data")
+                .isEqualTo(collected);
+
+        dispatcher.onCommitSuccess(collected);
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("the success ack is what marks the covered work clean")
+                .isFalse();
+    }
+
+    /**
+     * The crash-injection surface. abortClose is idempotent, deregisters from the registry (abortAllActive
+     * must not abort it twice), and a crashed dispatcher accepts no further dispatch.
+     */
+    @Test
+    void abortCloseIsACrashNotAShutdown() {
+        dispatcher = new PcTaskDispatcher("task-abort", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "k"));
+
+        dispatcher.abortClose();
+        dispatcher.abortClose(); // idempotent - a second crash of a dead dispatcher is a no-op
+
+        assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+                .as("a crashed dispatcher hands out nothing")
+                .isZero();
+
+        // abortAllActive after the abort must not touch this dispatcher again (it deregistered) - and with
+        // no other dispatcher alive in this test, the call is a clean no-op rather than an error.
+        PcTaskDispatcher.abortAllActive();
+    }
+
+    /** abortAllActive reaches every live dispatcher, not only the most recent one. */
+    @Test
+    void abortAllActiveCrashesEveryLiveDispatcher() {
+        dispatcher = new PcTaskDispatcher("task-multi-a", INPUT_PARTITIONS, 4);
+        PcTaskDispatcher second = new PcTaskDispatcher("task-multi-b", INPUT_PARTITIONS, 4);
+        try {
+            PcTaskDispatcher.abortAllActive();
+            assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+                    .as("first dispatcher crashed")
+                    .isZero();
+            assertThat(second.dispatchAvailable(record -> () -> { }))
+                    .as("second dispatcher crashed too - the registry covers every live instance")
+                    .isZero();
+        } finally {
+            second.close();
+        }
+    }
+
     private static final class Completion {
         private final String key;
         private final long offset;

@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -67,11 +69,19 @@ import java.util.concurrent.atomic.AtomicReference;
  *       demands a Consumer, and although nothing here calls {@code validate()}, PC's
  *       {@code onPartitionsAssigned} really does use one: it calls {@code consumer.committed(...)} to
  *       bootstrap each partition's completed-offset map. Handing it the live Streams consumer would be worse
- *       than useless - Streams writes <em>its own</em> metadata into those offset commits, and PC would try
- *       to decode it as PC's incomplete-offset payload. Offset commit stays on the stock Streams path
- *       (deferred, per the plan), so PC's copy of that state is never committed from and never needs to be
- *       real. A {@link MockConsumer} with no committed offsets gives every partition a clean state and every
- *       record is accepted.</li>
+ *       than useless - a group that ran stock Streams carries <em>Streams-format</em> metadata in its
+ *       commits, and PC's bootstrap would try to decode that as PC's incomplete-offset payload and fail
+ *       under the default {@code invalidOffsetMetadataPolicy} (FAIL). A {@link MockConsumer} with no
+ *       committed offsets gives every partition a clean state and every record is accepted.
+ *       <p>
+ *       <b>Since U9 the group's commits really do carry PC's data</b> - {@link #collectCommitData} feeds the
+ *       patched {@code StreamTask}'s committable offsets - and the mock bootstrap stays sound even so:
+ *       PC's bootstrap truncation ({@code PartitionState.maybeTruncateBelowOrAbove}) aligns the frontier to
+ *       the first record Streams actually polls after a resume, and only <em>dirty</em> partitions are ever
+ *       collected, so a first commit from a fresh dispatcher cannot regress the group's committed offset.
+ *       What the mock costs is read-back: PC starts blank, so records a previous run completed beyond the
+ *       frontier are replayed rather than skipped - a permitted at-least-once duplicate, recorded in the
+ *       plan as the follow-up.</li>
  *   <li><b>Retries disabled.</b> PC's answer to a failure is to re-dispatch the record. Here that would
  *       re-run the entire processor chain, including {@code forward()} calls that already emitted records
  *       downstream - duplicates stock Streams never produces, since it surfaces the exception to the
@@ -190,6 +200,7 @@ public class PcTaskDispatcher implements Closeable {
         };
         this.workerPool = Executors.newFixedThreadPool(poolSize, threadFactory);
 
+        ACTIVE.add(this);
         log.info("PC dispatch active for task {} over {} with a pool of {}, KEY ordering, retries disabled",
                 taskName, this.inputPartitions, poolSize);
     }
@@ -229,7 +240,13 @@ public class PcTaskDispatcher implements Closeable {
      * Take whatever PC will hand out, prepare each record on this thread, and run it on a worker. Called from
      * the StreamThread only.
      *
-     * @return how many records were submitted to the pool this time round
+     * @return how many records were CONSUMED from the WorkManager this time round - dispatched to the pool,
+     *         dropped during preparation, or failed at preparation. Not merely pool submissions: the patched
+     *         {@code process()} returns this as its progress signal, and stock's contract is "did the task
+     *         make progress", which a consumed-by-drop record satisfies. Counting only pool submissions made
+     *         {@code process()} report false after consuming a batch of corrupted records - a lie that
+     *         StreamTaskTest catches with assertTrue(task.process(...)) and that stock's TaskExecutor paces
+     *         on.
      */
     public int dispatchAvailable(final WorkPreparer preparer) {
         drainCompletions();
@@ -239,43 +256,58 @@ public class PcTaskDispatcher implements Closeable {
             return 0;
         }
 
-        // Never ask for more than the pool can start. PC would happily hand out its full target and the
-        // surplus would sit in the executor's queue marked in-flight, which inflates the concurrency we are
-        // trying to measure and delays every completion behind it.
-        int free = poolSize - inFlight.get();
-        if (free < 1) {
-            lastDispatchCount = 0;
-            return 0;
-        }
+        // Never ask for more than the pool can start (checked per loop pass below): PC would happily hand
+        // out its full target and the surplus would sit in the executor's queue marked in-flight, which
+        // inflates the concurrency being measured and delays every completion behind it.
 
-        List<WorkContainer<byte[], byte[]>> available = workManager.getWorkIfAvailable(free);
-        int dispatched = 0;
-        for (WorkContainer<byte[], byte[]> work : available) {
-            Runnable chainExecution;
-            try {
-                chainExecution = preparer.prepare(work.getCr());
-            } catch (RuntimeException e) {
-                // Preparation failed on the StreamThread - deserialisation, most likely. Treat it exactly as
-                // a processing failure so the record does not vanish from PC's accounting.
-                recordFailure(work, e);
-                continue;
+        // The pump loops while preparation consumes records SYNCHRONOUSLY (corrupted or dropped records:
+        // completed on this thread, no worker involved). Under KEY ordering a synchronously-consumed
+        // record's key-mate only becomes available once that completion is fed back, and deferring the
+        // feed-back to the next pump would stall the key by a full poll cycle - a poison pill would hold up
+        // its whole key for ~poll.ms. Stock consumes such records inline, so this loop restores parity.
+        // Terminates: every iteration either consumes at least one record from a finite backlog or exits.
+        int consumed = 0;
+        while (true) {
+            int capacity = poolSize - inFlight.get();
+            if (capacity < 1) {
+                break;
             }
+            List<WorkContainer<byte[], byte[]>> available = workManager.getWorkIfAvailable(capacity);
+            int syncCompleted = 0;
+            for (WorkContainer<byte[], byte[]> work : available) {
+                consumed++;
+                Runnable chainExecution;
+                try {
+                    chainExecution = preparer.prepare(work.getCr());
+                } catch (RuntimeException e) {
+                    // Preparation failed on the StreamThread - deserialisation, most likely. Treat it exactly
+                    // as a processing failure so the record does not vanish from PC's accounting.
+                    recordFailure(work, e);
+                    syncCompleted++;
+                    continue;
+                }
 
-            if (chainExecution == null) {
-                // Dropped during preparation - consumed, nothing to run.
-                work.onUserFunctionSuccess();
-                completed.add(work);
-                continue;
+                if (chainExecution == null) {
+                    // Dropped during preparation - consumed, nothing to run.
+                    work.onUserFunctionSuccess();
+                    completed.add(work);
+                    syncCompleted++;
+                    continue;
+                }
+
+                inFlight.incrementAndGet();
+                recordsDispatched.incrementAndGet();
+                PcDispatchCounters.onDispatchedToPool();
+                workerPool.execute(() -> runOnWorker(work, chainExecution));
             }
-
-            inFlight.incrementAndGet();
-            recordsDispatched.incrementAndGet();
-            PcDispatchCounters.onDispatchedToPool();
-            dispatched++;
-            workerPool.execute(() -> runOnWorker(work, chainExecution));
+            if (syncCompleted == 0) {
+                break;
+            }
+            // Feed the synchronous outcomes back so their key-mates become available to this same pump.
+            drainCompletions();
         }
-        lastDispatchCount = dispatched;
-        return dispatched;
+        lastDispatchCount = consumed;
+        return consumed;
     }
 
     private void runOnWorker(final WorkContainer<byte[], byte[]> work, final Runnable chainExecution) {
@@ -319,6 +351,42 @@ public class PcTaskDispatcher implements Closeable {
      */
     public Throwable pollFailure() {
         return firstFailure.getAndSet(null);
+    }
+
+    /**
+     * The frontier and its encoded holes, for every dirty partition - what the consumer-group commit should
+     * carry. StreamThread only, like every WorkManager touch.
+     * <p>
+     * Completions are drained first, so work that has already finished is folded into the answer - but
+     * nothing waits: records still in flight stay incomplete, which is precisely what keeps the frontier
+     * below them. A commit-time drain would reintroduce the head-of-line stall this module exists to remove.
+     * <p>
+     * Collection does not clear anything. PC's dirty state clears only on {@link #onCommitSuccess}, so a
+     * commit that fails after collection simply leaves the partition dirty and the next collection returns
+     * the same (or newer) data - nothing is stranded.
+     */
+    public Map<TopicPartition, OffsetAndMetadata> collectCommitData() {
+        drainCompletions();
+        return workManager.collectCommitDataForDirtyPartitions();
+    }
+
+    /**
+     * Whether a commit is worth attempting: completed work exists that no successful commit has covered.
+     * StreamThread only. This is PC's own dirty flag, not a parallel copy of it - see KTD-S7's grain.
+     */
+    public boolean hasCommitDataOutstanding() {
+        drainCompletions();
+        return workManager.isDirty();
+    }
+
+    /**
+     * The other half of the commit protocol: report a <em>successful</em> commit back, so PC can mark the
+     * covered work clean. The only caller of PC's {@code setClean} - skip this and every partition stays
+     * dirty forever, which turns "commit when needed" into "commit every interval, unconditionally".
+     * StreamThread only.
+     */
+    public void onCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
+        workManager.onOffsetCommitSuccess(committed);
     }
 
     public int getInFlightCount() {
@@ -383,12 +451,44 @@ public class PcTaskDispatcher implements Closeable {
         return isQuiescent();
     }
 
+    /**
+     * Every dispatcher currently alive in this JVM. Exists so a test can reach dispatchers buried inside
+     * running {@code StreamTask}s to {@link #abortClose()} them - the crash-injection surface for the R10
+     * kill-restart proof. Registered at construction, removed on either close path.
+     */
+    private static final Set<PcTaskDispatcher> ACTIVE = ConcurrentHashMap.newKeySet();
+
+    /** Crash-injection for tests: {@link #abortClose()} every live dispatcher in the JVM. */
+    public static void abortAllActive() {
+        for (PcTaskDispatcher dispatcher : ACTIVE) {
+            dispatcher.abortClose();
+        }
+    }
+
+    /**
+     * A crash, not a shutdown: no drain, no completion feed-back, no revocation, workers interrupted
+     * immediately. Exists for the kill-restart proof (R10) - the orderly {@link #close()} path drains via
+     * the patched {@code suspend()} and commits on the way down, which would hand a simulated crash exactly
+     * the repair pass a real one never gets, and park each test repetition on the pool-termination wait.
+     */
+    public void abortClose() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        ACTIVE.remove(this);
+        workerPool.shutdownNow();
+        log.info("PC dispatch ABORTED over {} - simulating a crash, nothing drained, nothing reported",
+                inputPartitions);
+    }
+
     @Override
     public void close() {
         if (closed) {
             return;
         }
         closed = true;
+        ACTIVE.remove(this);
         workerPool.shutdown();
         try {
             if (!workerPool.awaitTermination(30, TimeUnit.SECONDS)) {

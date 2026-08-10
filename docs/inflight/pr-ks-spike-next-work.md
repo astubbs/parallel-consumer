@@ -1,7 +1,9 @@
 # Kafka Streams spike: the next moves, ranked
 
 For the `parallel-consumer-streams-spike` work (astubbs#255). Detail and measurements live in
-`docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`; this file is the ranked worklist.
+`docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`; this file is the ranked worklist. Presentation
+work - the example demo, the API stability tag, and dropping "spike" from the name - is in
+`next-streams-module-graduation.md`.
 
 ## 1. Triage the 33 failing StreamTaskTest cases - do this first
 
@@ -78,6 +80,14 @@ annotating and throwing, **not** by deleting the methods:
 **The signatures must survive.** Kafka's own suite calls these methods heavily; deleting them stops
 that suite compiling, which would forfeit the 188-test evidence and block ever running more of it.
 
+**Invert the default, and let Kafka's own suite be the gate for reinstatement.** Windowing, joins,
+suppression and EOS are what we know is *broken*, which is not the same set as what we know *works*.
+The owner's ask is the stronger rule: every public Kafka Streams API this fork exposes starts refused
+unless we have proven it, and an API comes back only when Kafka's own test suite exercises it with the
+seam **on** and passes - not when someone reads the code and judges it fine. That makes the supported
+surface grow with evidence rather than with optimism, and it couples this item to item 6: the more of
+Kafka's suite we actually run, the more surface the gate can open.
+
 Needs the item 1 triage first, to know exactly what the boundary is.
 
 ## 5. Stream time under concurrency - a design question, not a bug
@@ -90,6 +100,32 @@ current stream time", and windowing, joins and suppression all inherit whatever 
 where no earlier record is still in flight. That is structurally the same problem as tracking which
 offsets are complete when work finishes out of order, which PC already solves and encodes. Worth
 testing whether one mechanism can serve both before designing a second one.
+
+## 6. Run Kafka Streams' entire test suite, not only the classes we patched
+
+The evidence today comes from `StreamTaskTest`, `RecordCollectorTest` and `ProcessorContextImplTest` -
+the classes covering what the patch touches, and the narrowest defensible sample. The harness already
+unpacks and patches Kafka's own *test* sources, so aiming it at the rest of the Streams suite is
+largely configuration, and anything it finds is a divergence we currently cannot see at all.
+
+Two payoffs, and other items depend on both. The seam-**off** arm becomes a far stronger claim: the
+whole suite passing against the patched classes says "behaviour preserved" in a way that a handful of
+classes cannot. The seam-**on** arm produces exactly the evidence item 4's gate needs before any
+refused API can be reinstated.
+
+Expect it to be slow, and expect failures that are Kafka's own environmental flakiness rather than
+ours. So the first pass is a triage exercise like item 1, not a pass/fail number.
+
+## 7. At the Kafka 4 upgrade, carry patches for several Kafka versions and test them in parallel
+
+The patch is generated against whatever `kafka.version` resolves to, which makes a single-version patch
+set hostage to one Kafka release: the module supports exactly the version it was cut against. When the
+repo moves to Kafka 4 (astubbs#53, `pr-53-java-baseline-kafka4.md`), the harness should instead hold a
+patch per supported Kafka version and build and test each of them in parallel, rather than migrating
+the one patch forward and stranding the previous version's users.
+
+Deliberately not now. It only pays for itself once there is a second version to support, and the Kafka
+4 upgrade is where that arrives.
 
 ## Promotional material to keep
 
@@ -115,5 +151,6 @@ Pair both with their caveats, per `next-fork-packaging-docs-and-licensing.md`.
 
 ## Delete when
 
-The triage is done and its outcome recorded, and items 2 and 3 have either landed or become their own
-plans.
+The triage is done and its outcome recorded, items 2 and 3 have either landed or become their own
+plans, and the later items have moved on too - item 7 belongs with the Kafka 4 work in
+`pr-53-java-baseline-kafka4.md` once that starts.
