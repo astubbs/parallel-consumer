@@ -122,6 +122,30 @@ and the traps that voided earlier experiments.
 Once you have a hypothesis, [`docs/investigating.md`](docs/investigating.md) carries the method for
 settling it: **a fix that works is not evidence of the cause.**
 
+## Read the commits you inherit
+
+The same rule one step earlier: read the record before you build on it, not before you ship.
+
+Whenever your base moves under you - cutting a worktree from a master that advanced, merging master
+in mid-flight, rebasing, replaying, or picking a branch back up - run
+`git log --oneline <old-base>..<new-base>` and read the **bodies** of anything touching your area.
+You inherit decisions, constraints, and sometimes instructions addressed to your branch. A green
+build proves the code still compiles; it proves nothing about whether the ground under your design
+moved.
+
+Three things hide there, and none announce themselves: an instruction to your branch; a decision
+that reshapes your work (a renamed module, a new document naming the project's approach); and an
+argument against what you are about to do. **When you override an inherited decision, record the
+reasoning you are overriding, where you override it** - or the next reader takes your change for an
+oversight and reverts it.
+
+Commit bodies are load-bearing here, because release notes are generated from the log - so the
+most consequential sentence in a commit is often nowhere near its subject. Reading a dozen of them
+costs seconds.
+
+Worked example and method:
+[`docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md`](docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md).
+
 ## Overview
 
 Parallel Consumer is a Java library for concurrent message processing from Apache Kafka with a
@@ -264,14 +288,6 @@ Nothing lints commit messages, so all of this is on you.
   reading if it says where you looked, and ruling one out is a real result (astubbs#220 is the
   worked example). Do this at merge prep, once the class is understood; doing it mid-diagnosis just
   widens the investigation.
-- **Read the commits you inherit.** After any rebase, merge or replay onto a moved base, run
-  `git log --oneline <old-base>..<new-base>` and read the *bodies* of anything touching your area.
-  You inherit decisions, constraints and sometimes instructions addressed to your branch - and a
-  green build proves only that the code compiles, not that the ground under your design held.
-  Commit bodies are load-bearing here because release notes are generated from them. When you
-  override an inherited decision, record the reasoning you are overriding, where you override it.
-  [`docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md`](docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md)
-  has the worked example and the method.
 - **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates fix-ups
   nobody wants in the permanent log, but usually also two or three genuinely separate pieces of
   work. Do not default; look at the actual commits:
