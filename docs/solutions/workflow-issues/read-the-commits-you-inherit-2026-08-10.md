@@ -70,4 +70,4 @@ calibrated to a cost that does not apply here.
 
 - [`docs/inflight/pr-strategy-doc-merge-triggers.md`](../../inflight/pr-strategy-doc-merge-triggers.md) - the
   per-branch re-check list this failure mode routes around
-- `AGENTS.md`, PR Discipline - the rule that cites this write-up
+- `AGENTS.md`, Read the commits you inherit - the rule that cites this write-up
