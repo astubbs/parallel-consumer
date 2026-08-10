@@ -103,11 +103,11 @@ Each of these is an idea rather than a commitment, and each has its own note:
   `next-module-maturity-table.md` for the settled wording.
 - **A living roadmap** of high-level themes, anchored on stated 1.0 exit criteria rather than a date.
   See `next-living-roadmap.md`.
-- **A machine-readable index of the product's features**, one file per feature, backfilled over the
+- **A machine-readable catalogue of the product's features**, one file per feature, backfilled over the
   existing surface. Built for a narrow agent to write into safely - a general docs site is too
   unstructured for that - and it seeds the docs site as a byproduct. Unlike the rest of this list it is
   permanent rather than a release artefact. Starting now, maintained alongside the README until the
-  cutover. See `next-feature-index.md`.
+  cutover. See `feature--docs-catalogue.md`.
 
 ## Do at release: one sweep over the upstream mirrors
 

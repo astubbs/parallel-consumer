@@ -11,7 +11,7 @@ The four ideas, referred to below by letter:
 | **T** | `next-testing-suite-as-product-docs.md` | A published section presenting the test suite as a product |
 | **M** | `next-module-maturity-table.md` | A per-module maturity table in `src/docs/README_TEMPLATE.adoc` |
 | **R** | `next-living-roadmap.md` | A themes-level roadmap in markdown, plus the 1.0 exit criteria |
-| **F** | `next-feature-index.md` | A machine-readable index of the product features, backfilled, seeding the docs site |
+| **F** | `feature--docs-catalogue.md` | A machine-readable index of the product features, backfilled, seeding the docs site |
 
 ## They are not four independent tracks
 
@@ -215,7 +215,7 @@ checkout in either case.
 | M | `docs/inflight/next-module-maturity-table.md` |
 | T | `docs/inflight/next-testing-suite-as-product-docs.md` |
 | R | `docs/inflight/next-living-roadmap.md` |
-| F | `docs/inflight/next-feature-index.md` |
+| F | `docs/inflight/feature--docs-catalogue.md` |
 | nobody during fan-out | `docs/inflight/release-0.6.0.0.md`, reconciled in wave 2 |
 
 Each agent folds its chosen direction back into its own note, in place. That is what the ledger wants
