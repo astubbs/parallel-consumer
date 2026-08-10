@@ -108,6 +108,14 @@ keeps dispatching until the next pump notices.
 | R13 | Each pile C, D and H case that does not move is re-recorded as a named divergence with the reason, not left unexplained. | The spike plan's pile table |
 | R14 | No assertion is weakened, skipped or deleted anywhere. | AGENTS.md test discipline |
 
+**User-facing surface**
+
+| ID | Requirement | Source |
+|---|---|---|
+| R15 | The user-facing surface moves in the same unit as the behaviour. The new control-arm property is named and documented in the module README's settings block beside `pc.streams.wakeOnWork.enabled`, and every `Current Shortcomings` entry this work falsifies is rewritten. | Field testers are the module's whole current audience, and the README points them at that list |
+| R16 | Enabling the pause must not regress head-of-line-blocking throughput, measured with the control-arm property as the single varied term. | R17 makes `buffered.records.per.partition` a concurrency knob as well as a memory knob; an unmeasured throughput loss would hit the module's headline value |
+| R17 | If `max.task.idle.ms` is honoured on the PC path at all, it is honoured with stated semantics and any divergence from stock is recorded in the divergence list. Honouring a Kafka setting with different meaning and saying nothing is the failure mode the unsupported-surface refusal exists to prevent. | The module's promise is that unsupported semantics refuse loudly rather than differ silently |
+
 ### Scope Boundaries
 
 **In scope.** Per-partition occupancy publication; pause and resume on the PC path; the buffered-records
@@ -186,11 +194,30 @@ above. The tests are a weak scorecard for it, so this plan carries its own proof
 
 This is the design question the brief asked to be settled here.
 
-Counting toward Kafka's own limit means `buffered.records.per.partition` keeps the meaning the user
-configured, `addRecords` keeps being the place that pauses, `resumePollingForPartitionsWithAvailableSpace`
-keeps being the place that resumes, and the `active-buffer-count` metric keeps meaning occupancy. Kafka
-already implements the whole loop; the only thing missing is the number. Feeding it the right number is
-a smaller change than any alternative and leaves one limit rather than two.
+Counting toward Kafka's own limit means `addRecords` keeps being the place that pauses,
+`resumePollingForPartitionsWithAvailableSpace` keeps being the place that resumes, and the
+`active-buffer-count` metric keeps meaning occupancy. Kafka already implements the whole loop; the only
+thing missing is the number. Feeding it the right number leaves one limit rather than two.
+
+**It does not leave `buffered.records.per.partition` meaning exactly what it did, and saying so would be
+false.** On the stock path it is purely a memory knob, because a serial engine draws no parallelism from
+a deeper buffer. Under PC dispatch the buffer is also the pool of distinct keys concurrency is drawn
+from, so a low setting now caps concurrency as well as memory. A user who tuned it down for a serial
+engine gets less parallelism in the parallel one, which is the module's headline value. That is a real
+trade, it must be documented rather than discovered, and R16 measures it.
+
+**Three options were weighed, not two.** The third is the one an implementer would find first and is
+recorded here so it is not re-proposed:
+
+| Option | Why it loses |
+|---|---|
+| **Count toward `maxBufferedSize` (chosen)** | - |
+| Dispatcher applies its own limit and reports Streams' buffer as full | "Full" is not an occupancy, so nothing can decide when to resume. It needs a second threshold, and two thresholds that can disagree is how a partition ends up paused forever with no error to explain it. It also makes Kafka's own tests meaningless about a limit Kafka no longer owns. |
+| **PC's own inflow throttle** - `WorkManager.shouldThrottle()` / `isSufficientlyLoaded()`, which core PC's `BrokerPollSystem` already consumes to pause a consumer, and which `BrokerPollerBackpressureTest` already asserts against a real broker | Genuinely attractive: PC's own accounting, no new counter, proven against a broker, and reachable from the StreamThread, which is already the owner thread. It is unconsumed here only because `BrokerPollSystem` does not run on this path. It loses on **granularity and units**. The signal is one boolean for the whole WorkManager, but Kafka Streams pauses and resumes per partition, so it can stop the world and cannot selectively restart it. And it is keyed on a multiple of PC's `maxConcurrency` - a concurrency target - not on a memory budget, so `buffered.records.per.partition` would become dead config and `active-buffer-count` would keep reporting zero. The metric would still be a lie. |
+
+So "a smaller change than the alternatives" is not the argument, and an earlier draft of this KTD
+claimed it without having checked. The argument is per-partition granularity and keeping the user's
+configured limit live.
 
 It also keeps the seam out of `inFlight`. That counter carries a documented KNOWN RESIDUAL - a stale
 read between a worker's completion enqueue and its decrement - whose stated fix is to split it in two
@@ -301,7 +328,32 @@ alignment for joins and windows - every one of which this module refuses - so it
 is close to zero, and it earns its place mainly by restoring a configured behaviour rather than silently
 ignoring it.
 
-Governs R6 partially; owns U7.
+**Cutting it is not the same as ignoring it, and R17 is what makes that distinction binding.** This
+module's whole promise about unsupported behaviour is that it refuses loudly rather than differing
+silently, and `max.task.idle.ms` is currently the second kind: the PC path reads a user's setting and
+does nothing with it. Whichever way U7 goes, the outcome is written down - honoured with the simplified
+semantics named, or left unimplemented and recorded in the divergence list beside stream time and
+partition ordering. There is no branch of this decision where the setting stays quietly ignored.
+
+Governs R6 partially, R17; owns U7.
+
+#### KTD7. The backpressure switch is permanent, documented, user-facing surface - not measurement scaffolding.
+
+`pc.streams.backpressure.enabled`, following the `pc.streams.*` convention already set by
+`pc.streams.dispatch.enabled`, `pc.streams.dispatch.poolSize` and `pc.streams.wakeOnWork.enabled`, and
+sharing their loud-failure rule: a value that is neither `true` nor `false` throws rather than being read
+as off.
+
+Permanent for the same two reasons `pc.streams.wakeOnWork.enabled` is. It is the control arm, so it has
+to survive the run that used it or the experiment cannot be repeated. And it is an escape hatch on a
+change that can pause a user's consumer - the one failure shape in this plan that presents as a silent
+stall rather than an exception - so an operator needs a way to take it out of the picture without
+rebuilding.
+
+Permanence is what makes documenting it obligatory rather than optional, which is why R15 puts it in the
+README's settings block in this unit rather than leaving it to a later documentation pass.
+
+Governs R15.
 
 ### High-Level Technical Design
 
@@ -549,7 +601,7 @@ written:
    is about a backpressure test whose named scenario was unreachable by construction. Before asserting a
    bound, show from the record count, `buffered.records.per.partition`, the fetch size and the
    processing cost that the control arm *can* exceed it and the fixed arm *can* approach it.
-2. **Approach the bound.** `docs/inflight/pr-streams-task-lifecycle-and-rebalance.md` records the rule
+2. **Approach the bound.** `docs/inflight/pr-streams-rebalance-coverage-gaps.md` records the rule
    that a test which never approaches its own bound is not exercising the thing it bounds. Report the
    fixed arm's maximum as a number, not as a pass.
 3. **Await the value being asserted, never a proxy that leads it.** The maximum-observed reading is the
@@ -700,17 +752,31 @@ default-configuration case is the one that matters more.
 
 ### U8. Re-measure, and re-record what stays divergent
 
-**Goal:** the pile table and the divergence list match what is now true, with evidence.
+**Goal:** the pile table and the divergence list match what is now true, and a field tester reading the
+user-facing surface is not told two things that stopped being true.
 
-**Requirements:** R11, R12, R13.
+**Requirements:** R11, R12, R13, R15.
 
 **Dependencies:** U1-U7.
 
 **Files:**
-- `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md` (the pile classification table and its owner column)
+- `parallel-consumer-streams/README.md` - **unconditional, not gated on a proven-scope claim moving.**
+  Document `pc.streams.backpressure.enabled` in the settings block beside `pc.streams.wakeOnWork.enabled`,
+  and say that `buffered.records.per.partition` now bounds memory *and* caps the key pool concurrency is
+  drawn from.
+- `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md` - the pile classification table **and
+  `Current Shortcomings`**. Two entries there stop being true when this lands: *"Consumer pausing -
+  Kafka Streams, not PC's"* and *"Failures surface a pump cycle late"*. The first is closed; the second
+  is **narrowed, not closed** - U6 bounds the window, it does not remove it - and must be rewritten to
+  say so rather than struck.
 - `docs/inflight/pr-ks-spike-next-work.md`
-- `docs/inflight/pr-ks-spike-hostile-streams-review.md` (strike the two aims this unit closes)
-- `parallel-consumer-streams/README.md` (only if a proven-scope claim moves)
+- `docs/inflight/pr-ks-spike-hostile-streams-review.md` (the two aims this unit answers)
+
+**The `Current Shortcomings` list is a three-way collision.** U10, U13 and U14 all falsify entries in it
+from parallel branches. This unit edits only the two entries it can cite a measurement for, and leaves a
+note in the inflight entry saying the list must be re-checked as a whole at consolidation rather than
+trusted from any single branch's edit. Editing entries this unit did not measure would be the same
+mistake as inheriting a pile count.
 
 **No CHANGELOG.adoc edit.** AGENTS.md is explicit that a PR never adds a changelog entry and that
 there is no window in which a PR contributes one. The only sanctioned edit is correcting an existing
@@ -751,6 +817,7 @@ established it.
 | Module unit suite | `./mvnw -pl .,parallel-consumer-streams test -Dcopyright.skip=true` | green |
 | Module integration suite | `./mvnw -pl .,parallel-consumer-streams verify -Dcopyright.skip=true` | green, including both arms of U4 |
 | Memory bound | U4's two arms | fixed arm within bound, control arm outside it, both numbers reported |
+| Concurrency not regressed | `HeadOfLineBlockingBenchmarkTest`, varying only `pc.streams.backpressure.enabled` | throughput with the pause on is not materially worse than with it off, at a `buffered.records.per.partition` large enough not to cap the key pool. Report both numbers - "no regression" without them is not a result. |
 | Patch integrity | `bin/regen-patch.sh`, then diff added/removed line **bodies** against the previous patch | every line the old patch added is still added. Hunk count is a hint - adding lines can merge hunks and lower it legitimately. |
 
 **Proving the upstream suite actually ran is part of the gate.** `-Dtest=...` silently overrides the
@@ -833,8 +900,9 @@ Recorded because the scoping-confirmation gate did not run.
 2. Reimplementing `PartitionGroup.readyToProcess` faithfully, including its `fetchedLags` branches, is
    not wanted at the price of a possible stall. U7 takes the simplified form instead, and is cuttable.
 3. Making `shouldPauseAndResumeBasedOnBufferedRecords` pass by serialising dispatch is not on the table.
-4. The control-arm property added in U2 is wanted permanently, as `pc.streams.wakeOnWork.enabled` is,
-   rather than being a temporary measurement scaffold to remove afterwards.
+4. The `Current Shortcomings` entries this unit falsifies are this unit's to edit, because it is the one
+   that can cite the measurement. The other two branches falsifying entries in the same list re-check it
+   at consolidation rather than each trusting the others - see U8.
 
 ---
 
@@ -853,6 +921,12 @@ Recorded because the scoping-confirmation gate did not run.
   which is what makes KTD1's loop close without new plumbing.
 - Kafka 3.9.2 `PartitionGroup.readyToProcess` - the idling semantics KTD6 simplifies, and the
   `fetchedLags` branches that make a faithful reimplementation a stall risk.
+- `parallel-consumer-core` `WorkManager.shouldThrottle()` / `isSufficientlyLoaded()`, and
+  `BrokerPollerBackpressureTest` - the third backpressure option KTD1 weighs and rejects, already proven
+  against a real broker on core's own path.
+- `docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md` - `StreamThreadTest`'s
+  `shouldLogAndRecordSkippedRecordsForInvalidTimestamps[3]` is a pre-existing flake at roughly 2 runs in
+  5. If that specific case fails the 419 gate, re-run it; any other failure is real.
 - `parallel-consumer-core` `ShardKey.KeyOrderedKey` - shards on `(topic-partition, key)`, which is why
   two partitions dispatch concurrently and why `shouldPauseAndResumeBasedOnBufferedRecords` is
   unreachable.
