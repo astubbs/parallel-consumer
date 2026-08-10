@@ -13,17 +13,29 @@ they are not re-proposed. Full working: `docs/ideation/2026-08-10-module-maturit
 - The position taken at 0.6.0.0 is that **every known critical defect has been addressed**, under
   considerably more - and more rigorous - testing than before, and that the project is **ready for
   production use as far as reliability is concerned**.
-- What actually remains before 1.0 is refactoring and a set of contained follow-up items. None of it
-  is reliability work.
+- 1.0 is waiting on three things, not one: a settled API surface, the functionality still intended for
+  it, and confidence on critical bugs rather than only on known ones.
 
-The resolution is that **a single version number is being asked to carry two independent facts**:
+**Correction.** This note previously said pre-1.0 reserves the API surface *and not reliability*, and
+that what remained before 1.0 was refactoring with no reliability work in it. Neither is true, and the
+sentence survived several rounds of review because it is neat rather than because it is accurate. 1.0
+is also gated on wanted functionality landing and on critical-bug confidence.
 
-| Axis | 0.6.0.0 position |
+So a single version number is being asked to carry several independent facts, and the honest framing
+separates what is *claimed now* from what 1.0 is *waiting on*:
+
+| | 0.6.0.0 position |
 |---|---|
-| **Reliability** - will it lose or double-process your data, stall, or leak | The claim being made. Known critical issues fixed, and demonstrably tested |
-| **API stability** - will your code still compile next release | Not yet settled. This is what `<1.0` is really reserving |
+| **Reliability now** - will it lose or double-process your data, stall, or leak | The claim being made. Known critical issues fixed, and demonstrably tested |
+| **API stability** | Not settled. Reserved until 1.0 |
+| **Intended functionality** | Not complete. Some is still wanted before 1.0 |
+| **Critical-bug confidence** | 0.6.0.0 claims the *known* set is fixed. 1.0 claims confidence about the unknown set, which is earned by time in the field rather than by a fix landing |
 
-"Pre-1.0 refers to the API surface, not to reliability" is a defensible, checkable sentence.
+The reader-facing sentence therefore has to say that below 1.0 does not mean unproven, and then name
+what 1.0 is actually waiting on - not reduce it to the API surface.
+
+**Open:** the last row above is an interpretation, not a settled position. If "critical-bug-free for
+1.0" means something other than confidence about the unknown set, the sentence needs rewording.
 
 Do not oversell what testing proves. It shows the known failure modes are covered and no longer
 reproduce - not that no unknown ones exist. The claim to make is **"all known critical issues"**.
@@ -86,9 +98,12 @@ thing being corrected is silence.
 
 ## Open, and blocking
 
-- **The experiment rows are not writable yet.** Connect, Kafka Streams and the GUI are spikes with no
-  open PR and are not in the reactor. Whichever PR lands each module adds its own row; writing the row
-  first would assert something the tree contradicts.
+- **The experiment rows are intended but not writable yet.** Connect, Kafka Streams and the GUI are
+  expected in 0.6.0.0 as experiments, and are expected to get PRs. They are spikes on branches today
+  with no open PR and are not in the reactor, so writing their rows now would assert something the
+  tree contradicts. The intent is recorded here; whichever PR lands each module adds its own row, and
+  that PR is also the first moment the table says anything - before the first experiment lands, every
+  row would read the same and the table would be a module directory rather than a maturity table.
 - **A release-time cross-check, not a documentation task.** Before the tag, confirm the gate actually
   held: astubbs#29 landed and confluentinc#857 closed. If it did not, name the open defect in the
   release material rather than softening the sentence. Background in `bug-857-family.md`.
