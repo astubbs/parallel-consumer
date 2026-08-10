@@ -613,13 +613,15 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     /**
      * The same defect class as {@link #loopEndCallBackCanBeRegisteredFromAnotherThread()}, one subsystem over.
      * <p>
-     * {@code WorkManager.successfulWorkListeners} is exposed by a Lombok {@code @Getter(PUBLIC)}, which hands callers
-     * the live mutable list, so registration is {@code getSuccessfulWorkListeners().add(..)} from whatever thread the
-     * caller happens to be on. {@code WorkManager.onSuccessResult} iterates it, and is documented as running from
-     * "controller or poller thread". Plain-list iteration breaks when one of those adds lands mid-notify.
+     * {@link io.confluent.parallelconsumer.state.WorkManager#addSuccessfulWorkListener
+     * WorkManager.addSuccessfulWorkListener} can be called from any thread, while
+     * {@code WorkManager.onSuccessResult} iterates the listeners and is documented as running from "controller or
+     * poller thread". Plain-list iteration breaks when a registration lands mid-notify.
      * <p>
-     * Note the accessor is *why* this instance stayed hidden: searching for the field name finds the declaration and
-     * the iteration but never a mutation, so it reads as dead code. The mutation is spelled with the getter's name.
+     * This registration used to be spelled {@code getSuccessfulWorkListeners().add(..)}, against a list handed out
+     * whole by a Lombok {@code @Getter(PUBLIC)} - which is exactly why the bug stayed hidden. Searching for the field
+     * name found the declaration and the iteration but never a mutation, so it read as dead code. The accessor is now
+     * a real method, so the next such search finds its callers.
      */
     @Test
     @SneakyThrows
@@ -631,7 +633,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         var wm = parallelConsumer.getWm();
 
         // runs on whichever thread completed the work, and holds the notify loop open while the list is mutated
-        wm.getSuccessfulWorkListeners().add(work -> {
+        wm.addSuccessfulWorkListener(work -> {
             if (parkedOnce.compareAndSet(false, true)) {
                 notifyingListeners.countDown();
                 awaitLatch(registrationLanded);
@@ -640,7 +642,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         var registrar = new Thread(() -> {
             awaitLatch(notifyingListeners);
-            wm.getSuccessfulWorkListeners().add(work -> log.trace("Listener registered off thread"));
+            wm.addSuccessfulWorkListener(work -> log.trace("Listener registered off thread"));
             registrationLanded.countDown();
         }, "off-thread-success-listener-registrar");
         registrar.start();

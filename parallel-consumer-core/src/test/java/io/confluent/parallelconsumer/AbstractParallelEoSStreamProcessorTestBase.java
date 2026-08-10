@@ -166,7 +166,7 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
     }
 
     protected void injectWorkSuccessListener(WorkManager<String, String> wm, List<WorkContainer<String, String>> customSuccessfulWork) {
-        wm.getSuccessfulWorkListeners().add((work) -> {
+        wm.addSuccessfulWorkListener((work) -> {
             log.debug("Test work listener heard some successful work: {}", work);
             synchronized (customSuccessfulWork) {
                 customSuccessfulWork.add(work);

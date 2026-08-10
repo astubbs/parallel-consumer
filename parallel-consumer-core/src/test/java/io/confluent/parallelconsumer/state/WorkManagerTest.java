@@ -88,7 +88,7 @@ public class WorkManagerTest {
         module = new PCModuleTestEnv(optsOverride);
 
         wm = module.workManager();
-        wm.getSuccessfulWorkListeners().add((work) -> {
+        wm.addSuccessfulWorkListener((work) -> {
             log.debug("Heard some successful work: {}", work);
             successfulWork.add(work);
         });

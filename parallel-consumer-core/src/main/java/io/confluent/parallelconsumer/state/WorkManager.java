@@ -67,14 +67,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private int numberRecordsOutForProcessing = 0;
     private PCModule<K, V> module;
     /**
-     * Useful for testing.
+     * Useful for testing. Register with {@link #addSuccessfulWorkListener}.
      * <p>
-     * Concurrent because the getter below hands out this list itself, so registration happens on whatever thread the
-     * caller is on, while {@link #onSuccessResult} iterates it from the controller or poller thread. A plain list
-     * breaks its own iteration when a registration lands mid-notify, and the resulting
-     * {@link java.util.ConcurrentModificationException} escapes into the control loop and stops the consumer.
+     * Concurrent because registration can happen on any thread, while {@link #onSuccessResult} iterates it from the
+     * controller or poller thread. A plain list breaks its own iteration when a registration lands mid-notify, and the
+     * resulting {@link java.util.ConcurrentModificationException} escapes into the control loop and stops the
+     * consumer.
      */
-    @Getter(PUBLIC)
     private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new CopyOnWriteArrayList<>();
 
     private Gauge waitingRecordsNumberGauge;
@@ -163,6 +162,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         }
         numberRecordsOutForProcessing += work.size();
         return work;
+    }
+
+    /**
+     * Register a listener to be notified after each work container succeeds.
+     * <p>
+     * Safe to call from any thread, including while the consumer is running. The listener itself runs on whichever
+     * thread completed the work - controller or poller - so it must not block.
+     */
+    public void addSuccessfulWorkListener(Consumer<WorkContainer<K, V>> listener) {
+        successfulWorkListeners.add(listener);
     }
 
     public void onSuccessResult(WorkContainer<K, V> wc) {
