@@ -27,7 +27,7 @@ import java.lang.annotation.Target;
  *     blocks, on purpose.</li>
  *     <li><b>Quarantine is master-state, not PR-state.</b> Only tests failing on master (or on every PR
  *     regardless of content) qualify. A test red on only one PR is that PR's problem.</li>
- *     <li><b>Re-enabling = deleting this annotation AND its entry in {@code docs/QUARANTINED_TESTS.md}</b>
+ *     <li><b>Re-enabling = deleting this annotation AND its entry in {@code docs/quarantined-tests.md}</b>
  *     (the CI-enforced live registry - {@code bin/check-quarantine-registry.sh} fails on drift), done by
  *     the owning fix PR ({@link #fixedBy()}) after it merges master - which atomically moves the test
  *     back into the gating lane.</li>

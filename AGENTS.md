@@ -16,18 +16,83 @@ owned that content all along.)
 | **`STRATEGY.md`** (repo root) | What the product is and why: the target problem, the guiding choice to solve it client-side, who it is for, the metrics that would show the approach working, and the tracks under investment | A roadmap, a schedule, or a feature list. It is a *claims* document that nothing tests, so work which falsifies one of its claims has to update it - the open branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
 | **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and **never** a committed index file, which every PR would edit |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** in their own release-gated section, and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
-| **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
-| **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
+| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary: entities, named processes and status concepts whose meaning here is project-specific (the produce/commit lock pair, *dirty*, shard, in-flight work). Each entry stands alone - no file paths, class names or current config values. Relevant when orienting to the codebase or writing about it | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with frontmatter for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for a specific piece of work | Durable reference - a plan goes stale once its work lands |
-| **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
+| **`docs/self-hosted-runner.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status | Editorial opinion (that is the `.adoc` beside it), and **upstream issues** - those live in the fork mirrors, `upstream-mirror` label |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when they disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes. Sections for **shipped** releases are frozen; the section for the release being cut - **`== 0.6.0.0` included** - is regenerated at release time from the commit log, so what is under it today is working text, not the notes v6 will publish. `README.adoc` links to it and no longer embeds it | Anything invisible to users or operators - and **not** a per-PR chore: a PR never *adds* an entry. Correcting a factual error in an existing one is the only edit it may make |
 
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
+## You are a machine running techniques written for humans
+
+Nearly all engineering advice you have absorbed carries an unstated cost model: human attention, working
+memory, fatigue, and the tedium of repetitive work. You inherited the advice and the cost model together,
+and you cannot easily tell them apart. **The advice is usually right. The cost model is usually not yours.**
+
+Before letting a technique's conventional wisdom shape a decision, ask what its justification rests on. If
+it rests on correctness, it binds you. If it rests on human effort, it does not.
+
+**Cheap for you, expensive for a human - never let these steer a design:**
+
+- **Merge conflicts, rebases, and patches against a moving upstream.** Never reshape, relocate, or narrow a
+  change to dodge a conflict. Never reject forking or patching a dependency because "we would have to
+  maintain the patch" - regenerating a patch is a task you are good at. `parallel-consumer-streams-spike`
+  patches Kafka itself at build time; that is a normal option, not a heroic one.
+- **Reading whole subsystems.** Read the source and *know* the contract. Do not infer it from javadoc and
+  naming and then act on the inference - that is how lifecycle and threading assumptions turn out wrong.
+- **Exhaustiveness.** Forty test cases cost barely more than five. Prefer per-version source sets to a
+  clever reflection shim, every enum branch to the interesting ones, every error path to the happy one.
+  Cleverness whose purpose is saving keystrokes buys you nothing and costs the reader.
+- **Wide mechanical changes.** A 200-file rename verified against the suite is among the *safest* changes
+  available to you, not the riskiest. Human fear of large diffs is fear of attention lapses.
+- **Keeping N things in sync.** The *maintenance* argument for an abstraction is weak for you. The
+  *single-source-of-truth-for-correctness* argument is not - keep that one, and keep [Be DRY](#code-style).
+
+**Re-derive rather than inherit:**
+
+- **"Ship the smallest thing first"** is right, but choose the increment for what it *validates*, not for
+  what it *avoids building*. The smallest-looking option is sometimes more code and less capability.
+- **Effort estimates** ("that is a two-week change", "that is a lot of files") justify nothing. Argue from
+  risk and verifiability. Strip every effort-based reason from an argument and see what is actually left.
+
+**Still genuinely hard - the human intuition holds here:**
+
+- **Wall-clock.** CI, broker integration tests, and builds do not care how fast you think.
+- **Non-determinism.** Concurrency bugs and flakes are hard for you too, and this repository's history is
+  the proof. Do not get confident here; see [Testing](#testing).
+- **Judgment about people.** What users want, what is worth building, what to prioritise. Ask.
+- **Anything you cannot verify.** No broker, no credentials, no production data. Say so plainly instead of
+  reasoning past it.
+- **Irreversible or outward-facing actions.** Cheap to perform is not the same as safe to perform.
+
+## Read the commits you inherit
+
+When you merge, rebase, or replay onto a moved branch, **read the commit messages you just took on** -
+`git log --oneline <old-base>..<new-base>`, then read the bodies of anything that touches your area.
+Inheriting commits means inheriting decisions, constraints, and sometimes instructions addressed to you.
+A green build proves the code still compiles; it proves nothing about whether the ground under your
+design moved.
+
+Three things hide there, and none of them announce themselves:
+
+- **Instructions to your branch.** On astubbs#240 the parent's tip commit said, in its body, *"Connect
+  inherits this and should extend the second persona rather than re-litigate whether one exists."* Never
+  read, so it was obeyed only by luck.
+- **Decisions that reshape your work.** The same rebase renamed a module and its package. That was
+  discovered by tripping over a merge conflict, and a new `STRATEGY.md` naming this project's approach
+  was discovered only because the owner asked whether it had been read.
+- **Arguments against what you are about to do.** A commit you are overriding usually explains why it
+  did what it did. Record that reasoning where you override it, or the next agent reads your change as
+  an oversight and reverts it.
+
+Cost is not a defence: reading a dozen commit messages is seconds, and this is exactly the kind of work
+an agent is fast at (see *You are a machine running techniques written for humans* above).
 
 ## Before you investigate anything
 
@@ -178,7 +243,7 @@ bin/performance-test.sh
   demand) in the non-gating "Quarantine Lane / tests" CI job, whose summary carries pass/fail + the audit of every
   quarantined test and its owner; the seconds-fast "Quarantine Audit" job enforces the rules on every
   PR (registry drift / broken owner claims fail fast - no tests are run there). The live registry
-  / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
+  / task list is `docs/quarantined-tests.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
   the annotations in both directions, so it can't drift; `bin/check-quarantine-owners.sh` additionally
   verifies each entry's owner claim (owning PR exists + is open + eventually removes the quarantine). Rules: **(1) no
   quarantine without diagnosis** — undiagnosed red stays red and blocks, on purpose; **(2) quarantine is
@@ -278,7 +343,7 @@ stack traces (see Testing).
 - **`.github/workflows/repo-hygiene.yml`** — "Repo Hygiene", on every push/PR plus dispatch. Two independent jobs. `sigpipe` runs `bin/check-shell-sigpipe.sh` (its own self-test first) to catch a `bin/*.sh` piping into `grep -q` under `pipefail`, which silently inverts the script's answer. `actions` runs `bin/check-action-versions.sh`, keeping every GitHub Action pinned to a single version across all workflows. Neither gates the build - they exist because the failures they catch are invisible rather than loud.
 - **`.github/workflows/check-dependencies.yml`** — "PR Dependency Check". Reads `depends on astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out of order. See [PR Discipline](#pr-discipline) for the syntax.
 - **`.github/workflows/cancel-closed-pr-runs.yml`** — Cancels a PR's in-flight runs when it closes, so a withdrawn PR stops occupying runners. Housekeeping only; gates nothing.
-- **Self-hosted lanes** (see [`docs/SELF_HOSTED_RUNNER.md`](docs/SELF_HOSTED_RUNNER.md)). None of these gate merging - they are for speed and for work too heavy for a 2-core hosted runner. All are **skipped for PRs from forks** (`head.repo.full_name == github.repository`), because a fork PR must never run on our own hardware.
+- **Self-hosted lanes** (see [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md)). None of these gate merging - they are for speed and for work too heavy for a 2-core hosted runner. All are **skipped for PRs from forks** (`head.repo.full_name == github.repository`), because a fork PR must never run on our own hardware.
   **`highcpu` is the only self-hosted label** - six runners, all online. Declare labels in [`.github/actionlint.yaml`](.github/actionlint.yaml) or actionlint flags them.
 
   - `pr-highcpu-fast-feedback.yml` ("highcpu") — on every in-repo PR plus dispatch. The lane that earns the hardware.
@@ -647,7 +712,7 @@ Multiple agents/sessions often work in parallel git worktrees (kept under `.clau
 
 ## Refactoring backlog
 
-Deferred internal refactors (too big/risky to fold into the change at hand) live in [`docs/refactoring.md`](docs/refactoring.md) - a versioned markdown list, grouped by file, **not** GitHub issues (overkill for a solo maintainer). When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot (`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry to the doc. **`docs/refactoring.md` also owns the triage of plain `TODO`/`FIXME`/`XXX` markers** - there are ~90 of those versus a handful using the `TODO(refactor):` convention, and they are inventoried in the generated [`docs/TODO_INDEX.md`](docs/TODO_INDEX.md) (`bin/todo-index.sh`, `--check` fails when stale). It already covers the breaking-change queue, static-state removal, offset-encoder cleanups and per-file backlogs - so write triage up here, and **do not start a parallel list** (see *Where things live* at the top). Promote an item to a branch/PR only when you actually start it; if it maps to an upstream issue, link it rather than duplicate. The doc also tracks **breaking changes queued for the next major version** in a separate, release-gated section, kept apart from the non-breaking internal refactors (those are batched for a major bump, not folded in ad hoc). This is distinct from `docs/inflight/` (in-flight), `upstream-map.yaml` (fork↔upstream), and PR review feedback (raise on the PR).
+Deferred internal refactors (too big/risky to fold into the change at hand) live in [`docs/refactoring.md`](docs/refactoring.md) - a versioned markdown list, grouped by file, **not** GitHub issues (overkill for a solo maintainer). When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot (`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry to the doc. **`docs/refactoring.md` also owns the triage of plain `TODO`/`FIXME`/`XXX` markers** - there are ~90 of those versus a handful using the `TODO(refactor):` convention, and they are inventoried in the generated [`docs/todo-index.md`](docs/todo-index.md) (`bin/todo-index.sh`, `--check` fails when stale). It already covers the breaking-change queue, static-state removal, offset-encoder cleanups and per-file backlogs - so write triage up here, and **do not start a parallel list** (see *Where things live* at the top). Promote an item to a branch/PR only when you actually start it; if it maps to an upstream issue, link it rather than duplicate. The doc also tracks **breaking changes queued for the next major version** in a separate, release-gated section, kept apart from the non-breaking internal refactors (those are batched for a major bump, not folded in ad hoc). This is distinct from `docs/inflight/` (in-flight), `upstream-map.yaml` (fork↔upstream), and PR review feedback (raise on the PR).
 
 ## Upstream tracking
 

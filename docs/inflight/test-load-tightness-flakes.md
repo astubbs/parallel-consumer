@@ -54,6 +54,62 @@ bug in exactly this area (a rebalance-time commit killing the broker-poll thread
 `bin/soak-test.sh 'PartitionStateCommittedOffsetIT#committedOffsetRemoved' 20` at a low
 `SOAK_FREE_CORES`.
 
+**Five local sightings from one session are collected in
+[`test-local-core-failures-2026-08-10.md`](test-local-core-failures-2026-08-10.md)** - three clusters,
+one diagnosis between them, and the local/CI asymmetry that is the actually interesting part. The
+shutdown-family detail below predates that entry; the newer one supersedes it on scope and on the
+astubbs#101 correction.
+
+**`ParallelEoSStreamProcessorTest`'s shutdown family is unstable locally - three sightings, one session.**
+On 2026-08-10, six full reactor runs on astubbs#240's branch produced three failures, each a different
+test, none reproducing in isolation: `executorThreadsInterruptedOnShutdownTimeout[1]` (detailed below),
+`inFlightMessagesCommittedIfProcessedDuringShutdown[3]` failing through
+`AbstractParallelEoSStreamProcessorTestBase.assertCommits` with `[1 record completed during shutdown]`,
+and two in `JStreamParallelEoSStreamProcessorTest` - `testConsumeAndProduce` and `testFlatMapProduce`,
+once each. Four failures over roughly seven full reactor runs, four distinct tests. **Not a rate** - the
+runs were under varying background load and none was designed as a sample.
+
+**`inFlightMessagesCommittedIfProcessedDuringShutdown` is very likely already answered by astubbs#260,
+which is open and diagnoses this mechanism as correct product behaviour rather than a flake.** That PR
+covers a sibling in the same class failing through the same `assertCommits` helper, and its finding is
+that PC commits the highest *sequentially* succeeded offset plus one - so under KEY ordering, a completed
+record on an unblocked shard re-commits the same base offset with updated incomplete-offset encoding. The
+defect was in the helper, which meant an exact sequence in transactional mode and a duplicate-insensitive
+set in the others, while its javadoc claimed it collapsed repeats and never did. Check my sighting
+against that fix before treating it as its own investigation.
+
+It also corrects a link made here earlier: this is **not** astubbs#101 returning. That fixed the opposite
+symptom - a commit that never happened - so it is a different fault in the same test family.
+
+The `JStreamParallelEoSStreamProcessorTest` pair (`testConsumeAndProduce`, `testFlatMapProduce`) has no
+such explanation and has **not** been soaked; the contention reading is assumed for it, not evidenced.
+CI's Unit lane was green on the same tree throughout, which is what makes "this machine, not this code"
+the leading hypothesis rather than a conclusion.
+
+Two of the three are shutdown-commit siblings, which matters because
+[`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) already tracks a third member of that same
+family - `queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`, 3/45 on CI - as a **regression
+of astubbs#101**, surfacing through that same `assertCommits` helper. Independent sessions hitting
+different members of one family is stronger signal than any single sighting, and argues for treating the
+shutdown-commit group as one investigation rather than three flakes. Whoever picks it up should start
+from the astubbs#101 fix and diff against it, per that entry.
+
+**Candidate, unconfirmed - and it looks like the unforceable-trigger class, not tightness.**
+`ParallelEoSStreamProcessorTest.executorThreadsInterruptedOnShutdownTimeout[1]` failed once
+(2026-08-10, astubbs#240's branch) during a reactor run with several concurrent Maven builds competing:
+`Expecting AtomicBoolean(false) to have value: true`. It then passed **0/6 unloaded and 0/8 at
+`SOAK_FREE_CORES=2`**, plus CI and a clean reactor run - not reproduced, so no rate, and one sighting is
+not a rate. Apply this doc's own rule before filing it as tight: the test sets a 1s `shutdownTimeout`,
+blocks the user function on a latch, closes, and asserts the worker caught `InterruptedException` - but
+between priming and closing it waits on `awaitForSomeLoopCycles(2)`, which awaits **control-loop cycles**,
+a proxy for the antecedent the assertion needs (*a worker is inside the user function*). If dispatch has
+not happened when `close()` fires there is nothing blocked to interrupt and the assertion fails exactly
+as seen. That is a trigger the test cannot force, so raising a timeout would never fix it; the fix is to
+have the user function count down an `entered` latch and await that instead. Note the sibling in the same
+class, `queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` (3/45), is already tracked in
+`test-untracked-ci-flakes.md` as a regression of astubbs#101 - same class, same shutdown-commit area,
+so rule the two in or out together rather than separately.
+
 **Explicitly NOT a member: `RebalanceEoSDeadlockTest.noDeadlockOnRevoke`** (1/20). Per the astubbs#68 record
 its contended failure maps to the real confluentinc#857 deadlock - that sighting is live confirmation the
 deadlock is still on master, with its fix waiting in astubbs#29.
