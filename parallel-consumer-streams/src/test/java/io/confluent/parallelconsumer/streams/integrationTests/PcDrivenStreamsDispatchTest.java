@@ -3,7 +3,6 @@ package io.confluent.parallelconsumer.streams.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import io.confluent.parallelconsumer.streams.PcDispatchCounters;
 import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
@@ -13,11 +12,9 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse;
 import org.apache.kafka.streams.kstream.KStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,7 +54,7 @@ import static org.awaitility.Awaitility.await;
  */
 @Slf4j
 @Isolated
-class PcDrivenStreamsDispatchTest extends BrokerIntegrationTest<String, String> {
+class PcDrivenStreamsDispatchTest extends BrokerStreamsIntegrationTest {
 
     private static final int KEYS = 6;
     private static final int RECORDS_PER_KEY = 5;
@@ -259,12 +256,7 @@ class PcDrivenStreamsDispatchTest extends BrokerIntegrationTest<String, String> 
         // plain ValueMapper cannot distinguish them.
         stream.mapValues((key, value) -> probe.processOneRecord(key, value)).to(outputTopic);
 
-        Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, namePrefix + "-" + System.nanoTime());
-        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers());
-        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.consumerPrefix("auto.offset.reset"), "earliest");
+        Properties props = baseStreamsProps(namePrefix + "-" + System.nanoTime());
         // One StreamThread, so the only concurrency observed inside the chain is the one this unit
         // introduced. With two threads a probe reading "2 at once" would prove nothing.
         props.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
@@ -274,22 +266,7 @@ class PcDrivenStreamsDispatchTest extends BrokerIntegrationTest<String, String> 
         // and process(), which is precisely the seam being measured. Leaving it off keeps the flag-off arm
         // stock and the flag-on arm attributable.
 
-        KafkaStreams streams = new KafkaStreams(builder.build(), props);
-        streams.setUncaughtExceptionHandler(throwable -> {
-            log.error("Streams thread died", throwable);
-            return StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
-        });
-        streams.start();
-
-        AtomicInteger polls = new AtomicInteger();
-        await().atMost(Duration.ofSeconds(60)).until(() -> {
-            KafkaStreams.State state = streams.state();
-            if (polls.getAndIncrement() % 10 == 0) {
-                log.info("Waiting for Streams to run, state={}", state);
-            }
-            return state == KafkaStreams.State.RUNNING;
-        });
-        return streams;
+        return startAndAwaitRunning(builder, props, LOG_AND_SHUT_DOWN_CLIENT);
     }
 
     private void produce(final String inputTopic) {

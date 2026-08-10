@@ -3,7 +3,6 @@ package io.confluent.parallelconsumer.streams.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import io.confluent.parallelconsumer.streams.PcDispatchCounters;
 import io.confluent.parallelconsumer.streams.integrationTests.BaselineFixture.Row;
@@ -17,11 +16,9 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse;
 
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +29,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,7 +50,7 @@ import static org.awaitility.Awaitility.await;
  * @see PcDrivenStatefulProofTest
  */
 @Slf4j
-abstract class PcDrivenProofSupport extends BrokerIntegrationTest<String, String> {
+abstract class PcDrivenProofSupport extends BrokerStreamsIntegrationTest {
 
     static final int POOL_SIZE = 4;
 
@@ -114,30 +110,10 @@ abstract class PcDrivenProofSupport extends BrokerIntegrationTest<String, String
         StreamsBuilder builder = new StreamsBuilder();
         topology.define(builder);
 
-        Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
-        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers());
-        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.consumerPrefix("auto.offset.reset"), "earliest");
+        Properties props = baseStreamsProps(applicationId);
         props.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
 
-        KafkaStreams streams = new KafkaStreams(builder.build(), props);
-        streams.setUncaughtExceptionHandler(throwable -> {
-            log.error("Streams thread died", throwable);
-            return StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
-        });
-        streams.start();
-
-        AtomicInteger polls = new AtomicInteger();
-        await().atMost(Duration.ofSeconds(60)).until(() -> {
-            KafkaStreams.State state = streams.state();
-            if (polls.getAndIncrement() % 10 == 0) {
-                log.info("Waiting for Streams to run, state={}", state);
-            }
-            return state == KafkaStreams.State.RUNNING;
-        });
-        return streams;
+        return startAndAwaitRunning(builder, props, LOG_AND_SHUT_DOWN_CLIENT);
     }
 
     /**
@@ -147,6 +123,14 @@ abstract class PcDrivenProofSupport extends BrokerIntegrationTest<String, String
      * <p>
      * Each send is awaited so the broker-assigned offset can be recorded against the value: that map is the
      * probe's only anchor for {@code context.offset()} that does not itself come from the record context.
+     * <p>
+     * <b>Call this before starting the topology.</b> The offset can only be recorded once the send is acked,
+     * so a topology that is already RUNNING can fetch and process a record in the window between that ack and
+     * the bookkeeping - the probe then finds no offset for a record it is holding and reports one "the test
+     * never sent". It is a narrow window, widest on the very first record because an idle StreamThread returns
+     * from its poll the instant that record lands, and it fails a run roughly once in eight on a loaded CI
+     * machine. Producing everything first closes it by construction; the arms set
+     * {@code auto.offset.reset=earliest}, so nothing produced ahead of start is missed.
      */
     @SneakyThrows
     void replayFixtureInputs(final String inputTopic, final BaselineFixture fixture, final AmbientContextProbe probe) {

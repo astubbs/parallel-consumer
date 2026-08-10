@@ -345,6 +345,11 @@ class PcDrivenStatefulProofTest extends PcDrivenProofSupport {
 
         probe.setExpectedTopic(inputTopic);
 
+        // Replayed BEFORE the topology starts, and the ordering is load-bearing - see replayFixtureInputs.
+        // Starting first leaves a window in which a running StreamThread can process a record before the test
+        // has recorded that record's offset, and the probe then reports a record "the test never sent".
+        replayFixtureInputs(inputTopic, fixture, probe);
+
         // The probe node is value-, key- and order-transparent: it returns the value it was given and emits
         // nothing of its own, so its presence cannot change what the count sees or what reaches the sink.
         // transformValues cannot change the key, so groupByKey below still needs no repartition.
@@ -370,7 +375,6 @@ class PcDrivenStatefulProofTest extends PcDrivenProofSupport {
 
         List<Row> outputs;
         try {
-            replayFixtureInputs(inputTopic, fixture, probe);
             outputs = drain(outputTopic, fixture.getOutputs().size(), longValueConsumerProps(),
                     (Long count) -> Long.toString(count));
         } finally {

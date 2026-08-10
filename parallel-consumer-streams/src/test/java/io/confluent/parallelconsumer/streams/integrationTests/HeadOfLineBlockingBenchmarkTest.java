@@ -3,13 +3,11 @@ package io.confluent.parallelconsumer.streams.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -24,7 +22,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,7 +57,7 @@ import static org.awaitility.Awaitility.await;
 // PcDispatchSwitch is process-wide: a concurrently running class that flipped it would silently rewrite which
 // arm this test measured.
 @Isolated
-class HeadOfLineBlockingBenchmarkTest extends BrokerIntegrationTest<String, String> {
+class HeadOfLineBlockingBenchmarkTest extends BrokerStreamsIntegrationTest {
 
     private static final int POOL_SIZE = 4;
 
@@ -265,27 +262,11 @@ class HeadOfLineBlockingBenchmarkTest extends BrokerIntegrationTest<String, Stri
             return value;
         }).to(outputTopic);
 
-        Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, name + "-" + System.nanoTime());
-        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers());
-        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.consumerPrefix("auto.offset.reset"), "earliest");
+        Properties props = baseStreamsProps(name + "-" + System.nanoTime());
         // One StreamThread, so the only concurrency available to the PC arm is the one this module introduced.
         props.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
 
-        KafkaStreams streams = new KafkaStreams(builder.build(), props);
-        streams.start();
-
-        AtomicInteger polls = new AtomicInteger();
-        await().atMost(Duration.ofSeconds(60)).until(() -> {
-            KafkaStreams.State state = streams.state();
-            if (polls.getAndIncrement() % 10 == 0) {
-                log.info("Waiting for Streams to run, state={}", state);
-            }
-            return state == KafkaStreams.State.RUNNING;
-        });
-        return streams;
+        return startAndAwaitRunning(builder, props);
     }
 
     private static void sleep(final Duration duration) {
