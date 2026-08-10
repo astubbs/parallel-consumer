@@ -199,7 +199,14 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <excludes>
+                    <!-- combine.children="append" is load-bearing, not decoration. Without it this list
+                         REPLACES the root pom's inherited surefire excludes - including
+                         `**/integrationTest*/**/*.java` - and the broker-backed crash-restart arm is
+                         collected by the UNIT lane as well as by failsafe: it ran twice and made the `test`
+                         phase require Docker. Found on 2026-08-11 the first time that arm was executed;
+                         `TestConventionRules` cannot catch it, because the class is in the right package
+                         and the defect is in this plugin config's merge semantics. -->
+                    <excludes combine.children="append">
                         <exclude>**/WorkerSinkTaskRegressionTest.java</exclude>
                     </excludes>
                     <systemPropertyVariables>
