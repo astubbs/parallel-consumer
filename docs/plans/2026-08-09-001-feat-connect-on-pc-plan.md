@@ -24,7 +24,7 @@ confluentinc/parallel-consumer#119); it is not a production Connect distribution
 **Authority hierarchy.** The requirements below define the outcome. Key Technical Decisions govern
 the mechanism for their cited requirements. AGENTS.md governs repository conventions. The current
 Connect 3.9.2 WorkerSinkTask and SinkTask contracts govern what a real connector may observe. The
-newer direction in docs/inflight/parked-connect-on-pc.md overrides the superseded
+newer direction in docs/inflight/pr-connect-on-pc.md overrides the superseded
 docs/plans/2026-08-08-001-feat-connect-sink-in-pc-plan.md.
 
 **Stop conditions.** Stop and surface a blocker instead of widening the spike if a generated-source
@@ -72,7 +72,7 @@ the resulting work is yet safe to commit through a real Connect worker.
 
 #### Generated patch harness
 
-- R1. A new Maven reactor module named parallel-consumer-connect-spike builds local generated copies of
+- R1. A new Maven reactor module named parallel-consumer-connect builds local generated copies of
   the named Kafka Connect source classes it patches, from `connect-runtime` or `connect-api` as needed,
   without committing generated Apache Kafka source or classes.
 - R2. The generated WorkerSinkTask class is demonstrably the class that loads when the spike module is
@@ -157,14 +157,19 @@ the resulting work is yet safe to commit through a real Connect worker.
 
 ### Context & Research
 
-- docs/inflight/parked-connect-on-pc.md records the rejected embedded-runtime direction, the adopted
+- docs/inflight/pr-connect-on-pc.md records the rejected embedded-runtime direction, the adopted
   patched-runtime direction, and the specific key-sharding question this spike isolates.
 - docs/inflight/next-patched-kafka-packaging.md establishes that local development is allowed while
   publication is blocked by separate licensing, trademark, and dependency-hygiene work.
-- `feats/ks-on-pc-spike` is the direct parent of this branch. Its `parallel-consumer-streams-spike` module
+- `feats/ks-on-pc-spike` is the direct parent of this branch. Its `parallel-consumer-streams` module
   supplies the source-jar unpacking and patch scripts, shadowed-class proof pattern, and public
   `PcTaskDispatcher`. That dispatcher already owns PC assignment, registration, bounded selection, worker
-  result marking, completion-mailbox drain, retry suppression, failure surfacing, and quiescence.
+  result marking, completion-mailbox drain, retry suppression, failure surfacing, and quiescence. Since the
+  parent's U9 it also owns the commit surface — `collectCommitData` (frontier plus encoded holes from
+  `collectCommitDataForDirtyPartitions`), `hasCommitDataOutstanding`, `onCommitSuccess` (the only path to
+  `setClean`), and `abortClose` — proven by its `CommitFrontierCrashRestartTest`. That machinery is what the
+  follow-on commit-composition design builds on: complete a record's work only when the owning task's
+  `preCommit()` covers it, and PC's frontier becomes the durable frontier with no clamping needed.
 - parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ShardKey.java defines KEY
   identity as `(topic-partition, key)` with deep array equality and null-safe hashing. astubbs#150 is prior
   art for the same-key/different-partition distinction.
@@ -191,7 +196,7 @@ the resulting work is yet safe to commit through a real Connect worker.
 
 ### Key Technical Decisions
 
-- KTD1. **Create a development-only parallel-consumer-connect-spike module on top of, and dependent on,
+- KTD1. **Create a development-only parallel-consumer-connect module on top of, and dependent on,
   the parent Streams spike module.** It reuses `PcTaskDispatcher` and the patch scripts directly, then adds
   only Connect's serial SinkTask-lane boundary. The name cannot be mistaken for a supported connector
   integration, and explicit publication opt-outs keep packaging decisions separate. (session-settled:
@@ -302,7 +307,7 @@ PR.
 
 ### System-Wide Impact
 
-- Build: root reactor wiring gains one experimental module after `parallel-consumer-streams-spike`. Its
+- Build: root reactor wiring gains one experimental module after `parallel-consumer-streams`. Its
   generated source directories must not be picked up as generic integration-test roots or committed.
 - Classpath: the module intentionally shadows a Kafka class only in its own test/runtime environment.
   The class-loading test must prove the expected winner and an untouched sibling's origin.
@@ -371,16 +376,16 @@ narrow patched WorkerSinkTask source tree, and bounds the disabled seam's observ
 **Files.**
 
 - pom.xml (modify)
-- parallel-consumer-streams-spike/bin/regen-patch.sh (modify)
-- parallel-consumer-connect-spike/pom.xml (create)
-- parallel-consumer-connect-spike/.gitignore (create)
-- parallel-consumer-connect-spike/src/main/patch/pcconnect.patch (create)
-- parallel-consumer-connect-spike/src/main/java/io/confluent/parallelconsumer/connectspike/PcConnectDispatchBridge.java (create)
-- parallel-consumer-connect-spike/src/test/java/io/confluent/parallelconsumer/connectspike/ShadowedClassLoadingTest.java (create)
-- parallel-consumer-connect-spike/src/test/java/io/confluent/parallelconsumer/connectspike/PatchHarnessTest.java (create)
-- parallel-consumer-connect-spike/src/test/java/io/confluent/parallelconsumer/connectspike/WorkerSinkTaskRegressionReportsVerifier.java (create)
-- parallel-consumer-connect-spike/src/test/resources/worker-sink-task-stock-baseline-tests.txt (create)
-- parallel-consumer-connect-spike/src/test/java/io/confluent/parallelconsumer/connectspike/TestConventionsArchTest.java (create)
+- parallel-consumer-streams/bin/regen-patch.sh (modify)
+- parallel-consumer-connect/pom.xml (create)
+- parallel-consumer-connect/.gitignore (create)
+- parallel-consumer-connect/src/main/patch/pcconnect.patch (create)
+- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connectspike/PcConnectDispatchBridge.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/ShadowedClassLoadingTest.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/PatchHarnessTest.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/WorkerSinkTaskRegressionReportsVerifier.java (create)
+- parallel-consumer-connect/src/test/resources/worker-sink-task-stock-baseline-tests.txt (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/TestConventionsArchTest.java (create)
 
 **Approach.**
 
@@ -443,11 +448,11 @@ shards to serial SinkTask lanes.
 
 **Files.**
 
-- parallel-consumer-streams-spike/src/main/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcher.java (modify)
-- parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcherTest.java (modify)
-- parallel-consumer-connect-spike/src/main/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLaneRouter.java (create)
-- parallel-consumer-connect-spike/src/main/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLane.java (create)
-- parallel-consumer-connect-spike/src/test/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLaneRouterTest.java (create)
+- parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcher.java (modify)
+- parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcherTest.java (modify)
+- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLaneRouter.java (create)
+- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLane.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLaneRouterTest.java (create)
 
 **Approach.**
 
@@ -456,9 +461,13 @@ shards to serial SinkTask lanes.
    already owns those mechanisms and tests assignment, same-key order, independent-key overlap, bounded
    selection, retry suppression, and worker-to-controller completion.
 2. Strengthen the shared dispatcher with an owner-thread guard captured at construction. Assert that
-   assignment, registration, selection, completion drain, quiescence pumping, and close stay on that owner;
-   workers retain their existing mark-result-then-enqueue behavior. Add the negative guard to the parent's
-   own focused test so both spikes inherit it.
+   assignment, registration, selection, completion drain, quiescence pumping, and close stay on that owner
+   — and the commit surface the parent gained in its U9 (`collectCommitData`, `hasCommitDataOutstanding`,
+   `onCommitSuccess`, `abortClose`), which this plan predates: those methods reach `WorkManager` directly
+   and are exactly the calls a later commit-composition step will be tempted to make from a commit thread.
+   Workers retain their existing mark-result-then-enqueue behavior. Add the negative guard to the parent's
+   own focused test so both spikes inherit it. Verified against the merged tree 2026-08-10: `WorkPreparer`
+   exists as assumed, and no owner-thread guard exists yet — this step is live, not duplicated.
 3. Make `PcSinkTaskLaneRouter` implement the parent's `WorkPreparer`. On the controller thread it derives the
    public KEY ShardKey from the raw ConsumerRecord, floor-mods its hash across the supplied lanes, and returns
    the Runnable the inherited worker pool executes. Topic-partition participation, deep array equality, and
@@ -474,7 +483,10 @@ shards to serial SinkTask lanes.
    incomplete records is a termination condition for the failed run.
 6. Keep offset collection out of the router. The inherited dispatcher uses its synthetic MockConsumer only
    to bootstrap assignment, and this branch makes that consumer reject any commit call. Neither the router
-   nor a lane calls SinkTask.preCommit, flush, or a PC offset committer.
+   nor a lane calls SinkTask.preCommit, flush, or a PC offset committer. The reject-commits tripwire stays
+   sound after the parent's U9: the Streams commit path goes through Streams' own consumer, and the
+   crash-restart integration test uses a real broker — nothing on the parent exercises the dispatcher's
+   MockConsumer commit overloads, so the tripwire cannot break parent tests.
 
 **Test scenarios.**
 
@@ -518,9 +530,9 @@ intentionally did not enable, and where the next design work belongs.
 
 **Files.**
 
-- parallel-consumer-connect-spike/README.md (create)
-- docs/inflight/parked-connect-on-pc.md (rename to docs/inflight/branch-connect-on-pc-spike.md and modify)
-- docs/plans/2026-08-09-001-feat-connect-on-pc-spike-plan.md (this plan; already created)
+- parallel-consumer-connect/README.md (create)
+- docs/inflight/pr-connect-on-pc.md (already renamed from parked-, since the work now has PR astubbs/parallel-consumer#269; modify)
+- docs/plans/2026-08-09-001-feat-connect-on-pc-plan.md (this plan; already created)
 
 **Approach.**
 
@@ -545,7 +557,7 @@ and why it is not a supported Kafka Connect integration.
 
 ## Verification Contract
 
-- `./mvnw -pl parallel-consumer-connect-spike -am test` passes without Docker, including the stock and
+- `./mvnw -pl parallel-consumer-connect -am test` passes without Docker, including the stock and
   patched-disabled upstream WorkerSinkTask regression arms, the non-empty exact-report comparison, and the
   inherited Streams dispatcher tests selected by `-am`.
 - Regenerate the patch from freshly unpacked pristine and working trees. The tracked patch must remain

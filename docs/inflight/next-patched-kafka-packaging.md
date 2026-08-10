@@ -2,8 +2,8 @@
 
 Raised: 2026-08-08. Not started.
 
-Affects every module built on the build-time Kafka patch strategy - today `parallel-consumer-streams-spike`
-(`feats/ks-on-pc-spike`), and the Connect work parked in `parked-connect-on-pc.md`. **This blocks
+Affects every module built on the build-time Kafka patch strategy - today `parallel-consumer-streams`
+(`feats/ks-on-pc-spike`), and the Connect work tracked in `pr-connect-on-pc.md`. **This blocks
 publishing either of them.** It does not block developing them, because both currently generate patched
 classes locally and gitignore the output, which distributes nothing.
 
@@ -37,7 +37,7 @@ the KS work will use: we publish a **fork of the patched Kafka module under our 
 drop-in replacement. Classes keep their original fully-qualified names on purpose - the patch depends on
 being the same class Kafka's own internals reference by name, so relocating or shading it is not available.
 Only the **patch files** are version-controlled; they are applied at build and publish time, and the
-generated sources and classes stay gitignored, exactly as `parallel-consumer-streams-spike` already does
+generated sources and classes stay gitignored, exactly as `parallel-consumer-streams` already does
 with `src/main/patch/pcspike.patch` and `bin/apply-patch.sh` / `bin/regen-patch.sh`.
 
 This is well-precedented - shipping a modified Kafka derivative under your own coordinates is what several

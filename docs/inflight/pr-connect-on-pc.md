@@ -1,13 +1,28 @@
-# Parked: Kafka Connect sinks driven by Parallel Consumer
+# PR astubbs/parallel-consumer#269: Kafka Connect sinks driven by Parallel Consumer
 
 Issue: astubbs/parallel-consumer#240 (mirror of confluentinc/parallel-consumer#119)
-Branch: `feats/connect-on-pc-spike`
-Parked: 2026-08-08, resuming the week of 2026-08-10.
+Branch: `feats/connect-on-pc-spike`, stacked on `feats/ks-on-pc-spike` (PR base is that branch; retarget
+to master when the parent lands).
 
-## State
+## State (2026-08-10)
 
-One commit: `docs/plans/2026-08-08-001-feat-connect-sink-in-pc-plan.md`, carrying a
-superseded-direction header. No code. Nothing pushed.
+Active. The spike plan is `docs/plans/2026-08-09-001-feat-connect-on-pc-plan.md`; the superseded
+embed-direction plan (`2026-08-08-001-...`) is kept for its offset analysis. U1 — the
+`parallel-consumer-connect` module and its generated-`WorkerSinkTask` shadowing proof — is on the
+branch; PR astubbs/parallel-consumer#269's CI run is its first execution evidence. U2 (key-to-lane
+dispatch, reconciled against the parent's U9 dispatcher commit surface) is next; the module README and
+boundary write-up land with the plan's U3. Publication of both spike modules is disabled — see
+`release-experimental-modules-publication-disabled.md`; do not reverse before merge.
+
+## The step after U2: frontier-composed commit (designed, not yet planned as units)
+
+The parent's U9 made the patched runtime commit PC's **frontier plus encoded holes** and acknowledge
+success back through the dispatcher — the machinery the Connect commit design needs. The Connect delta:
+complete a record's `WorkContainer` only when the owning task's `preCommit()` watermark covers it, each
+watermark read against that task's own record stream. PC's frontier is then the *durable* frontier and
+U9's commit path works unchanged — no offset clamping, no metadata stripping, no partial-commit dirty
+flags. Non-buffering sinks degenerate to U9 semantics exactly. Open design point: PC must never retry a
+record that was `put()` but not yet durable — it is in the sink's buffer, not failed.
 
 ## Direction
 
