@@ -137,6 +137,65 @@ Re-measure rather than quoting these; the commands are the point:
 
 The 8 string literals are the dangerous ones and each is enumerated in §5.
 
+### 4.5 Commit shape: two commits, and one commit is impossible - not merely worse
+
+**Decided. The move goes in its own commit; the content edits follow in a second.** `git mv` only,
+never `mv` plus `git add`.
+
+Measured on a throwaway clone of master, git 2.51.2, no ambient `diff.*`/`merge.*` config:
+
+| shape | renames detected | mis-paired | lowest similarity |
+|---|---|---|---|
+| **two commits** - move, then edits | **233 / 233** | 0 | `R100` |
+| squashed into one | 232 / 233 | **4 invented** | `R061` |
+
+Squashing does not merely lose a rename. It **invents** four, pairing the five per-module
+`TestConventionsArchTest.java` files into a cross-module cycle (`streams→metrics`, `vertx→mutiny`,
+`mutiny→reactor`, `reactor→vertx`), reporting one deleted and one as new. A bare count of `R` entries
+sees nothing wrong, which is why the verification re-derives every rename's expected destination and
+asserts the pairing, printing `mis-paired 0`.
+
+**No setting can rescue it, and there is a measured reason.** Those files score `R071`-`R073`
+against their own true former selves - the same band as against their siblings - so the correct pair
+and the wrong pair are *indistinguishable by similarity*. `-M` is therefore a pure trade: `<=73%`
+detects 232 with 3-4 invented, `>=74%` invents none but loses 11-13 real renames. `-B` /
+`--break-rewrites` in every form was byte-identical to omitting it. `-C` /
+`--find-copies-harder` made it worse (4 mis-pairings to 5, and 6 combined with `-B`).
+
+**Even a working setting would be unusable.** Git's rename detection cannot be configured from the
+repository: there is no `.gitattributes` mechanism for `-M`, `-B`, `merge.renameLimit` or
+`diff.renames`. Any fix of the form "set X" holds on the clone that set it and silently does not on
+CI, on a contributor's machine, or in the next agent's worktree. **This project requires the default
+behaviour to be correct**, which rules the single-commit shape out independently of the measurement
+above.
+
+Keep `--single-commit` only as the self-test's experiment arm - it is the negative control proving
+the mis-pairing detector fires. It is not an option to choose.
+
+### 4.6 The merge hazard, and the only defence that exists
+
+**Commit shape is irrelevant to merges.** `git merge` resolves renames over the base-to-tip *tree
+delta*, which is identical however many commits span it; merging the two-commit and the
+single-commit master into the same branch gave byte-identical results.
+
+**The real hazard is a branch that has not been renamed at all**, and it is silent:
+
+- Merging renamed master into an un-renamed branch exits **0 with zero conflicts and no warning**.
+- A marker edit in the *streams* module's `TestConventionsArchTest.java` came out in the **mutiny**
+  module's file. An edit to `BrokerPollSystem.java` in the same merge landed correctly, so the merge
+  looks entirely healthy.
+
+Nothing catches this. Measured and refuted as mitigations: `merge.directoryRenames` in all three
+values (no effect), `merge.renameLimit`, `diff.renames=copies`, `-s recursive`, and - the only
+repo-committable lever that could plausibly have applied - a `.gitattributes` entry marking the
+files `-diff`, committed on both sides (**no effect**). `-X find-renames=75%` does surface it, but
+drops 13 legitimate renames and is a per-invocation flag, not repo state.
+
+**Therefore: running `bin/rename-packages.sh` on every open branch before it merges is mandatory,
+and it is the only defence.** With the script run on both sides, the same case surfaces loudly as
+`CONFLICT (rename/delete)` plus `CONFLICT (add/add)` on the correct path with the edit intact. This
+is not best practice; it is the difference between a conflict and silent cross-module corruption.
+
 ## 5. The work, risk-ordered
 
 Ordered by *how quietly it fails*, not by size. Everything above R5 fails silently or fails green.
