@@ -329,6 +329,14 @@ public class PcTaskDispatcher implements Closeable {
      * runs after the worker's chain returned, because a worker enqueues its outcome only once the chain is
      * done. Reverse either and the mark occasionally runs ahead of live work: silent, intermittent, and
      * visible only as spuriously late records under load.
+     *
+     * <p><b>Those two boundaries now serve a second reader, so do not move them for stream time's
+     * convenience.</b> Because the entry goes in before the pool submission and comes out at the drain, on
+     * the owner thread only, {@code size()} is the <em>exact</em> in-flight count - the quantity
+     * {@link #dispatchAvailable}'s capacity read wants and {@link #inFlight} cannot give it, since a worker
+     * decrements that counter concurrently (see the residual note in {@link #runOnWorker}). Nothing consumes
+     * it that way yet. A later simplification that folded these two calls into the surrounding code would
+     * take the exact count with it without noticing.
      */
     private final Map<WorkContainer<byte[], byte[]>, Long> inFlightStreamTimestamps = new IdentityHashMap<>();
 
@@ -718,13 +726,25 @@ public class PcTaskDispatcher implements Closeable {
             //
             // KNOWN RESIDUAL, and this ordering narrows it rather than closing it. A StreamThread that
             // reaches PcWorkSignal's wait between the add and the decrement above leaves on the pending
-            // outcome without any signal, and still reads the stale count. It only bites at poolSize 1,
-            // where the stale read means capacity 0 and the next pass waits a poll budget with a
-            // dispatchable record in hand; at poolSize >= 2 the spare slot absorbs it. Closing it properly
-            // means splitting this counter in two - a pool-capacity count the worker owns and decrements
-            // BEFORE enqueuing, and an outstanding count the StreamThread owns and decrements as it drains -
-            // so that neither question is ever answered from the other's window. Deliberately not done here:
-            // it re-keys every reader of getInFlightCount(), and this defect is bounded and non-hanging.
+            // outcome without any signal, and still reads the stale count.
+            //
+            // THE ORIGINAL WORDING HERE SAID "at poolSize >= 2 the spare slot absorbs it". THAT IS
+            // REFUTED - a harness reproducing this exact ordering measured lost-dispatch reads at every
+            // pool size (2764 of them at poolSize 8 with 10us work). Do not restore it, and if a merge
+            // offers it back, take this side.
+            //
+            // The COST, however, is not one poll budget at every size, which a first correction also got
+            // wrong by inheriting it. At poolSize 1 the wake-on-work gate reads false and a full stock
+            // poll is paid; at poolSize >= 2 the gate stays open, so the cost is SHORT_POLL (1ms) plus
+            // time-to-next-completion. The default pool is 4, so the expensive case is the benchmark's
+            // control arm rather than the shipped configuration.
+            //
+            // Closing it properly means answering "how many are in the pool" without reading a counter a
+            // worker is concurrently writing. Note that astubbs#255 U13's inFlightStreamTimestamps map is
+            // already exactly that: it is populated BEFORE workerPool.execute and emptied in the drain, on
+            // the owner thread only, so its size() is the exact in-flight count with no window and no
+            // atomics. Deliberately not wired up here - it re-keys every reader of getInFlightCount(), and
+            // that is a separate decision.
             workSignal.signalWorkAvailable();
         }
     }
