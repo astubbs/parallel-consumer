@@ -296,9 +296,12 @@ class ProcessorContextConfinementTest {
                 .isFalse();
 
         assertThat(StreamTask.class.getDeclaredMethod("doProcess", long.class,
-                Class.forName("org.apache.kafka.streams.processor.internals.AbstractPartitionGroup$RecordInfo")))
-                .as("doProcess must take the RecordInfo as a parameter. If it still reads the field, pinning it "
-                        + "in process() buys nothing, because the read happens after the record was processed.")
+                Class.forName("org.apache.kafka.streams.processor.internals.AbstractPartitionGroup$RecordInfo"),
+                Class.forName("org.apache.kafka.streams.processor.internals.StampedRecord")))
+                .as("doProcess must take both the RecordInfo and the record as parameters. If either is still "
+                        + "read from a field, pinning it in process() buys nothing - the RecordInfo read happens "
+                        + "after the record was processed, and on the PC path there is no single 'current "
+                        + "record' for a task at all, there are up to poolSize of them at once.")
                 .isNotNull();
 
         assertThat(Modifier.isVolatile(fieldOf(StreamTask.class, "commitNeeded").getModifiers()))

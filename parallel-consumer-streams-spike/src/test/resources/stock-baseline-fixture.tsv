@@ -1,0 +1,86 @@
+# Stock Kafka Streams baseline for the astubbs#255 PC-on-Streams spike.
+#
+# GENERATED - do not hand-edit. Written by StockBaselineFixtureTest in
+# parallel-consumer-example-streams, a module that does NOT depend on
+# parallel-consumer-streams-spike, so these rows come from the published kafka-streams jar
+# and not from the spike's patched target/classes. That independence is what makes this a
+# baseline rather than a second copy of the thing under test.
+#
+# The stateless arm: one output record per input, value suffixed, timestamp carried
+# through unchanged.
+#
+# Regenerate (and then READ THE DIFF):
+#   ./mvnw -pl parallel-consumer-examples/parallel-consumer-example-streams -am clean verify \
+#     -DskipUTs=true -Dit.test=StockBaselineFixtureTest -Dfailsafe.failIfNoSpecifiedTests=false \
+#     -Dcopyright.skip=true -Dpc.spike.fixture.regenerate=true
+#
+# Tracked at parallel-consumer-streams-spike/src/test/resources/stock-baseline-fixture.tsv
+# 'in' rows are the inputs in produce order, and the spike-side test replays exactly these
+# rather than rebuilding them, so the two arms cannot drift in what they were fed. Every
+# input also carries a header named by probeHeader below, whose value is the record's own
+# value in UTF-8.
+# 'out' rows are the outputs in the order stock Streams emitted them.
+# Columns: type<TAB>key<TAB>value<TAB>timestamp
+fixtureVersion	1
+topology	stream -> mapValues((key, value) -> value + "-processed") -> to
+probeHeader	pc-probe-id
+in	key-0	k0-s0-t1700000000000	1700000000000
+in	key-1	k1-s0-t1700000000010	1700000000010
+in	key-2	k2-s0-t1700000000020	1700000000020
+in	key-3	k3-s0-t1700000000030	1700000000030
+in	key-4	k4-s0-t1700000000040	1700000000040
+in	key-5	k5-s0-t1700000000050	1700000000050
+in	key-0	k0-s1-t1700000000060	1700000000060
+in	key-1	k1-s1-t1700000000070	1700000000070
+in	key-2	k2-s1-t1700000000080	1700000000080
+in	key-3	k3-s1-t1700000000090	1700000000090
+in	key-4	k4-s1-t1700000000100	1700000000100
+in	key-5	k5-s1-t1700000000110	1700000000110
+in	key-0	k0-s2-t1700000000120	1700000000120
+in	key-1	k1-s2-t1700000000130	1700000000130
+in	key-2	k2-s2-t1700000000140	1700000000140
+in	key-3	k3-s2-t1700000000150	1700000000150
+in	key-4	k4-s2-t1700000000160	1700000000160
+in	key-5	k5-s2-t1700000000170	1700000000170
+in	key-0	k0-s3-t1700000000180	1700000000180
+in	key-1	k1-s3-t1700000000190	1700000000190
+in	key-2	k2-s3-t1700000000200	1700000000200
+in	key-3	k3-s3-t1700000000210	1700000000210
+in	key-4	k4-s3-t1700000000220	1700000000220
+in	key-5	k5-s3-t1700000000230	1700000000230
+in	key-0	k0-s4-t1700000000240	1700000000240
+in	key-1	k1-s4-t1700000000250	1700000000250
+in	key-2	k2-s4-t1700000000260	1700000000260
+in	key-3	k3-s4-t1700000000270	1700000000270
+in	key-4	k4-s4-t1700000000280	1700000000280
+in	key-5	k5-s4-t1700000000290	1700000000290
+out	key-0	k0-s0-t1700000000000-processed	1700000000000
+out	key-1	k1-s0-t1700000000010-processed	1700000000010
+out	key-2	k2-s0-t1700000000020-processed	1700000000020
+out	key-3	k3-s0-t1700000000030-processed	1700000000030
+out	key-4	k4-s0-t1700000000040-processed	1700000000040
+out	key-5	k5-s0-t1700000000050-processed	1700000000050
+out	key-0	k0-s1-t1700000000060-processed	1700000000060
+out	key-1	k1-s1-t1700000000070-processed	1700000000070
+out	key-2	k2-s1-t1700000000080-processed	1700000000080
+out	key-3	k3-s1-t1700000000090-processed	1700000000090
+out	key-4	k4-s1-t1700000000100-processed	1700000000100
+out	key-5	k5-s1-t1700000000110-processed	1700000000110
+out	key-0	k0-s2-t1700000000120-processed	1700000000120
+out	key-1	k1-s2-t1700000000130-processed	1700000000130
+out	key-2	k2-s2-t1700000000140-processed	1700000000140
+out	key-3	k3-s2-t1700000000150-processed	1700000000150
+out	key-4	k4-s2-t1700000000160-processed	1700000000160
+out	key-5	k5-s2-t1700000000170-processed	1700000000170
+out	key-0	k0-s3-t1700000000180-processed	1700000000180
+out	key-1	k1-s3-t1700000000190-processed	1700000000190
+out	key-2	k2-s3-t1700000000200-processed	1700000000200
+out	key-3	k3-s3-t1700000000210-processed	1700000000210
+out	key-4	k4-s3-t1700000000220-processed	1700000000220
+out	key-5	k5-s3-t1700000000230-processed	1700000000230
+out	key-0	k0-s4-t1700000000240-processed	1700000000240
+out	key-1	k1-s4-t1700000000250-processed	1700000000250
+out	key-2	k2-s4-t1700000000260-processed	1700000000260
+out	key-3	k3-s4-t1700000000270-processed	1700000000270
+out	key-4	k4-s4-t1700000000280-processed	1700000000280
+out	key-5	k5-s4-t1700000000290-processed	1700000000290

@@ -55,6 +55,11 @@
              purpose: pinning jackson-databind in root dependencyManagement forces WireMock
              (parallel-consumer-vertx) onto an incompatible Jackson and breaks VertxTest. -->
         <spike.jackson.version>2.16.2</spike.jackson.version>
+
+        <!-- Only used by the kafka-upstream-tests profile below. Matched to what Kafka 3.9 builds its own
+             tests against, so their assertions mean what their authors meant. -->
+        <hamcrest.version>2.2</hamcrest.version>
+        <reload4j.version>1.2.25</reload4j.version>
     </properties>
 
     <dependencies>
@@ -120,6 +125,230 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <!-- Apache Kafka's OWN test suite, run against our patched classes. Opt-in, because it pulls four
+         extra test-scope artifacts and roughly triples the module's test time.
+
+             ./mvnw test -pl parallel-consumer-streams-spike -Pkafka-upstream-tests
+
+         This is the strongest behaviour-preservation gate available to the spike: Kafka publishes its
+         compiled tests to Central, our patched classes precede the kafka-streams jar on the classpath
+         (proven by ShadowedClassLoadingTest), so Kafka's own StreamTaskTest / ProcessorContextImplTest /
+         RecordCollectorTest exercise OUR StreamTask, OUR AbstractProcessorContext and OUR
+         RecordCollectorImpl - not the released ones. Anything the patch broke that Kafka tested, fails
+         here.
+
+         Surefire only scans target/test-classes by default, so <dependenciesToScan> is what makes it look
+         inside the kafka-streams test jar at all. It sits on the extra execution and NOT on the plugin, so
+         the default-test execution (our own tests) is unaffected. -->
+    <profiles>
+        <profile>
+            <id>kafka-upstream-tests</id>
+            <properties>
+                <!-- Kafka's own test FIXTURES need the same treatment as its main classes, for the same
+                     reason. InternalMockProcessorContext extends AbstractProcessorContext and, as shipped,
+                     reads and writes the `recordContext` / `currentNode` fields directly. Thread-confining
+                     those fields turns every one of those getfield/putfield instructions into a
+                     NoSuchFieldError at construction time, so all 59 RecordCollectorTest cases die before
+                     reaching a single assertion. Regenerating the fixture from the published test-sources
+                     jar and converting it to the accessors - exactly what the patch already does to
+                     ProcessorContextImpl - is what lets those tests run at all. Still no Apache source in
+                     the repository: generated, gitignored, only the patch is tracked. -->
+                <kafka.test.patched.dir>${project.build.directory}/kafka-test-patched</kafka.test.patched.dir>
+                <kafka.test.pristine.dir>${project.build.directory}/kafka-test-pristine</kafka.test.pristine.dir>
+                <spike.patched.test.classes>org/apache/kafka/test/InternalMockProcessorContext.java</spike.patched.test.classes>
+            </properties>
+            <dependencies>
+                <!-- Kafka's compiled tests, plus the org.apache.kafka.test.* fixtures they are built on
+                     (InternalMockProcessorContext, MockSourceNode, MockClientSupplier, ...). Preferred over
+                     recompiling test-sources: no Apache source enters the build, and no Java 8 problem. -->
+                <dependency>
+                    <groupId>org.apache.kafka</groupId>
+                    <artifactId>kafka-streams</artifactId>
+                    <version>${kafka.version}</version>
+                    <classifier>test</classifier>
+                    <scope>test</scope>
+                </dependency>
+                <!-- org.apache.kafka.test.TestUtils, org.apache.kafka.common.utils.MockTime and
+                     LogCaptureAppender live here, not in the streams test jar. -->
+                <dependency>
+                    <groupId>org.apache.kafka</groupId>
+                    <artifactId>kafka-clients</artifactId>
+                    <version>${kafka.version}</version>
+                    <classifier>test</classifier>
+                    <scope>test</scope>
+                </dependency>
+                <!-- LogCaptureAppender is a log4j 1.x Appender; RecordCollectorTest imports
+                     org.apache.log4j.Level directly. reload4j is the maintained drop-in for that API. -->
+                <dependency>
+                    <groupId>ch.qos.reload4j</groupId>
+                    <artifactId>reload4j</artifactId>
+                    <version>${reload4j.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <!-- Having the log4j 1.x API on the classpath is not enough: LogCaptureAppender only sees a
+                     message if SLF4J actually routes to log4j. Under logback it captures nothing and
+                     RecordCollectorTest's one log-assertion test fails on an empty list. This binding is
+                     swapped in for the Kafka execution only - see classpathDependencyExcludes below. -->
+                <dependency>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-reload4j</artifactId>
+                    <version>${slf4j.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.hamcrest</groupId>
+                    <artifactId>hamcrest</artifactId>
+                    <version>${hamcrest.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.junit.jupiter</groupId>
+                    <artifactId>junit-jupiter-params</artifactId>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- Same three-step dance as the main build, one phase later: unpack the fixture from
+                         the published test-sources jar (pristine + working copy), patch the working copy,
+                         and add it as a TEST source root so it compiles into target/test-classes - which
+                         precedes the kafka-streams test jar on surefire's classpath, so our fixture wins
+                         over the shipped one exactly as target/classes wins over the main jar. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>unpack-kafka-streams-test-sources</id>
+                                <phase>generate-test-sources</phase>
+                                <goals>
+                                    <goal>unpack</goal>
+                                </goals>
+                                <configuration>
+                                    <overWriteReleases>true</overWriteReleases>
+                                    <overWriteSnapshots>true</overWriteSnapshots>
+                                    <artifactItems>
+                                        <artifactItem>
+                                            <groupId>org.apache.kafka</groupId>
+                                            <artifactId>kafka-streams</artifactId>
+                                            <version>${kafka.version}</version>
+                                            <classifier>test-sources</classifier>
+                                            <type>jar</type>
+                                            <includes>${spike.patched.test.classes}</includes>
+                                            <outputDirectory>${kafka.test.patched.dir}</outputDirectory>
+                                        </artifactItem>
+                                        <artifactItem>
+                                            <groupId>org.apache.kafka</groupId>
+                                            <artifactId>kafka-streams</artifactId>
+                                            <version>${kafka.version}</version>
+                                            <classifier>test-sources</classifier>
+                                            <type>jar</type>
+                                            <includes>${spike.patched.test.classes}</includes>
+                                            <outputDirectory>${kafka.test.pristine.dir}</outputDirectory>
+                                        </artifactItem>
+                                    </artifactItems>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>apply-kafka-test-patch</id>
+                                <phase>process-test-sources</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>${project.basedir}/bin/apply-patch.sh</executable>
+                                    <arguments>
+                                        <argument>${kafka.test.patched.dir}</argument>
+                                        <argument>${project.basedir}/src/main/patch/pcspike-testfixtures.patch</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>add-patched-kafka-test-sources</id>
+                                <phase>generate-test-sources</phase>
+                                <goals>
+                                    <goal>add-test-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${kafka.test.patched.dir}</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <!-- Exactly one SLF4J binding per fork. Our own tests keep logback (and
+                             logback-test.xml); Kafka's fork gets reload4j so LogCaptureAppender works.
+                             Both bindings are on the module's test classpath - surefire is what keeps
+                             them apart, per execution. -->
+                        <configuration>
+                            <classpathDependencyExcludes>
+                                <classpathDependencyExclude>org.slf4j:slf4j-reload4j</classpathDependencyExclude>
+                            </classpathDependencyExcludes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>kafka-upstream-tests</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>test</goal>
+                                </goals>
+                                <configuration>
+                                    <dependenciesToScan>
+                                        <dependency>org.apache.kafka:kafka-streams</dependency>
+                                    </dependenciesToScan>
+                                    <!-- Only the tests of classes we patch. Scanning the whole jar would run
+                                         ~2500 tests of code this spike never touches, and drown the signal. -->
+                                    <includes>
+                                        <include>org/apache/kafka/streams/processor/internals/StreamTaskTest.java</include>
+                                        <include>org/apache/kafka/streams/processor/internals/ProcessorContextImplTest.java</include>
+                                        <include>org/apache/kafka/streams/processor/internals/RecordCollectorTest.java</include>
+                                    </includes>
+                                    <reportsDirectory>${project.build.directory}/surefire-reports-kafka-upstream</reportsDirectory>
+                                    <classpathDependencyExcludes>
+                                        <classpathDependencyExclude>ch.qos.logback:logback-classic</classpathDependencyExclude>
+                                    </classpathDependencyExcludes>
+                                    <!-- Kafka's tests are written for a serial JUnit runner: StreamTaskTest
+                                         pins a fixed state-directory name and MockProducer/MockConsumer are
+                                         shared per instance, so running them concurrently fails 159 of them
+                                         on state-dir locks alone and says nothing about our patch.
+                                         Concurrency arrives on this module by accident anyway - the
+                                         parallel-consumer-core tests jar ships a junit-platform.properties
+                                         with parallel.enabled=true, and it lands on our test classpath.
+                                         Surefire's configurationParameters outrank that file. -->
+                                    <properties>
+                                        <configurationParameters>
+                                            junit.jupiter.execution.parallel.enabled = false
+                                        </configurationParameters>
+                                    </properties>
+                                    <!-- Kafka's tests are not written for our tag scheme; the inherited
+                                         group filters would silently drop all of them. -->
+                                    <groups combine.self="override"/>
+                                    <excludedGroups combine.self="override"/>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>

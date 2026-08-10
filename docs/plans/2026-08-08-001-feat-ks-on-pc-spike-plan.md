@@ -484,6 +484,11 @@ the flag-off path is green.
 **Files:**
 - `parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StockBaselineFixtureTest.java` (create)
 - `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/PcDrivenStreamsProofTest.java` (create)
+- `parallel-consumer-streams-spike/src/test/resources/stock-baseline-fixture.tsv` (create - the fixture
+  itself, tracked so the spike-side test has a baseline without re-running the stock arm, and re-verified
+  against a live stock run on every execution of `StockBaselineFixtureTest`. It carries the *inputs* as
+  well as the outputs, and the spike-side test replays those, so the two arms cannot drift in what they
+  were fed - the two modules cannot share code in this reactor order.)
 
 **Approach:**
 
