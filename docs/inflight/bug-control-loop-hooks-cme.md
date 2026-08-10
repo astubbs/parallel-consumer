@@ -1,11 +1,13 @@
 # `controlLoopHooks` is an unsynchronised `ArrayList` behind a public API - HIGH PRIORITY, v6
 
-**This branch owns extracting it. Do it first, in its own PR off `master`, labelled `0.6.0.0`.**
+**DONE - extracted as astubbs/parallel-consumer#267**, off `master`, labelled `0.6.0.0`, with an
+exposure test that fails without the fix. This branch still has to rebase onto it and drop its own
+copy of the line once that PR merges.
 
-The fix currently exists only as one line on this branch (`feats/web-gui`, #215), where it is
-invisible to everyone else and gated on a large feature landing. Every other in-flight branch is
-exposed to the same defect in the meantime, and the fix is worth roughly nothing until it is on
-`master`. Extract it, then rebase this branch onto it and drop the line here.
+The fix used to exist only as one line on this branch (`feats/web-gui`,
+astubbs/parallel-consumer#215), where it was invisible to everyone else and gated on a large feature
+landing. Every other in-flight branch was exposed to the same defect in the meantime, and the fix was
+worth roughly nothing until it reached `master`.
 
 ## The defect
 
@@ -41,8 +43,21 @@ The defect class is *unsynchronised mutable state reachable from a public API wh
 reads it*. `controlLoopHooks` is the instance we know about; look for siblings on the same class
 before closing this out, and report what was checked and cleared, not only what was found.
 
+**Done, and it found a second live instance.** `WorkManager.successfulWorkListeners` had the same
+shape and is fixed in the same PR. It hid because a Lombok `@Getter(PUBLIC)` handed out the live
+list, so the mutation is spelled `getSuccessfulWorkListeners().add(..)` - searching the field name
+finds the declaration and the iteration but never a write, and it reads as dead code. That getter is
+now a real `addSuccessfulWorkListener(..)` method, so the next such search finds its callers.
+
+Cleared, with reasons: `partitionStates` (already concurrent plus a snapshot - the
+astubbs/parallel-consumer#252 fix); `slowWorkCounters`, `succeededRecordsCounters`,
+`failedRecordsCounters` (never iterated, only point lookups, so no traversal to break);
+`RetryQueue.unique` and `.sorted` (package-private test-only accessors nothing calls);
+`OffsetSimultaneousEncoder.sortedEncodings` (getter never called, encoder built per commit).
+
 ## Knock-ons
 
-- **`feats/web-gui` (#215) drops the line** when this lands, and rebases onto it.
+- **`feats/web-gui` (astubbs/parallel-consumer#215) drops the line** when
+  astubbs/parallel-consumer#267 lands, and rebases onto it.
 - It earns its own `CHANGELOG` line at release time. It is a user-visible stability fix, not an
   internal tidy-up, and it should not arrive buried inside a dashboard feature entry.

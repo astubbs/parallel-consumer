@@ -28,33 +28,46 @@ and the page in one command. Phases 2-5 are deferred and listed in the plan's Ph
   incident for off-thread PC access.
 - Offsets are strings on the wire and BigInt in JS; numbers are pixel geometry only.
 
-## TODO before merge: re-cut two commits
+## DONE: the two contaminated commits were re-cut
 
 Decided: re-cut rather than squash. The branch holds several genuinely separable workstreams (the
 module, the chaos scenario driver, the demo, the review fixes) that someone will later want to bisect
 to or revert independently, and releases after 0.6.0.0 generate their notes from the commit log.
 
-Two commits carry work that is not theirs. **The content is complete and correct across the branch -
-only the attribution is wrong**, so this is a history fix, not a code fix.
+Two commits carried work that was not theirs. **The content was complete and correct across the
+branch - only the attribution was wrong**, so this was a history fix, not a code fix.
 
-| Commit | Says it does | Also contains, wrongly |
-|---|---|---|
-| `9cd60ee0` | serialise the state document | the whole chaos-scenario framework, which belongs with `39922d72` |
-| `64b5c446` | drop TLS from the MVP | the GraalVM + Selenium pom entries, which belong with `d23ca7a5` |
+| Commit | Said it did | Also contained, wrongly | Now |
+|---|---|---|---|
+| `9cd60ee0` -> `79a35dd8` | serialise the state document | the whole chaos-scenario framework | 0 scenario files |
+| `39922d72` -> `7b6b3ceb` | generalise the conductor | - | carries all 21 |
+| `64b5c446` -> `0587cbe7` | drop TLS from the MVP | the GraalVM + Selenium pom entries | 0 such lines |
+| `d23ca7a5` -> `8d067c1f` | prove the page renders | - | carries them |
 
 Cause in both cases: `git add -A` ran in this shared worktree while a parallel agent was still
 writing to a different subtree. Staging explicit paths would have avoided it.
 
-Method, per the merge-strategy rule in `AGENTS.md`:
+**Verified the way the method demands: `git diff backup/web-gui-pre-recut HEAD` is empty.** History
+changed, content did not, 25 commits before and after. The pre-re-cut tip is kept as the tag
+`backup/web-gui-pre-recut` (`5ad663c3`) until this branch merges.
 
-1. `git fetch origin master` **first, every time** - a stale ref silently reverts whatever master
-   gained meanwhile.
-2. `git reset --mixed <merge-base>` - the **merge-base**, not `origin/master`. The tell that you used
-   the wrong base is files appearing in the staged set that this branch never touched.
-3. Restage into atomic commits. The test for atomic is whether the message needs an "and also".
-4. Verify with `git diff <old-tip> HEAD` - it must be **empty**, proving history changed and content
-   did not.
-5. Rebase-merge, so each lands on master on its own.
+What actually worked, since the recorded method needed amending:
+
+- **Setting each commit's tree directly beats replaying diffs.** `git read-tree -u --reset <commit>`
+  then `git commit -C <commit>` reproduces a commit's tree exactly, so nothing has to apply cleanly
+  against a shifted base. That is what let the two rightful commits reclaim their files without a
+  single conflict: rebuild the contaminated commit *without* the stolen paths, then set the next
+  commit's tree exactly and the difference *is* the moved work.
+- **`git reset --mixed <merge-base>` - step 2 of the original method - would have been wrong here.**
+  It flattens the branch to one diff, so every rebuilt commit gets the *final* state of each file
+  rather than its state at that point. The net diff still verifies empty, which makes the damage
+  invisible, but intermediate commits end up containing future work and bisect becomes a lie. Use it
+  only when deliberately re-cutting into *fewer, different* commits.
+- `git cherry-pick -q` is not a thing. It fails, and inside a `set -e` script with `&&` it can look
+  like a no-op rather than an error. Do not silence cherry-pick.
+- `git rm` needs `-f` when the index deliberately differs from HEAD, which it always does mid-rebuild.
+
+Remaining: rebase-merge, so each commit lands on master on its own.
 
 ## TODO later: end-user docs and promotional material in the README
 
