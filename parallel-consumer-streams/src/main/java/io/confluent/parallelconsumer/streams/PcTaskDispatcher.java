@@ -102,9 +102,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>The rule that keeps the two apart: <b>a question is not allowed to mutate.</b> A query that drained the
  * completion mailbox "just to be accurate" is how a field read became a cross-thread write.
  *
- * <p>Which thread is the owner is itself mutable - see {@link #bindToCurrentThread()}. A task can be handed
- * to a different StreamThread, and the guard has to follow it rather than pin the task to whichever thread
- * happened to construct it.
+ * <p>Which thread is the owner is itself mutable - see {@link #bindToCurrentThread()}. <b>Nothing in
+ * production calls it yet</b>, and saying otherwise would send the next reader hunting for a call site that
+ * does not exist: in Kafka 3.9.2 a reassigned task is closed and rebuilt rather than handed to another
+ * thread, so the constructor's bind is the only one that happens. It is here because the construction-time
+ * capture was an unstated assumption rather than a decision, and the cross-thread hazard that actually bit
+ * (the state updater) is handled by the read-only surface above, not by rebinding.
  *
  * <h2>Decisions taken here, and what they cost</h2>
  * <ul>
@@ -507,11 +510,20 @@ public class PcTaskDispatcher implements Closeable {
         // That is the one direction that guarantee may not fail in. Leaving the item on the queue until
         // after the publish means it is always visible through one term or the other.
         while ((work = completed.peek()) != null) {
-            workManager.handleFutureResult(work);
-            // Publish before the remove, on the thread that just changed the value being published. See
-            // pcDirty for why this is a publication rather than a shadow.
-            publishDirtyState();
-            completed.poll();
+            try {
+                workManager.handleFutureResult(work);
+            } finally {
+                // Publish before the remove, on the thread that just changed the value being published. See
+                // pcDirty for why this is a publication rather than a shadow.
+                //
+                // In a finally, so a throwing outcome cannot WEDGE the dispatcher. Peeking before removing is
+                // what closes the publication race, but it also means a head-of-queue item that throws would
+                // be re-attempted by every future drain - from process(), from every commit, from close() -
+                // and re-throw forever. Removing unconditionally turns a permanent wedge back into a single
+                // failed outcome, which is the lesser of the two and the behaviour the poll-first version had.
+                publishDirtyState();
+                completed.poll();
+            }
         }
     }
 
@@ -606,7 +618,13 @@ public class PcTaskDispatcher implements Closeable {
      * outstanding" - which is the only direction that would be unsafe.
      */
     public boolean hasUncommittedWork() {
-        return pcDirty || inFlight.get() > 0 || hasPendingCompletions();
+        // TERM ORDER IS LOAD-BEARING: pcDirty is read LAST, and reading it first is a real bug.
+        // drainCompletions publishes pcDirty before it removes the outcome from the queue, so a reader that
+        // samples pcDirty EARLY (before the publish) and the queue LATE (after the removal) straddles the
+        // whole transition and sees false from both - the one answer this method may never give. Reading the
+        // queue first and pcDirty last makes that impossible: an empty queue means the removal already
+        // happened, the removal follows the publish, so the pcDirty read that comes after it cannot be stale.
+        return inFlight.get() > 0 || hasPendingCompletions() || pcDirty;
     }
 
     /**
