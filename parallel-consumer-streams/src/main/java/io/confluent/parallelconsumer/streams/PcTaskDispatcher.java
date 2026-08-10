@@ -602,10 +602,16 @@ public class PcTaskDispatcher implements Closeable {
     /**
      * Whether a worker outcome is sitting in the mailbox waiting for the StreamThread to feed it back to PC.
      * <p>
-     * This is {@link PcWorkSignal}'s wake predicate, and it is level-triggered on purpose - the queue is
-     * drained only by the StreamThread inside {@link #dispatchAvailable}, so a StreamThread that is waiting is
-     * by definition not draining, and a completion enqueued at any point before or during the wait is still
-     * here to be seen. That is what makes a lost wakeup impossible without any extra state.
+     * This is half of {@link PcWorkSignal}'s wake predicate, and it is level-triggered on purpose - the
+     * drain runs on owner-thread paths only, and the one that runs on a normal pass is inside
+     * {@link #dispatchAvailable}, so a StreamThread that is waiting is by definition not draining and a
+     * completion enqueued at any point before or during the wait is still here to be seen. That is what makes
+     * a lost wakeup impossible without any extra state.
+     * <p>
+     * <b>It is only half.</b> Level-triggering assumes the woken thread goes on to reach the drain, and Kafka
+     * can decline to let it - a paused topology skips {@code process()} entirely while the thread stays
+     * RUNNING and keeps polling, so this stays true forever and a wait released on it alone would spin. The
+     * other half is the release generation in {@link PcWorkSignal}; see the {@code workSignals} field there.
      */
     public boolean hasPendingCompletions() {
         return !completed.isEmpty();

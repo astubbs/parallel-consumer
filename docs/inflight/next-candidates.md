@@ -37,7 +37,10 @@ than owning a wait, and all three get the publish-then-signal ordering right.
    `onCommitRequested()` - which has **zero callers** - and cleared by the waiter. Wired up as written it
    could lose the signal both ways: set-before-arm, and no happens-before at all. The level-triggered
    alternative is already there: read `commitRequestQueue` directly. Either delete it or wire it up
-   level-triggered.
+   level-triggered - and if it is wired up, name what clears `commitRequestQueue` and check that path
+   cannot be skipped while the waiter stays alive, or the level-triggered form spins instead of waiting
+   (`docs/solutions/integration-issues/kafka-streams-couples-polling-and-processing-on-one-thread.md`,
+   "A level-triggered predicate assumes the woken thread drains").
 3. **`getTimeToBlockFor` rounds a retry deadline up to the full static retry delay.**
    `AbstractParallelEoSStreamProcessor:1243` discards `lowestScheduled` (a time *remaining*) whenever it is
    below `defaultMessageRetryDelay`, so a record retriable in 10ms is waited on for 1s. Nothing can end

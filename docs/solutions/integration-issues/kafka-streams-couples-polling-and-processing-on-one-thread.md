@@ -10,13 +10,17 @@ symptoms:
   - "Throughput tracks the poll cadence rather than the work, so adding workers to the pool changes nothing"
   - "A no-concurrency control arm measures the asynchronous path SLOWER than stock Kafka Streams (0.69x) instead of tying with it"
   - "Roughly 74ms of per-record overhead that no profiler attributes to the user function"
+  - "A paused topology pins one core - the StreamThread stays RUNNING and healthy while the poll phase spins at roughly 1kHz, clearing only at the commit interval"
 root_cause: async_timing
 resolution_type: code_fix
 severity: high
+last_updated: 2026-08-11
 related_components:
   - kafka-streams
   - PcTaskDispatcher
   - HeadOfLineBlockingBenchmarkTest
+  - PcWorkSignal
+  - PcWorkSignalTest
 tags:
   - kafka-streams
   - streamthread
@@ -25,6 +29,7 @@ tags:
   - async-dispatch
   - framework-integration
   - performance
+  - busy-spin
 ---
 
 # Kafka Streams polls and processes on one thread, so anything you make asynchronous is throttled by the poll wait
@@ -119,25 +124,140 @@ constant satisfies both. The fix is to **wake the loop when a completion arrives
 out the poll: poll with a short timeout to collect broker records, then block on your own condition
 for the remainder of the configured budget, signalled by a worker completion or a retry timer.
 
+The contrast is real but it is not clean, and the rest of this section is about the part that is not:
+the fix reproduces the mitigation's own busy-spin, from a different cause, unless the wait releases
+once per raise rather than once per pass.
+
 **This has now been built, and the numbers are in.** `parallel-consumer-streams` patches
 `StreamThread.pollPhase()` to do exactly that, gated so an idle dispatcher keeps the stock full-budget
 poll (`PcWorkSignal`, `-Dpc.streams.wakeOnWork.enabled`). At the **default** `poll.ms`, three runs each,
 varying only that switch: the single-key control went from **0.70x to 0.99x** - the penalty is gone
 rather than reduced - and the head-of-line experiment's p50 went from 5.5x to 17.1x, p99 3.0x to 9.2x.
-The design and its trap are in `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md:1345-1382`.
+The finding that prompted it is in `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`, section
+"The StreamThread's poll wait throttles dispatch"; the design as built, including its observability
+counters, is in `docs/plans/2026-08-10-001-feat-ks-wake-on-work-plan.md`. Cited by section rather than
+by line range on purpose - those plans are still being edited, and every line-range pointer into them
+in this file had drifted by the time this section was added.
 
 Two implementation notes worth carrying to any other framework, because both are ways to build this and
 still lose:
 
-- **Make the wake predicate a level-triggered read of live state**, not an edge-triggered "a completion
-  happened" flag. The flag has to be armed before the wait, and the arming point is necessarily *after*
-  the previous dispatch pass, so a completion landing in that gap is discarded and the thread waits out
-  the full budget with work in hand. Reading the completions queue directly cannot lose a wake, because
-  only the parked thread drains it and it is not draining while parked.
+- **Make the wake predicate a level-triggered read of live state, then AND it with a release-generation
+  guard.** Level-triggered first, because an edge-triggered "a completion happened" flag has to be armed
+  before the wait, and the arming point is necessarily *after* the previous dispatch pass, so a
+  completion landing in that gap is discarded and the thread waits out the full budget with work in
+  hand. Reading the completions queue directly cannot lose a wake, because only the parked thread drains
+  it and it is not draining while parked. But that last clause says who *can* drain, and it is read as
+  saying what *will* happen: a level-triggered read alone assumes the woken thread goes on to clear what
+  it read, and a framework is free to skip the drain while keeping the thread alive and polling. Then
+  the predicate is permanently true and the wait degenerates into a busy-spin. So release a wait only
+  for raises it has not already been let out on. See **A level-triggered predicate assumes the woken
+  thread drains** below, which is the half of this rule that was missing when it was first written here.
 - **Signal after the in-flight count is decremented, not with the completion.** Signal first and the
   woken thread drains the completion, computes its free capacity against a count not yet decremented,
   dispatches nothing, and parks again with an empty queue and no further signal coming. That is a
   full-budget stall, microseconds wide, that will never reproduce on demand.
+
+**A level-triggered predicate assumes the woken thread drains, and a framework that can legitimately
+skip the drain turns the wait into a spin.** The predicate here is "an outcome is pending"
+(`PcTaskDispatcher.hasPendingCompletions`,
+`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java:610-612`),
+and that queue is emptied by exactly one method, `drainCompletions()` (`PcTaskDispatcher.java:490`).
+What matters is not how many callers it has - it has several, all on owner-thread paths - but which of
+them runs on a normal pass. That is the one at the head of `dispatchAvailable`
+(`PcTaskDispatcher.java:344-345`), reached through the patched `StreamTask.process()`. The others are
+commit (`collectCommitData()`, `PcTaskDispatcher.java:526-528`) and the two teardown paths, quiescence
+and close - none of which a topology sitting paused in its poll phase reaches. So the question the
+predicate turns on is whether Kafka gets to `process()`, and Kafka does not always get there. `KafkaStreams.pause()`
+(`KafkaStreams.java:1827-1834`) adds the topology to `TopologyMetadata`'s paused set
+(`TopologyMetadata.java:267-268`); `TaskExecutionMetadata.canProcessTask` reads that set and answers
+`false` (`TaskExecutionMetadata.java:64-77`); and `TaskExecutor.process` skips `processTask` entirely
+for any task that answers no (`TaskExecutor.java:69-89`, reached from `TaskManager.process`,
+`TaskManager.java:2017-2018`). Kafka states the consequence in `pause()`'s own javadoc, which is the
+strongest citation in the set because the framework is describing the trap itself
+(`KafkaStreams.java:1821-1822`, Kafka 3.9.2):
+
+```
+ *  <p>Paused topologies will only skip over a) processing, b) punctuation, and c) standby tasks.
+ *  Notably, paused topologies will still poll Kafka consumers, and commit offsets.
+```
+
+The thread stays `RUNNING`, keeps entering `pollPhase()`, and never reaches the drain. With one outcome
+sitting undrained, a purely level-triggered wait returns instantly on every pass and the poll phase
+becomes a loop of 1ms polls: one core pinned, and a thousand fetches a second where the default
+`poll.ms` asks for ten. The rate is arithmetic from the short poll rather than a measurement, because
+this was caught in review before anything ran it. It clears only when the commit path reaches the other
+`drainCompletions()` call, and `commit.interval.ms` defaults to 30s outside EOS
+(`StreamsConfig.java:160-161`), so "self-clearing" is worth very little. That it ends on a timer at all
+is why it would have presented as an unexplained CPU cost rather than as a hang.
+
+**The obvious reading of that failure is wrong, and acting on it re-opens the defect the design was
+built to avoid.** "Level-triggering was the mistake, use an edge-triggered flag" restores the arming gap
+and the lost wakeup with it. Both halves are load-bearing. The fix keeps the level-triggered read and
+adds a *release generation* beside it: `workSignals`, bumped by every raise, against
+`workSignalsReleasedOn`, the raise count this waiter has already left a wait on
+(`PcWorkSignal.java:146-167`). A wait leaves early only for a raise it has not already been released
+for:
+
+```java
+// before: the level-triggered form, which returns instantly on every pass once nobody drains
+if (hasPendingCompletions()) {
+    workArrived = true;
+    break;
+}
+```
+
+```java
+// after (PcWorkSignal.java:339-345)
+// Both halves are load-bearing. The pending outcome is what makes leaving USEFUL; the
+// unreleased signal is what stops a caller that never drains from turning this into a spin.
+if (workSignals != workSignalsReleasedOn && hasPendingCompletions()) {
+    workSignalsReleasedOn = workSignals;
+    workArrived = true;
+    break;
+}
+```
+
+A completion that landed *before* the wait began still ends it, because raising it bumped the counter
+(`signalWorkAvailable`, `PcWorkSignal.java:278-283`), so the lost-wakeup property survives untouched. A
+second pass with nothing new takes the full budget, which is exactly stock behaviour and the right
+answer when nobody is draining.
+
+**What the guard is not.** It is not a shadow of "is there work": nothing consults it to decide whether
+to dispatch, and it cannot answer whether an outcome exists, which is still read live off the queue. It
+records one thing only, which raises this waiter has already been let out on. It is also distinct from
+`wakeRequests` (`PcWorkSignal.java:133-144`), the counter that abandons the wait outright for shutdown
+and for the last dispatcher going away, and which deliberately does not count as a wake. Two counters
+with two meanings is the minimum here, not duplication: one says "leave, work arrived", the other says
+"leave, regardless".
+
+**Which waits are immune, which is how to sweep for the rest.** A wait whose *departure is itself the
+drain* cannot have this defect: `BlockingQueue.poll(timeout)` removes the element as the condition of
+returning, so there is no separate path for a framework to skip. That is why this repository's core
+control loop is not exposed - it waits on `workMailBox.poll(timeToBlockFor.toMillis(), MILLISECONDS)`
+(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java:1192`),
+a consuming take. The exposure begins the moment the predicate reads state that some *other* code path
+clears. Sweeping the tree on that criterion turns up one live sibling and one latent one, and both are
+worth carrying:
+
+- The sibling, and the first instance in this repository: the drain-path zombie, where a shadow copy of
+  the shutdown state meant `consumer.poll()` was never called and the loop's intended long poll silently
+  stopped happening, spinning at roughly 10kHz. Different term, identical shape and identical bill -
+  `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`. `PcWorkSignal`'s class
+  javadoc already cites it as the same shape (`PcWorkSignal.java:53-55`).
+- The latent one: `ConsumerManager.commitRequested`
+  (`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerManager.java:75`)
+  is a non-volatile boolean set by `onCommitRequested()` (`:292`), which has zero callers in the tree.
+  The recorded recommendation is to wire it up level-triggered by reading `commitRequestQueue` directly
+  (`docs/inflight/next-candidates.md`). That recommendation is right and it is now incomplete in exactly
+  the way the bullet above was: whoever implements it has to name what clears `commitRequestQueue` and
+  ask whether that path can be skipped while the waiter stays alive.
+
+**Found in code review, and negative-controlled rather than merely fixed.** No test failed and nothing
+was observed in production - the spin needs a paused or otherwise non-draining topology, which no
+benchmark arm exercised. It was introduced and removed inside `astubbs/parallel-consumer#271`, before
+the module was ever merged. Reverting the predicate to the level-triggered form fails one test, alone,
+on its own assertion; see the negative control under Examples.
 
 **6. Do not reach for `Consumer#wakeup()` as the signal.** It is the obvious mechanism and it is the
 wrong one. `wakeup()` throws `WakeupException`, and it is the framework's word for *shutdown*. A wake
@@ -159,7 +279,11 @@ An incidental benefit of owning the condition: because you own it, shutdown can 
 needs a wake path distinct from "work arrived" - a `notifyAll` against a work predicate that is still
 false will not release the waiter, so the shutdown wake has to be a state change the waiter also
 checks. Confirm the shutdown path with a test that closes mid-dispatch, and assert the thread was
-provably parked on your condition first, or a green result proves nothing.
+provably parked on your condition first, or a green result proves nothing. The built code went one step
+further than this paragraph asked: the shutdown path is a *counter* captured on entry
+(`wakeRequests`, `PcWorkSignal.java:133-144`) rather than a flag, for the same reason the work path
+needed a release generation - a flag can be armed and cleared around a waiter, a monotonic count read
+at entry cannot.
 
 **7. Check whether the framework already offers a supported decoupling.** Kafka has a second loop,
 `runOnceWithProcessingThreads()` (`StreamThread.java:1102`), selected by `processingThreadsEnabled`
@@ -199,6 +323,22 @@ your change starts paying. Blocking waits, "cheap" polling intervals, batch flus
 times across a call you are about to make asynchronous, and any "we can afford to sleep here, there
 is nothing else to do" comment in the source are all the same shape.
 
+**The second general lesson: a level-triggered predicate carries a hidden assumption, that whoever you
+wake goes on to clear the state you read.** It is never stated, it is invisible while it holds, and it
+is precisely what makes level-triggering the safe choice in the first place - the state cannot be
+missed because the waiter is the only one who consumes it. The moment the framework can legitimately
+decline to run the consuming path while keeping the thread alive, the predicate is permanently true and
+the wait becomes a spin: not a hang, not an error, just a pinned core and a self-inflicted request storm
+that clears whenever some unrelated timer happens to drain the queue. Every framework has at least one
+such state and they are all documented as features - paused, throttled, quiesced, circuit-broken,
+backpressured, in backoff, mid-rebalance, standby. The check is mechanical: **for every level-triggered
+predicate, name the single code path that clears it, then ask what makes that path skippable while the
+waiting thread stays alive.** If you cannot name one drain site, the predicate is already wrong for a
+different reason. If you can name it and the framework can skip it, the wait needs a generation guard
+so it releases once per raise instead of once per pass. Note where the cost lands: this defect is paid
+in CPU rather than in correctness, so no assertion fails, no record is lost, and nothing but a profiler
+or a power bill will report it.
+
 ## When to Apply
 
 - Dispatching Kafka Streams records to a thread pool, an executor, an async client, or any component
@@ -212,14 +352,24 @@ is nothing else to do" comment in the source are all the same shape.
   compensating for a wait that should be interrupted by an event you already have in hand.
 - Reviewing a change that adds a config recommendation to an integration guide. "Set `poll.ms` low"
   is the shape of a mitigation being quietly promoted to a solution.
+- Writing or reviewing a `wait`/`await` whose predicate reads live state rather than a flag. Name the
+  one code path that clears that state and check it is on the path the wake is supposed to unblock. A
+  predicate cleared by someone other than the woken thread, or by a path the framework can skip, spins
+  instead of waiting. A wait whose departure is itself the drain, such as a blocking-queue take, is
+  immune and needs no guard.
+- Integrating with a framework that has a pause, throttle, quiesce, drain-stop, standby or
+  circuit-breaker mode. Those all mean "keep the thread alive but do not run the work", which is exactly
+  the state that starves a level-triggered predicate and converts your wait into a busy loop.
 
 ## Examples
 
 **The measurement (one-term control, only `poll.ms` changed).** From
-`docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md:1333-1343`, using
+`docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`, section "The StreamThread's poll wait
+throttles dispatch", using
 `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java`
 (one blocking 1500ms record at the head of a partition, 24 fast 25ms records behind it, pool of 4,
-`NUM_STREAM_THREADS_CONFIG` pinned to 1 at line 275 so the only concurrency is the one under test):
+`NUM_STREAM_THREADS_CONFIG` pinned to 1 at `HeadOfLineBlockingBenchmarkTest.java:282` so the only
+concurrency is the one under test):
 
 | | Async-path overhead vs stock, single key | Experiment A p50 | Experiment A p99 |
 |---|---|---|---|
@@ -228,7 +378,7 @@ is nothing else to do" comment in the source are all the same shape.
 
 About 98% of the measured penalty was poll wait. With it gone, the asynchronous arm became limited by
 pool size, which is the only thing that should limit it. Note that the committed benchmark does
-**not** set `poll.ms` (`HeadOfLineBlockingBenchmarkTest.java:268-275`), so its published figures are
+**not** set `poll.ms` anywhere in `HeadOfLineBlockingBenchmarkTest.java`, so its published figures are
 the pessimistic, default-configuration ones.
 
 **The mitigation, and how to label it.** One line, and it must carry the reason it is not the fix:
@@ -271,6 +421,29 @@ if (processed == 0) break         -> when it decides there is nothing to do
 The third line is the one that matters. "Nothing to do" is a judgement the framework makes on behalf
 of a thread it believes it owns exclusively, and your integration has just made that belief false.
 
+**The negative control for the anti-spin guard, and why it has to assert on elapsed time.**
+`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/PcWorkSignalTest.java:343`
+dispatches one record, waits until an outcome is genuinely sitting in the mailbox, takes a first wait
+and asserts it returns well inside its budget, then asserts the outcome is *still* undrained - "which
+is exactly what a paused topology does to this thread" - and takes a second wait against the same
+budget:
+
+```java
+long second = timeMillis(() -> PcWorkSignal.awaitWorkForRemainderOf(SHORT_BUDGET));
+assertThat(second)
+        .as("nothing new arrived and nobody drained, so this wait must take its budget. Returning "
+                + "instantly here is a busy-spin on the StreamThread, not a fast path.")
+        .isGreaterThanOrEqualTo(SHORT_BUDGET.toMillis() - PcWorkSignal.SHORT_POLL.toMillis() - 50);
+```
+
+The assertion is on elapsed time and not on a counter, because a wait counter reads the same whether
+the wait blocked or returned instantly - which is the whole defect. Reverting the predicate to the
+level-triggered `if (hasPendingCompletions())` fails this test and no other, on that last assertion:
+the deliberately undrained outcome is the one fixture in the suite that reproduces a non-draining
+caller, and every other case reaches the wait with either no signal at all or real work still in
+flight. A fix that reproduces the symptom when removed, on a named assertion, is the difference between
+a fix that works and a fix you can show is the cause.
+
 ## Related
 
 - `docs/solutions/best-practices/control-arms-vary-exactly-one-term.md` - the one-term control
@@ -278,9 +451,23 @@ of a thread it believes it owns exclusively, and your integration has just made 
   exposed it.
 - `docs/solutions/best-practices/chase-refuted-predictions.md` - the control arm here went the wrong
   way, and chasing that anomaly rather than filing it is what found this.
-- `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md:1315-1386` - the full finding, the
-  measurements, the wake-on-work design, and the `wakeup()` trap.
-- `docs/inflight/pr-ks-spike-next-work.md` item 3 - the fix, landed, with its measurements.
+- `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md` - the first instance in
+  this repository of the same spin shape: a wait that was meant to block silently stopped blocking, at
+  roughly 10kHz. Different mechanism, identical bill.
+- `docs/solutions/integration-issues/kafka-streams-task-lifecycle-callbacks-do-not-mean-what-they-are-named.md`
+  - the same governing rule from the other side, that the framework reaches or skips a path contrary to
+  what the integration assumes. That doc says two instances is a class rather than a coincidence; the
+  paused topology skipping `process()` is a third.
+- `docs/solutions/architecture-patterns/a-progress-signal-must-count-work-consumed-not-work-accepted.md`
+  - the same structural fact underneath, that the only drain on a normal pass is inside
+  `dispatchAvailable` and the StreamThread reaches it only through `process()`.
+- `docs/solutions/best-practices/fresh-work-needs-independent-review.md` - the spin was found by a
+  review pass over same-session work, not by a test or by production.
+- `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`, section "The StreamThread's poll wait
+  throttles dispatch" - the full finding, the measurements, the wake-on-work design, and the
+  `wakeup()` trap.
+- `docs/inflight/pr-ks-spike-next-work.md` item 3 - the fix, built and measured on the branch. The
+  module itself is unmerged.
 - `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcWorkSignal.java` - the
   condition itself, and the reasoning for every choice in it.
 - `astubbs/parallel-consumer#271` - the PR the finding came out of.

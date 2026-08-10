@@ -5,7 +5,8 @@ project-specific meaning. Seeded with core domain vocabulary, then accretes as c
 ce-compound-refresh process learnings; direct edits are fine. Glossary only, not a spec or catch-all.
 
 Seeded from the transactional-commit learning of 2026-08-07, so it covers the concurrency and
-transactional-commit area. Other areas of the project are not yet described here.
+transactional-commit area, and since extended into the Kafka Streams dispatch area. Other areas of the
+project are not yet described here.
 
 ## Relationships
 
@@ -88,6 +89,30 @@ per-partition number that assumes sequential completion and silently loses in-fl
 completion is out of order — the defect class the Kafka Streams module's U9 exists to remove, and the
 reason that fix is a deletion rather than a repair: no amount of locking lets one number express
 "12 done, 10 and 11 still running".
+
+## Kafka Streams dispatch
+
+**Split poll wait**
+The replacement for a Streams thread's single long poll: a short poll that collects whatever the broker
+has already fetched, followed by a wait on a condition this project owns for the remainder of the
+configured poll budget. Taken only while that thread has work outstanding; with nothing in flight the
+thread takes the stock full-budget poll, because nothing could end the wait early and shortening the
+poll would only delay broker records.
+
+**Wake-on-work**
+The policy the split poll wait exists to serve: end the wait the moment work becomes dispatchable,
+rather than sitting out a poll budget while workers complete in the background. It is what removes the
+throughput ceiling a poll interval imposes once something other than the consumer can make work
+available.
+
+The wait must release once per raised signal, not once per pass. Its natural predicate reads live
+state - is an outcome waiting to be fed back - which cannot lose a signal, because the thread that
+would clear that state is the one parked on it. But a topology can be paused, and a paused thread keeps
+polling while skipping processing, so the state is never cleared and a predicate that only reads it
+would return instantly forever, converting the wait into a busy-spin. Counting which raises a waiter has
+already been released on keeps the no-lost-signal property and removes the spin. Abandoning the wait
+outright, for shutdown or for the last dispatcher going away, is a separate signal that deliberately
+does not count as work arriving.
 
 ## Test reliability
 
