@@ -17,6 +17,6 @@
      Only real bot authors (Dependabot/Renovate etc.) are exempt. -->
 
 - [ ] Docs updated - or `N/A`
+- [ ] User-facing feature documentation data added under `docs/features/` - or `N/A - <reason>`
 - [ ] Tests added/updated - or `N/A`
 - [ ] Title & body reflect the final content of this PR
-- [ ] Self-hosted runner / security implications considered - or `N/A` (only relevant when touching CI runners or workflows)
