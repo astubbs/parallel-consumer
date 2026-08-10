@@ -13,6 +13,8 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
+import static io.confluent.parallelconsumer.connect.TestEnvironment.codeSourceOf;
+import static io.confluent.parallelconsumer.connect.TestEnvironment.requiredProperty;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -78,19 +80,4 @@ class WorkerSinkTaskRegressionTest {
                 Paths.get(requiredProperty("pc.connect.patched.reports.dir")));
     }
 
-    private static URL codeSourceOf(Class<?> type) {
-        assertThat(type.getProtectionDomain()).as("no protection domain for %s", type.getName()).isNotNull();
-        assertThat(type.getProtectionDomain().getCodeSource())
-                .as("no code source for %s", type.getName())
-                .isNotNull();
-        return type.getProtectionDomain().getCodeSource().getLocation();
-    }
-
-    private static String requiredProperty(String name) {
-        String value = System.getProperty(name);
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalStateException("missing required system property " + name);
-        }
-        return value;
-    }
 }

@@ -155,6 +155,52 @@ the resulting work is yet safe to commit through a real Connect worker.
 - A claim that all sinks tolerate key sharding. Partition-affine behavior remains the safe default for
   unknown connectors in follow-up design.
 
+### What "worth showing people" means, and when
+
+The spike's own units stop before anything a person could run. That is right for a feasibility proof and
+wrong as a destination, so the target is named here rather than left implicit.
+
+**The target is a tech demo shipped as an experimental module, not a production Connect runtime.** The
+0.6.0.0 release is close, and an experimental module ships on its own maturity clock - the Streams spike
+already establishes that a brand-new alpha can sit alongside a stable release without implying anything
+about it. Nobody should be running this in production, the README should say so first, and being honest
+about that is what makes the demo credible rather than overclaimed.
+
+**MVP - the smallest thing worth putting in front of someone:**
+
+- A real sink connector, unmodified, receiving real records through a patched Connect worker driven by
+  Parallel Consumer, against a real broker.
+- Offsets committed on PC's frontier-plus-holes, with a crash-restart proof - the Streams spike's
+  `CommitFrontierCrashRestartTest` is the shape to copy.
+- One partition served by more than one task lane, with the final sink state matching stock Connect.
+- A README a stranger can follow to reproduce it, naming what does not work.
+- The connector compatibility table (`parallel-consumer-connect/connector-compatibility.md`)
+  carrying at least one **Verified** row rather than only predictions.
+
+**Explicitly not in the MVP:** SMTs, DLQ / `errors.tolerance`, `ConfigProvider`, distributed mode, the
+REST API, broad connector coverage, or any performance claim.
+
+**Publication stays gated** by `docs/inflight/release-spike-modules-publication-disabled.md` regardless of
+MVP readiness - the packaging, trademark and licensing questions are a separate gate, and shipping the
+demo does not open it.
+
+### Verification against real connectors - a later phase, and the credibility bar
+
+This does not fit in U1-U3 and must not be smuggled into them; it is named here so it is not forgotten.
+
+An adopter has no reason to trust a patched Connect runtime because we say our own tests pass. The
+standard already set by the Streams spike is the right one: **run the upstream project's own published
+test suite against the patched classes.** For Connect that means, per connector, resolving its test
+artifacts and running its suite against the fork - and recording which tests do not apply and why.
+
+That work also *populates* the compatibility table rather than leaving it a set of predictions, which is
+why the two belong in the same phase. Expect it to be where most of the real findings are: the
+partition-ownership assumption this design breaks is exactly the kind of thing a connector's own suite
+encodes and ours never would.
+
+Sequencing: after a live delivery seam exists (so there is something to run a suite *against*), and
+before any claim about connector compatibility appears in user-facing documentation.
+
 ### Context & Research
 
 - docs/inflight/pr-connect-on-pc.md records the rejected embedded-runtime direction, the adopted
@@ -380,12 +426,12 @@ narrow patched WorkerSinkTask source tree, and bounds the disabled seam's observ
 - parallel-consumer-connect/pom.xml (create)
 - parallel-consumer-connect/.gitignore (create)
 - parallel-consumer-connect/src/main/patch/pcconnect.patch (create)
-- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connectspike/PcConnectDispatchBridge.java (create)
-- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/ShadowedClassLoadingTest.java (create)
-- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/PatchHarnessTest.java (create)
-- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/WorkerSinkTaskRegressionReportsVerifier.java (create)
+- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connect/PcConnectDispatchBridge.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/ShadowedClassLoadingTest.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/PatchHarnessTest.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/WorkerSinkTaskRegressionReportsVerifier.java (create)
 - parallel-consumer-connect/src/test/resources/worker-sink-task-stock-baseline-tests.txt (create)
-- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/TestConventionsArchTest.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/TestConventionsArchTest.java (create)
 
 **Approach.**
 
@@ -450,9 +496,9 @@ shards to serial SinkTask lanes.
 
 - parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcher.java (modify)
 - parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcherTest.java (modify)
-- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLaneRouter.java (create)
-- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLane.java (create)
-- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connectspike/PcSinkTaskLaneRouterTest.java (create)
+- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connect/PcSinkTaskLaneRouter.java (create)
+- parallel-consumer-connect/src/main/java/io/confluent/parallelconsumer/connect/PcSinkTaskLane.java (create)
+- parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/PcSinkTaskLaneRouterTest.java (create)
 
 **Approach.**
 

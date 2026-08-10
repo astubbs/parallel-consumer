@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static io.confluent.parallelconsumer.connect.TestEnvironment.requiredProperty;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -175,14 +176,6 @@ class PatchHarnessTest {
 
     private static String sharedRegenPatch() {
         return requiredProperty("pc.connect.regen.patch.script");
-    }
-
-    private static String requiredProperty(String name) {
-        String value = System.getProperty(name);
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalStateException("missing required system property " + name);
-        }
-        return value;
     }
 
     private static ProcessResult run(String... command) throws Exception {

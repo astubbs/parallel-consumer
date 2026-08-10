@@ -53,6 +53,22 @@ Note the inversion: `ProcessingOrder.KEY` had to be *rejected* under the embed d
 *natural* mode here. Keyed upsert sinks - JDBC upsert, Elasticsearch by document id, Mongo - are exactly
 where key-level concurrency beyond partition count is worth money.
 
+## Target: a tech demo alongside 0.6.0.0, not a production runtime
+
+The plan's "What worth showing people means" section carries the MVP definition and the explicit
+non-goals. Summary: an unmodified sink connector receiving real records through a PC-driven Connect
+worker, frontier-committed with a crash-restart proof, one partition across several lanes, and a README
+a stranger can follow. Publication stays gated by `release-spike-modules-publication-disabled.md`
+independently of MVP readiness.
+
+## Connector compatibility catalogue - started, all predictions
+
+`parallel-consumer-connect/connector-compatibility.md` now exists and is seeded with clearly
+labelled **untested predictions** grouped by what each connector assumes about partition ownership
+(key-affine, partition-affine, unknown). Nothing is verified. A row becomes Verified only when that
+connector's own published test suite passes against the patched runtime - the same bar the Streams spike
+met with Kafka's 188 tests, and the only evidence an adopter should accept. Revisit before merge.
+
 ## Known constraint: not every connector tolerates losing whole-partition ownership
 
 S3 and HDFS sinks name output files by topic-partition-offset, so two tasks each holding part of

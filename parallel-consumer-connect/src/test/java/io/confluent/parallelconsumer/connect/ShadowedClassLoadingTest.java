@@ -8,8 +8,8 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.net.URL;
 
+import static io.confluent.parallelconsumer.connect.TestEnvironment.codeSourceOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Proves that the one generated Connect class wins without splitting its runtime package. */
@@ -55,13 +55,5 @@ class ShadowedClassLoadingTest {
         assertThat(field.getBoolean(null)).isFalse();
         assertThat(PcConnectDispatchBridge.enabled()).isFalse();
         assertThat(codeSourceOf(PcConnectDispatchBridge.class)).isEqualTo(codeSourceOf(generated));
-    }
-
-    private static URL codeSourceOf(Class<?> type) {
-        assertThat(type.getProtectionDomain()).as("no protection domain for %s", type.getName()).isNotNull();
-        assertThat(type.getProtectionDomain().getCodeSource())
-                .as("no code source for %s", type.getName())
-                .isNotNull();
-        return type.getProtectionDomain().getCodeSource().getLocation();
     }
 }
