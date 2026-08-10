@@ -29,6 +29,43 @@ owned that content all along.)
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
 
+## `gh` defaults to the WRONG repo here - fix it before your first command
+
+This is a fork with two remotes: `origin` → `astubbs/parallel-consumer` (**where the work happens**)
+and `upstream` → `confluentinc/parallel-consumer`. When both exist and nothing says otherwise, `gh`
+prefers the `upstream` one. So a bare `gh pr list`, `gh pr view 259`, `gh run view` or `gh pr create`
+silently addresses **confluentinc**, not this fork.
+
+**Run this once per clone** (it writes `remote.origin.gh-resolved` into the shared git config, so it
+covers every worktree at once):
+
+```bash
+gh repo set-default astubbs/parallel-consumer
+```
+
+Verify with `gh repo view --json nameWithOwner` - it must print `astubbs/parallel-consumer`.
+
+**Why this earns a section rather than a footnote: the failure is usually silent.** `gh pr view 259`
+fails loudly ("Could not resolve to a PullRequest") only because upstream happens to have no such PR.
+The dangerous case is the one that *succeeds*: the merged-PR prior-art search below returns
+**upstream's** history, finds nothing relevant, and reads as "no prior art" - the exact false
+confidence [Before you investigate anything](#before-you-investigate-anything) exists to prevent. That
+very command sat unqualified in the table below until this section was written, so every agent that
+ran it searched the wrong repository and had no way to tell.
+
+**Two habits that survive a fresh clone**, since the config above is local and uncommitted - CI
+runners, other machines and fresh agent sandboxes all start without it:
+
+- **Qualify `gh` commands in anything you write down** - docs, scripts, a handoff prompt. `-R
+  astubbs/parallel-consumer` costs nothing and is correct with or without the config.
+- **When you genuinely mean upstream, say so**: `-R confluentinc/parallel-consumer`. Reading an
+  upstream issue is normal here; what must never be accidental is *which* repo answered.
+
+Sanity check for any `gh` result that surprises you: if the output mentions `confluentinc` when you
+meant the fork, or a number resolves to something unrecognisable, check the repo before you build a
+hypothesis on it. See also [Issue references](#issue-references) - the same fork/upstream ambiguity
+bites a bare `#NNN`.
+
 ## Before you investigate anything
 
 Do all five checks below **before** forming a hypothesis, and say in your write-up what they returned
@@ -41,7 +78,7 @@ settled the last question of this shape, and the traps that voided someone's ear
 | Solved problems | `grep -rl <mechanism> docs/solutions/` | A documented root cause with a signature you can rule in or out |
 | In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` | A known-open defect you are about to rediscover |
 | Open PRs | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> --name-only` | A fix already in flight, and files your change would collide with |
-| **Merged** PRs, by file | `gh pr list --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` | The PR that last fixed something in this exact file - the richest prior art there is, and invisible to a search on the *open* list |
+| **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` | The PR that last fixed something in this exact file - the richest prior art there is, and invisible to a search on the *open* list |
 | Existing issues | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` and filter by title - fork issues *and* the `upstream-mirror` ones | An upstream bug already triaged; read the upstream issue itself, not the mirror's summary |
 
 **Grep the mechanism, not the symptom.** The name of the failing test is the weakest search term
@@ -203,7 +240,7 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 - **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
   Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via
   `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`), e.g.
-  `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. NB unlike the
+  `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. NB unlike the
   local recipe above, CI runs EXCLUDE `@Quarantined` chaos scenarios (the Quarantine Lane owns those) -
   while `ChaosChurnStormIT` is quarantined under PR astubbs#80 they therefore select zero tests, and the job
   summary flags that loudly.
@@ -253,7 +290,7 @@ log is unavailable. Fetch the job directly - this works as soon as **that job** 
 of the rest of the run:
 
 ```bash
-jid=$(gh run view <run-id> --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
+jid=$(gh run view <run-id> -R astubbs/parallel-consumer --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
 gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
 ```
 
@@ -514,7 +551,7 @@ Logic and tests live in `.github/scripts/issue-ref-gate.js` and `issue-ref-gate.
 
 **`Fixes #NNN` only closes on PRs targeting the default branch.** Discovered on astubbs#29, which targeted
 `master-confluent`: the keyword was in the body and GitHub ignored it entirely. Check
-`gh pr view N --json closingIssuesReferences` rather than assuming. And never use `Fixes` for a
+`gh pr view N -R astubbs/parallel-consumer --json closingIssuesReferences` rather than assuming. And never use `Fixes` for a
 *partial* fix - see the mirrors for confluentinc#233, confluentinc#326 and confluentinc#857, none of which their linked PRs
 actually resolve.
 
