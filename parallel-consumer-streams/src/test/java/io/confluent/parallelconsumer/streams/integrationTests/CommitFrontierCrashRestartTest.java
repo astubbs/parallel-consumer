@@ -3,7 +3,6 @@ package io.confluent.parallelconsumer.streams.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
 import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
@@ -17,7 +16,6 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -37,7 +35,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -65,7 +62,7 @@ import static org.awaitility.Awaitility.await;
 // PcDispatchSwitch is process-wide; a concurrent test flipping it would change which dispatch path this
 // class measures.
 @Isolated
-class CommitFrontierCrashRestartTest extends BrokerIntegrationTest<String, String> {
+class CommitFrontierCrashRestartTest extends BrokerStreamsIntegrationTest {
 
     private static final int POOL_SIZE = 4;
 
@@ -327,27 +324,11 @@ class CommitFrontierCrashRestartTest extends BrokerIntegrationTest<String, Strin
             return value;
         }).to(outputTopic);
 
-        Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, appId);
-        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers());
-        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.consumerPrefix("auto.offset.reset"), "earliest");
+        Properties props = baseStreamsProps(appId);
         props.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
         props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, COMMIT_INTERVAL.toMillis());
 
-        KafkaStreams streams = new KafkaStreams(builder.build(), props);
-        streams.start();
-
-        AtomicInteger polls = new AtomicInteger();
-        await().atMost(Duration.ofSeconds(60)).until(() -> {
-            KafkaStreams.State state = streams.state();
-            if (polls.getAndIncrement() % 10 == 0) {
-                log.info("Waiting for Streams to run, state={}", state);
-            }
-            return state == KafkaStreams.State.RUNNING;
-        });
-        return streams;
+        return startAndAwaitRunning(builder, props);
     }
 
     private void awaitOutputs(final String outputTopic, final int expected) {

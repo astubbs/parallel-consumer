@@ -3,7 +3,6 @@ package io.confluent.parallelconsumer.streams.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
@@ -12,10 +11,8 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.KStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,8 +25,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -61,7 +56,7 @@ import static org.awaitility.Awaitility.await;
 // The switch it depends on is process-wide, so an arm that turns it on in another class would otherwise be
 // able to do so underneath this one - converting the control arm into a second PC arm, silently.
 @Isolated
-class ShadowedStreamsControlTest extends BrokerIntegrationTest<String, String> {
+class ShadowedStreamsControlTest extends BrokerStreamsIntegrationTest {
 
     private static final int KEYS = 5;
     private static final int RECORDS_PER_KEY = 20;
@@ -119,26 +114,8 @@ class ShadowedStreamsControlTest extends BrokerIntegrationTest<String, String> {
         KStream<String, String> stream = builder.stream(inputTopic);
         stream.mapValues(value -> value + SUFFIX).to(outputTopic);
 
-        Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "control-arm-" + System.nanoTime());
-        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers());
-        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        // Start from the beginning so the test is not racing the topology's startup.
-        props.put(StreamsConfig.consumerPrefix("auto.offset.reset"), "earliest");
-
-        KafkaStreams streams = new KafkaStreams(builder.build(), props);
-        streams.start();
-
-        AtomicInteger polls = new AtomicInteger();
-        await().atMost(Duration.ofSeconds(60)).until(() -> {
-            KafkaStreams.State state = streams.state();
-            if (polls.getAndIncrement() % 10 == 0) {
-                log.info("Waiting for Streams to run, state={}", state);
-            }
-            return state == KafkaStreams.State.RUNNING;
-        });
-        return streams;
+        // No thread count: stock Kafka Streams' own default is what this arm is the baseline for.
+        return startAndAwaitRunning(builder, baseStreamsProps("control-arm-" + System.nanoTime()));
     }
 
     private List<ProducerRecord<String, String>> produce(String inputTopic) {

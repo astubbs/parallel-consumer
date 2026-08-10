@@ -62,11 +62,19 @@
              If this list has to grow much past a dozen, that sprawl is itself the answer to "how little had to change". -->
         <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java</patched.classes>
 
-        <!-- Match the version kafka-streams already resolves at runtime scope, so the generated sources
-             compile against exactly the Jackson the jar expects. Module-local and explicitly versioned on
-             purpose: pinning jackson-databind in root dependencyManagement forces WireMock
-             (parallel-consumer-vertx) onto an incompatible Jackson and breaks VertxTest. -->
-        <kafka.streams.jackson.version>2.16.2</kafka.streams.jackson.version>
+        <!-- Module-local and explicitly versioned on purpose: pinning jackson-databind in root
+             dependencyManagement forces WireMock (parallel-consumer-vertx) onto an incompatible Jackson and
+             breaks VertxTest.
+
+             Deliberately AHEAD of the 2.16.2 that kafka-streams 3.9.2 resolves, rather than matching it.
+             2.16.2 carries two high-severity PolymorphicTypeValidator bypasses (GHSA-j3rv-43j4-c7qm,
+             GHSA-rmj7-2vxq-3g9f), both first patched at 2.18.8, and this declaration is compile scope, so
+             the version chosen here is the one that reaches anyone depending on this module. Neither
+             advisory is reachable from the generated sources - Kafka's use here is metadata
+             serialisation, not polymorphic deserialisation of untrusted input - but shipping a flagged
+             version to consumers to save a patch bump is not a trade worth making. Held on the 2.18 line to
+             stay close to what the jar was built against. -->
+        <kafka.streams.jackson.version>2.18.9</kafka.streams.jackson.version>
 
         <!-- Only used by Kafka's own test suite (see the build section). Matched to what Kafka 3.9 builds
              its own tests against, so their assertions mean what their authors meant. -->

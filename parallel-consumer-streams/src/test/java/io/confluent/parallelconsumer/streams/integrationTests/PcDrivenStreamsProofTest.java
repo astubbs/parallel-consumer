@@ -161,6 +161,12 @@ class PcDrivenStreamsProofTest extends PcDrivenProofSupport {
 
         probe.setExpectedTopic(inputTopic);
 
+        // Replayed BEFORE the topology starts, and the ordering is load-bearing - see
+        // replayFixtureInputs. Starting first leaves a window in which a running StreamThread can process a
+        // record before the test has recorded that record's offset, and the probe then reports a record "the
+        // test never sent". Producing first makes that unreachable rather than merely unlikely.
+        replayFixtureInputs(inputTopic, fixture, probe);
+
         // The probe node is value-, key- and order-transparent: it returns the value it was given and emits
         // nothing of its own, so its presence cannot change what reaches the sink. It is a reader, added
         // where the fixture topology has nothing, precisely so that the emitted records stay comparable.
@@ -173,7 +179,6 @@ class PcDrivenStreamsProofTest extends PcDrivenProofSupport {
         });
 
         try {
-            replayFixtureInputs(inputTopic, fixture, probe);
             return drain(outputTopic, fixture.getOutputs().size(), new Properties(), Function.identity());
         } finally {
             streams.close(Duration.ofSeconds(60));
