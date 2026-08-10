@@ -21,6 +21,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 import static java.lang.Boolean.TRUE;
@@ -66,10 +67,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private int numberRecordsOutForProcessing = 0;
     private PCModule<K, V> module;
     /**
-     * Useful for testing
+     * Useful for testing.
+     * <p>
+     * Concurrent because the getter below hands out this list itself, so registration happens on whatever thread the
+     * caller is on, while {@link #onSuccessResult} iterates it from the controller or poller thread. A plain list
+     * breaks its own iteration when a registration lands mid-notify, and the resulting
+     * {@link java.util.ConcurrentModificationException} escapes into the control loop and stops the consumer.
      */
     @Getter(PUBLIC)
-    private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new ArrayList<>();
+    private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new CopyOnWriteArrayList<>();
 
     private Gauge waitingRecordsNumberGauge;
     private Gauge inflightRecordsNumberGauge;

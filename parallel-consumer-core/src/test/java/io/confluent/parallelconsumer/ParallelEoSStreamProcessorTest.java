@@ -610,6 +610,53 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds));
     }
 
+    /**
+     * The same defect class as {@link #loopEndCallBackCanBeRegisteredFromAnotherThread()}, one subsystem over.
+     * <p>
+     * {@code WorkManager.successfulWorkListeners} is exposed by a Lombok {@code @Getter(PUBLIC)}, which hands callers
+     * the live mutable list, so registration is {@code getSuccessfulWorkListeners().add(..)} from whatever thread the
+     * caller happens to be on. {@code WorkManager.onSuccessResult} iterates it, and is documented as running from
+     * "controller or poller thread". Plain-list iteration breaks when one of those adds lands mid-notify.
+     * <p>
+     * Note the accessor is *why* this instance stayed hidden: searching for the field name finds the declaration and
+     * the iteration but never a mutation, so it reads as dead code. The mutation is spelled with the getter's name.
+     */
+    @Test
+    @SneakyThrows
+    void successfulWorkListenerCanBeRegisteredFromAnotherThread() {
+        var notifyingListeners = new CountDownLatch(1);
+        var registrationLanded = new CountDownLatch(1);
+        var parkedOnce = new AtomicBoolean(false);
+
+        var wm = parallelConsumer.getWm();
+
+        // runs on whichever thread completed the work, and holds the notify loop open while the list is mutated
+        wm.getSuccessfulWorkListeners().add(work -> {
+            if (parkedOnce.compareAndSet(false, true)) {
+                notifyingListeners.countDown();
+                awaitLatch(registrationLanded);
+            }
+        });
+
+        var registrar = new Thread(() -> {
+            awaitLatch(notifyingListeners);
+            wm.getSuccessfulWorkListeners().add(work -> log.trace("Listener registered off thread"));
+            registrationLanded.countDown();
+        }, "off-thread-success-listener-registrar");
+        registrar.start();
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        registrar.join(SECONDS.toMillis(defaultTimeoutSeconds));
+        assertThat(registrationLanded.getCount()).as("off-thread registration completed").isZero();
+
+        // as above, the outcome that matters is that the consumer survived it
+        awaitForOneLoopCycle();
+        assertThat(parallelConsumer.isClosedOrFailed()).as("consumer still running").isFalse();
+
+        parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds));
+    }
+
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
     @SneakyThrows
