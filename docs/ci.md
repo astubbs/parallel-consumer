@@ -39,9 +39,10 @@ stack traces (see [`docs/testing.md`](testing.md)).
   [`docs/copyright.md`](copyright.md).
 - **`quarantine-lane.yml`** - runs the `@Quarantined` tests non-gating on every PR push, every push
   to master, and on dispatch. See [`docs/testing.md`](testing.md).
-- **`pr-checklist.yml`** - fails a human-authored PR whose template checklist is missing or has
-  unchecked boxes without an `N/A`, and hosts the changelog-citation and issue-reference gates.
-  Only real `Bot`-type authors are exempt.
+- **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
+  Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
+  [`docs/releasing.md`](releasing.md)) and the issue-reference gate (`issue-ref-gate.js`, see
+  [`docs/issue-references.md`](issue-references.md)).
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -52,8 +53,10 @@ stack traces (see [`docs/testing.md`](testing.md)).
   API. `sigpipe` runs `bin/check-shell-sigpipe.sh`, which fails any `bin/*.sh` piping into
   `grep -q` under `pipefail` - that construct reports failure exactly when it *matches*, and
   shellcheck does not detect it. `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows. Self-tests run first. Neither gates the
-  build; they exist because the failures they catch are invisible rather than loud.
+  GitHub Action pinned to one version across all workflows. Self-tests run first. **Both are
+  required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
+  the job names are an API. They exist because the failures they catch are invisible rather than
+  loud, and they gate precisely so those failures cannot be skimmed past.
 - **`claude-code-review.yml`** - automated PR review. The job ends with a gate,
   `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs
   first), asserting that a review from *this* run actually landed on the PR. Without it the check

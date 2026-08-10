@@ -70,8 +70,8 @@
         <!-- Copyright-header conformance is enforced by bin/check-copyright-headers.sh, run in the
              `validate` phase by exec-maven-plugin (below), so a plain `mvn` build catches violations
              and not only the copyright.yml GitHub Action. It is provenance-aware: upstream-derived
-             files keep the Confluent header, fork-original files use the fork header - see AGENTS.md
-             "Copyright rules for this fork". Skip it with -Dcopyright.skip=true. -->
+             files keep the Confluent header, fork-original files use the fork header - see
+             docs/copyright.md. Skip it with -Dcopyright.skip=true. -->
         <copyright.skip>false</copyright.skip>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
 

@@ -43,10 +43,15 @@ leave such a test red (ambiguous checks, error-prone merge decisions) and do **n
 
 Instead annotate it `@Quarantined(reason, tracking, fixedBy)` (in core's shared test sources). The
 test then leaves the gating suites - green means mergeable - but keeps running on every PR push and
-after every merge to master (plus `workflow_dispatch`) in the non-gating "Quarantine Lane / tests"
-CI job, whose summary carries pass/fail plus an audit of every quarantined test and its owner. The
+after every merge to master (plus `workflow_dispatch`) in the "Quarantine Lane / tests" CI job,
+whose summary carries pass/fail plus an audit of every quarantined test and its owner. The
 seconds-fast "Quarantine Audit" job enforces the rules on every PR (registry drift and broken owner
 claims fail fast; no tests run there).
+
+**What "non-gating" means precisely.** That job *is* a required status check, but its test-running
+step carries `continue-on-error: true`, so a quarantined test going red cannot block a merge. Its
+registry and owner-claim steps have no such escape and do fail the job: the lane gates on the
+registry staying honest, never on the test outcomes.
 
 The live registry and task list is [`docs/QUARANTINED_TESTS.md`](QUARANTINED_TESTS.md), enforced by
 `bin/check-quarantine-registry.sh` to match the annotations in both directions so it cannot drift;
@@ -60,8 +65,8 @@ Rules:
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
    merging master, atomically restoring the test to the gating lane.
 
-Releases are blocked while the lane is non-empty (`release.yml` guard; snapshots still publish).
-Run the lane locally with `bin/quarantined-test.sh`.
+A non-empty lane blocks releases - see [`docs/releasing.md`](releasing.md). Run the lane locally
+with `bin/quarantined-test.sh`.
 
 ## Chaos Pain Suite (on-demand bug detector - never gates)
 

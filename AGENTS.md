@@ -43,6 +43,11 @@ an older one has been superseded, absorbed by tooling, or is now stated twice.
   of one workflow before. Cross-reference whichever doc owns it.
 - **Do not pre-empt misreadings.** A rule needing three paragraphs to defend it against
   misinterpretation is a rule that needs rewriting.
+- **Before you move or rename a heading, grep the whole repo for it** -
+  `grep -rn '<exact heading text>' .` - not just `docs/`. Other files cite headings here by name in
+  prose, and those citations live in `pom.xml`, shell-script headers, workflow YAML and javadoc as
+  often as in markdown. Nothing checks them, so a stale one is silent. The restructure that created
+  this file left eight such pointers dangling and had to sweep them afterwards.
 
 **Backstops, if the judgement above is slipping.** `wc -l AGENTS.md` past ~400 lines means
 something situational has crept in; each of these fires earlier and names its own fix: a section
@@ -71,6 +76,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/SELF_HOSTED_RUNNER.md`](docs/SELF_HOSTED_RUNNER.md) | Setting up or operating the self-hosted highcpu runner |
+| [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 
 **Where work and knowledge are recorded:**
 
@@ -83,9 +89,10 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths or current config values | A spec, an architecture doc, or general programming vocabulary |
-| **`docs/solutions/`** | Write-ups of problems already **solved**, by category, frontmatter for searching | Open problems |
+| **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
-| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status | Editorial opinion (the `.adoc` beside it), and upstream **issues** - those live in the fork mirrors |
+| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status | Editorial opinion, and upstream **issues** - those live in the fork mirrors |
+| **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
 Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
@@ -173,10 +180,13 @@ Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are 
   hides exactly the bugs this library exists to prevent. **When a broker integration test fails,
   read its `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing by hand** - and check the
   probe's thresholds before believing a clean one.
-- **Reuse test utilities - search before you add.** Shared helpers live in `KafkaClientUtils` and
-  `BrokerIntegrationTest`; extend those rather than writing a raw `admin`/producer/consumer call or
-  a parallel helper. A drifted copy of topic-creation logic once became a flaky-CI source. Check
-  `docs/solutions/` before solving a familiar-feeling problem.
+- **Reuse test utilities - search before you add.** Extend the shared helpers rather than writing a
+  parallel one; a drifted copy of topic-creation logic once became a flaky-CI source. Where they
+  live and what they cover: [`docs/testing.md`](docs/testing.md). Check `docs/solutions/` before
+  solving a familiar-feeling problem.
+- **Quarantine is master-state, not PR-state.** A test red on only one PR is that PR's problem, not
+  a quarantine candidate - and nothing enforces this, so it is on you. The rest of the quarantine
+  discipline is in [`docs/testing.md`](docs/testing.md).
 
 Unit tests are surefire (`src/test/java/`); integration tests are failsafe and need Docker
 (`src/test-integration/java/`).
@@ -186,11 +196,11 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 - **Lombok** used extensively (builders, getters, logging); IntelliJ Lombok plugin required.
 - **EditorConfig** enforced - 4-space Java indent, 120-char lines.
 - **Google Truth** for test assertions, with JUnit 5 and Mockito.
-- **License headers** are enforced by `bin/check-copyright-headers.sh`, which runs in the build's
-  `validate` phase, not only in CI (skip: `-Dcopyright.skip=true`). **There is no header-applying
-  tool** - write the header by hand, and which header a file gets depends on its provenance:
-  [`docs/copyright.md`](docs/copyright.md). Do not change or year-bump an existing file's header
-  without substantive code changes in the same commit.
+- **License headers** are enforced by `bin/check-copyright-headers.sh`, and there is no tool that
+  writes them - which header a new, modified, renamed or extracted file gets depends on its
+  provenance: [`docs/copyright.md`](docs/copyright.md). Two rules bind before you get there: do not
+  touch an existing file's header unless that commit also changes the file substantively, and never
+  bump a copyright year as an incidental or standalone change.
 
 ## Changelog
 
