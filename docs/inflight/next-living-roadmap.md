@@ -63,6 +63,18 @@ import it and PRs can amend it under review like anything else. Respect the cons
 `parked-docs-site.md`: do not build anything that depends on `README_TEMPLATE.adoc` embedding other
 documents.
 
+## Settled: performance is why PC exists, not what v6 ships
+
+`STRATEGY.md` calls Performance "the main track", and the work queued for 0.6.0.0 is reliability,
+refactoring, documentation and the experiments. That reads as a contradiction and it is not one:
+performance is the reason the library exists at all, and reliability is the primary focus of this
+particular release. The roadmap therefore orders themes per release, and performance slots in where it
+belongs rather than being forced to the front to match the strategy's framing.
+
+Do not "resolve" this by rewording `STRATEGY.md`, and do not have the roadmap explain away an apparent
+inconsistency that a reader is unlikely to construct in the first place. A strategy that says what the
+project is for and a roadmap that says what comes next are answering different questions.
+
 ## Delete when
 
 The roadmap exists, the docs site imports it, the README's "single place to look" wording is

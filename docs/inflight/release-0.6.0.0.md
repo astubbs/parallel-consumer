@@ -41,6 +41,25 @@ survive the release.
   that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
   `README.adoc` regenerated.
 
+## Release gate: no disabled tests
+
+**0.6.0.0 does not ship while any test is disabled.** Tests currently carrying `@Disabled`:
+`VertxTest`, `ParallelEoSStreamProcessorTest` (two), and `MultiInstanceRebalanceTest`. All four
+predate the fork - they were added in 2021 and 2022, before this repo had a rule against muting or the
+`@Quarantined` mechanism that replaced it - so this is inherited debt rather than a rule being broken.
+One is not a muted test at all: `VertxTest.handleHttpResponseCodes`'s entire body is
+`assertThat(true).isFalse()`, a stub that was never written.
+
+Each needs the same decision: fix it, delete it, or quarantine it with a diagnosis under
+`@Quarantined`. Quarantining is not a way to satisfy this gate on its own, because a release is
+separately blocked while the quarantine registry is non-empty - so a quarantined test defers the
+problem to the same gate by another route. AGENTS.md already gives the reasoning for why muting is the
+wrong answer: it "loses the signal - a 'known flake' can be a real product bug".
+
+This is a gate rather than a documentation task. The testing-as-a-product material asserts flake
+discipline, and a reader who greps for `@Disabled` inside a minute of reading it is the exact reader
+that material is written for.
+
 ## Say plainly that the experimental modules cannot affect plain PC
 
 If 0.6.0.0 ships new experimental modules - the Kafka Streams one (astubbs#255) and the Connect one -
