@@ -22,7 +22,7 @@
 # astubbs/parallel-consumer#259 adds and which has NOT merged yet. Until it does, the plugin still
 # runs here on `validate` in every other Maven job - unauthenticated, 401ing, silently green. This
 # job neither causes nor worsens that, and has no ordering dependency on that PR (see the Maven step
-# below); it is simply the one place the scan is real. Drop this paragraph once #259 lands.
+# below); it is simply the one place the scan is real. Drop this paragraph once that PR lands.
 #
 # A GREEN MAVEN RUN IS NOT EVIDENCE THE SCAN HAPPENED. The plugin's `fail` parameter covers
 # "vulnerable components were found", not "the request failed" - with an expired token it prints a
