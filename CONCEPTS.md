@@ -105,6 +105,11 @@ rather than sitting out a poll budget while workers complete in the background. 
 throughput ceiling a poll interval imposes once something other than the consumer can make work
 available.
 
+A saturated input does not make it idle, which is the intuition to distrust. What sends the thread back
+to a poll is the ceiling on how much work it may take in one pass, not an empty broker, so a thread with
+a deep backlog still parks while its workers are in flight and still waits on them rather than on the
+broker. Saturating the topic does not saturate the thread.
+
 The wait must release once per raised signal, not once per pass. Its natural predicate reads live
 state - is an outcome waiting to be fed back - which cannot lose a signal, because the thread that
 would clear that state is the one parked on it. But a topology can be paused, and a paused thread keeps
