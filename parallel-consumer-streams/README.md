@@ -151,9 +151,10 @@ is **[Current Shortcomings in the plan](../docs/plans/2026-08-08-001-feat-ks-on-
 **Read that section before relying on this anywhere that matters.** In summary, and without the detail:
 stream time does not advance, so `PunctuationType.STREAM_TIME` punctuators never fire; caching must be
 disabled on state stores, which changes what your topology emits; and retries are off, so failures surface
-a pump cycle late. The size of the gap is measured, not estimated - **33 of Apache Kafka's own
-`StreamTaskTest` cases fail with the seam on** (68/101, against 101/101 with it off), and the shortcomings
-list maps onto those failures.
+a pump cycle late. The size of the gap is measured, not estimated - **36 of Apache Kafka's own
+`StreamTaskTest` cases do not pass with the seam on** (65/101, against 101/101 with it off), and the
+shortcomings list maps onto them. Six of the 36 are not shortcomings at all: they are EOS tests hitting the
+refusal below, which is the mechanism working. The other 30 are the gap.
 
 **Crash safety is not on that list.** Offsets are committed from Parallel Consumer's own completion
 tracking, so a commit covers only work that is genuinely finished and a crash cannot skip a record that
@@ -193,6 +194,14 @@ gives the same reason, and points at the switch that turns it off.
 **The method signatures are all still there.** Nothing was deleted: Kafka's own test suite calls these
 methods heavily, and deleting them would stop that suite compiling and forfeit the evidence below.
 
+**Do not combine the third row with `REPLACE_THREAD`.** The first two rows fail in your own call stack, at
+build time, where you can catch them. The task-construction refusal does not: it leaves `StreamTask`'s
+constructor and arrives at your `StreamsUncaughtExceptionHandler`. If that handler answers `REPLACE_THREAD`,
+Kafka replaces the thread with no backoff and no attempt limit, the replacement is refused for exactly the
+same reason, and the application rebalances in a loop. The refusal is deterministic, so nothing breaks the
+cycle but changing the topology or turning the seam off. Answer `SHUTDOWN_CLIENT` (or
+`SHUTDOWN_APPLICATION`) for this exception, or keep the Processor API off state stores this module refuses.
+
 **Reinstatement is evidence-gated, not judgement-gated.** A construct comes off this list when Kafka's own
 test suite exercises it with the seam **on** and passes - not when someone reads the code and concludes it
 looks fine.
@@ -220,7 +229,7 @@ This is a substantiated claim, available for release notes and other promotional
   weaker than stock.
 - **The condition:** dispatch switch **off** - set explicitly on that surefire execution, not inherited
   from a default. This is a *behaviour-preservation* claim about the patch, not a claim about the parallel
-  path. The parallel path's number is 68/101 on `StreamTaskTest`, and is stated everywhere the 419 is.
+  path. The parallel path's number is 65/101 on `StreamTaskTest`, and is stated everywhere the 419 is.
 - **How to reproduce:** it runs in this module's **normal** test run, no profile and no flag:
 
   ```

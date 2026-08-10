@@ -9,31 +9,72 @@ to a family of modules rather than one, and answering them once is cheaper than 
 Neither module has user-facing documentation in the generated README. Both need it, and the Streams
 one has a substantiated claim worth using:
 
-> 188 of Apache Kafka's own Streams tests (`StreamTaskTest` 101, `RecordCollectorTest` 59,
-> `ProcessorContextImplTest` 28) pass unmodified against the patched classes, zero skipped.
+> 419 of Apache Kafka's own Streams tests (`StreamTaskTest` 101, `RecordCollectorTest` 59,
+> `ProcessorContextImplTest` 28, `StreamThreadTest` 231) pass unmodified against the patched
+> classes, zero failures.
 
-**Do not quote that alone.** It holds with the seam **off**. With the seam **on**, `StreamTaskTest` is
-68/101 - the 33 failures are the known semantic gap (offset/commit accounting, buffering, punctuation,
-EOS gates, close/suspend, error wrapping, ordering). Quoted without that pairing it reads as
-"Kafka-equivalent", which is not true yet. Both facts, or neither.
+The 21 cases `StreamThreadTest` skips are skipped by Kafka's own annotations, and an unpatched
+control run skips exactly the same 21 - say so rather than saying "zero skipped", because the honest
+form of the claim has to survive a reader opening the surefire output.
 
-**The head-of-line blocking measurement is the strongest promotional material this module has.** One
-partition, one 1500ms record at the head of the queue, twentyfour 25ms records behind it on other
-keys. Same JVM, same patched classes, switching only the seam:
+**These figures move. Re-derive them before quoting, do not copy them from here.** This note has been
+wrong twice already: it said 188 after `StreamThreadTest` was added by the wake-on-work work, and it
+said 68/101 after the API refusal changed the seam-on profile. Both were hand-written prose that nothing
+reconciled. The phrasing also moved from "zero skipped" to "zero failures", because `StreamThreadTest`
+carries 21 skips of Kafka's own annotating.
+
+**Do not quote the headline alone.** It holds with the seam **off**. With the seam **on**,
+`StreamTaskTest` is **65/101** - 30 assertion failures plus 6 errors. Quoted without that pairing it
+reads as "Kafka-equivalent", which is not true yet. Both facts, or neither.
+
+**And say what the seam-on failures are, because they are not all gaps.** The 6 errors are the API
+refusal working as designed - EOS constructs now throwing `UnsupportedOperationException` rather than
+silently returning wrong results. Refusing an API necessarily adds seam-on failures to Kafka's own
+suite, so that count going UP can mean the module got safer. Treating it as a single quality score is
+how it gets misread.
+
+**Which number leads - settled 2026-08-11, and this reverses the earlier rule.** Two things changed:
+a realistic benchmark now exists, and the quickest figure turned out to be an artefact of the fixture.
+
+**Lead with backlog catch-up.** On a realistic card-payment screening workload with a Zipf-skewed
+keyspace and a heavy-tailed cost distribution: **25.8/s to 96.0/s, 3.72x, 47 seconds down to 15.**
+Reproduced hours apart. It leads because it is *relatable* - "how long until we are caught up" is a
+question every operator has asked at an uncomfortable hour, it needs no explanation of key ordering,
+and the workload was not chosen to flatter us. Full results:
+`docs/plans/2026-08-11-001-realistic-benchmark-result.md`.
+
+**Then the head-of-line measurement, as the property in isolation.** One partition, one 1500ms record
+at the head, twentyfour 25ms records behind it on other keys, same JVM and patched classes, switching
+only the seam:
 
 | | Stock Kafka Streams | PC-driven | |
 |---|---|---|---|
-| Quickest fast record | 1541ms | **27ms** | **57x** |
-| Median fast record | 1858ms | 232ms | 8x |
+| Quickest fast record | 1541ms | **27ms** | 57x |
+| Median fast record | 1858ms | 232ms | **8x** |
 
-The quickest figure is the one to lead with, because it is the claim itself rather than a summary of
-it: under stock dispatch even the luckiest record behind the blocker waited for it, because
-`PartitionGroup.nextRecord()` hands the partition over one record at a time. Under PC dispatch the
-quickest paid its own 25ms and nothing else.
+**The MEDIAN is the speedup figure. The MINIMUM states the claim but is not a speedup.** The
+distinction matters and the earlier version of this note got it wrong.
 
-**Pair it with the control, always** - same rule as the 188 above. With every record on a **single
-key** the same benchmark gives **0.69x**: PC is *slower*, because KEY ordering permits at most one
-in-flight record per key and the pool handoff still costs something. That is not an embarrassment to
+The minimum is the right evidence for the qualitative claim - *under stock dispatch even the luckiest
+record behind the blocker waited for it, because `PartitionGroup.nextRecord()` hands the partition over
+one record at a time; under PC dispatch the quickest paid its own 25ms and nothing else.* That is an
+existence proof that head-of-line blocking is gone, and no other statistic states it as directly.
+
+But **57x is bounded by the fixture's own construction.** The workload is 1500ms over 25ms - a ratio of
+60 - so the quickest record can never beat 60x, and 57x is simply that number minus the handoff. It is
+a figure we designed rather than discovered, and the first competent reader will divide 1500 by 25 and
+say so. Leading with it invites exactly the "synthetic, rigged" dismissal the realistic benchmark exists
+to defuse.
+
+So: state the claim with the minimum, quote the speedup as the median, and never present 57x as a
+headline speed multiplier.
+
+**Pair it with the control, always** - same rule as the 419 above. With every record on a **single
+key** the same benchmark gives **0.99x** - PC ties with stock rather than losing to it - and whole-batch
+drain reaches parity at 1.01x. It was 0.69x before wake-on-work landed; quote the current number, and
+keep the old one only where the point being made is that the poll wait was the cause. KEY ordering permits at most one
+in-flight record per key, so there is nothing to parallelise and the honest answer is "no better, and no
+worse", which is the reassurance a cautious reader actually wants. That is not an embarrassment to
 bury; it is what makes the headline credible, and it tells a reader exactly when this helps them.
 Quoted alone the headline reads as "PC is 57x faster than Kafka Streams", which is false and which
 the first competent reader will falsify.
@@ -52,10 +93,21 @@ than a spin. Write that up as the explanation of what the simulation is trying t
 The same write-up should carry the converging case explicitly - the workload where PC's advantage
 disappears should cost **nothing** against stock, which is the reassurance a cautious reader actually
 wants before adopting anything. ("No cost for convergence state" is read here as the single-key or
-otherwise degenerate case, where key concurrency cannot help; if the owner meant something else, this
-is the place to correct it.) That half of the claim is **not true yet**: single-key still measures
-0.69x until the poll-wait fix lands, item 3 of `pr-ks-spike-next-work.md`. Write the explanation now,
-publish the no-cost claim after.
+otherwise degenerate case, where key concurrency cannot help.)
+
+**That half of the claim is now TRUE, and it was not when this was written.** Wake-on-work landed and
+single-key moved from 0.69x to 0.99x, with whole-batch drain at 1.01x - checked deliberately,
+because drain is the statistic a sceptic computes first and per-record latency can reach parity while
+end-to-end does not. So the no-cost claim is publishable. Keep drain time printed in every arm so a
+regression cannot hide behind a healthy-looking median.
+
+**The realistic-domain benchmark now EXISTS** - `test/ks-streams-realistic-domain-benchmark`, results in
+`docs/plans/2026-08-11-001-realistic-benchmark-result.md`, front door `parallel-consumer-streams/DEMO.md`.
+Card-payment authorisation screening, Zipf-skewed keys, heavy-tailed costs, chosen for what is
+*unfavourable* about it. It refuted six predictions, including that backlog catch-up would be independent
+of wake-on-work (it is not - that fix is two thirds of the benefit). Most of its cells are still one run
+per arm; see `test-benchmark-figures-that-are-single-run.md` before quoting any of them. The original
+reasoning is kept below because it is why the thing was built and what it has to keep satisfying.
 
 **Also build a realistic-domain benchmark, as devil's-advocate cover for the synthetic one.** The
 head-of-line blocking experiment was designed to expose PC's advantage - one blocker, fast records on

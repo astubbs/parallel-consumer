@@ -93,7 +93,7 @@ patch's line count is the honest answer to "how much had to change" -
   source root for every module, which compiles the patched classes a second time into
   `target/test-classes` - and that precedes `target/classes` on the surefire classpath.
   Two copies, and the winner is an accident. `parallel-consumer-streams/pom.xml:37-45`.
-- **Name the class set; do not discover it.** `patched.classes` lists exactly four
+- **Name the class set; do not discover it.** `patched.classes` lists exactly five
   files, with a comment for each one the compiler would never have demanded.
   `RecordCollectorImpl` is constructed outside `StreamTask`, so nothing forces it into
   the set, yet its non-concurrent maps are written from every worker thread.
@@ -150,7 +150,7 @@ override inherited tag filters, which would otherwise silently drop every one of
 fails on shared fixtures and tells you nothing about your patch (`:416-428`). The count
 this produces is a citable claim in the module README, and it is only meaningful with
 zero exclusions and zero relaxed assertions - the moment you exclude a test, the claim is
-void. `parallel-consumer-streams/README.md:112-138`.
+void. `parallel-consumer-streams/README.md` (the evidence section).
 
 **4. Design around the regeneration foot-gun, and make it detectable.** The unpack step
 runs with `overWriteReleases=true`, so *any* build invocation between editing the
@@ -172,7 +172,7 @@ with `javap -p -classpath target/classes ...` before believing any result.
 **6. Handle the licence at distribution time, not at commit time.** Not committing the
 source removes the commit-time obligation, but publishing an artifact containing
 *compiled, modified* Apache 2.0 classes triggers section 4(b): the distribution must
-carry prominent notices stating that you changed the files. This repo names the four
+carry prominent notices stating that you changed the files. This repo names the five
 modified classes in `NOTICE`, attributes the ASF, states plainly that they were changed,
 and points at the patch as the complete expression of the change. `NOTICE:12-29`.
 
@@ -181,7 +181,7 @@ classes in the third party's package namespace. Any consumer holding both your a
 and the original gets behaviour decided by classpath order, which build tools do not
 guarantee. The technique is sound inside your own module's build and is *not* a
 distribution mechanism. Say so where users will read it, rather than discovering it for
-them. `parallel-consumer-streams/README.md:92-95`, and
+them. `parallel-consumer-streams/README.md` (the build section), and
 `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md:382-397` enumerates the three
 expensive ways out (publish a forked artifact under a different coordinate, ship a
 classloader or agent trick, or upstream the change) and picks none of them.
@@ -224,8 +224,8 @@ here wrote. The only remaining obligation attaches to the published artifact, an
   classpath. Classpath order is not a distribution contract. Publish a fork under a
   different coordinate, or upstream the change.
 - **Do not apply when** the target is a moving trunk rather than a pinned release. These
-  four classes have already diverged materially on Kafka 4.x, so a green result on 3.9
-  does not transfer unexamined. `parallel-consumer-streams/README.md:140-152`.
+  patched classes have already diverged materially on Kafka 4.x, so a green result on 3.9
+  does not transfer unexamined. `parallel-consumer-streams/README.md` (the limitations section).
 
 ## Examples
 
@@ -276,7 +276,7 @@ independently of anything you intend to change.
 
 ```
 The parallel-consumer-streams artifact additionally contains MODIFIED versions of
-four classes from Apache Kafka:
+five classes from Apache Kafka:
   ...
 These files have been CHANGED by Antony Stubbs and contributors ... The changes are
 expressed as, and limited to, the patch tracked at

@@ -38,7 +38,7 @@
 
              Deliberately NOT under target/generated-sources: the root pom adds that whole directory as an
              *integration-test* source root for every module (see its build-helper add-integration-test-source
-             execution). Generating there compiles these four classes a second time into target/test-classes,
+             execution). Generating there compiles these five classes a second time into target/test-classes,
              which then precedes target/classes on the surefire classpath - two copies of the same patched
              Kafka classes, and the one that wins is an accident of classpath order rather than a decision. -->
         <kafka.patched.dir>${project.build.directory}/kafka-patched</kafka.patched.dir>
@@ -59,9 +59,11 @@
              which is why the four IMPLS carry the runtime refusal. Neither half substitutes for the other.
 
              This list is now thirteen, which is past the point at which the patch-do-not-vendor learning says the
-             sprawl is itself the answer. Stated rather than absorbed: the alternative that stays at five is a
-             single check in InternalStreamsBuilder keyed on the DSL's graph-node types, at the cost of a
-             message one step removed from the method the user actually called. -->
+             sprawl is itself the answer. Stated rather than absorbed: the smaller alternative is a single check
+             in InternalStreamsBuilder keyed on the DSL's graph-node types, at the cost of a message one step
+             removed from the method the user actually called. It reaches ten, not five - the four IMPLS go away
+             and InternalStreamsBuilder arrives, but the four INTERFACES stay patched, because the compile-time
+             refusal is the half that has to sit on the symbol a call site resolves to. -->
         <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamThread.java,org/apache/kafka/streams/kstream/KStream.java,org/apache/kafka/streams/kstream/KTable.java,org/apache/kafka/streams/kstream/KGroupedStream.java,org/apache/kafka/streams/kstream/CogroupedKStream.java,org/apache/kafka/streams/kstream/internals/KStreamImpl.java,org/apache/kafka/streams/kstream/internals/KTableImpl.java,org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java,org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java</patched.classes>
 
         <!-- Module-local and explicitly versioned on purpose: pinning jackson-databind in root
@@ -178,7 +180,7 @@
         </dependency>
 
         <!-- Apache Kafka's own test suite, and the fixtures it is built on. These are what make the
-             188-test upstream execution below possible; see the comment on that surefire execution. -->
+             419-test upstream execution below possible; see the comment on that surefire execution. -->
 
         <!-- Kafka's compiled tests, plus the org.apache.kafka.test.* fixtures they are built on
              (InternalMockProcessorContext, MockSourceNode, MockClientSupplier, ...). Preferred over
@@ -461,9 +463,10 @@
                             <!-- The 419 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only
                                  means that with the seam OFF. Stated here rather than inherited: the
                                  seam now defaults ON (PcDispatchSwitch - depending on the artifact is
-                                 the opt-in), and with it on Kafka's StreamTaskTest is 68/101, recorded
-                                 separately as the measured gap. Nothing about this execution may depend
-                                 on what the default happens to be. -->
+                                 the opt-in), and with it on Kafka's StreamTaskTest is 65/101, recorded
+                                 separately as the measured gap - 30 of those 36 are the gap and 6 are EOS
+                                 tests hitting the refusal, which is the mechanism working. Nothing about
+                                 this execution may depend on what the default happens to be. -->
                             <systemPropertyVariables>
                                 <pc.streams.dispatch.enabled>false</pc.streams.dispatch.enabled>
                             </systemPropertyVariables>

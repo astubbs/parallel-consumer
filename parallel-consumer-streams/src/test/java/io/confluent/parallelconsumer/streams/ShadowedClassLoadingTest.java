@@ -120,6 +120,8 @@ class ShadowedClassLoadingTest {
      */
     @Test
     void generatedAndJarClassesShareOneRuntimePackage() {
+        List<String> generatedPackages = generatedPackages();
+
         for (String name : GENERATED) {
             Class<?> generated = load(name);
 
@@ -129,7 +131,7 @@ class ShadowedClassLoadingTest {
                     .as("%s is generated into a package this test does not know about. Every generated package "
                                     + "needs a declared jar-resident sibling, or its coexistence is unproven.",
                             generated.getName())
-                    .isIn(generatedPackages());
+                    .isIn(generatedPackages);
 
             Class<?> jarSibling = jarResidentSiblingOf(generated);
             assertThat(generated.getClassLoader())
