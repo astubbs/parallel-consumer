@@ -113,9 +113,34 @@ comparison needs:
 Other settings:
 
 ```
--Dpc.streams.dispatch.poolSize=4      # worker threads per task; also PC's maxConcurrency. Default 4.
--Dpc.streams.wakeOnWork.enabled=false # back to one full-budget poll - see Wake on work. Default on.
+-Dpc.streams.dispatch.poolSize=4       # worker threads per task; also PC's maxConcurrency. Default 4.
+-Dpc.streams.wakeOnWork.enabled=false  # back to one full-budget poll - see Wake on work. Default on.
+-Dpc.streams.backpressure.enabled=false # stop pausing partitions - see Backpressure. Default on.
 ```
+
+### Backpressure, and what `buffered.records.per.partition` now means
+
+Kafka Streams pauses a partition once its buffer passes `buffered.records.per.partition`. On the PC path
+the records are held by Parallel Consumer rather than by Streams' own queue, so that pause did not fire and
+nothing bounded inflow: under a processor slower than the broker feed, records accumulated with no limit but
+heap. They are now counted, so the pause and the resume work as Kafka intends.
+
+**Measured, two arms differing only in the switch** - 600 records, one partition, a 10ms processor,
+`buffered.records.per.partition=10` and `max.poll.records=20`:
+
+| | Peak records held in memory |
+|---|---|
+| `-Dpc.streams.backpressure.enabled=false` | **596** of 600 - effectively the whole topic |
+| default (on) | **30**, against a derived bound of 34 |
+
+**One thing to know before tuning.** On the stock path `buffered.records.per.partition` is purely a memory
+knob, because a serial engine draws no benefit from a deeper buffer. Under PC dispatch the buffer is also
+the pool of distinct keys concurrency is drawn from, so **setting it low now costs throughput as well as
+memory**. If you tuned it down for stock Kafka Streams, revisit it here.
+
+The bound is the threshold plus one poll batch, because `addRecords` is handed a whole batch and can only
+pause after registering it - stock has the identical property, which is why `max.poll.records` matters to
+the figure above.
 
 From a test, so each arm states which path it wants rather than inheriting a default:
 
@@ -150,15 +175,22 @@ is **[Current Shortcomings in the plan](../docs/plans/2026-08-08-001-feat-ks-on-
 
 **Read that section before relying on this anywhere that matters.** In summary, and without the detail:
 stream time does not advance, so `PunctuationType.STREAM_TIME` punctuators never fire; caching must be
-disabled on state stores, which changes what your topology emits; and retries are off, so failures surface
-a pump cycle late. The size of the gap is measured, not estimated - **36 of Apache Kafka's own
-`StreamTaskTest` cases do not pass with the seam on** (65/101, against 101/101 with it off), and the
-shortcomings list maps onto them. Six of the 36 are not shortcomings at all: they are EOS tests hitting the
-refusal below, which is the mechanism working. The other 30 are the gap.
+disabled on state stores, which changes what your topology emits; and retries are off, so a failure
+surfaces a pump cycle late rather than at the throw. The size of the gap is measured, not estimated -
+**29 of Apache Kafka's own `StreamTaskTest` cases do not pass with the seam on** (72/101, against 101/101
+with it off), and the shortcomings list maps onto them. Six of the 29 are not shortcomings at all: they are
+EOS tests hitting the refusal below, which is the mechanism working. The other 23 are the gap.
+
+**Two items that were on that list have moved.** Consumer pausing is no longer absent - see
+[Backpressure](#backpressure-and-what-bufferedrecordsperpartition-now-means) above. And the late failure is
+now *bounded* rather than merely late: the dispatcher stops handing out work the moment it knows a record
+has failed, so what runs in the gap is limited to what was already in flight instead of to a whole poll
+budget. A failure also now arrives as the exception stock would have thrown - a `TimeoutException` stays a
+`TimeoutException` instead of being buried in a wrapper - and names the record that caused it.
 
 **Crash safety is not on that list.** Offsets are committed from Parallel Consumer's own completion
 tracking, so a commit covers only work that is genuinely finished and a crash cannot skip a record that
-was still in flight. Note that 14 of the 33 failures above are Kafka's offset and commit tests, which
+was still in flight. Note that 12 of the 29 failures above are Kafka's offset and commit tests, which
 still fail - not because anything can be lost, but because they assert Kafka's *encoding* of the commit
 metadata, and this module deliberately owns that field. A failing test there is the divergence being
 detected, not data being lost.

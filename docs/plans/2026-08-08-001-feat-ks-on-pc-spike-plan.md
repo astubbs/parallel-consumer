@@ -1359,20 +1359,43 @@ When this is addressed, the persistence half has a settled direction: KTD-S7's g
 Streams-side watermarks ride inside PC's versioned payload as an opaque blob, never as a second
 writer of the metadata field.
 
-### Consumer pausing - Kafka Streams', not PC's
+### ~~Consumer pausing - Kafka Streams', not PC's~~ RESOLVED by U14
 
-`StreamTask.addRecords` pauses a partition once its buffer passes `maxBufferedSize`, and resumes it as
-the buffer drains. That is Streams' backpressure onto the consumer. The PC path never fills that buffer,
-so the pause never fires, and PC's own limits (max concurrency, per-shard in-flight) are the only inflow
-control there is - and they do not reach back to the consumer.
+**No longer a shortcoming.** The dispatcher counts, per partition, the records it holds that no worker has
+started, and `addRecords` compares that against `buffered.records.per.partition` exactly as the stock
+branch compares the `RecordQueue` size. So Kafka's own pause fires, and `resumePollingForPartitionsWith-
+AvailableSpace` - which runs at the top of every `runOnce` - undoes it as the buffer drains. The
+`active-buffer-count` metric reports the occupancy rather than a constant zero.
 
-### Failures surface a pump cycle late
+**Measured, two arms differing only in `pc.streams.backpressure.enabled`:** peak records held went from
+**596 of 600** with the pause off to **30** with it on, against a derived bound of 34. The control arm is
+what makes that meaningful - a fast enough consumer never fills a buffer, so a single arm under the bound
+would prove nothing.
+
+**One consequence to carry forward, which is new rather than resolved:** on the stock path
+`buffered.records.per.partition` is purely a memory knob; under PC dispatch the buffer is also the pool of
+distinct keys concurrency is drawn from, so a low setting now trades throughput for memory. Recorded in the
+module README rather than left for a user to discover.
+
+### Failures surface a pump cycle late - NARROWED by U14, not closed
 
 PC's retries are deliberately disabled: a retry re-runs a processor chain that has already called
 `forward()` downstream, producing duplicates that stock Streams never produces. The consequence is that a
 failure surfaces when the dispatcher next pumps and observes the failed work container, not synchronously
-at the moment of the throw - and records dispatched into the worker pool in that window will have run.
-Stock Streams throws straight to the uncaught-exception handler.
+at the moment of the throw. Stock Streams throws straight to the uncaught-exception handler.
+
+**Still true, and it cannot be closed** - the throw genuinely happens on a worker after the StreamThread
+has moved on. **What U14 changed is the blast radius.** The dispatcher now stops handing out work the
+instant it knows a record has failed, so the records that run in the window are bounded by what was already
+in flight rather than by a whole poll budget. The bar is deliberately sticky: `pollFailure()` clears the
+failure as it hands it over, and a bar that cleared with it would leave `suspend()`'s drain free to
+dispatch the entire remaining backlog of a task that is already dying.
+
+**The exception is also now the one stock would have thrown.** It was wrapped in a generic
+`StreamsException` regardless of cause, which buried a `TimeoutException` that stock rethrows unchanged.
+The classification now mirrors stock's catch ladder, and the message names the topic, partition and offset
+- which matters more here than in stock, because the failure is one record out of `poolSize` running
+concurrently.
 
 ### ~~Offset commit is optimistic - a crash can lose records~~ RESOLVED by U9
 
