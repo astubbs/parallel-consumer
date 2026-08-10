@@ -640,6 +640,14 @@ public class PcTaskDispatcher implements Closeable {
      * <b>What this does not solve:</b> a group whose commits this module wrote carries PC's frontier payload,
      * not Streams' {@code TopicPartitionMetadata}, so there is nothing to decode and nothing to seed from.
      * The general case still needs KTD-S7's opaque rider.
+     * <p>
+     * <b>Owner thread only, and unguarded on purpose.</b> Kafka reaches this through
+     * {@code StreamTask.initializeTaskTimeAndProcessorMetadata} from {@code completeRestoration}, which in
+     * 3.9.2 only {@code TaskManager} calls - not {@code DefaultStateUpdater}, not {@code TaskExecutor} - so
+     * the owner thread is the only caller today. No {@code assertOwnerThread}, because restoration is exactly
+     * the territory where turning a thread comment into a check threw on a legitimate call once already (see
+     * the class javadoc's thread model), and that walk has not been redone for every Kafka version this
+     * module may meet. The sentence is the contract; add the guard when someone has earned it.
      */
     public void seedStreamTime(final long committedPartitionTime) {
         maxDispatchedStreamTimestamp = Math.max(maxDispatchedStreamTimestamp, committedPartitionTime);
@@ -661,8 +669,12 @@ public class PcTaskDispatcher implements Closeable {
     /**
      * Recompute {@link #streamTimeLowWaterMark} and publish it. Owner thread only. Called from the tail of
      * {@link #dispatchAvailable}, the tail of {@link #drainCompletions}, and {@link #seedStreamTime} -
-     * and <b>deliberately from neither close path</b>, for the reason on
-     * {@link #dropStreamTimeHoldsWithoutPublishing()}. Do not "restore" a missing publish there.
+     * and never <b>directly</b> from a close path. {@link #close()} still publishes <em>transitively</em>,
+     * through the {@link #drainCompletions()} it runs while holds are still registered - which is correct,
+     * because those holds are real completions. What must never be added is a publish <b>after</b>
+     * {@link #dropStreamTimeHoldsWithoutPublishing()}, which would recompute over an emptied map. An earlier
+     * version of this sentence said "from neither close path", which reads as "the mark never moves during
+     * close" and is false.
      * <p>
      * <b>Publish after the last mutation, never before it.</b> U10 lost Kafka's own
      * {@code shouldClearCommitStatusesInCloseDirty} to exactly that ordering mistake, on the flag this field

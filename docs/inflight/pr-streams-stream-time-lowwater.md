@@ -43,6 +43,18 @@ the production read to `work.getCr().timestamp()` left all nine green. Now pinne
 `theMarkFollowsTheTimestampThePreparerSuppliedNotTheBrokersOwn`, and the pin is **mutation-verified**:
 with that swap applied, exactly one test goes red and it is that one.
 
+Correctness review found a second one, also **fixed**: the STREAM_TIME punctuator warning named two
+divergences and stopped immediately before the one that can corrupt state. `punctuate()` runs on the
+StreamThread while up to `poolSize` records are still inside the chain on workers, so **stock's guarantee
+that `punctuate()` and `process()` never overlap for one task is gone** - and a plain `KeyValueStore` is
+*supported* here, so the obvious punctuator ("iterate the store now that everything up to T is done")
+races the processors writing it. The warning now carries that as clause 3.
+
+**The open question that clause raises, and this plan does not settle:** whether a STREAM_TIME punctuator
+should be *refused* when the topology also declares a state store, rather than warned about. A warning is
+the right call while the punctuator is the only thing that can reach the hazard; it stops being the right
+call if anyone finds a way to hit it without registering one.
+
 Still open:
 
 - **`seedStreamTime`'s call site has no coverage at all.** Delete the
@@ -72,6 +84,20 @@ Still open:
 - **"Exactly what stock holds" is asserted about the dispatcher and only described as equal to stock.**
   No stock value is computed anywhere in these tests, so the never-ahead-of-stock property still rests on
   prose. U13.4's seam-OFF control arm is what changes that.
+- **The new extracted-timestamp test pins the dispatcher, not `pcPrepare`.** It proves the plumbing
+  carries whatever it is given; nothing proves `StreamTask.pcPrepare` gives it `stamped.timestamp` rather
+  than `rawRecord.timestamp()`. Same gap as the two above: it needs a test on the StreamTask side.
+- **No test pins the `dispatchedToPool > 0` guard** - a pump that dispatches nothing because the pool is
+  full must leave the mark unchanged. That is the pump where the map is fullest.
+- **`seedStreamTime` arriving while records are in flight** is untested; only the empty-pool case is.
+
+Two things correctness review checked and cleared, worth not re-deriving: both publish guards **are**
+equivalent to unconditional publishing (a skipped publish would need a hold added-then-drained, and the
+drain publishes), and `abortClose()` not clearing the map holds up - after abort no publish is reachable,
+because `dispatchAvailable` drains then early-returns on `closed`, and a late outcome's `remove()` returns
+null so `releasedAnyHold` stays false. Also: `TopicPartitionMetadata.decode` cannot hand `seedStreamTime`
+a bogus huge value from a PC-written commit, because `OffsetEncoding`'s magic bytes deliberately exclude 1
+and 2 and the decode falls through to `UNKNOWN`.
 
 ## The thing to read before trusting a number here
 
