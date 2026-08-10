@@ -22,9 +22,10 @@ cross-reference each other, and three of those references are load-bearing:
   T. M's own note says the engineering-system detail belongs in T and that the table should reference
   it rather than duplicate it. Two agents writing that content independently produces duplication that
   only surfaces at convergence.
-- **M feeds R.** R anchors on a stated definition of 1.0, and M is where the definition comes from:
-  pre-1.0 reserves the API surface, not reliability. R cannot state exit criteria without M's two-axis
-  split.
+- **M feeds R.** R anchors on a stated definition of 1.0, and M is where the definition comes from.
+  Wave 0 has now settled it, and corrected it: 1.0 waits on a settled API surface, on functionality
+  still wanted, and on critical-bug confidence. R cannot state exit criteria without that, and must
+  not fall back on the shorter, false version.
 - **F feeds R.** F is R's "living document" trigger: the per-PR feature file is what tells the roadmap
   a theme has shipped.
 
@@ -46,8 +47,13 @@ folded in here, so no agent has to wonder whether it is missing context a siblin
 
 ### The four interface contracts
 
-1. **The two-axis vocabulary.** Reliability and API stability are separate axes. Pre-1.0 reserves the
-   API surface, not reliability. Every agent uses those words and does not invent synonyms.
+1. **What 1.0 is waiting on.** Reliability and API stability are separate axes, and the release claims
+   reliability now while reserving the API surface. But **1.0 is waiting on three things, not one**: a
+   settled API surface, functionality still wanted before 1.0, and confidence about critical bugs
+   rather than only about the known set. No agent writes "pre-1.0 reserves the API surface, not
+   reliability" - that sentence is neat and false, and it survived being restated through a note, this
+   seed and four rounds of review before wave 0 caught it. Settled wording is in
+   `next-module-maturity-table.md`; R's 1.0 exit criteria anchor on that, not on the shorter version.
 2. **Engineering-system detail lives in T.** The CI and analysis apparatus, the lanes, mutation
    testing, automated review coverage. M and R reference it; only T describes it.
 3. **The release gate is not met yet.** The `confluentinc#857` deadlock is still open, with the fix in
