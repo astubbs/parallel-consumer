@@ -150,7 +150,13 @@ class OffsetCompositionCrashRestartTest extends BrokerIntegrationTest<String, St
             return lastCommitted;
         } finally {
             if (dispatcher != null) {
-                dispatcher.close();
+                // abortClose, NOT close. close() is an orderly shutdown: it drains the worker pool, feeds
+                // every outstanding completion back through drainCompletions and revokes the partitions - so
+                // running it here would mean the assertions below describe a clean handover, while the
+                // comment above them says "the crash". A test named for a crash that quietly performs a
+                // graceful shutdown is the shape of evidence that proves a weaker property than it claims.
+                // abortClose is the crash-injection surface, and is what the sibling streams arm uses.
+                dispatcher.abortClose();
             }
         }
     }

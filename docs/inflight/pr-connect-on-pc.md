@@ -151,3 +151,34 @@ never requires blocking a worker at all.
 `AGENTS.md` said `**/*IT.java` is included in failsafe. The root pom's failsafe `<includes>` lists only
 `**/integrationTest*/**/*.java`, so a `*IT.java` outside an `integrationTest` package runs in neither
 suite and reports nothing. `TestConventionRules` has it right. Not yet fixed.
+
+## Open: a lane can still over-claim to `preCommit`, on staging order rather than delivery order
+
+Found by an independent correctness review of the contiguous-prefix fix, and **reproduced twice against
+the compiled classes** - once driving `PcSinkTaskLane` + `PcSinkTaskDurabilityBarrier` through a real
+`PcTaskDispatcher`, once through the real `PcSinkTaskLaneRouter`. Not a hypothetical.
+
+`PcSinkTaskDurabilityBarrier.advanceDeliveredThrough` stops the claim at the lowest offset still in
+`staged`. That correctly blocks a gap the lane *knows about*. It says nothing about an offset routed to
+this lane that has **not been staged yet** - and PC hands work out per shard, so two distinct keys sharing
+one lane can be dispatched in any order. In the reproduction the first record the dispatcher handed over
+was offset 20 of 40; the barrier immediately claimed through 21, though offsets 0-19 were routed to that
+same lane and had never been staged.
+
+The consumer-group commit is still safe - PC's frontier holds at the lowest incomplete offset regardless -
+so this is not a data-loss path today. The damage is confined to the map handed to `preCommit`: for a
+connector that overrides `flush`, it is an instruction to flush offsets the lane was never given, which is
+the hazard `PcSinkTaskLane`'s own javadoc names.
+
+Why it is parked rather than patched: the stop line the fix needs is "the lowest offset this lane will
+*ever* be given and has not yet received", which is not derivable inside the barrier - it is a fact about
+routing that only exists once the record has been routed. The two candidate shapes are (a) the router
+declares a lane's owed offsets at registration time, before `prepare` runs, or (b) a lane's own records are
+staged in strict offset order, buffering higher offsets until the lower ones arrive. Both change the
+router's concurrency shape. `PcConnectDispatchBridge.enabled()` still returns `false`, so nothing reaches
+this in a running system - but it must be settled before the router is wired to a real Connect runtime.
+
+**Test-shape lesson worth keeping:** every existing probe arm stages every offset up front and then varies
+*delivery* order. That is precisely why this survived - no arm varies *staging* order, so the whole class
+of defect was invisible by construction. A regression arm has to drive staging through the real dispatcher
+with several keys on one lane.

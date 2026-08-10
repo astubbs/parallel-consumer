@@ -256,6 +256,34 @@ class OffsetCompositionProbeTest {
                 .isEqualTo(16L);
     }
 
+    /**
+     * The other half of {@code failed()}: an offset that reached the sink and is only awaiting confirmation.
+     * Unlike the pre-delivery case it must be <em>dropped</em>, or a later watermark could still confirm a
+     * record PC has already been told failed - completing it twice, in opposite directions.
+     */
+    @Test
+    @DisplayName("failing an already-delivered record drops it, so no later watermark can confirm it")
+    void failingAnAlreadyDeliveredRecordDropsItFromConfirmation() {
+        final ScriptedSinkTask task = new ScriptedSinkTask();
+        final Fixture fixture = new Fixture(task, ConfirmationRule.OWNING_LANE);
+        fixture.stage(0, task);
+        fixture.stage(1, task);
+        fixture.deliverAll();
+
+        fixture.fail(0);
+        assertThat(fixture.failedOffsets())
+                .as("the record's own handle must be told, exactly once")
+                .containsExactly(0L);
+
+        // A watermark that would otherwise have covered both.
+        task.declareDurableThrough(2);
+        fixture.runCycle();
+
+        assertThat(fixture.completedOffsets())
+                .as("offset 0 already failed, so the watermark may not also succeed it - only 1 completes")
+                .containsExactly(1L);
+    }
+
     // ---------- the exhaustive arm ------------------------------------------------------------------
 
     /**
@@ -427,6 +455,7 @@ class OffsetCompositionProbeTest {
         private final Map<ScriptedSinkTask, PcSinkTaskDurabilityBarrier> barriers = new HashMap<>();
         private final Map<Long, ScriptedSinkTask> taskByOffset = new HashMap<>();
         private final Collection<Long> completed = new ConcurrentLinkedQueue<>();
+        private final Collection<Long> failed = new ConcurrentLinkedQueue<>();
         private final ConfirmationRule rule;
 
         Fixture(final ScriptedSinkTask task, final ConfirmationRule rule) {
@@ -456,9 +485,19 @@ class OffsetCompositionProbeTest {
 
                 @Override
                 public void failed(final Throwable cause) {
-                    throw new AssertionError("no arm here fails a record", cause);
+                    failed.add(offset);
                 }
             });
+        }
+
+        /** Fails one record through its barrier, as the router does when {@code put} throws. */
+        void fail(final long offset) {
+            final ScriptedSinkTask task = taskByOffset.get(offset);
+            barriers.get(task).failed(PARTITION, offset, new IllegalStateException("scripted failure"));
+        }
+
+        Set<Long> failedOffsets() {
+            return new HashSet<>(failed);
         }
 
         /** Runs the lane's {@code put} and promotes the offset, as the worker call would. */

@@ -169,6 +169,12 @@ public class PcSinkTaskDurabilityBarrier {
      * the over-claim this class exists to prevent. A retry re-stages the offset and replaces the handle;
      * this dispatcher disables retries, so in practice such a record pins this lane's watermark for good -
      * exactly as it pins PC's own frontier.
+     *
+     * <p><b>That pin costs memory, not just liveness.</b> Once the watermark is frozen, {@link #confirm}
+     * stops clearing {@link #deliverable} and {@link #advanceDeliveredThrough} stops pruning
+     * {@link #deliveredOffsets}, so both grow by one entry per record this lane goes on to write. Bounded
+     * only by how long the task runs. Acceptable while this module is unwired; a real deployment needs the
+     * permanently-stuck offset surfaced and the lane retired rather than left accumulating.
      */
     public synchronized void failed(final TopicPartition partition, final long offset, final Throwable cause) {
         final NavigableMap<Long, CompletionHandle> stagedForPartition = staged.get(partition);

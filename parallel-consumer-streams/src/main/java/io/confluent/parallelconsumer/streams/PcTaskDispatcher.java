@@ -567,13 +567,19 @@ public class PcTaskDispatcher implements Closeable {
      */
     private void enterWorkManager(final String method) {
         final Thread current = Thread.currentThread();
+        // compareAndSet, not get-then-set. A read followed by a separate write leaves a window in which two
+        // threads both observe null, both pass, and both proceed inside - the detector staying silent at
+        // exactly the moment it is needed. Claiming the slot atomically closes it.
+        if (insideWorkManager.compareAndSet(null, current)) {
+            return;
+        }
         final Thread holder = insideWorkManager.get();
-        if (holder != null && holder != current) {
+        if (holder != current) {
             throw new IllegalStateException(String.format(
                     "%s touches WorkManager, which admits one thread at a time, but '%s' is already inside it; "
-                            + "this call came from '%s'", method, holder.getName(), current.getName()));
+                            + "this call came from '%s'", method,
+                    holder == null ? "another thread" : holder.getName(), current.getName()));
         }
-        insideWorkManager.set(current);
     }
 
     private void leaveWorkManager() {
@@ -700,6 +706,10 @@ public class PcTaskDispatcher implements Closeable {
             Thread.currentThread().interrupt();
             workerPool.shutdownNow();
         }
+        // Touches WorkManager without claiming occupancy, unlike the five methods that do. Deliberate: this
+        // runs after the pool has drained, and a teardown that threw because someone else was mid-call would
+        // turn an orderly close into a leak. The asymmetry is the trade, not an oversight - if a caller can
+        // reach close() concurrently with dispatch, the guard will not be the thing that tells you.
         drainCompletions();
         workManager.onPartitionsRevoked(new ArrayList<>(inputPartitions));
         log.info("PC dispatch closed over {}", inputPartitions);
