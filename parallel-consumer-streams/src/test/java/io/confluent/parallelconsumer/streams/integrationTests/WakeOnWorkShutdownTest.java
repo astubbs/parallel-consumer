@@ -192,6 +192,11 @@ class WakeOnWorkShutdownTest extends BrokerStreamsIntegrationTest {
                     .as("%s: and the mechanism must genuinely have been in play - a zero here means the "
                             + "StreamThread never parked on our condition and this arm tested stock", name)
                     .isPositive();
+        } else {
+            assertThat(PcDispatchCounters.getSplitPollWaits())
+                    .as("%s: the control arm must be genuinely inert. A non-zero here means the kill switch "
+                            + "did not reach the run and both arms measured the same thing.", name)
+                    .isZero();
         }
     }
 

@@ -352,10 +352,20 @@ public class PcTaskDispatcher implements Closeable {
             // ORDER MATTERS, and it looks arbitrary: the signal goes AFTER the decrement, not with the
             // completion above. Signal first and the woken StreamThread drains the completion, then computes
             // capacity = poolSize - inFlight against a count this thread has not yet decremented, dispatches
-            // nothing, and parks again - with an empty completions queue and no further signal coming. That is
-            // a full poll-budget stall, microseconds wide, and it would never reproduce on demand.
+            // nothing, and parks again - a full poll-budget stall, microseconds wide, that would never
+            // reproduce on demand.
             // Raised on the failure path too, via this finally: a failed record frees a pool slot exactly like
             // a successful one, and the failure branch is the one a later refactor forgets.
+            //
+            // KNOWN RESIDUAL, and this ordering narrows it rather than closing it. A StreamThread that
+            // reaches PcWorkSignal's wait between the add and the decrement above leaves on the pending
+            // outcome without any signal, and still reads the stale count. It only bites at poolSize 1,
+            // where the stale read means capacity 0 and the next pass waits a poll budget with a
+            // dispatchable record in hand; at poolSize >= 2 the spare slot absorbs it. Closing it properly
+            // means splitting this counter in two - a pool-capacity count the worker owns and decrements
+            // BEFORE enqueuing, and an outstanding count the StreamThread owns and decrements as it drains -
+            // so that neither question is ever answered from the other's window. Deliberately not done here:
+            // it re-keys every reader of getInFlightCount(), and this defect is bounded and non-hanging.
             workSignal.signalWorkAvailable();
         }
     }

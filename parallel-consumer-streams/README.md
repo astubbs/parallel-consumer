@@ -68,6 +68,13 @@ Deliberately **not** `KafkaConsumer#wakeup()`, which is the obvious mechanism an
 not polling arms the *next* poll instead, so a stray completion could swallow a shutdown. Owning the
 condition costs one small class and removes that failure mode entirely.
 
+**The trade it makes.** While a worker is in flight and no completion arrives, the consumer is polled for
+1ms and then not again until the budget expires - so a record arriving from the broker mid-wait can wait out
+the remainder, where a single full-budget `poll()` would have returned it at once. It is bounded by `poll.ms`
+and only applies while workers are busy (which is when a newly-arrived record could not have been dispatched
+anyway), but it is a real cost and not a free win. Under load it barely arises, because every completion
+ends the wait and the next pass polls again.
+
 **To turn it off**, without turning the seam off: `-Dpc.streams.wakeOnWork.enabled=false`. That restores one
 full-budget poll, and it is how the before/after above was measured as a one-term control.
 

@@ -422,7 +422,7 @@
                                 <include>org/apache/kafka/streams/processor/internals/StreamThreadTest.java</include>
                             </includes>
                             <reportsDirectory>${project.build.directory}/surefire-reports-kafka-upstream</reportsDirectory>
-                            <!-- The 188 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only
+                            <!-- The 419 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only
                                  means that with the seam OFF. Stated here rather than inherited: the
                                  seam now defaults ON (PcDispatchSwitch - depending on the artifact is
                                  the opt-in), and with it on Kafka's StreamTaskTest is 68/101, recorded

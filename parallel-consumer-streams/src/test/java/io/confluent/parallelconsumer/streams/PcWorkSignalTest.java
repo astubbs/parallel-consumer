@@ -337,9 +337,51 @@ class PcWorkSignalTest {
         dispatcher.close();
         dispatcher = null;
 
-        assertThat(PcWorkSignal.hasActiveWorkOnCurrentThread())
-                .as("a closed dispatcher must not keep the gate open for work that can never arrive")
-                .isFalse();
+        // Asserted on the REGISTRY, not on the gate. An orderly close drains and awaits its pool, so the gate
+        // reads false afterwards whether or not the deregistration happened - an assertion on the gate here
+        // passes with the production deregistration deleted, which makes it worth nothing.
+        assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
+                .as("a closed dispatcher must deregister, or it keeps answering the gate for work that can "
+                        + "never arrive")
+                .isZero();
+        assertThat(PcWorkSignal.hasActiveWorkOnCurrentThread()).isFalse();
+    }
+
+    /**
+     * <b>The anti-spin property, and the one that a purely level-triggered wait gets wrong.</b>
+     * <p>
+     * The wake predicate is "an outcome is pending", and outcomes are only cleared by the StreamThread inside
+     * {@code dispatchAvailable}. Kafka does not always get there: {@code KafkaStreams.pause()} makes
+     * {@code TaskExecutionMetadata.canProcessTask} answer no, so {@code process()} is skipped entirely while
+     * the thread stays RUNNING and keeps polling. A wait that left on the pending outcome every time would
+     * then return instantly on every pass, turning the poll phase into a ~1kHz loop of 1ms polls - a pinned
+     * core and a thousand fetches a second - until something else happened to drain it.
+     * <p>
+     * So the second wait, with the outcome still undrained and nothing new signalled, must take its budget.
+     */
+    @Test
+    void aSecondWaitWithNothingNewDrainedMustNotReturnInstantly() {
+        dispatcher = new PcTaskDispatcher("wake-nodrain", INPUT_PARTITIONS, 4);
+
+        dispatchOneBlockingOn(new CountDownLatch(0));
+        await().atMost(Duration.ofSeconds(30))
+                .until(() -> dispatcher.hasPendingCompletions());
+
+        long first = timeMillis(() -> PcWorkSignal.awaitWorkForRemainderOf(SHORT_BUDGET));
+        assertThat(first)
+                .as("the first wait leaves at once - there is a real outcome to feed back")
+                .isLessThan(SHORT_BUDGET.toMillis() / 2);
+
+        // Deliberately NOT draining, which is exactly what a paused topology does to this thread.
+        assertThat(dispatcher.hasPendingCompletions())
+                .as("the fixture only means anything while the outcome is still undrained")
+                .isTrue();
+
+        long second = timeMillis(() -> PcWorkSignal.awaitWorkForRemainderOf(SHORT_BUDGET));
+        assertThat(second)
+                .as("nothing new arrived and nobody drained, so this wait must take its budget. Returning "
+                        + "instantly here is a busy-spin on the StreamThread, not a fast path.")
+                .isGreaterThanOrEqualTo(SHORT_BUDGET.toMillis() - PcWorkSignal.SHORT_POLL.toMillis() - 50);
     }
 
     /** The same, through the crash path, which does not drain and must still deregister. */

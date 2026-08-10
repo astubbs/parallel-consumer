@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The condition a {@code StreamThread} waits on instead of sitting out the rest of {@code poll.ms} while
@@ -56,12 +57,18 @@ import java.util.WeakHashMap;
  *   <li><b>Should the wait be split at all?</b> {@link #hasActiveWorkOnCurrentThread()} - is anything in
  *       flight, or is an outcome waiting to be fed back. If not, the thread takes the stock full-budget poll,
  *       because nothing can wake it and shortening the poll would only delay broker records.</li>
- *   <li><b>Should the wait end?</b> Completions pending. Level-triggered, and therefore impossible to lose:
- *       the completions queue is drained <em>only</em> by the StreamThread inside
+ *   <li><b>Should the wait end?</b> An outcome is pending <em>and</em> this wait has not already been
+ *       released for it. The first half is level-triggered and therefore impossible to lose: the completions
+ *       queue is drained <em>only</em> by the StreamThread inside
  *       {@code PcTaskDispatcher.dispatchAvailable}, and a StreamThread that is waiting here is by definition
  *       not draining it. A worker enqueues its outcome before it signals, so a signal that races the waiter
  *       either finds the predicate already true or is delivered under this monitor.</li>
  * </ul>
+ * The second half - {@link #workSignals} - is not a retreat to an edge-triggered flag, and it is not a
+ * shadow of "is there work": it records only <em>which raises this waiter has already been let out on</em>,
+ * and nothing consults it to decide whether to dispatch. It exists because a level-triggered predicate alone
+ * assumes the woken thread goes on to clear the state, and Kafka does not always let it. See the field for
+ * the paused-topology case that turns that assumption into a pinned core.
  *
  * <h2>Scoped per owning thread, and safe when the scoping is wrong</h2>
  * A single JVM-wide monitor would let one StreamThread's wait be ended by an unrelated task's completion:
@@ -135,6 +142,29 @@ public final class PcWorkSignal {
      */
     private long wakeRequests;
 
+    /**
+     * Counts raised work signals, and how many this thread has already left a wait on.
+     * <p>
+     * <b>This is what stops a level-triggered predicate becoming a spin when the caller does not drain.</b>
+     * The wait's predicate is "an outcome is pending", which is true until the StreamThread feeds it back -
+     * and the StreamThread only does that inside {@code dispatchAvailable}, which Kafka does not always
+     * reach. {@code KafkaStreams.pause()} is the plain example: {@code TaskExecutor} consults
+     * {@code TaskExecutionMetadata.canProcessTask}, a paused topology answers no, and {@code process()} is
+     * skipped entirely while the thread stays RUNNING and keeps polling. A purely level-triggered wait would
+     * then return instantly on every pass, and the poll phase would become a ~1kHz loop of
+     * {@code poll(1ms)} - one core pinned and a thousand fetches a second - until the commit interval
+     * happened to drain it.
+     * <p>
+     * So a wait leaves early only for work it has <em>not already been released for</em>. A completion that
+     * landed before the wait began still counts, because raising it bumped the counter - which is the
+     * lost-wakeup property this class exists for. A second pass with nothing new simply takes the full
+     * budget, which is exactly stock behaviour and the right answer when nobody is draining.
+     * <p>
+     * Guarded by {@link #monitor}.
+     */
+    private long workSignals;
+    private long workSignalsReleasedOn;
+
     private PcWorkSignal() {
     }
 
@@ -201,6 +231,14 @@ public final class PcWorkSignal {
         if (signal == null) {
             return;
         }
+        // Re-checked here, not just at the gate. Between the two, the caller ran a short poll - and a poll
+        // runs ConsumerRebalanceListener callbacks inline, which on a revocation tear this thread's tasks
+        // down and deregister their dispatchers. Without this the thread would then wait out its budget for
+        // work that no longer exists, in the middle of a rebalance, which is when the consumer most needs
+        // polling.
+        if (!signal.hasActiveWork()) {
+            return;
+        }
         final long remainingMillis = fullPollBudget.toMillis() - SHORT_POLL.toMillis();
         if (remainingMillis <= 0) {
             return;
@@ -238,6 +276,7 @@ public final class PcWorkSignal {
      */
     void signalWorkAvailable() {
         synchronized (monitor) {
+            workSignals++;
             monitor.notifyAll();
         }
     }
@@ -283,12 +322,19 @@ public final class PcWorkSignal {
      */
     private void await(final long remainingMillis) {
         PcDispatchCounters.onSplitPollWait();
-        final long deadlineMillis = System.currentTimeMillis() + remainingMillis;
+        // nanoTime, not currentTimeMillis: this loop recomputes its remaining time from the clock on every
+        // pass, so a wall clock stepping backwards would re-extend the wait by the size of the step. The
+        // StreamThread is not calling Consumer#poll() while it is here, and a step larger than
+        // max.poll.interval.ms would get the member evicted from the group.
+        final long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remainingMillis);
         boolean workArrived = false;
         synchronized (monitor) {
             final long wakeRequestsAtEntry = wakeRequests;
             while (true) {
-                if (hasPendingCompletions()) {
+                // Both halves are load-bearing. The pending outcome is what makes leaving USEFUL; the
+                // unreleased signal is what stops a caller that never drains from turning this into a spin.
+                if (workSignals != workSignalsReleasedOn && hasPendingCompletions()) {
+                    workSignalsReleasedOn = workSignals;
                     workArrived = true;
                     break;
                 }
@@ -296,8 +342,11 @@ public final class PcWorkSignal {
                     // Shutdown, or the last dispatcher going away. Not work, so it does not count as a wake.
                     break;
                 }
-                final long leftMillis = deadlineMillis - System.currentTimeMillis();
+                final long leftNanos = deadlineNanos - System.nanoTime();
                 // Never call wait(0) - that means "wait forever", and the whole point here is a bounded wait.
+                // Sub-millisecond remainders round down to zero, so they end the wait rather than start an
+                // unbounded one.
+                final long leftMillis = leftNanos / 1_000_000L;
                 if (leftMillis <= 0) {
                     break;
                 }
@@ -311,6 +360,26 @@ public final class PcWorkSignal {
         }
         if (workArrived) {
             PcDispatchCounters.onWakeOnWork();
+        }
+    }
+
+    /**
+     * Test seam: how many dispatchers this thread's signal still speaks for.
+     * <p>
+     * Exists because the gate is <em>not</em> a usable proxy for "did it deregister". An orderly
+     * {@code close()} drains and awaits its pool, so the gate reads false afterwards whether or not the
+     * dispatcher was ever removed - a test asserting on the gate there passes with the deregistration
+     * deleted.
+     *
+     * @return -1 when no signal belongs to the calling thread
+     */
+    static int registeredDispatchersOnCurrentThread() {
+        final PcWorkSignal signal = BY_OWNER.get(Thread.currentThread());
+        if (signal == null) {
+            return -1;
+        }
+        synchronized (signal.dispatchers) {
+            return signal.dispatchers.size();
         }
     }
 
