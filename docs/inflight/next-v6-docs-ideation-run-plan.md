@@ -53,7 +53,10 @@ to renegotiate. This is the section to lift verbatim into each agent's prompt.
 
 ### The standing constraints
 
-- `README.adoc` is generated. Edit `src/docs/README_TEMPLATE.adoc`, never the README.
+- `README.adoc` is generated. Edit `src/docs/README_TEMPLATE.adoc`, never the README. Regenerate with
+  `./mvnw -N asciidoc-template:build` and commit the regenerated `README.adoc` in the same commit. No
+  CI check catches template-to-README drift, so an unregenerated edit is invisible to every reader
+  while every check stays green.
 - Do not build anything new that depends on `README_TEMPLATE.adoc` embedding other documents. Source
   is `parked-docs-site.md`; the docs site is astubbs#208, parked.
 - Maturity is per module. One alpha experiment must not downgrade how the core describes itself, and
@@ -119,7 +122,7 @@ that gets dropped once the artefact exists and looks finished.
 | 7 | `ce-doc-review` or `ce-code-review` | Prose for T, M and R. Code for F's gate. Both for F overall |
 | 8 | *apply the findings* | Distinct from step 7 and routinely skipped. A review that is read but not applied has cost tokens and changed nothing |
 | 9 | `ce-commit` | Freely, on the idea's own branch |
-| 10 | *verify* | `mvn -q -pl :parallel-consumer-parent validate` style checks for anything touching the template or CI; for F, that the gate actually fails a PR missing its file |
+| 10 | *verify* | `./mvnw -N asciidoc-template:build` for anything touching the template, and commit the regenerated README; for F, that the gate actually fails a PR missing its file |
 | 11 | `ce-compound` | Per idea, while its branch still exists, not deferred to the end of the run |
 
 Steps 3 and 8 are the two the run will try to skip. Step 3 because the ideation output reads as a
