@@ -43,6 +43,22 @@ refused constructs are exactly where the remaining users are.
 Conversely if it shows nothing on non-blocking work, refusing joins costs us far less than it appears to,
 and that is worth knowing before anyone spends a quarter on stream-time correctness.
 
+## Sequencing: do the supported-envelope half NOW, the joins half LATER
+
+Split it, because half of this is blocked and half is not:
+
+- **Now.** Stateless transforms and non-windowed aggregation with real serde and real CPU, no injected
+  sleep. Entirely inside the supported envelope, needs nothing that does not exist, and answers the
+  question that actually changes the claim's category.
+- **Later, gated on the joins reinstatement.** Anything using joins, windows or suppression cannot be
+  measured PC-driven until those constructs work rather than throw. Do not attempt it before then and do
+  not treat the refusal as a benchmark result - "it threw" is not a performance number.
+
+**Leave a marker on the joins half rather than losing it**, because it is the more valuable measurement of
+the two and it will become possible: the moment the reinstatement work lands, the first question should be
+whether dispatch helps the constructs that were refused. If it does, that retroactively justifies the whole
+reinstatement effort; if it does not, the refusal was cheap and should stay.
+
 ## Delete when
 
 The measurement exists for the supported envelope, with both arms and the overhead stated plainly, and its
