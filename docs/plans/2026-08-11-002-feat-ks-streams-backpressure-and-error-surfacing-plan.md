@@ -907,6 +907,59 @@ nothing.
 
 ---
 
+## Measured outcome, as at the U1-U6 commits
+
+Same method both times, and the isolation is shown to have worked rather than asserted: the default
+surefire report directory is **empty** while `surefire-reports-kafka-upstream/` holds all four classes, so
+`-Dincluded.groups=nonexistent-isolation-group` suppressed only the module's own tests.
+
+| Gate | Result |
+|---|---|
+| Seam OFF, Kafka's own suites | **419 run, 0 failures, 21 skips** - StreamTaskTest 101, StreamThreadTest 231, RecordCollectorTest 59, ProcessorContextImplTest 28. Unchanged. |
+| Seam ON, `StreamTaskTest` | **30 failing → 29 failing**, and **zero regressions** |
+| Module unit suite | green, including 39 `PcTaskDispatcherTest` cases |
+
+**Pile by pile:**
+
+| Case | Pile | Outcome |
+|---|---|---|
+| `shouldRecordBufferedRecords` | C | **FIXED** |
+| `shouldResumePartitionWhenSkippingOverRecordsWithInvalidTs` | C | Still failing, but **it now fails later** - see the open finding below |
+| `shouldPauseAndResumeBasedOnBufferedRecords` | C | Still failing, as predicted |
+| `shouldBeProcessableIfAllPartitionsBuffered` | C | Still failing - U7 is blocked on U13 and was not built |
+| `shouldWrapKafkaExceptionWithStreamsExceptionWhenProcess` | D | Still failing, as predicted |
+| `shouldThrowOnTimeoutExceptionAndBufferRecordForRetryIfEosDisabled` | D | Still failing, as predicted |
+| `shouldRecordE2ELatencyOnSourceNodeAndTerminalNodes` | H | Still failing, as predicted |
+
+### OPEN: the resume fires one record too early
+
+**Not a prediction, and not diagnosed - found by measurement and recorded rather than guessed at.**
+
+`shouldResumePartitionWhenSkippingOverRecordsWithInvalidTs` used to fail at its **first** assertion. It now
+gets past it, which is direct evidence that **the pause works**: five records against a
+`buffered.records.per.partition` of 3 pauses the partition, exactly as intended.
+
+It now fails at `StreamTaskTest.java:1141`, the second `assertTrue(consumer.paused().contains(partition1))`,
+which runs after one `process(0L)` and one `resumePollingForPartitionsWithAvailableSpace()`. The partition
+should still be paused there: one record consumed leaves four held against a threshold of three. Something
+put it in the resume set anyway, so either more than one record was consumed by that pump or the occupancy
+read at resume time is lower than four.
+
+Two candidates, neither confirmed:
+
+1. The resume loop offers **every** input partition at or below the threshold, where stock offers only the
+   partition it just processed from. That is a real difference from stock and the more likely of the two,
+   but it does not obviously explain this case, because partition1 was the partition processed from.
+2. The pump consumed two records rather than one, which would put occupancy at exactly the threshold and
+   make the resume correct-by-its-own-rule but wrong against the test.
+
+**Resolve this before U4**, because the memory bound depends on the resume being no more eager than the
+pause: a resume that fires early un-pauses a partition that is still full, and the bound degrades quietly
+rather than failing loudly. The instrument to use is the occupancy count itself, which is already published
+and already readable from a test.
+
+---
+
 ## Predictions
 
 Stated before implementation, so the report can be honest about which held.
