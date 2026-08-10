@@ -706,6 +706,31 @@ Multiple agents/sessions often work in parallel git worktrees (kept under `.clau
 - **Before deleting a worktree**, verify it is safe: no live `lsof` holder, no uncommitted changes, and its branch content is merged or preserved. A marker `status: merged — SAFE TO DELETE` records that verification. For stronger protection, `git worktree lock --reason "..."` makes git refuse removal.
 - The higher-level map of what each branch/worktree is for lives in `docs/inflight/` (the `branch-` and `pr-` files).
 
+### Never dispatch a subagent into a worktree it cannot commit from
+
+A session is often **pinned to one worktree**: git commands aimed anywhere else - `git -C <other>`, or a
+`cd` inside a compound command - are refused outright. **A subagent inherits that pin, and so does any
+helper it spawns.** So an agent told to "create your own worktree and work there" can do the work and can
+never save it. It will report success with everything stranded on disk.
+
+Decide who commits **before dispatch**, not after the report. Two shapes work:
+
+- **Agent works in the dispatching session's own worktree.** It can commit. Only one agent at a time, and
+  the parent must stay out of the files while it runs.
+- **Agent works elsewhere and the parent lands the output.** Legitimate, and *not* a bypass of the pin -
+  reading and copying files is unrestricted; only git-against-another-worktree is blocked. The parent
+  copies the changed files into its own worktree and commits there.
+
+The second shape has one trap worth naming: if two agents ran, **diff every shared file before copying**.
+On 2026-08-11 two agents both edited `OffsetCompositionCrashRestartTest.java` and
+`docs/inflight/pr-connect-on-pc.md`. One file was a clean supersede (3 arms versus 1, both carrying the
+same fix); the other was a genuine merge - a rewritten section from one agent, an appended section from the
+other - and a bulk copy would have silently dropped a recorded finding. Also check the incoming code does
+not call methods the other agent **removed**, since it was written against the older base.
+
+The `!` prefix does not escape the pin either: it runs inside the session. Suggesting it as a workaround
+wastes a round trip and looks like it did nothing, because it did.
+
 ## Documented Solutions
 
 `docs/solutions/` - documented solutions to past problems and workflow patterns, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
