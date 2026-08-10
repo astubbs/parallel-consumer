@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 /**
  * The condition a {@code StreamThread} waits on instead of sitting out the rest of {@code poll.ms} while
@@ -290,20 +291,24 @@ public final class PcWorkSignal {
     }
 
     private boolean hasActiveWork() {
-        synchronized (dispatchers) {
-            for (PcTaskDispatcher dispatcher : dispatchers) {
-                if (dispatcher.getInFlightCount() > 0 || dispatcher.hasPendingCompletions()) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        return anyDispatcherMatches(dispatcher ->
+                dispatcher.getInFlightCount() > 0 || dispatcher.hasPendingCompletions());
     }
 
     private boolean hasPendingCompletions() {
+        return anyDispatcherMatches(PcTaskDispatcher::hasPendingCompletions);
+    }
+
+    /**
+     * The two questions this class asks of its dispatchers differ only in their predicate, so the lock and the
+     * short-circuiting walk live here once. Holding {@link #dispatchers} for the whole walk rather than
+     * copying it is deliberate: the answer is a point-in-time reading either way, and a copy would allocate on
+     * the gate, which every poll phase crosses.
+     */
+    private boolean anyDispatcherMatches(final Predicate<PcTaskDispatcher> predicate) {
         synchronized (dispatchers) {
             for (PcTaskDispatcher dispatcher : dispatchers) {
-                if (dispatcher.hasPendingCompletions()) {
+                if (predicate.test(dispatcher)) {
                     return true;
                 }
             }
