@@ -569,16 +569,18 @@ public class PcTaskDispatcher implements Closeable {
                 // ever firing for that partition, which is this unit's whole purpose failing with no
                 // symptom. It is expected exactly once per revoked partition with work still in PC's shards,
                 // so it is a warning to correlate rather than an error on its own.
-                if (bufferedByPartition.computeIfPresent(work.getTopicPartition(),
-                        (partition, held) -> held <= 1 ? null : held - 1) == null
-                        && !bufferedByPartition.containsKey(work.getTopicPartition())) {
-                    if (bufferedUnderflows++ == 0) {
-                        log.warn("PC dispatch consumed a record for {} with no buffered count to decrement - "
-                                        + "expected after that partition is revoked, a backpressure accounting "
-                                        + "drift otherwise. Further occurrences are counted, not logged.",
-                                work.getTopicPartition());
-                    }
+                // Underflow is decided BEFORE the decrement, not from its result: the legitimate last
+                // decrement removes the entry, so computeIfPresent returns null for "counted down to zero"
+                // and for "was never there" alike, and reading the result cannot tell them apart.
+                final TopicPartition consumedFrom = work.getTopicPartition();
+                if (!bufferedByPartition.containsKey(consumedFrom) && bufferedUnderflows++ == 0) {
+                    log.warn("PC dispatch consumed a record for {} with no buffered count to decrement - "
+                                    + "expected after that partition is revoked, a backpressure accounting "
+                                    + "drift otherwise. Further occurrences are counted, not logged.",
+                            consumedFrom);
                 }
+                bufferedByPartition.computeIfPresent(consumedFrom,
+                        (partition, held) -> held <= 1 ? null : held - 1);
                 Runnable chainExecution;
                 try {
                     chainExecution = preparer.prepare(work.getCr());
