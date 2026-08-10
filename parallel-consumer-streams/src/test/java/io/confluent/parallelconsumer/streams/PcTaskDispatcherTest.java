@@ -918,12 +918,12 @@ class PcTaskDispatcherTest {
      */
     @Test
     void closingReleasesEveryResourceARecycleUsedToLeak() {
-        final int activeBefore = PcTaskDispatcher.activeDispatcherCount();
+        final int activeBefore = PcTaskDispatcher.activeCount();
         dispatcher = new PcTaskDispatcher("task-teardown-contract", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(2, offset -> "k" + offset));
         dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
 
-        assertThat(PcTaskDispatcher.activeDispatcherCount())
+        assertThat(PcTaskDispatcher.activeCount())
                 .as("precondition: the dispatcher is live in the JVM-wide registry")
                 .isEqualTo(activeBefore + 1);
         assertThat(PcWorkSignal.registeredDispatchersOnCurrentThread())
@@ -932,7 +932,7 @@ class PcTaskDispatcherTest {
 
         dispatcher.close();
 
-        assertThat(PcTaskDispatcher.activeDispatcherCount())
+        assertThat(PcTaskDispatcher.activeCount())
                 .as("leak 1: the registry entry is static, so a leaked dispatcher outlives the task forever")
                 .isEqualTo(activeBefore);
         assertThat(dispatcher.isClosed())

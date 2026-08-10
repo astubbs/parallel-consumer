@@ -842,13 +842,21 @@ public class PcTaskDispatcher implements Closeable {
     private static final Set<PcTaskDispatcher> ACTIVE = ConcurrentHashMap.newKeySet();
 
     /**
-     * Test seam: how many dispatchers are live in this JVM.
+     * How many dispatchers are live in this JVM right now.
      * <p>
-     * Exists because a leaked dispatcher has no other observable signature - it keeps running, keeps its
-     * pool, and says nothing. The pool and the {@link PcWorkSignal} registration are each checkable on their
-     * own; this is the third, and a teardown path that forgets to close is only caught by all three.
+     * Two tests need this, for opposite reasons, and one method serves both.
+     * <p>
+     * <b>Proving a negative:</b> that a task refused by {@link PcSupportedEnvelope} built no dispatcher. That
+     * ordering - the envelope check before this constructor - is the difference between a refused task and a
+     * leaked worker pool, and it is otherwise asserted only by a comment in the patched {@code StreamTask},
+     * which nothing enforces.
+     * <p>
+     * <b>Proving a teardown:</b> that a closed or recycled dispatcher left the registry. A leaked dispatcher
+     * has no other observable signature - it keeps running, keeps its pool, and says nothing. The pool and the
+     * {@link PcWorkSignal} registration are each checkable on their own; this is the third, and a teardown
+     * path that forgets to close is only caught by all three.
      */
-    static int activeDispatcherCount() {
+    public static int activeCount() {
         return ACTIVE.size();
     }
 

@@ -7,6 +7,7 @@ import org.apache.kafka.streams.kstream.CogroupedKStream;
 import org.apache.kafka.streams.kstream.KGroupedStream;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -83,6 +84,17 @@ class RefusedDslAnnotationsTest {
     private static final int DEPRECATED_ADDED_BY_THE_PATCH =
             TOTAL_REFUSED_OVERLOADS - ALREADY_DEPRECATED_BY_KAFKA;
 
+    /**
+     * The tracked patch, read once for the whole class. Two tests below walk it with different parsers, and
+     * both want the same bytes; re-reading a 1774-line file per test buys nothing.
+     */
+    private static List<String> patchLines;
+
+    @BeforeAll
+    static void readThePatch() throws IOException {
+        patchLines = Files.readAllLines(Paths.get("src/main/patch/pc-streams.patch"), StandardCharsets.UTF_8);
+    }
+
     @Test
     void everyRefusedKStreamMethodIsDeprecated() {
         assertEveryOverloadDeprecated(KStream.class, KSTREAM_REFUSED, KSTREAM_OVERLOADS);
@@ -122,10 +134,7 @@ class RefusedDslAnnotationsTest {
      * those, {@link #everyRefusedKTableMethodIsDeprecated()} passes whether or not the patch touched them.
      */
     @Test
-    void thePatchAnnotatesEveryRefusedOverloadIndividually() throws IOException {
-        final List<String> patchLines = Files.readAllLines(
-                Paths.get("src/main/patch/pc-streams.patch"), StandardCharsets.UTF_8);
-
+    void thePatchAnnotatesEveryRefusedOverloadIndividually() {
         int doNotCallAdded = 0;
         for (final String line : patchLines) {
             // An added line in a unified diff is "+" then the source line, so the "+" has to come off before
@@ -157,10 +166,7 @@ class RefusedDslAnnotationsTest {
      * come here and say so, which is the cheapest available guard on the sentence the reader is going to see.
      */
     @Test
-    void everyRefusedOverloadExplainsTheRefusalInJavadoc() throws IOException {
-        final List<String> patchLines = Files.readAllLines(
-                Paths.get("src/main/patch/pc-streams.patch"), StandardCharsets.UTF_8);
-
+    void everyRefusedOverloadExplainsTheRefusalInJavadoc() {
         // The post-image of one hunk: the lines a reader of the patched file would see, and whether the patch
         // added each. Reset per hunk, because line adjacency does not survive a hunk boundary.
         final List<String> postImage = new ArrayList<>();
