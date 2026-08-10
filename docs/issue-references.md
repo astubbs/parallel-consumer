@@ -45,7 +45,7 @@ when the headroom thins.
 | Link text a human reads | Name the repo in the text too: `[confluentinc issue #12]`, not `[issue #12]` |
 | Anything **posted to GitHub** (PR and issue bodies, comments) | Fully qualified `owner/parallel-consumer#NN` |
 | Closing keywords | `Fixes astubbs/parallel-consumer#167` |
-| Commit and PR titles | Issue at the front, and carry **both** numbers: `fix(core) astubbs#119: paused consumption after rebalance (confluentinc#857)`. The title becomes the squash commit subject, so it is the reference most people ever see (see AGENTS.md, Commits) |
+| Commit and PR titles | Issue at the front, and carry **both** numbers: `fix(core) astubbs#119: paused consumption after rebalance (confluentinc#857)`. A trailing parenthetical must be repo-qualified like that - what AGENTS.md forbids there is a *bare* `(#41)`, which squash-merge renders indistinguishable from the PR number it appends. The title becomes the squash subject, so it is the reference most people ever see |
 
 **A hyperlink satisfies the gate, but not the reader - so name the repo anyway in link text.** The
 gate can see the target and stops asking; a human reading `issue #12` cannot, and this fork has its

@@ -39,15 +39,15 @@ an older one has been superseded, absorbed by tooling, or is now stated twice.
   comment.
 - **Cite incidents, never retell them.** If the story behind a rule has no durable home yet, write
   it into `docs/solutions/` first and link it from there.
-- **Never state a fact twice** - duplicates drift apart, and this file has carried two descriptions
-  of one workflow before. Cross-reference whichever doc owns it.
+- **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it.
 - **Do not pre-empt misreadings.** A rule needing three paragraphs to defend it against
   misinterpretation is a rule that needs rewriting.
-- **Before you move or rename a heading, grep the whole repo for it** -
-  `grep -rn '<exact heading text>' .` - not just `docs/`. Other files cite headings here by name in
-  prose, and those citations live in `pom.xml`, shell-script headers, workflow YAML and javadoc as
-  often as in markdown. Nothing checks them, so a stale one is silent. The restructure that created
-  this file left eight such pointers dangling and had to sweep them afterwards.
+- **Before you move or rename any labelled block, grep the whole repo for its text** -
+  `grep -rn '<exact label text>' . --exclude-dir=.git --exclude-dir=target` - not just `docs/`.
+  Headings are the obvious case, but **bold sub-item labels get cited too**, and those citations
+  live in `pom.xml`, shell-script headers, workflow YAML and javadoc as often as in markdown.
+  Nothing checks any of them, so a stale one is silent: the split that produced this file moved a
+  bold label, `Copyright rules for this fork`, and left six files pointing at it.
 
 **Backstops, if the judgement above is slipping.** `wc -l AGENTS.md` past ~400 lines means
 something situational has crept in; each of these fires earlier and names its own fix: a section
@@ -168,7 +168,7 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 ## Testing
 
 Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are in
-[`docs/testing.md`](docs/testing.md). Two rules bind regardless:
+[`docs/testing.md`](docs/testing.md). Three rules bind regardless:
 
 - **⚠️ Be EXTREMELY careful modifying tests to make them pass, especially under
   parallelism/stress.** A test failing under concurrent load may be exposing a **real main-code bug

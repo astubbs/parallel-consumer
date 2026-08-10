@@ -23,7 +23,7 @@ stack traces (see [`docs/testing.md`](testing.md)).
 ## Workflows
 
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
-  default Kafka 3.9.1 (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
+  the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
   (`bin/ci-build.sh`). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
   detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
@@ -37,8 +37,10 @@ stack traces (see [`docs/testing.md`](testing.md)).
   `bin/test-check-copyright-headers.sh` runs first, then the real scan) on every push/PR.
   GitHub-hosted; needs `fetch-depth: 0` so the fork-point commit is in history. Rules:
   [`docs/copyright.md`](copyright.md).
-- **`quarantine-lane.yml`** - runs the `@Quarantined` tests non-gating on every PR push, every push
-  to master, and on dispatch. See [`docs/testing.md`](testing.md).
+- **`quarantine-lane.yml`** - runs the `@Quarantined` tests on every PR push, every push to master,
+  and on dispatch. Its job is the **required** check `tests`, so the job name is an API here too -
+  but the test-running step is `continue-on-error`, so red quarantined tests cannot block a merge.
+  See [`docs/testing.md`](testing.md).
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
   [`docs/releasing.md`](releasing.md)) and the issue-reference gate (`issue-ref-gate.js`, see

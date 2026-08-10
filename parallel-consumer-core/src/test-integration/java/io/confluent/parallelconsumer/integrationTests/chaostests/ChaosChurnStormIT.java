@@ -46,8 +46,7 @@ import static org.awaitility.Awaitility.await;
  * fix commit (expect GREEN). The RED->GREEN flip is the evidence that the fix addresses the mechanism
  * the probe watches. Add {@code -Dchaos.seed=<seed>} to replay a specific schedule; on-demand CI runs
  * via {@code .github/workflows/chaos-pain.yml} (workflow_dispatch: seed, reps). See
- * <a href="https://github.com/astubbs/parallel-consumer/blob/master/docs/testing.md">docs/testing.md</a>,
- * "Chaos Pain Suite".
+ * {@code docs/testing.md}, "Chaos Pain Suite".
  */
 @Tag("chaos")
 @Timeout(600)

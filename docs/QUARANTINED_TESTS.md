@@ -2,8 +2,9 @@
 
 The task list of tests currently in the quarantine lane: known-failing-on-master tests carrying
 `@Quarantined`, excluded from the gating CI suites (so green checks mean mergeable) but still run on EVERY PR push
-and after every merge to master (workflow_dispatch on demand) by the non-gating "Quarantine Lane / tests"
-job. The lane posts a sticky per-test report comment on the PR (🔴 failing-as-expected / 🟡🎲
+and after every merge to master (workflow_dispatch on demand) by the "Quarantine Lane / tests"
+job - whose test step is `continue-on-error`, so a red quarantined test cannot block a merge
+(see [`docs/testing.md`](testing.md)). The lane posts a sticky per-test report comment on the PR (🔴 failing-as-expected / 🟡🎲
 flapper passed / 🚨 PASSED) and, when a DETERMINISTIC quarantined test passes (its fix landed), opens
 a MERGE-BLOCKING review thread demanding the annotation + entry be deleted (the repo requires
 conversation resolution). Tests that pass unreliably are marked `flapping = true` on the annotation -
@@ -31,7 +32,8 @@ reporter).
 Rules (full discipline in [`docs/testing.md`](testing.md), and the `@Quarantined` javadoc):
 
 1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose.
-2. **Quarantine is master-state, not PR-state** - a test red on only one PR is that PR's problem.
+2. **Quarantine is master-state, not PR-state** - stated in AGENTS.md, Testing, because no script
+   checks it.
 3. **Re-enable = the owning fix PR deletes the annotation AND this entry in the same commit**, after
    merging master - atomically restoring the test to the gating lane.
 4. Every entry needs an owning fix PR. An entry without one is diagnosed-but-unowned: flag it, find it
