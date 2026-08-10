@@ -55,7 +55,7 @@ statement than a version number.
 
 "Living document" fails by default - it is written once and rots, and a stale roadmap is worse than
 none because it is confidently wrong in public. Decide what forces an update: release cuts are the
-obvious trigger, and the per-PR feature index (`next-per-pr-docs-and-feature-index.md`) is the
+obvious trigger, and the feature documentation index (`next-feature-docs-index.md`) is the
 natural feed for "this shipped, move it".
 
 Markdown in the repo, so the docs site (astubbs#208, MkDocs + Material, versioned with `mike`) can
@@ -63,17 +63,22 @@ import it and PRs can amend it under review like anything else. Respect the cons
 `parked-docs-site.md`: do not build anything that depends on `README_TEMPLATE.adoc` embedding other
 documents.
 
-## Settled: performance is why PC exists, not what v6 ships
+## Settled: performance, correctness and reliability do not compete
 
-`STRATEGY.md` calls Performance "the main track", and the work queued for 0.6.0.0 is reliability,
-refactoring, documentation and the experiments. That reads as a contradiction and it is not one:
-performance is the reason the library exists at all, and reliability is the primary focus of this
-particular release. The roadmap therefore orders themes per release, and performance slots in where it
-belongs rather than being forced to the front to match the strategy's framing.
+`STRATEGY.md` calls Performance "the main track" while the work queued for 0.6.0.0 is reliability,
+refactoring, documentation and the experiments. That looks like a contradiction only if the three are
+read as rivals for priority, and they are not.
 
-Do not "resolve" this by rewording `STRATEGY.md`, and do not have the roadmap explain away an apparent
-inconsistency that a reader is unlikely to construct in the first place. A strategy that says what the
-project is for and a roadmap that says what comes next are answering different questions.
+Performance is why the library exists. But throughput is worthless if the results are wrong or the
+consumer stalls, so correctness and reliability are not a track competing with performance - they are
+its preconditions. Work on correctness is work toward the performance goal rather than a detour from
+it. The three are sides of one thing and they arrive together.
+
+Two consequences for how the roadmap is written. It must not present the three as a ranked contest, or
+explain why one is "ahead" this release - that framing invents a tradeoff the project is not making,
+and invites a reader to ask which one got sacrificed. And `STRATEGY.md` should not be reworded to fix
+an inconsistency that only appears under a misreading; a document saying what the project is for and a
+roadmap saying what comes next answer different questions.
 
 ## Delete when
 

@@ -97,22 +97,27 @@ Each of these is an idea rather than a commitment, and each has its own note:
 - **The test suite presented as a product**, including what has been tested and fixed since the last
   upstream release - the strongest available answer to "this fork just added features". See
   `next-testing-suite-as-product-docs.md`.
-- **A per-module maturity table**, and correcting what `<1.0` implies: it reserves the *API surface*,
-  not reliability. See `next-module-maturity-table.md`.
+- **A per-module maturity table**, and saying what `<1.0` actually means here. Note that "it reserves
+  the API surface, not reliability" is *false* and was corrected: 1.0 waits on a settled API surface,
+  on functionality still wanted, and on confidence reaching beyond the defects already known. See
+  `next-module-maturity-table.md` for the settled wording.
 - **A living roadmap** of high-level themes, anchored on stated 1.0 exit criteria rather than a date.
   See `next-living-roadmap.md`.
-- **Per-PR feature documentation**, so features stop landing undocumented. See
-  `next-per-pr-docs-and-feature-index.md`.
+- **A feature documentation index**, one page per feature rather than per PR, backfilled over the
+  existing surface and machine readable so it can seed the docs site. Starting now, and maintained
+  alongside the README until the cutover. See `next-feature-docs-index.md`.
 
 ## Do at release: one sweep over the upstream mirrors
 
-All 78 upstream issues are mirrored here (astubbs#44, astubbs#117-astubbs#195), and each carries a **Fork status** section
-written on 2026-08-05. Roughly **11 of them name `0.6.0.0`** in the future tense - "ships in", "is set
+The upstream issues are mirrored here, labelled `upstream-mirror`, and each carries a **Fork status**
+section written on 2026-08-05. Some of them name `0.6.0.0` in the future tense - "ships in", "is set
 to ship", "answered by the fork" - and those statements only become true when the release goes out.
+Find them rather than counting them: the mirrors are a label query and the future-tense wording is a
+text search, so both survive more mirrors being added.
 
 At release, in one pass:
 
-- **Reword the ~11 that name `0.6.0.0`** from future to past tense, and give the actual coordinate
+- **Reword every mirror that names `0.6.0.0`** from future to past tense, and give the actual coordinate
   (`bz.stub.parallelconsumer:parallel-consumer-core:0.6.0.0`) so a reader can act on it rather than
   being told a release exists.
 - **Close astubbs#186 (`confluentinc#880`), astubbs#188 (`confluentinc#885`) and astubbs#195 (`confluentinc#907`)** with a pointer

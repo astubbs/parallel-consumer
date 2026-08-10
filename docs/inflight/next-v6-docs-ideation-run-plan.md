@@ -11,7 +11,7 @@ The four ideas, referred to below by letter:
 | **T** | `next-testing-suite-as-product-docs.md` | A published section presenting the test suite as a product |
 | **M** | `next-module-maturity-table.md` | A per-module maturity table in `src/docs/README_TEMPLATE.adoc` |
 | **R** | `next-living-roadmap.md` | A themes-level roadmap in markdown, plus the 1.0 exit criteria |
-| **F** | `next-per-pr-docs-and-feature-index.md` | A `docs/features/` convention, front matter schema, and PR gate |
+| **F** | `next-feature-docs-index.md` | One page per feature, backfilled and machine readable, seeding the docs site |
 
 ## They are not four independent tracks
 
@@ -26,7 +26,7 @@ cross-reference each other, and three of those references are load-bearing:
   Wave 0 has now settled it, and corrected it: 1.0 waits on a settled API surface, on functionality
   still wanted, and on critical-bug confidence. R cannot state exit criteria without that, and must
   not fall back on the shorter, false version.
-- **F feeds R.** F is R's "living document" trigger: the per-PR feature file is what tells the roadmap
+- **F feeds R.** F is R's "living document" trigger: the feature page is what tells the roadmap
   a theme has shipped.
 
 F is otherwise orthogonal in content. It is also the only one of the four with a code component (front
@@ -215,7 +215,7 @@ checkout in either case.
 | M | `docs/inflight/next-module-maturity-table.md` |
 | T | `docs/inflight/next-testing-suite-as-product-docs.md` |
 | R | `docs/inflight/next-living-roadmap.md` |
-| F | `docs/inflight/next-per-pr-docs-and-feature-index.md` |
+| F | `docs/inflight/next-feature-docs-index.md` |
 | nobody during fan-out | `docs/inflight/release-0.6.0.0.md`, reconciled in wave 2 |
 
 Each agent folds its chosen direction back into its own note, in place. That is what the ledger wants
