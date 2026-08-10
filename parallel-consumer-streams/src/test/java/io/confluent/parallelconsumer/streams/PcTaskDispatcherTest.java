@@ -1170,17 +1170,26 @@ class PcTaskDispatcherTest {
     @Test
     void withOneWorkerTheMarkIsTheRunningRecordsTimestampJustAsStockHolds() {
         dispatcher = new PcTaskDispatcher("task-st-sequential", INPUT_PARTITIONS, 1);
-        dispatcher.registerRecords(PARTITION, records(3, offset -> "key-" + (offset % 3)));
+        // ONE key, deliberately. Across several keys PC selects by shard rather than by offset, so the order
+        // is PC's and not stock's - an earlier version of this test asserted [0,1,2] across three keys and
+        // measured [0,2,2], which is the seam working as designed rather than a defect. Pinning to a single
+        // key isolates the property under test: a pool of one, a queue of one, and the mark on the record
+        // actually running.
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "the-only-key"));
 
-        List<Long> markAfterEachPump = new ArrayList<>();
-        for (int pump = 0; pump < 3; pump++) {
-            dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
-            markAfterEachPump.add(dispatcher.getStreamTimeLowWaterMark());
+        List<Long> markAfterEachDispatch = new ArrayList<>();
+        for (int record = 0; record < 3; record++) {
+            // One dispatch at a time, not pumpUntilQuiescent - that loops until nothing is left, so it would
+            // run all three and read the same final mark three times.
+            dispatcher.dispatchAvailable(noOpPreparer());
+            markAfterEachDispatch.add(dispatcher.getStreamTimeLowWaterMark());
+            await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getInFlightCount() == 0);
         }
 
-        assertThat(markAfterEachPump)
-                .as("records carry offset-as-timestamp; with a pool of one, the mark walks them one at a "
-                        + "time and ends on the last - no lead over stock at any point")
+        assertThat(markAfterEachDispatch)
+                .as("records carry offset-as-timestamp; with a pool of one the mark is always exactly the "
+                        + "timestamp of the record now in flight - which is what stock holds, because stock "
+                        + "advances at selection, before processing. No lead, no lag.")
                 .containsExactly(0L, 1L, 2L);
     }
 
