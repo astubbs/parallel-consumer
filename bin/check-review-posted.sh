@@ -154,8 +154,15 @@ fi
 # reaching the first boundary - would segment the FIRST comment by the fallback rule, so a
 # tracker that puts its run URL after its task list would have its unticked boxes filed under
 # whatever came before it, and pass. That is exactly the shape astubbs#257 posted.
+#
+# `-x`, and it is load-bearing: this must ask the SAME question the scan below asks, which is
+# whole-line equality. A comment can mention the marker without being one - quoting this script,
+# or reviewing the PR that introduced it - and a substring test would then claim the stream is
+# segmented while the scan finds no boundary to segment on. Segmentation would be switched off
+# with nothing put in its place, collapsing every comment into one, which is precisely the
+# whole-stream behaviour the section above rules out.
 have_boundary=0
-if grep -qF "$COMMENT_BOUNDARY" <<<"$comment_bodies"; then
+if grep -qxF "$COMMENT_BOUNDARY" <<<"$comment_bodies"; then
     have_boundary=1
 fi
 

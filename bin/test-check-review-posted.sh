@@ -212,6 +212,19 @@ assert "first comment in the stream is an unfinished tracker citing this run" \
 $BOUNDARY
 $OTHER_BOT_COMMENTS" 31370656609 success)"
 
+# "Does this stream carry boundaries" has to ask the same question the scan asks. A comment can
+# MENTION the marker without being one - quoting this script, or reviewing the PR that adds it -
+# and a substring test then reports boundaries that the scan will never find. Segmentation is
+# switched off with nothing put in its place, the whole stream collapses into one comment, and a
+# genuine review is failed by its own predecessor's unticked boxes. That is the control-arm
+# behaviour this change exists to avoid, re-entered through the back door.
+MARKER_MENTIONED_INLINE="Quoting the script: \`COMMENT_BOUNDARY='$BOUNDARY'\` is the marker it emits."
+
+assert "a comment mentions the marker mid-line without being a boundary" \
+    0 "$(run_checker "$UNFINISHED_COMMENT
+$MARKER_MENTIONED_INLINE
+$FINISHED_COMMENT" 31370656609 success)"
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "All bin/check-review-posted.sh self-tests passed"
