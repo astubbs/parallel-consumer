@@ -54,6 +54,12 @@ bug in exactly this area (a rebalance-time commit killing the broker-poll thread
 `bin/soak-test.sh 'PartitionStateCommittedOffsetIT#committedOffsetRemoved' 20` at a low
 `SOAK_FREE_CORES`.
 
+**Five local sightings from one session are collected in
+[`test-local-core-failures-2026-08-10.md`](test-local-core-failures-2026-08-10.md)** - three clusters,
+one diagnosis between them, and the local/CI asymmetry that is the actually interesting part. The
+shutdown-family detail below predates that entry; the newer one supersedes it on scope and on the
+astubbs#101 correction.
+
 **`ParallelEoSStreamProcessorTest`'s shutdown family is unstable locally - three sightings, one session.**
 On 2026-08-10, six full reactor runs on astubbs#240's branch produced three failures, each a different
 test, none reproducing in isolation: `executorThreadsInterruptedOnShutdownTimeout[1]` (detailed below),
