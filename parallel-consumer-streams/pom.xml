@@ -34,6 +34,17 @@
     </description>
 
     <properties>
+        <!-- PUBLICATION DISABLED - owner decision, 2026-08-10: neither this module nor the Connect one
+             publishes anything, releases or snapshots, until the fork packaging and licensing questions
+             are resolved (docs/inflight/next-patched-kafka-packaging.md) and the module is judged sane.
+             Do NOT remove before merge; re-enabling is its own reviewed change that deletes
+             docs/inflight/release-experimental-modules-publication-disabled.md in the same commit.
+             Mirrors parallel-consumer-examples/pom.xml - note skipPublishing below is plugin
+             CONFIGURATION, not a property; a properties-only copy silently protects nothing. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+
         <!-- Where the unpacked-then-patched Kafka sources land. Generated, gitignored, never tracked.
 
              Deliberately NOT under target/generated-sources: the root pom adds that whole directory as an
@@ -194,6 +205,14 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+
             <!-- 1. Unpack the target classes from the published sources jar, twice: a pristine copy
                     (used by bin/regen-patch.sh to re-derive the patch) and the working copy that gets
                     patched. Always overwrite, so every build starts from released source and the patch
