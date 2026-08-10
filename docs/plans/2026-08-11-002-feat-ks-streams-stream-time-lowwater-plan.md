@@ -63,6 +63,12 @@ stream time "never advances on the PC path" - so correcting those strings is in 
 windowed operator now works is not, and [U13.5](#u135-the-reinstatement-ledger) says exactly why for
 each construct.
 
+**There is no upstream design to copy.** KIP-311 and KIP-408 both propose worker-pool processing for
+Kafka Streams and neither mentions stream time, punctuation or timers anywhere. The shape being built
+here is the standard one from outside Kafka - MillWheel's low watermark, Beam's watermark hold, Flink's
+async order boundary - and the trap being avoided is one Kafka itself already fell into and backed out
+of in KAFKA-3514. See [Sources and prior art](#sources-and-prior-art).
+
 ---
 
 ## Problem Frame
@@ -131,13 +137,28 @@ cannot, and no `volatile`, lock or concurrent map repairs that - which is why th
 **in-flight set**, and the single `long` is only its published summary. Advancing to "max over
 completed" would be the high-water shape that entry exists to reject.
 
-**The empty-pool arm is a high-water read, and it is admissible for one specific reason.** That entry's
-rule is "degrade to frontier-only, never to high-water". This design takes the max only when the
-in-flight set is *empty*, which is exactly the shape of PC's own
+**The empty-pool arm is a high-water read, and it is admissible for two specific reasons.** That
+entry's rule is "degrade to frontier-only, never to high-water". This design takes the max only when
+the in-flight set is *empty*, which is exactly the shape of PC's own
 `getOffsetHighestSequentialSucceeded()` - lowest incomplete, or highest seen when the incomplete set is
 empty. The condition that makes it safe is that **the emptiness test and the max are one observation**:
 both are read inside a single owner-thread method over owner-thread-only state (KTD3), never as an
 "is it empty? then take the max" sequence that a concurrent dispatch could interleave.
+
+The second reason is the one that settles the design question the brief raised. **When the pool is
+empty, this value is not merely defensible - it is exactly what stock reports.** Stock's stream time is
+`max` over records *selected*; `maxDispatchedTimestamp` is `max` over records *dispatched*; with
+nothing in flight those are the same set. So the empty-pool arm introduces no exposure that stock does
+not already have.
+
+That matters because the exposure is real and well documented upstream.
+[KIP-695](https://cwiki.apache.org/confluence/display/KAFKA/KIP-695%3A+Further+Improve+Kafka+Streams+Timestamp+Synchronization)
+spends an entire KIP on the point that **an empty buffer is not the same as no data**, and that the
+correct predicate for "may I advance" is *lag*, not emptiness - which is why it added
+`Consumer#currentLag()`. Stock's mitigation is `max.task.idle.ms` and `isProcessable()`. **The PC path
+does not consult `isProcessable()` at all**, so that mitigation is inert here - recorded in
+[U13.6](#u136-record-what-u13-does-not-fix) as a divergence rather than fixed, because wiring
+task-idling into PC dispatch is a unit of its own and would be the wrong thing to bolt onto this one.
 
 **Corollary the same entry demands: there must be no second path that answers stream time with a stale
 number.** Its recorded near-miss was an unnamed single-number fallback (`consumer.position()`) that
@@ -145,6 +166,25 @@ survived the fix. On the PC path the equivalents are `partitionGroup.streamTime(
 short-circuited in U13.3) and `extractPartitionTimes()` -> `partitionGroup.partitionTimestamp()`, which
 is unreachable because `prepareCommit` returns PC's map before `committableOffsetsAndMetadata()` is
 called. U13.3 asserts that unreachability rather than assuming it.
+
+**The min is over records IN FLIGHT, never over records PC is merely holding - and Kafka has already
+paid for getting this wrong.** [KAFKA-3514](https://issues.apache.org/jira/browse/KAFKA-3514) records
+that Kafka Streams' original design *did* take a min-based task time, through a `MinTimestampTracker`
+over all buffered partitions, and abandoned it: "an empty buffered partition will cause its timestamp
+to be not advanced, and hence the task timestamp as well since it is the smallest among all
+partitions", with the consequence that "if any of the input topics doesn't receive messages regularly,
+the punctuate method won't be called regularly either". That resolution is why stream time is
+max-over-polled today. Extending this plan's min arm to cover undispatched records would walk straight
+back into it.
+
+**The exact safety property, stated narrowly so it is not overclaimed:** when the mark reads `T`, no
+record **currently in flight** has a timestamp below `T`. It says nothing about records PC has not yet
+handed out, and nothing about records not yet fetched. Stock makes an even weaker claim - it can be at
+the timestamp of the record it just selected while lower-timestamped records sit buffered in another
+partition - so this is strictly stronger than stock, and still not a completeness guarantee. Flink's
+async operator is the closest published analogue: watermarks there are order boundaries emitted only
+after every result from before them, and a min over in-flight work gives the punctuation half of that
+property for free, which is the main reason to build it.
 
 **Why `max(published, candidate)` rather than the raw candidate:** the candidate is not monotone. Two
 records in flight at 100 and 200; the 100 finishes; the candidate jumps to 200; a *new* record at 150
@@ -186,6 +226,16 @@ Rejected: a `TreeMap` multiset keyed by timestamp. It is the "right" data struct
 the wrong choice here - it adds add/remove/decrement bookkeeping that can drift out of step with the
 in-flight set, to save a scan of four entries. Correctness by construction beats an asymptotic argument
 at this size.
+
+**The ordering requirement, which is the classic race in this family.** There must be no instant at
+which a record is neither counted as in-flight nor accounted for as completed. So the timestamp is
+added **before** `workerPool.execute`, and removed **after** `workManager.handleFutureResult` has
+folded the outcome back in - and the existing worker contract already supplies the other half, because
+a worker enqueues its outcome only after `chainExecution.run()` returns, so the record's forwards and
+store writes happen-before the drain that releases its hold. This is Beam's **watermark hold** with the
+same invariant: the hold is registered before the element is released and cleared after its effects are
+visible. Get it backwards and the mark occasionally runs ahead of live work - silently, intermittently,
+and visible only as spuriously late records under load.
 
 ### KTD4. Publication reuses `pcDirty`'s pattern exactly: one volatile, republished at every mutation point
 
@@ -478,6 +528,13 @@ Three questions, each with a measurement and a stated expected shape:
 3. **Is punctuation deterministic across runs?** Run the same input twice through the same topology and
    compare the punctuator's argument sequence. The prediction is **no** - the mark advances in jumps tied
    to completion timing - and a refutation here would be more interesting than a confirmation.
+4. **How often does PC dispatch a record behind its own mark?** Count the times the raw candidate comes
+   out *below* the clamped value. Every one of those is a record PC handed out after stream time had
+   already passed it - which under a windowed operator would be a late record. In a system with perfect
+   knowledge of its own in-flight set this count would be a leak detector; here it is a genuine
+   **lateness meter**, because PC dispatches per KEY shard in offset order while stock selects across
+   partitions in timestamp order. It is the number that says how much extra lateness the seam creates,
+   and it is the number a future reinstatement decision turns on.
 
 **Execution note:** this unit reports data. Assert only the properties that must hold (monotone, never
 ahead of stock, bounded by the slowest in-flight record) and *log* the rest, so a machine-dependent
@@ -570,9 +627,24 @@ the actual classes during implementation, not copied. Where it is wrong, the cor
    order. On a multi-partition task, PC can therefore advance stream time past a record another
    partition still holds, where stock would have selected that record first. This is *lateness*, the
    same class stock already has, but PC produces more of it - and no windowed operator should be
-   reinstated without measuring it.
+   reinstated without the number U13.4 measures.
 4. **Punctuation does not make the task commit-needed** (KTD6), and
    `shouldCommitAllTasksIfRevokedTaskTriggerPunctuation` is the upstream case that would catch it.
+5. **`max.task.idle.ms` is inert on the PC path.** Stock's answer to "a partition is empty but data may
+   still be coming" is `isProcessable()` plus the idling budget, refined across KIP-353 and KIP-695
+   until the predicate became *lag* rather than *emptiness*. `pcProcess` does not consult
+   `isProcessable()` - by design, since it answers a question about a buffer the PC path does not fill -
+   so a user who sets `max.task.idle.ms` gets no effect. Silent, and worth a line in the README's known
+   gaps rather than a surprise.
+6. **The vocabulary changed, and users should be told.** KIP-622's javadoc for
+   `currentStreamTimeMs()` calls stream time "a high-watermark" - max over everything seen. What the PC
+   path now publishes is a **low-water mark** in the Flink/Beam/MillWheel sense: min over pending work.
+   The two coincide whenever the pool drains, which is why this is a safe substitution, but it is a
+   different quantity with different behaviour under load and the `CONCEPTS.md` entry should say so.
+7. **Retries are off, so a failed record releases its hold** - and if retries are ever enabled here that
+   decision becomes live. A record in backoff either keeps its hold (correct, but stream time stops for
+   the length of any poison-pill backoff) or drops it (live, but the record is late against the mark
+   when it eventually succeeds). Recorded now, while the answer is free.
 
 Also update the pile F row: it is no longer "2, deferred with a route". State the measured outcome and
 re-home `shouldPunctuateOnceStreamTimeAfterGap` with its evidence.
@@ -709,3 +781,23 @@ result.
    and route.
 7. The patch regenerates with content parity.
 8. Refuted predictions from the table above are reported at least as prominently as confirmed ones.
+
+---
+
+## Sources and prior art
+
+**Upstream Kafka has no design for this, and that is checkable rather than assumed.** KIP-311 ("Async
+processing with dynamic scheduling", abandoned) and KIP-408 ("Add Asynchronous Processing To Kafka
+Streams", under discussion since 2019, incomplete) both propose worker-pool processing and both discuss
+ordering and offset commit; **neither mentions stream time, punctuation or timers at all**. KAFKA-6989
+is the same. This unit is filling a hole upstream left open, not re-treading a settled path.
+
+| Source | What it settles for this plan |
+|---|---|
+| [KAFKA-3514](https://issues.apache.org/jira/browse/KAFKA-3514) | Kafka Streams tried a min-based task time (`MinTimestampTracker`) over *buffered* partitions and abandoned it, because an empty partition pinned the whole task and punctuators stopped firing. The reason this plan's min is over **in-flight only**. |
+| [KIP-353](https://cwiki.apache.org/confluence/display/KAFKA/KIP-353%3A+Improve+Kafka+Streams+Timestamp+Synchronization), [KIP-695](https://cwiki.apache.org/confluence/display/KAFKA/KIP-695%3A+Further+Improve+Kafka+Streams+Timestamp+Synchronization) | The empty-versus-idle distinction, and that the sound predicate is *lag*, not emptiness. Stock's mitigation is `isProcessable()`, which the PC path does not consult - recorded as a divergence, not fixed here. |
+| [KIP-622](https://cwiki.apache.org/confluence/display/KAFKA/KIP-622%3A+Add+currentSystemTimeMs+and+currentStreamTimeMs+to+ProcessorContext) | Kafka calls its stream time "a high-watermark". What this plan publishes is a low-water mark. Same value when the pool drains; different quantity under load, and the docs must say so. |
+| [MillWheel (VLDB 2013), section 4.5](https://www.vldb.org/pvldb/vol6/p1033-akidau.pdf) | The canonical definition this design is an instance of: the low watermark is the min over the oldest unfinished work. Also the source of two rules taken here - clamp monotonic even in the face of late data, and never let "unknown" mean "complete". |
+| [Beam `WatermarkHold`](https://github.com/apache/beam/blob/master/runners/core-java/src/main/java/org/apache/beam/runners/core/WatermarkHold.java) | The hold-ordering invariant in KTD3: register before the element is released, clear after its effects are visible. |
+| [Flink Async I/O](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/operators/asyncio/) | The accepted design for concurrency under event time - watermarks are order boundaries emitted only after every result from before them. Also the source of the cost this plan must report: punctuation latency becomes the slowest in-flight record, not the average. |
+| [Flink `withIdleness`](https://nightlies.apache.org/flink/flink-docs-stable/api/java/org/apache/flink/api/common/eventtime/WatermarkStrategy.html) and [Confluent's write-up](https://www.confluent.io/blog/why-is-flink-not-producing-results/) | The three recognised answers to an empty input - hold, fall back to max-seen, or declare idle - and that the third trades completeness for liveness rather than being free. |
