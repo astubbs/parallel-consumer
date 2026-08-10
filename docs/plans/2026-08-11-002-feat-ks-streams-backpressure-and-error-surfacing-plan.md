@@ -931,7 +931,38 @@ surefire report directory is **empty** while `surefire-reports-kafka-upstream/` 
 | `shouldThrowOnTimeoutExceptionAndBufferRecordForRetryIfEosDisabled` | D | Still failing, as predicted |
 | `shouldRecordE2ELatencyOnSourceNodeAndTerminalNodes` | H | Still failing, as predicted |
 
-### OPEN: the resume fires one record too early
+### RESOLVED, and it was a misdiagnosis: the resume does not fire early
+
+**Reported in an earlier revision of this document as an open defect blocking U4. That was wrong, and the
+error was mine: I misread which assertion line 1141 is.** It is the *second*
+`assertTrue(task.process(0L))`, not a pause assertion. Nothing about the pause or the resume was failing.
+
+Settled by instrumenting `getBufferedRecordCount` and reading the actual sequence for that test - after
+first confirming the instrumentation reached the build, because the first attempt silently did not and
+produced a clean "no output" that looked like evidence:
+
+```
+topic1-0 = 5   addRecords pause check   -> 5 > 3, partition paused
+topic1-0 = 4   first resume check       -> 4 > 3, correctly NOT resumed
+topic1-0 = 4   second resume check      -> still 4: the second pump consumed nothing
+```
+
+So the pause fires, the resume correctly declines, and the count is exactly right at every step. The test
+fails because the **second `process()` consumed nothing**: all five records share one key, so offset 20
+cannot be handed out until offset 10's worker completes and is drained, and the test calls `process()`
+again microseconds later. That is **P7 confirmed as the race it was predicted to be**, in the same
+async-versus-synchronous family as the rest of pile C and D - not a backpressure defect.
+
+**U4 is therefore unblocked.**
+
+### One real defect the investigation did surface
+
+The resume loop offered **every input partition** at or below the threshold. Kafka pauses partitions for
+reasons unrelated to buffering - `addPartitionsForOffsetReset` pauses until a reset completes - so that
+set could hand back a partition this path never paused, restarting fetches while its offsets were still
+being reset. Now only partitions this path paused are candidates, tracked in `pcPausedPartitions`, which
+also makes the resume provably no more eager than the pause. That property is what the memory bound rests
+on, so it is worth having explicitly rather than by luck.
 
 **Not a prediction, and not diagnosed - found by measurement and recorded rather than guessed at.**
 
