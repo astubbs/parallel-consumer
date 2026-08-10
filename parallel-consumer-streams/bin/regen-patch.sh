@@ -97,7 +97,9 @@ patch_file="$module_dir/$patch_rel"
 for d in "$pristine" "$patched"; do
     if [[ ! -d "$d" ]]; then
         echo "regen-patch: missing $d" >&2
-        echo "regen-patch: run './mvnw -pl parallel-consumer-streams generate-sources' first" >&2
+        # Both the phase and the `.` matter - see the header. generate-sources only UNPACKS, so
+        # regenerating from that tree deletes every hunk, and the leaf module alone fails enforcer.
+        echo "regen-patch: run './mvnw -pl .,parallel-consumer-streams process-sources' first" >&2
         exit 1
     fi
 done
