@@ -22,10 +22,18 @@ import java.util.List;
 final class PcRefusalMessage {
 
     /**
+     * The tracking issue, named once. Every refusal message carries it twice - as the prefix that says which
+     * subsystem is talking, and in the closing pointer - and the refusal tests assert on it, so a literal
+     * would have to be kept in step across four files by hand. Same treatment, for the same reason, as
+     * {@link PcDispatchSwitch#ENABLED_PROPERTY}.
+     */
+    static final String ISSUE = "astubbs#255";
+
+    /**
      * Where a reader goes for the full list and its rationale. The plan is the living document; the README
      * points at it rather than duplicating it.
      */
-    private static final String REFERENCE = "See parallel-consumer-streams/README.md and astubbs#255.";
+    private static final String REFERENCE = "See parallel-consumer-streams/README.md and " + ISSUE + ".";
 
     private PcRefusalMessage() {
     }
@@ -41,7 +49,7 @@ final class PcRefusalMessage {
                     + PcRefusalMessage.class.getName());
         }
 
-        final StringBuilder message = new StringBuilder("PC dispatch (astubbs#255): ");
+        final StringBuilder message = new StringBuilder("PC dispatch (" + ISSUE + "): ");
         final String supported;
         if (constructs.size() == 1) {
             message.append(constructs.get(0).getDisplayName())

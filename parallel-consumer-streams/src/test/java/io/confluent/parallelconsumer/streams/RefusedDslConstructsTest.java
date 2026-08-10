@@ -226,7 +226,7 @@ class RefusedDslConstructsTest {
         assertThatThrownBy(() -> fragment.applyTo(new StreamsBuilder()))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(expected.getDisplayName())
-                .hasMessageContaining("astubbs#255")
+                .hasMessageContaining(PcRefusalMessage.ISSUE)
                 .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY + "=false");
 
         PcDispatchSwitch.disable();
