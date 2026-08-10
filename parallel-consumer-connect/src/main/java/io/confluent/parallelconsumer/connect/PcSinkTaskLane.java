@@ -94,9 +94,4 @@ public class PcSinkTaskLane {
             lock.unlock();
         }
     }
-
-    /** Visible for tests: whether some thread currently holds this lane. */
-    boolean isHeld() {
-        return lock.isLocked();
-    }
 }

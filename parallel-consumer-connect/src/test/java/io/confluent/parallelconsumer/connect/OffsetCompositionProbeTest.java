@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -217,9 +218,42 @@ class OffsetCompositionProbeTest {
         task.declareDurableThrough(2);
         fixture.runCycle();
 
+        assertThat(fixture.claimedThrough(task))
+                .as("the lane's own prefix stops at the gap, so it claims nothing - a scalar cannot say "
+                        + "'I have 1 but not 0', and claiming 2 would tell the sink to flush a record it "
+                        + "never took")
+                .isNull();
         assertThat(fixture.completedOffsets())
-                .as("only the delivered record may be confirmed, even though the watermark covers both")
-                .containsExactly(1L);
+                .as("and with nothing claimed there is nothing to confirm - offset 0 above all, but offset 1 "
+                        + "is unreachable too while the gap below it is open")
+                .isEmpty();
+    }
+
+    /**
+     * The over-report the sound rule did <em>not</em> catch on its own: within a single lane. Distinct keys
+     * share a lane by hash, and {@link PcSinkTaskLane}'s lock gives exclusion with no ordering claim, so the
+     * higher offset can return from {@code put} first. Taking the numeric maximum then claims a prefix that
+     * has a hole in it.
+     */
+    @Test
+    @DisplayName("out of order inside one lane: the map handed to preCommit never claims an undelivered offset")
+    void outOfOrderDeliveryInsideOneLaneNeverClaimsAnUndeliveredOffset() {
+        final ScriptedSinkTask task = new ScriptedSinkTask();
+        final Fixture fixture = new Fixture(task, ConfirmationRule.OWNING_LANE);
+        fixture.stage(10, task);
+        fixture.stage(15, task);
+
+        fixture.deliver(15);
+        assertThat(fixture.claimedThrough(task))
+                .as("15 is in the sink's hands and 10 is not; claiming 16 here would instruct a connector "
+                        + "that overrides flush to flush an offset it was never given")
+                .isNull();
+
+        fixture.deliver(10);
+        assertThat(fixture.claimedThrough(task))
+                .as("both received, so the lane may claim its whole prefix - 15 is the top of it, and the "
+                        + "offsets between are simply not this lane's")
+                .isEqualTo(16L);
     }
 
     // ---------- the exhaustive arm ------------------------------------------------------------------
@@ -337,7 +371,7 @@ class OffsetCompositionProbeTest {
         final PcSinkTaskLane laneA = new PcSinkTaskLane(taskA);
         final PcSinkTaskLane laneB = new PcSinkTaskLane(taskB);
         final PcSinkTaskLaneRouter router = new PcSinkTaskLaneRouter(
-                java.util.Arrays.asList(laneA, laneB), OffsetCompositionProbeTest::project);
+                Arrays.asList(laneA, laneB), OffsetCompositionProbeTest::project);
 
         dispatcher = new PcTaskDispatcher("connect-probe", Collections.singleton(PARTITION), 4);
 
@@ -356,7 +390,7 @@ class OffsetCompositionProbeTest {
 
         // Whichever lane owns offset 0, hold it back and let the other lane declare everything durable.
         final PcSinkTaskLane ownerOfZero = router.laneFor(batch.get(0));
-        for (final PcSinkTaskLane lane : java.util.Arrays.asList(laneA, laneB)) {
+        for (final PcSinkTaskLane lane : Arrays.asList(laneA, laneB)) {
             final ScriptedSinkTask task = (ScriptedSinkTask) lane.getTask();
             task.declareDurableThrough(lane == ownerOfZero ? 0 : 4);
         }
@@ -453,6 +487,17 @@ class OffsetCompositionProbeTest {
 
         Set<Long> completedOffsets() {
             return new HashSet<>(completed);
+        }
+
+        /**
+         * What this lane's barrier would hand {@code preCommit} for {@link #PARTITION} right now, or null if
+         * it would claim nothing. Asserted on directly, because the claim is the thing under test: a
+         * scripted task can return any watermark it likes, so asserting only on completions would let an
+         * over-claim through whenever the task did not act on it.
+         */
+        Long claimedThrough(final ScriptedSinkTask task) {
+            final OffsetAndMetadata claim = barriers.get(task).snapshotDeliveredThrough().get(PARTITION);
+            return claim == null ? null : claim.offset();
         }
 
         /** PC's frontier: the lowest offset not yet complete. */

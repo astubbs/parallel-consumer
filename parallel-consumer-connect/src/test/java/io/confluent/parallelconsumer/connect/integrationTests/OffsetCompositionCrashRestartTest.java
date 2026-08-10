@@ -24,19 +24,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
-import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The crash-safety half of U3 in
@@ -162,10 +161,10 @@ class OffsetCompositionCrashRestartTest extends BrokerIntegrationTest<String, St
         try (KafkaConsumer<String, String> consumer = getKcu().createNewConsumer(groupId)) {
             consumer.assign(UniLists.of(inputPartition));
             // No seek: the group's committed offset is the resume point, which is exactly what is under test.
-            final long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
-            while (System.nanoTime() < deadline && redelivered.isEmpty()) {
-                consumer.poll(Duration.ofMillis(500)).forEach(record -> redelivered.add(record.value()));
-            }
+            await().atMost(Duration.ofSeconds(60)).until(() -> {
+                pollInto(consumer, redelivered);
+                return !redelivered.isEmpty();
+            });
         }
         return redelivered;
     }
@@ -182,12 +181,18 @@ class OffsetCompositionCrashRestartTest extends BrokerIntegrationTest<String, St
                      getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
             consumer.assign(UniLists.of(outputPartition));
             consumer.seekToBeginning(UniLists.of(outputPartition));
-            final long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
-            while (System.nanoTime() < deadline && written.size() < FAST_RECORDS) {
-                consumer.poll(Duration.ofMillis(500)).forEach(record -> written.add(record.value()));
-            }
+            await().atMost(Duration.ofSeconds(60)).until(() -> {
+                pollInto(consumer, written);
+                return written.size() >= FAST_RECORDS;
+            });
         }
         return written;
+    }
+
+    private static void pollInto(final KafkaConsumer<String, String> consumer, final List<String> values) {
+        for (final ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
+            values.add(record.value());
+        }
     }
 
     @SneakyThrows
@@ -207,8 +212,8 @@ class OffsetCompositionCrashRestartTest extends BrokerIntegrationTest<String, St
         final List<ConsumerRecord<byte[], byte[]>> converted = new ArrayList<>(records.size());
         for (final ConsumerRecord<String, String> record : records) {
             converted.add(new ConsumerRecord<>(record.topic(), record.partition(), record.offset(),
-                    record.key() == null ? null : record.key().getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    record.value().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+                    record.key() == null ? null : record.key().getBytes(StandardCharsets.UTF_8),
+                    record.value().getBytes(StandardCharsets.UTF_8)));
         }
         return converted;
     }
@@ -231,8 +236,6 @@ class OffsetCompositionCrashRestartTest extends BrokerIntegrationTest<String, St
         private final KafkaProducer<String, String> producer;
         private final String outputTopic;
         private final NavigableSet<Long> durable = new TreeSet<>();
-        private final Set<Long> received = new LinkedHashSet<>();
-        private final AtomicBoolean refusedSomething = new AtomicBoolean();
         private volatile long lowestRefused = Long.MAX_VALUE;
 
         private TopicSinkTask(final KafkaProducer<String, String> producer, final String outputTopic) {
@@ -243,19 +246,17 @@ class OffsetCompositionCrashRestartTest extends BrokerIntegrationTest<String, St
         @Override
         public void put(final Collection<SinkRecord> records) {
             for (final SinkRecord record : records) {
-                final String value = new String((byte[]) record.value(), java.nio.charset.StandardCharsets.UTF_8);
+                final String value = new String((byte[]) record.value(), StandardCharsets.UTF_8);
                 synchronized (this) {
-                    received.add(record.kafkaOffset());
                     if (PARKED_VALUE.equals(value)) {
                         // Cannot write this one, ever. Note it still RETURNS normally - buffering succeeded,
                         // durability did not, and conflating the two is the defect under investigation.
-                        refusedSomething.set(true);
                         lowestRefused = Math.min(lowestRefused, record.kafkaOffset());
                         continue;
                     }
                 }
                 producer.send(new ProducerRecord<>(outputTopic, record.key() == null ? null
-                        : new String((byte[]) record.key(), java.nio.charset.StandardCharsets.UTF_8), value));
+                        : new String((byte[]) record.key(), StandardCharsets.UTF_8), value));
                 synchronized (this) {
                     durable.add(record.kafkaOffset());
                 }

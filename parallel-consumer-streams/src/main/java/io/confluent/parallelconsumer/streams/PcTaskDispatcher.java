@@ -177,19 +177,30 @@ public class PcTaskDispatcher implements Closeable {
     static final Duration RETRIES_DISABLED_DELAY = Duration.ofDays(3650);
 
     /**
-     * The thread that constructed this dispatcher, and the only one allowed to touch {@link WorkManager}
-     * through it.
+     * The thread currently inside {@link WorkManager} through this dispatcher, or null.
      *
-     * <p>Several methods here already document "StreamThread only" in prose. This turns that comment into
-     * a check, because the cost of getting it wrong is silent: {@code WorkManager} and its partition state
-     * are not thread-safe, so a second thread calling in corrupts offset bookkeeping without throwing, and
-     * the damage surfaces later as a commit that covers work which never completed.
+     * <p>{@code WorkManager} and its partition state are not thread-safe, and the cost of getting that wrong
+     * is silent: a second thread calling in corrupts offset bookkeeping without throwing, and the damage
+     * surfaces later as a commit covering work that never completed. This makes the "one at a time" prose
+     * on the methods below into a check.
      *
-     * <p>Worth the guard specifically now that the commit surface exists. {@link #collectCommitData} and
-     * {@link #onCommitSuccess} reach {@code WorkManager} directly and sit exactly where a caller wiring up
-     * its own commit path is most likely to call from a commit or scheduler thread rather than the owner.
+     * <p><b>Occupancy, not identity - and that correction was earned.</b> This guard first read
+     * {@code Thread.currentThread() == ownerThread}, pinned to the constructing thread, and Kafka Streams
+     * refuted it: {@code DefaultStateUpdater.maybeCheckpointTasks} calls {@code task.maybeCheckpoint(false)}
+     * from its own {@code StateUpdater-N} thread, which reaches {@code commitNeeded()} and so this class.
+     * Streams does not keep one thread per task; it transfers <em>exclusive ownership</em> of a task between
+     * the StreamThread and the state-updater thread. A task handed over is removed from the StreamThread's
+     * registry first ({@code TaskManager.handleReassignedActiveTask}: {@code tasks.removeTask(task)} then
+     * {@code stateUpdater.add(task)}), and comes back only through
+     * {@code stateUpdater.drainRestoredActiveTasks} followed by {@code tasks.addTask(task)} in
+     * {@code transitRestoredTaskToRunning} - while everything the StreamThread processes and commits
+     * iterates {@code tasks.activeTasks()}. So the mutual exclusion holds; the fixed identity never did.
+     *
+     * <p>Deliberately a detector rather than a lock. Streams already provides the exclusion, and taking a
+     * lock here would add a second ordering to reason about on the dispatch path; what was missing was a way
+     * to hear about it loudly if that guarantee ever stops holding.
      */
-    private final Thread ownerThread;
+    private final AtomicReference<Thread> insideWorkManager = new AtomicReference<>();
 
     private final Set<TopicPartition> inputPartitions;
 
@@ -245,7 +256,6 @@ public class PcTaskDispatcher implements Closeable {
     public PcTaskDispatcher(final String taskName, final Set<TopicPartition> inputPartitions, final int poolSize) {
         this.inputPartitions = new LinkedHashSet<>(inputPartitions);
         this.poolSize = poolSize;
-        this.ownerThread = Thread.currentThread();
 
         ParallelConsumerOptions<byte[], byte[]> options = ParallelConsumerOptions.<byte[], byte[]>builder()
                 .consumer(new MockConsumer<byte[], byte[]>(OffsetResetStrategy.NONE))
@@ -289,23 +299,28 @@ public class PcTaskDispatcher implements Closeable {
             return;
         }
 
-        Map<TopicPartition, List<ConsumerRecord<byte[], byte[]>>> byPartition = new HashMap<>();
-        byPartition.put(partition, batch);
-        EpochAndRecordsMap<byte[], byte[]> epochTagged =
-                new EpochAndRecordsMap<>(new ConsumerRecords<>(byPartition), workManager.getPm());
+        enterWorkManager("registerRecords");
+        try {
+            Map<TopicPartition, List<ConsumerRecord<byte[], byte[]>>> byPartition = new HashMap<>();
+            byPartition.put(partition, batch);
+            EpochAndRecordsMap<byte[], byte[]> epochTagged =
+                    new EpochAndRecordsMap<>(new ConsumerRecords<>(byPartition), workManager.getPm());
 
-        recordsOffered.addAndGet(batch.size());
-        recordsAccepted.addAndGet(epochTagged.count());
-        PcDispatchCounters.onOfferedToWorkManager(batch.size());
-        PcDispatchCounters.onAcceptedByWorkManager(epochTagged.count());
-        if (epochTagged.count() != batch.size()) {
-            // Loud, because the thing being guarded against is silence.
-            log.error("PC dropped {} of {} records for {} for want of a partition-assignment epoch - " +
-                            "onPartitionsAssigned was not driven for this partition",
-                    batch.size() - epochTagged.count(), batch.size(), partition);
+            recordsOffered.addAndGet(batch.size());
+            recordsAccepted.addAndGet(epochTagged.count());
+            PcDispatchCounters.onOfferedToWorkManager(batch.size());
+            PcDispatchCounters.onAcceptedByWorkManager(epochTagged.count());
+            if (epochTagged.count() != batch.size()) {
+                // Loud, because the thing being guarded against is silence.
+                log.error("PC dropped {} of {} records for {} for want of a partition-assignment epoch - " +
+                                "onPartitionsAssigned was not driven for this partition",
+                        batch.size() - epochTagged.count(), batch.size(), partition);
+            }
+
+            workManager.registerWork(epochTagged);
+        } finally {
+            leaveWorkManager();
         }
-
-        workManager.registerWork(epochTagged);
     }
 
     /**
@@ -321,12 +336,24 @@ public class PcTaskDispatcher implements Closeable {
      *         on.
      */
     public int dispatchAvailable(final WorkPreparer preparer) {
+        enterWorkManager("dispatchAvailable");
+        try {
+            return dispatchAvailableExclusively(preparer);
+        } finally {
+            leaveWorkManager();
+        }
+    }
+
+    private int dispatchAvailableExclusively(final WorkPreparer preparer) {
         drainCompletions();
 
         if (closed) {
             lastDispatchCount = 0;
             return 0;
         }
+
+        // Loop-invariant: `preparer` is fixed for this call, so ask once rather than once per record.
+        final boolean deferred = preparer instanceof DeferringWorkPreparer;
 
         // Never ask for more than the pool can start (checked per loop pass below): PC would happily hand
         // out its full target and the surplus would sit in the executor's queue marked in-flight, which
@@ -348,11 +375,13 @@ public class PcTaskDispatcher implements Closeable {
             int syncCompleted = 0;
             for (WorkContainer<byte[], byte[]> work : available) {
                 consumed++;
-                final boolean deferred = preparer instanceof DeferringWorkPreparer;
+                // Held rather than discarded: runOnWorker reports a throw through the SAME handle, so a
+                // preparer that has already failed the record cannot be counted a second time.
+                final CompletionHandle handle = deferred ? handleFor(work) : null;
                 Runnable chainExecution;
                 try {
                     chainExecution = deferred
-                            ? ((DeferringWorkPreparer) preparer).prepare(work.getCr(), handleFor(work))
+                            ? ((DeferringWorkPreparer) preparer).prepare(work.getCr(), handle)
                             : preparer.prepare(work.getCr());
                 } catch (RuntimeException e) {
                     // Preparation failed on the StreamThread - deserialisation, most likely. Treat it exactly
@@ -373,7 +402,7 @@ public class PcTaskDispatcher implements Closeable {
                 inFlight.incrementAndGet();
                 recordsDispatched.incrementAndGet();
                 PcDispatchCounters.onDispatchedToPool();
-                workerPool.execute(() -> runOnWorker(work, chainExecution, deferred));
+                workerPool.execute(() -> runOnWorker(work, chainExecution, handle));
             }
             if (syncCompleted == 0) {
                 break;
@@ -385,20 +414,28 @@ public class PcTaskDispatcher implements Closeable {
         return consumed;
     }
 
+    /**
+     * @param handle non-null only for a {@link DeferringWorkPreparer}, whose return says "buffered" rather
+     *               than "done" - completing here would let the frontier pass an offset nothing has durably
+     *               written. A throw still ends the record, but is reported <em>through the handle</em> so
+     *               that a preparer which already failed it on the way out cannot have it counted twice.
+     */
     private void runOnWorker(final WorkContainer<byte[], byte[]> work, final Runnable chainExecution,
-                             final boolean deferred) {
+                             final CompletionHandle handle) {
         try {
             chainExecution.run();
-            // A deferred preparer's return says only "buffered", so completing here would let the frontier
-            // pass an offset nothing has durably written. Its CompletionHandle carries the real outcome.
-            // inFlight still falls in the finally below: it measures POOL OCCUPANCY, and the worker is
-            // genuinely free - conflating the two is what would stall the pump.
-            if (!deferred) {
+            if (handle == null) {
                 recordSuccess(work);
             }
         } catch (Throwable t) {
-            recordFailure(work, t);
+            if (handle == null) {
+                recordFailure(work, t);
+            } else {
+                handle.failed(t);
+            }
         } finally {
+            // Unconditional, deferred or not: this measures POOL OCCUPANCY, and the worker is genuinely
+            // free. Making it wait for durability is what would stall the pump.
             inFlight.decrementAndGet();
         }
     }
@@ -465,7 +502,8 @@ public class PcTaskDispatcher implements Closeable {
 
     /**
      * The frontier and its encoded holes, for every dirty partition - what the consumer-group commit should
-     * carry. StreamThread only, like every WorkManager touch.
+     * carry. Whichever thread currently owns the task, and only one at a time - see
+     * {@link #insideWorkManager}.
      * <p>
      * Completions are drained first, so work that has already finished is folded into the answer - but
      * nothing waits: records still in flight stay incomplete, which is precisely what keeps the frontier
@@ -476,19 +514,32 @@ public class PcTaskDispatcher implements Closeable {
      * the same (or newer) data - nothing is stranded.
      */
     public Map<TopicPartition, OffsetAndMetadata> collectCommitData() {
-        assertOwnerThread("collectCommitData");
-        drainCompletions();
-        return workManager.collectCommitDataForDirtyPartitions();
+        enterWorkManager("collectCommitData");
+        try {
+            drainCompletions();
+            return workManager.collectCommitDataForDirtyPartitions();
+        } finally {
+            leaveWorkManager();
+        }
     }
 
     /**
      * Whether a commit is worth attempting: completed work exists that no successful commit has covered.
-     * StreamThread only. This is PC's own dirty flag, not a parallel copy of it - see KTD-S7's grain.
+     * This is PC's own dirty flag, not a parallel copy of it - see KTD-S7's grain.
+     * <p>
+     * <b>Not StreamThread-only</b>, unlike the rest of this surface: Kafka Streams also reaches it from the
+     * state-updater thread, via {@code DefaultStateUpdater.maybeCheckpointTasks} to {@code maybeCheckpoint}
+     * to {@code commitNeeded()}, for tasks it currently owns. That is exclusive, not concurrent - see
+     * {@link #insideWorkManager} for why, and for the guard that says so if it ever stops being true.
      */
     public boolean hasCommitDataOutstanding() {
-        assertOwnerThread("hasCommitDataOutstanding");
-        drainCompletions();
-        return workManager.isDirty();
+        enterWorkManager("hasCommitDataOutstanding");
+        try {
+            drainCompletions();
+            return workManager.isDirty();
+        } finally {
+            leaveWorkManager();
+        }
     }
 
     /**
@@ -498,24 +549,35 @@ public class PcTaskDispatcher implements Closeable {
      * StreamThread only.
      */
     public void onCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
-        assertOwnerThread("onCommitSuccess");
-        workManager.onOffsetCommitSuccess(committed);
+        enterWorkManager("onCommitSuccess");
+        try {
+            workManager.onOffsetCommitSuccess(committed);
+        } finally {
+            leaveWorkManager();
+        }
     }
 
     /**
-     * Fails fast when a {@link WorkManager}-touching method is called off the owning thread.
+     * Claims sole occupancy of {@link WorkManager} for the calling thread, failing fast if another thread is
+     * already inside. Every caller must pair this with {@link #leaveWorkManager()} in a {@code finally}.
      *
      * <p>Deliberately an {@link IllegalStateException} naming both threads rather than an assertion: an
      * assertion disappears without {@code -ea}, and this is exactly the class of mistake that produces no
-     * symptom at the call site.
+     * symptom at the call site. The guarded methods do not nest, so occupancy needs no depth count.
      */
-    private void assertOwnerThread(final String method) {
+    private void enterWorkManager(final String method) {
         final Thread current = Thread.currentThread();
-        if (current != ownerThread) {
+        final Thread holder = insideWorkManager.get();
+        if (holder != null && holder != current) {
             throw new IllegalStateException(String.format(
-                    "%s touches WorkManager and is owner-thread-only, but was called from '%s'; the owner is '%s'",
-                    method, current.getName(), ownerThread.getName()));
+                    "%s touches WorkManager, which admits one thread at a time, but '%s' is already inside it; "
+                            + "this call came from '%s'", method, holder.getName(), current.getName()));
         }
+        insideWorkManager.set(current);
+    }
+
+    private void leaveWorkManager() {
+        insideWorkManager.set(null);
     }
 
     /** Whether either close path has run. A closed dispatcher hands out no work and accepts no more. */

@@ -13,7 +13,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.NavigableSet;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 /**
  * Turns one lane's {@code preCommit} watermark into per-record durability facts about <b>that lane's own
@@ -69,17 +71,32 @@ public class PcSinkTaskDurabilityBarrier {
      * be reachable by one, however high it climbs. Keeping these in the same map as the deliverable ones is
      * an over-commit the probe caught: offset 0's {@code put} threw, and a later watermark covering offset 1
      * marked 0 durable too.
+     *
+     * <p>It is also the gap list {@link #advanceDeliveredThrough} reads: an offset still sitting here is one
+     * this lane has <em>not</em> received, so nothing above it may be claimed to {@code preCommit}.
      */
     private final Map<TopicPartition, NavigableMap<Long, CompletionHandle>> staged = new HashMap<>();
 
     /** Handed to the sink and returned from {@code put}. Only these may be confirmed by a watermark. */
     private final Map<TopicPartition, NavigableMap<Long, CompletionHandle>> deliverable = new HashMap<>();
 
-    /** Next-offset per partition over records whose {@code put} has returned. What {@code preCommit} sees. */
-    private final Map<TopicPartition, Long> delivered = new HashMap<>();
+    /**
+     * Offsets whose {@code put} returned but which are not yet covered by {@link #deliveredThrough}. Kept
+     * because a lane's records are a <b>sparse, out-of-order</b> subset of its partition: distinct keys
+     * share a lane and the lane's lock orders nothing, so offset 15 can return from {@code put} before
+     * offset 10. Folding each one into the watermark as it lands would claim 16 while 10 is still in flight.
+     */
+    private final Map<TopicPartition, NavigableSet<Long>> deliveredOffsets = new HashMap<>();
 
-    /** The highest watermark this lane has returned per partition. Read by the probe's negative control. */
-    private final Map<TopicPartition, Long> lastReturned = new HashMap<>();
+    /**
+     * Next-offset per partition over the <b>contiguous prefix</b> of this lane's own received records. What
+     * {@code preCommit} sees, and the only number this barrier ever tells the sink about itself.
+     *
+     * <p>Contiguous over <em>this lane's</em> offsets, not the partition's: a lane holding {0, 5, 9} and
+     * having received all three claims 10, because Connect's scalar means "everything I was given, up to
+     * here". A gap at an offset this lane never received is not a gap in its own stream.
+     */
+    private final Map<TopicPartition, Long> deliveredThrough = new HashMap<>();
 
     public PcSinkTaskDurabilityBarrier(final PcSinkTaskLane lane) {
         this.lane = lane;
@@ -109,41 +126,81 @@ public class PcSinkTaskDurabilityBarrier {
             return;
         }
         deliverable.computeIfAbsent(partition, key -> new TreeMap<>()).put(offset, handle);
-        delivered.merge(partition, offset + 1, Math::max);
+        deliveredOffsets.computeIfAbsent(partition, key -> new TreeSet<>()).add(offset);
+        advanceDeliveredThrough(partition);
     }
 
-    /** Fails one record outright, releasing it to PC's own failure handling. */
-    public synchronized void failed(final TopicPartition partition, final long offset, final Throwable cause) {
-        CompletionHandle handle = remove(staged, partition, offset);
-        if (handle == null) {
-            handle = remove(deliverable, partition, offset);
+    /**
+     * Moves the watermark to the top of the contiguous prefix, and no further.
+     *
+     * <p>Deliberately <b>not</b> {@code max(delivered) + 1}. That was a real over-report: two keys sharing a
+     * lane are serialised but not ordered, so offsets 10 and 15 can return from {@code put} in either order,
+     * and taking the max after 15 lands tells the sink it received through 16 while 10 is still in flight.
+     * For a connector that overrides {@code flush} - and {@code SinkTask}'s base {@code preCommit} is
+     * {@code flush(offsets); return offsets;} - that is an instruction to flush offsets it was never given.
+     *
+     * <p>The stop line is the lowest offset still {@link #staged}: everything below it that this lane
+     * received is genuinely in the sink's hands. Offsets at or below the new watermark are dropped from
+     * {@link #deliveredOffsets}, which is what keeps it bounded.
+     */
+    private void advanceDeliveredThrough(final TopicPartition partition) {
+        final NavigableSet<Long> received = deliveredOffsets.get(partition);
+        if (received == null || received.isEmpty()) {
+            return;
         }
+        final NavigableMap<Long, CompletionHandle> outstanding = staged.get(partition);
+        final Long lowestOutstanding = outstanding == null || outstanding.isEmpty() ? null : outstanding.firstKey();
+        // Strictly below the gap: `lower`, not `floor`. The outstanding offset itself is the thing not received.
+        final Long prefixTop = lowestOutstanding == null ? received.last() : received.lower(lowestOutstanding);
+        if (prefixTop == null) {
+            return;
+        }
+        deliveredThrough.merge(partition, prefixTop + 1, Math::max);
+        received.headSet(prefixTop, true).clear();
+    }
+
+    /**
+     * Fails one record outright, releasing it to PC's own failure handling.
+     *
+     * <p>A record that failed <em>before</em> reaching the sink keeps its place in {@link #staged} rather
+     * than being removed. That is the same thing {@code WorkerSinkTask} does by not promoting
+     * {@code origOffsets} when {@code task.put} throws: the lane did not receive it, so the lane may not
+     * claim past it. Removing it would let the watermark step over an offset the sink never took, which is
+     * the over-claim this class exists to prevent. A retry re-stages the offset and replaces the handle;
+     * this dispatcher disables retries, so in practice such a record pins this lane's watermark for good -
+     * exactly as it pins PC's own frontier.
+     */
+    public synchronized void failed(final TopicPartition partition, final long offset, final Throwable cause) {
+        final NavigableMap<Long, CompletionHandle> stagedForPartition = staged.get(partition);
+        final CompletionHandle stagedHandle = stagedForPartition == null ? null : stagedForPartition.get(offset);
+        if (stagedHandle != null) {
+            stagedHandle.failed(cause);
+            return;
+        }
+        // Delivered but not yet confirmed: the sink did receive it, so the watermark stays honest. Drop it
+        // so no later watermark can confirm a record PC has already been told failed.
+        final NavigableMap<Long, CompletionHandle> deliverableForPartition = deliverable.get(partition);
+        final CompletionHandle handle =
+                deliverableForPartition == null ? null : deliverableForPartition.remove(offset);
         if (handle != null) {
             handle.failed(cause);
         }
     }
 
-    private static CompletionHandle remove(final Map<TopicPartition, NavigableMap<Long, CompletionHandle>> from,
-                                           final TopicPartition partition, final long offset) {
-        final NavigableMap<Long, CompletionHandle> byOffset = from.get(partition);
-        return byOffset == null ? null : byOffset.remove(offset);
-    }
-
     /**
-     * Asks this lane what it has durably written, and completes whatever that answer covers.
+     * Asks this lane what it has durably written, and returns its answer verbatim. Confirms nothing - that
+     * is {@link #confirm}'s job, and the split between them is what makes the negative control a control.
      *
      * <p>Runs off the dispatcher's owner thread on purpose. It holds the lane's lock for the duration -
      * {@code preCommit} is a {@code SinkTask} method and must not interleave with an in-flight {@code put} -
      * and a real connector flushes inside it, so running it on the owner thread would stall the dispatch
      * pump for every lane at once.
      *
-     * @param rule which watermark confirms a record; see {@link ConfirmationRule}
-     * @param ceilingAcrossLanes the highest watermark any lane has returned per partition, used only by
-     *                           {@link ConfirmationRule#HIGHEST_ACROSS_LANES}
-     * @return the records confirmed durable by this cycle
+     * @return whatever this lane's {@code preCommit} returned, or an empty map if it was not asked or
+     *         declined to answer
      */
     public Map<TopicPartition, OffsetAndMetadata> pollWatermarks() {
-        final Map<TopicPartition, OffsetAndMetadata> toCommit = snapshotDelivered();
+        final Map<TopicPartition, OffsetAndMetadata> toCommit = snapshotDeliveredThrough();
         if (toCommit.isEmpty()) {
             // Nothing has been put yet. Connect skips the commit entirely in this case rather than calling
             // preCommit with an empty map (WorkerSinkTask.java:417-418), so we do too.
@@ -156,9 +213,6 @@ public class PcSinkTaskDurabilityBarrier {
             // nothing became durable, so nothing completes and the frontier stays where it is.
             return Collections.emptyMap();
         }
-        synchronized (this) {
-            returned.forEach((partition, offset) -> lastReturned.merge(partition, offset.offset(), Math::max));
-        }
         return returned;
     }
 
@@ -169,24 +223,18 @@ public class PcSinkTaskDurabilityBarrier {
      * confirming any of them. That ordering is what makes the negative control a control: with the ceiling
      * built from a previous cycle it starts empty, the inverted rule degenerates to the sound one, and the
      * control silently cannot fire.
+     *
+     * @param rule which watermark confirms a record; see {@link ConfirmationRule}
+     * @param watermarks this lane's own answer, as returned by {@link #pollWatermarks()}
+     * @param ceilingAcrossLanes the highest watermark any lane returned this cycle, per partition. Read only
+     *                           by {@link ConfirmationRule#HIGHEST_ACROSS_LANES}
+     * @return how many of this lane's records the answer confirmed durable
      */
-    public int confirm(final ConfirmationRule rule,
-                       final Map<TopicPartition, OffsetAndMetadata> watermarks,
-                       final Map<TopicPartition, Long> ceilingAcrossLanes) {
-        return applyWatermarks(watermarks, rule, ceilingAcrossLanes);
-    }
-
-    private synchronized Map<TopicPartition, OffsetAndMetadata> snapshotDelivered() {
-        final Map<TopicPartition, OffsetAndMetadata> snapshot = new HashMap<>();
-        delivered.forEach((partition, next) -> snapshot.put(partition, new OffsetAndMetadata(next)));
-        return snapshot;
-    }
-
-    private synchronized int applyWatermarks(final Map<TopicPartition, OffsetAndMetadata> returned,
-                                             final ConfirmationRule rule,
-                                             final Map<TopicPartition, Long> ceilingAcrossLanes) {
+    public synchronized int confirm(final ConfirmationRule rule,
+                                    final Map<TopicPartition, OffsetAndMetadata> watermarks,
+                                    final Map<TopicPartition, Long> ceilingAcrossLanes) {
         int confirmed = 0;
-        for (final Map.Entry<TopicPartition, OffsetAndMetadata> entry : returned.entrySet()) {
+        for (final Map.Entry<TopicPartition, OffsetAndMetadata> entry : watermarks.entrySet()) {
             final TopicPartition partition = entry.getKey();
 
             final long watermark = rule == ConfirmationRule.HIGHEST_ACROSS_LANES
@@ -211,9 +259,14 @@ public class PcSinkTaskDurabilityBarrier {
         return confirmed;
     }
 
-    /** Visible for tests: records routed here but not yet confirmed durable, delivered or not. */
-    synchronized int pendingCount() {
-        return staged.values().stream().mapToInt(Map::size).sum()
-                + deliverable.values().stream().mapToInt(Map::size).sum();
+    /**
+     * What this lane would hand {@code preCommit} right now: its own contiguous received prefix, per
+     * partition. Package-private so the probe can assert on the claim itself rather than only on what a
+     * scripted task chose to return for it.
+     */
+    synchronized Map<TopicPartition, OffsetAndMetadata> snapshotDeliveredThrough() {
+        final Map<TopicPartition, OffsetAndMetadata> snapshot = new HashMap<>();
+        deliveredThrough.forEach((partition, next) -> snapshot.put(partition, new OffsetAndMetadata(next)));
+        return snapshot;
     }
 }

@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -482,6 +483,72 @@ class PcTaskDispatcherTest {
         assertThat(dispatcher.hasCommitDataOutstanding())
                 .as("the success ack is what marks the covered work clean")
                 .isFalse();
+    }
+
+    /**
+     * The regression for the guard that shipped too strict. It first compared against the CONSTRUCTING
+     * thread, which Kafka Streams refuted at once: {@code DefaultStateUpdater} calls
+     * {@code task.maybeCheckpoint} - and so {@code commitNeeded()} - from its own thread, for tasks it
+     * currently owns. Streams passes exclusive ownership of a task between threads rather than pinning it to
+     * one, so a second thread calling in <em>while nobody else is inside</em> is legitimate.
+     */
+    @Test
+    void anotherThreadMayUseTheCommitSurfaceWhenNoOneElseIsInside() throws Exception {
+        dispatcher = new PcTaskDispatcher("task-handoff", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "one-key"));
+        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+
+        // Stands in for the state-updater thread taking the task over.
+        final AtomicReference<Object> answer = new AtomicReference<>();
+        final Thread other = new Thread(() -> {
+            try {
+                answer.set(dispatcher.hasCommitDataOutstanding());
+            } catch (Throwable t) {
+                answer.set(t);
+            }
+        }, "StateUpdater-1");
+        other.start();
+        other.join(PUMP_TIMEOUT.toMillis());
+
+        assertThat(answer.get())
+                .as("a handed-over task is driven by a different thread, and that is not an error")
+                .isEqualTo(true);
+    }
+
+    /**
+     * The negative control for the guard above: it still has to fire on a genuine overlap, or replacing the
+     * identity check with an occupancy check would have quietly removed the protection instead of correcting
+     * it. Preparation runs inside {@code dispatchAvailable}'s occupancy window, so calling in from a second
+     * thread there is a real two-threads-at-once, not a handover.
+     */
+    @Test
+    void twoThreadsInsideWorkManagerAtOnceIsDetected() {
+        dispatcher = new PcTaskDispatcher("task-overlap", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "one-key"));
+
+        final AtomicReference<Throwable> fromOtherThread = new AtomicReference<>();
+        dispatcher.dispatchAvailable(record -> {
+            final Thread intruder = new Thread(() -> {
+                try {
+                    dispatcher.hasCommitDataOutstanding();
+                } catch (Throwable t) {
+                    fromOtherThread.set(t);
+                }
+            }, "Intruder-1");
+            intruder.start();
+            try {
+                intruder.join(PUMP_TIMEOUT.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+            return () -> { };
+        });
+
+        assertThat(fromOtherThread.get())
+                .as("entering WorkManager while the dispatch thread is already inside must be loud")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("admits one thread at a time");
     }
 
     /**

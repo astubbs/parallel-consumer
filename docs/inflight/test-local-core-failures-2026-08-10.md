@@ -28,7 +28,7 @@ transactional mode and a duplicate-insensitive set in the others while its javad
 repeats. That PR also rules out the tempting reading: *"No precondition could have fixed this… unbounded
 by design."* Check any new sighting in this class against that fix first.
 
-It also corrects a link made in `test-load-tightness-flakes.md` before #260 was read: this is **not**
+It also corrects a link made in `test-load-tightness-flakes.md` before astubbs#260 was read: this is **not**
 astubbs#101 returning - that fixed the opposite symptom, a commit that never happened.
 
 **`ProducerManagerTest` is not fresh territory either.** A sibling flake on the same

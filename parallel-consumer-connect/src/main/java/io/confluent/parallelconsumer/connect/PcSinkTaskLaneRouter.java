@@ -99,7 +99,16 @@ public class PcSinkTaskLaneRouter implements PcTaskDispatcher.DeferringWorkPrepa
 
         barrier.staged(partition, record.offset(), handle);
         return () -> {
-            lane.put(Collections.singletonList(projected));
+            try {
+                lane.put(Collections.singletonList(projected));
+            } catch (RuntimeException | Error e) {
+                // Without this the throw reaches the dispatcher, which fails the WorkContainer directly and
+                // never tells the barrier - leaving the record staged with a live handle nothing will ever
+                // report. Routing it through the barrier releases that handle exactly once; the dispatcher's
+                // own catch then finds the completion already reported and adds nothing.
+                barrier.failed(partition, record.offset(), e);
+                throw e;
+            }
             // Promoted only now, exactly as WorkerSinkTask promotes origOffsets into currentOffsets only
             // after task.put returns (WorkerSinkTask.java:616). A throw skips this, so the offset never
             // reaches preCommit and the record cannot be confirmed durable by a later cycle.

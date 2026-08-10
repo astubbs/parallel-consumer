@@ -3,6 +3,8 @@ package io.confluent.parallelconsumer.connect;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import io.confluent.parallelconsumer.state.ShardKey;
 import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.connect.data.Schema;
@@ -149,24 +151,19 @@ class PcSinkTaskLaneRouterTest {
                 PcSinkTaskLaneRouterTest::project);
 
         // Documents the ShardKey contract the router inherits: KEY shards are (partition, key), not key
-        // alone. Same bytes in another partition is a different shard, so nothing forces it to one lane.
-        final ShardIdentity a = ShardIdentity.of(router, record(0, "alpha", 0));
-        final ShardIdentity b = ShardIdentity.of(router, record(1, "alpha", 0));
+        // alone. Assert on the shard itself rather than on which lane it landed in - the lanes are chosen by
+        // hash, so two distinct shards may legitimately share one, and a lane comparison would be a
+        // hash-fragile way of asking a question about identity.
+        final ShardKey inPartitionZero = ShardKey.of(record(0, "alpha", 0), ProcessingOrder.KEY);
+        final ShardKey inPartitionOne = ShardKey.of(record(1, "alpha", 0), ProcessingOrder.KEY);
 
-        assertThat(a.lane).isNotNull();
-        assertThat(b.lane).isNotNull();
-    }
-
-    private static final class ShardIdentity {
-        private final PcSinkTaskLane lane;
-
-        private ShardIdentity(final PcSinkTaskLane lane) {
-            this.lane = lane;
-        }
-
-        static ShardIdentity of(final PcSinkTaskLaneRouter router, final ConsumerRecord<byte[], byte[]> r) {
-            return new ShardIdentity(router.laneFor(r));
-        }
+        assertThat(inPartitionZero)
+                .as("the same key bytes in a different partition is a DIFFERENT shard, so nothing forces "
+                        + "the two records onto one lane or orders them against each other")
+                .isNotEqualTo(inPartitionOne);
+        assertThat(router.laneFor(record(0, "alpha", 0)))
+                .as("and within one partition the key still pins the lane")
+                .isSameAs(router.laneFor(record(0, "alpha", 7)));
     }
 
     @Test
@@ -296,6 +293,63 @@ class PcSinkTaskLaneRouterTest {
         } finally {
             release.countDown();
             pool.shutdownNow();
+        }
+    }
+
+    /**
+     * A throw out of {@code put} must reach the barrier, not just the dispatcher. Before this the router
+     * called {@code lane.put} bare: the dispatcher caught the throw and failed the {@code WorkContainer}
+     * directly, so the barrier kept the record staged with a completion handle nothing would ever report.
+     */
+    @Test
+    void aThrowingPutFailsTheRecordThroughTheBarrier() {
+        final PcSinkTaskLane lane = new PcSinkTaskLane(new ThrowingSinkTask());
+        final PcSinkTaskLaneRouter router = new PcSinkTaskLaneRouter(Collections.singletonList(lane),
+                PcSinkTaskLaneRouterTest::project);
+
+        final AtomicInteger failures = new AtomicInteger();
+        final AtomicInteger successes = new AtomicInteger();
+        final Runnable work = router.prepare(record(0, "k", 0), new PcTaskDispatcher.CompletionHandle() {
+            @Override
+            public void succeeded() {
+                successes.incrementAndGet();
+            }
+
+            @Override
+            public void failed(final Throwable cause) {
+                failures.incrementAndGet();
+            }
+        });
+
+        assertThatThrownBy(work::run)
+                .as("the throw must still propagate - the dispatcher's own accounting depends on seeing it")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("sink refuses");
+        assertThat(failures.get())
+                .as("and the barrier must have reported the record failed, exactly once")
+                .isEqualTo(1);
+        assertThat(successes.get()).isZero();
+    }
+
+    /** A sink that cannot accept anything, so {@code put} always throws. */
+    private static final class ThrowingSinkTask extends SinkTask {
+
+        @Override
+        public void put(final Collection<SinkRecord> records) {
+            throw new IllegalStateException("sink refuses everything");
+        }
+
+        @Override
+        public String version() {
+            return "throwing";
+        }
+
+        @Override
+        public void start(final Map<String, String> props) {
+        }
+
+        @Override
+        public void stop() {
         }
     }
 
