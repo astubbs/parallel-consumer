@@ -28,19 +28,23 @@ cross-reference each other, and three of those references are load-bearing:
 - **F feeds R.** F is R's "living document" trigger: the per-PR feature file is what tells the roadmap
   a theme has shipped.
 
-F is otherwise orthogonal. It is also the only one of the four with a code component (front matter
-schema, checklist gate), so it is the only one whose review lens is code rather than prose.
+F is otherwise orthogonal in content. It is also the only one of the four with a code component (front
+matter schema, checklist gate), so it is the only one whose review lens is code rather than prose.
 
-What makes T, M and R parallelisable despite the chain is that the coupling sits at **three named
+What makes these parallelisable despite the chain is that the coupling sits at **four named
 interfaces**, not throughout the content. Pin those interfaces in the seed and the agents stop needing
-to talk to each other.
+to talk to each other. The F to R feed is the one to watch: it is the only coupling whose two ends are
+both open questions being answered in the same wave, so it is the one most likely to be designed twice
+and discovered at convergence.
 
 ## The seed: what every agent is given before it starts
 
 One shared brief, identical for every agent, covering the standard to write to and the interfaces not
-to renegotiate. This is the section to lift verbatim into each agent's prompt.
+to renegotiate. This is the section to lift verbatim into each agent's prompt. It is genuinely
+identical: where an agent needs an extra input, that input is named in the wave plan below rather than
+folded in here, so no agent has to wonder whether it is missing context a sibling was given.
 
-### The three interface contracts
+### The four interface contracts
 
 1. **The two-axis vocabulary.** Reliability and API stability are separate axes. Pre-1.0 reserves the
    API surface, not reliability. Every agent uses those words and does not invent synonyms.
@@ -49,7 +53,14 @@ to renegotiate. This is the section to lift verbatim into each agent's prompt.
 3. **The release gate is not met yet.** The `confluentinc#857` deadlock is still open, with the fix in
    astubbs#29 needing rebase and retarget. No agent writes an unqualified "all known critical defects
    are fixed". M's note explains the design: write as though the gate holds, name the check, amend the
-   wording at release if it has not.
+   wording at release if it has not. **The check runs at merge, not only at the release cut.** The
+   generated README is the front door and updates on every merge, so wording that assumes the gate
+   holds would be publicly readable, and falsifiable, for the whole gap between merge and release. If
+   astubbs#29 has not landed by wave 2, what merges is the qualified wording that names the open
+   defect.
+4. **The shipped-theme trigger.** A theme counts as shipped when a `docs/features/` file carrying a
+   `since-version` front matter field lands. F owns the directory name and the schema; R consumes only
+   that field. Neither renegotiates it, and neither waits on the other to know what it is.
 
 ### The standing constraints
 
@@ -59,6 +70,12 @@ to renegotiate. This is the section to lift verbatim into each agent's prompt.
   while every check stays green.
 - Do not build anything new that depends on `README_TEMPLATE.adoc` embedding other documents. Source
   is `parked-docs-site.md`; the docs site is astubbs#208, parked.
+- **The venue for this run is the repository as read on GitHub.** The docs site is a later import, not
+  a precondition, so no artefact may depend on it existing. Each stands alone as markdown under
+  `docs/`, linked from the README template by URL rather than embedded in it: T's section at
+  `docs/testing.md`, R's roadmap at `docs/roadmap.md`. Only M's table lands inside
+  `README_TEMPLATE.adoc` itself. These addresses are settled here rather than in ideation, because M
+  has to write a reference to T's section before T's own cycle has run.
 - Maturity is per module. One alpha experiment must not downgrade how the core describes itself, and
   the core's stability must not be lent to the alpha.
 - These are ideas, not release commitments. Nothing here is agreed as release-blocking.
@@ -73,14 +90,22 @@ T's note already contains the house voice, and it applies to all four: write for
 who skims, whose judgement gets repeated second-hand. Every claim independently checkable in seconds,
 naming the test class or script or number. Brevity as a requirement rather than a preference.
 
+That standard governs the *published* view. R also serves internal planning and scheduling, and an
+agent handed only the sceptical-skimmer brief will produce a promotional roadmap that nothing internal
+depends on, which is precisely how a living document rots in public. R must additionally name what
+internal use keeps it current, and who updates it at a release cut.
+
 ### What the ideation is for
 
 The notes already settle *whether* and largely *what*. Ideation that regenerates those decisions burns
 tokens re-deciding settled questions. Bound each agent to the shape and content of the artefact: the
-status vocabulary and row set for M, the document shape and publication venue for T, the file location
-and exit-criteria content for R, and for F the design questions its own note already lists open (front
-matter schema, and what "user-visible" means precisely). An agent that finds its note leaves the
-*whether* open should say so and stop, not invent an answer.
+status vocabulary and row set for M, the document shape for T, the exit-criteria content for R, and for
+F the design questions its own note lists open: the front matter schema, what "user-visible" means
+precisely, and whether a user-visible-feature PR must add a `docs/features/` file specifically or can
+satisfy the existing checklist box with any documentation edit. That third one is a real fork and was
+missing from an earlier draft of this plan; the verification in step 10 below depends on the answer, so
+it cannot be quietly assumed. An agent that finds its note leaves the *whether* open should say so and
+stop, not invent an answer.
 
 ## The wave plan
 
@@ -90,11 +115,23 @@ direction is picked per idea, the rest of that idea's cycle is its own sequence 
 in parallel if the tokens are there for it.
 
 **Wave 0, one agent, M.** M is the cheapest and most self-contained: it lands next to the existing
-"Java Version per Module" table in `README_TEMPLATE.adoc`, which needs the new modules added anyway,
-and its note already specifies columns and candidate rows. It runs first for two reasons beyond cost.
-It is where the two-axis vocabulary is actually decided, so its output gets promoted into the seed
-rather than guessed at by this plan. And it is a cheap test of whether the seed works at all, before
-the same seed is handed to three agents at once.
+"Java Version per Module" table in `README_TEMPLATE.adoc`, and its note already specifies columns and
+candidate rows. It runs first because it is the artefact the other three quote from, so settling it
+once costs less than reconciling three independent readings of it later.
+
+Be honest about what wave 0 does not do: it is not a test of whether the seed constrains an agent. M
+authors the contracts rather than inheriting them, so a clean wave 0 says nothing about whether an
+agent handed someone else's vocabulary will honour it. The seed stays unproven until wave 1 returns.
+
+M's table covers the modules actually in the reactor on this branch. The Streams and Connect rows are
+blocked on those modules merging and belong to whichever PR lands the module, not to M. Publishing
+maturity rows for artifacts a reader cannot resolve on Maven Central is the one thing the table must
+not do.
+
+**Alongside wave 0, and not by an agent:** astubbs#29 needs its rebase and retarget. It is the only
+named release blocker, and nothing in this run makes it land. The documentation can be written while it
+is open; it cannot merge on the unqualified wording while it is open. Give it an owner before wave 0
+starts, or accept that the qualified wording is what ships.
 
 Review M's output, fold the settled vocabulary into the seed, then:
 
@@ -102,9 +139,13 @@ Review M's output, fold the settled vocabulary into the seed, then:
 additionally read M's ideation output. F needs neither and could equally have run in wave 0 alongside
 M; running it here keeps the review load in one batch.
 
-**Wave 2, reconcile, no subagent.** Check the three interface contracts actually held, fold the
+**Wave 2, reconcile, no subagent.** Check the four interface contracts actually held, fold the
 cross-references between the artefacts, and resolve any collision on `README_TEMPLATE.adoc` between M
-and T. Cheap, and it is the step that fan-out makes necessary.
+and T. Run contract 3's release-gate check here, before any wording reaches master. Record in
+`release-0.6.0.0.md` which artefacts the release announcement links, and which sentences need
+re-tensing when the release is actually cut: merging prose that describes 0.6.0.0 in the present tense
+before 0.6.0.0 exists recreates exactly the problem that file already has to clean up across the
+mirrors. Cheap, and it is the step that fan-out makes necessary.
 
 ## The full cycle each idea runs
 
@@ -122,15 +163,16 @@ that gets dropped once the artefact exists and looks finished.
 | 7 | `ce-doc-review` or `ce-code-review` | Prose for T, M and R. Code for F's gate. Both for F overall |
 | 8 | *apply the findings* | Distinct from step 7 and routinely skipped. A review that is read but not applied has cost tokens and changed nothing |
 | 9 | `ce-commit` | Freely, on the idea's own branch |
-| 10 | *verify* | `./mvnw -N asciidoc-template:build` for anything touching the template, and commit the regenerated README; for F, that the gate actually fails a PR missing its file |
+| 10 | *verify* | `./mvnw -N asciidoc-template:build` for anything touching the template, and commit the regenerated README; for F, that the gate matches whatever its scope question was answered with, exercising the bot-authored and N/A paths rather than only the red one |
 | 11 | `ce-compound` | Per idea, while its branch still exists, not deferred to the end of the run |
 
 Steps 3 and 8 are the two the run will try to skip. Step 3 because the ideation output reads as a
 decision already made, and step 8 because the review reads as the finish line.
 
-`ce-pov` is worth one run against T specifically, once written. T is the only artefact addressed to a
-hostile reader, and a holistic verdict on whether it survives that reader is a different question from
-whether the prose is good.
+`ce-pov` is worth one run against M and T together, once both exist. T is the evidence, but M is where
+the falsifiable production-readiness claim is actually made, on the README a visitor sees first and in
+the wording hardest to walk back. A holistic verdict on whether that claim survives a reader looking
+for a reason to discount it is a different question from whether the prose is good.
 
 The shipping tail runs once, at convergence, not per idea: `ce-commit-push-pr`, then `ce-babysit-pr`
 and `ce-resolve-pr-feedback` until merge. Pushing is not the end of it. Watch the checks and the
@@ -140,7 +182,10 @@ tick.
 ## Mechanics
 
 **Worktrees.** One per idea, off `docs/v6-release-ideas`, living for that idea's whole cycle rather
-than being recreated per CE step. Nothing runs in the main checkout.
+than being recreated per CE step. Nothing runs in the main checkout. Each writes a `.worktree-owner`
+marker at creation recording owner, branch and idea letter, per AGENTS.md "Worktree ownership".
+Without it `bin/worktree-status.sh` cannot tell four concurrent worktrees apart, and the pre-deletion
+safety check has nothing to read when they are torn down.
 
 **File ownership**, so no two agents ever hold the same file:
 
@@ -160,6 +205,13 @@ M and T may both want to edit `README_TEMPLATE.adoc` in the implementation phase
 piece where it belongs and resolve the conflict at convergence rather than relocating content to avoid
 it.
 
+**Integration, after all four cycles finish.** Merge the idea branches into `docs/v6-release-ideas` in
+the order M, T, R, F. M first because the other three quote it; T second because that is where the
+`README_TEMPLATE.adoc` conflict lands, and resolving it against one prior change is cheaper than
+against three. Regenerate `README.adoc` once, after the last merge, then run the shipping tail on the
+integrated branch. Wave 2 is not this step and cannot be: a wave stops at ideation, so when wave 2 runs
+no artefact has been written and there is no template collision to resolve yet.
+
 **Shared scratchpad.** One scratchpad for the run, not one per agent, with every temp file namespaced
 by agent letter. Every agent gets the same preamble naming who else is running concurrently and which
 files they own. Raw ce-ideate option sets go there; only the chosen direction is committed.
@@ -176,11 +228,37 @@ split is wanted, but that is an observation rather than a plan.
 
 ## Where it is safe to stop
 
-Wave 0 alone is a complete outcome: the maturity table published and the pre-1.0 wording corrected is
-the cheapest of the four and settles the vocabulary the rest depend on. Wave 1 can wait indefinitely
-after that without leaving anything half-built. Within wave 1, F can be dropped without affecting T or
-R, at the cost of R's living-document trigger having no feed.
+Wave 0 alone is a complete outcome, with one condition attached. The maturity table published and the
+pre-1.0 wording corrected is the cheapest of the four and settles the vocabulary the rest depend on.
+But M's readiness claim is written to point at T, so if T is deferred indefinitely the claim points at
+nothing, and an unverifiable assertion is exactly what the reader standard says discredits everything
+around it. If wave 0 stands alone, M's claim must point directly at `docs/solutions/` and the named
+`bin/` test lanes instead. Wave 1 can then wait indefinitely without leaving anything half-built.
+Within wave 1, F can be dropped without affecting T or R, at the cost of R's living-document trigger
+falling back to release cuts as its only feed.
 
 ## Delete when
 
-All four notes have been retired by their own "Delete when" conditions, or the run is abandoned.
+The four artefacts are written and merged, and each note has been reduced to whatever docs-site
+follow-up it has left. Two of the notes cannot fully retire until astubbs#208 ships, which is not this
+run's to deliver, so retirement of this file is deliberately not gated on it.
+
+## Deferred / Open Questions
+
+### From the 2026-08-08 review
+
+Two findings were deliberately not applied, because answering them is not the agent's call.
+
+- **Where does F belong?** The reviewers split, and both arguments are good. One says move it
+  *earlier*, into wave 0 alongside M, on the grounds that F is the only agent that inherits the seed's
+  contracts rather than authoring them, and is therefore the only real test of whether the seed
+  constrains anyone. The other says move it *out* of this run entirely until after 0.6.0.0 ships, on
+  the grounds that F delivers nothing a release reader can look at (the directory is empty at release),
+  its value arrives across PRs not yet written, and it is the only item that raises the cost of
+  contributing to a fork actively trying to attract contributors away from an unmaintained upstream.
+  The plan as written leaves F in wave 1, which is the option neither reviewer argued for.
+- **What does fan-out buy over one agent holding all four notes in context?** Every mechanism in this
+  plan exists only because the work is split: the shared seed, the four contracts, the wave 2 reconcile,
+  the ownership table, the shared scratchpad. The stated reason to parallelise is that the agents read
+  the same repository and answer comparable questions, which is also precisely the condition a single
+  agent amortises best. The coordination apparatus is currently unpriced against that alternative.
