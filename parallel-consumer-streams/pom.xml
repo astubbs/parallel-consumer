@@ -49,8 +49,20 @@
              but is constructed outside StreamTask, so the compiler never demands it. ProcessorContextImpl
              is required because it reads/writes AbstractProcessorContext's fields directly. StreamThread
              is required for wake-on-work: it owns the poll wait, and nothing else can split it (astubbs#255).
-             If this list has to grow much past a dozen, that sprawl is itself the answer to "how little had to change". -->
-        <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamThread.java</patched.classes>
+             If this list has to grow much past a dozen, that sprawl is itself the answer to "how little had to change".
+
+             The eight kstream entries are the unsupported-surface refusal (astubbs#255 item 4), and they come
+             in matched pairs for a reason the compiler enforces. ErrorProne resolves a call site to the symbol
+             its receiver's STATIC TYPE declares, so `stream.join(...)` against a KStream variable resolves to
+             KStream#join - an annotation on KStreamImpl is invisible there. That is why the four public
+             INTERFACES carry @DoNotCall/@Deprecated. Conversely an interface method has no body to throw from,
+             which is why the four IMPLS carry the runtime refusal. Neither half substitutes for the other.
+
+             This list is now thirteen, which is past the point at which the patch-do-not-vendor learning says the
+             sprawl is itself the answer. Stated rather than absorbed: the alternative that stays at five is a
+             single check in InternalStreamsBuilder keyed on the DSL's graph-node types, at the cost of a
+             message one step removed from the method the user actually called. -->
+        <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamThread.java,org/apache/kafka/streams/kstream/KStream.java,org/apache/kafka/streams/kstream/KTable.java,org/apache/kafka/streams/kstream/KGroupedStream.java,org/apache/kafka/streams/kstream/CogroupedKStream.java,org/apache/kafka/streams/kstream/internals/KStreamImpl.java,org/apache/kafka/streams/kstream/internals/KTableImpl.java,org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java,org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java</patched.classes>
 
         <!-- Module-local and explicitly versioned on purpose: pinning jackson-databind in root
              dependencyManagement forces WireMock (parallel-consumer-vertx) onto an incompatible Jackson and
@@ -65,6 +77,14 @@
              version to consumers to save a patch bump is not a trade worth making. Held on the 2.18 line to
              stay close to what the jar was built against. -->
         <kafka.streams.jackson.version>2.18.9</kafka.streams.jackson.version>
+
+        <!-- @DoNotCall, which turns a call to a refused DSL method into a compile ERROR for anyone building
+             with ErrorProne. Declared explicitly and module-locally, following the jackson-databind precedent
+             above, because the transitive copy already on this module's tree is TEST scope only - and the
+             annotation has to resolve while compiling the patched MAIN sources. Annotations-only, no
+             transitive dependencies, Apache 2.0, so compile scope costs consumers nothing and gives their
+             ErrorProne the annotation type. -->
+        <error-prone-annotations.version>2.41.0</error-prone-annotations.version>
 
         <!-- Only used by Kafka's own test suite (see the build section). Matched to what Kafka 3.9 builds
              its own tests against, so their assertions mean what their authors meant. -->
@@ -104,6 +124,15 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <version>${kafka.streams.jackson.version}</version>
+        </dependency>
+
+        <!-- See the error-prone-annotations.version property for why this is declared here rather than
+             inherited: the transitive copy is test scope, and @DoNotCall is applied in the patched main
+             sources. -->
+        <dependency>
+            <groupId>com.google.errorprone</groupId>
+            <artifactId>error_prone_annotations</artifactId>
+            <version>${error-prone-annotations.version}</version>
         </dependency>
 
         <!-- Tests -->

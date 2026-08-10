@@ -78,7 +78,13 @@ Two things this did **not** settle, and they are follow-ups rather than gaps in 
   registry degrades to the stock poll if that assumption is ever false - safe, but unproven under
   multi-thread and multi-task, which is the module's standing limit anyway.
 
-## 4. Remove the APIs that do not work, rather than documenting them
+## 4. Remove the APIs that do not work, rather than documenting them - LANDED
+
+**Done**, as the three layers below, in
+`docs/plans/2026-08-10-001-feat-refuse-unsupported-streams-surface-plan.md`. The named set refuses;
+`patched.classes` went from five classes to thirteen to carry it; Kafka's 419 are unchanged. **The
+"invert the default" ask below is NOT done** and is the remaining part of this item - it needs item 6
+first, or the refused surface is defined by whatever nobody has looked at yet.
 
 Windowed operators, joins, suppression and EOS are broken or unsupported on the PC path, and today
 nothing stops a user reaching for them - they get silently wrong results.
@@ -97,7 +103,7 @@ annotating and throwing, **not** by deleting the methods:
    patched and its constructor holds both topology and config.
 
 **The signatures must survive.** Kafka's own suite calls these methods heavily; deleting them stops
-that suite compiling, which would forfeit the 188-test evidence and block ever running more of it.
+that suite compiling, which would forfeit the 419-test evidence and block ever running more of it.
 
 **Invert the default, and let Kafka's own suite be the gate for reinstatement.** Windowing, joins,
 suppression and EOS are what we know is *broken*, which is not the same set as what we know *works*.

@@ -26,11 +26,12 @@ consumer poll
 Under PC's KEY ordering, at most one record per key is in flight, so records on distinct keys of the same
 partition run concurrently while per-key order is preserved.
 
-The Kafka side of the change is a **716-line patch across 5 `processor.internals` classes**
-(`StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`, `RecordCollectorImpl`, `StreamThread`),
-and it needed **no new Parallel Consumer API**.
+The Kafka side of the change is a **1477-line patch across 13 Kafka classes**: the dispatch seam itself is
+5 `processor.internals` classes (`StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`,
+`RecordCollectorImpl`, `StreamThread`), and the other 8 are the `kstream` interfaces and impls that carry
+the refusals below. It needed **no new Parallel Consumer API**.
 
-**No Apache Kafka source is committed to this repository.** The five classes are unpacked from the
+**No Apache Kafka source is committed to this repository.** The thirteen classes are unpacked from the
 published `kafka-streams` sources jar at `generate-sources`, patched with the tracked
 `src/main/patch/pc-streams.patch`, and compiled into `target/classes`, which precedes the `kafka-streams` jar
 on the classpath.
@@ -148,11 +149,11 @@ The living list, with the mechanism behind each item and an assessment of what i
 is **[Current Shortcomings in the plan](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)**.
 
 **Read that section before relying on this anywhere that matters.** In summary, and without the detail:
-stream-time-driven behaviour (punctuation, windows, joins, suppression) does not work; caching must be
-disabled on state stores, which changes what your topology emits; retries are off and failures surface a
-pump cycle late; and EOS is out of scope. The size of the gap is measured, not estimated - **33 of Apache
-Kafka's own `StreamTaskTest` cases fail with the seam on** (68/101, against 101/101 with it off), and the
-shortcomings list maps onto those failures.
+stream time does not advance, so `PunctuationType.STREAM_TIME` punctuators never fire; caching must be
+disabled on state stores, which changes what your topology emits; and retries are off, so failures surface
+a pump cycle late. The size of the gap is measured, not estimated - **33 of Apache Kafka's own
+`StreamTaskTest` cases fail with the seam on** (68/101, against 101/101 with it off), and the shortcomings
+list maps onto those failures.
 
 **Crash safety is not on that list.** Offsets are committed from Parallel Consumer's own completion
 tracking, so a commit covers only work that is genuinely finished and a crash cannot skip a record that
@@ -160,6 +161,30 @@ was still in flight. Note that 14 of the 33 failures above are Kafka's offset an
 still fail - not because anything can be lost, but because they assert Kafka's *encoding* of the commit
 metadata, and this module deliberately owns that field. A failing test there is the divergence being
 detected, not data being lost.
+
+## What refuses, and why that is the good news
+
+**Windowed operators, joins, suppression and exactly-once do not silently misbehave here - they refuse.**
+They are all driven by stream time, which does not advance on the PC path, and the fields that carry it
+are non-volatile `long`s doing read-modify-write from every worker. Left reachable, they would return
+plausible, wrong answers. So the patch closes them:
+
+| You get | When |
+|---|---|
+| A **compile error** (`@DoNotCall`), or a deprecation warning without ErrorProne | you write `join`, `windowedBy` or `suppress` against `KStream`, `KTable`, `KGroupedStream` or `CogroupedKStream` |
+| An `UnsupportedOperationException` naming the construct | you build that topology with the seam on |
+| An `UnsupportedOperationException` at task construction | your topology reaches a `WindowStore`, `SessionStore` or suppression buffer through the **Processor API**, or sets `processing.guarantee` to exactly-once |
+
+Every one of those is conditional on the seam. **With `-Dpc.streams.dispatch.enabled=false` all of them
+build and run exactly as stock Kafka Streams does** - which is both the escape hatch and the reason
+Apache Kafka's own 419 tests still pass unmodified.
+
+**The method signatures are all still there.** Nothing was deleted: Kafka's own test suite calls these
+methods heavily, and deleting them would stop that suite compiling and forfeit the evidence below.
+
+**Reinstatement is evidence-gated, not judgement-gated.** A construct comes off this list when Kafka's own
+test suite exercises it with the seam **on** and passes - not when someone reads the code and concludes it
+looks fine.
 
 ## The 419-test claim
 
@@ -174,7 +199,9 @@ This is a substantiated claim, available for release notes and other promotional
 - **What they run against:** our patched `StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`,
   `RecordCollectorImpl` and `StreamThread`, which precede the `kafka-streams` jar on the classpath - proven
   separately by `ShadowedClassLoadingTest`, and cross-checked by the fact that turning the dispatch flag on
-  changes the result (the released classes have no such flag).
+  changes the result (the released classes have no such flag). The eight patched `kstream` types are on that
+  same classpath and precede the jar in the same way, so these suites run against the refusals too - which
+  is what makes the count evidence that refusing costs a seam-off run nothing.
 - **The skips:** 21 of `StreamThreadTest`'s cases are skipped, by Kafka's own annotations and not by
   anything here. That is stated rather than hidden, because the honest form of the claim has to survive
   someone reading the surefire output. A control run against the **unpatched** `StreamThread` skips exactly
@@ -198,7 +225,9 @@ The count lives in exactly three places - the surefire execution's comment in `p
 
 The module is pinned to the reactor's `${kafka.version}` (currently **3.9.2**), and the patch is derived
 against exactly those sources. `org.apache.kafka.streams.processor.internals` is package-private,
-unsupported and explicitly not an API - the five classes are free to change shape in any patch release.
+unsupported and explicitly not an API - those five classes are free to change shape in any patch release,
+and while the eight `kstream` types are public API, the patch tracks their bodies line by line, so they are
+just as exposed to a re-derive.
 
 **On a Kafka bump the patch will need re-deriving.** The build fails *loudly* when it no longer applies -
 `bin/apply-patch.sh` dry-runs first and fails on any rejected hunk - rather than drifting silently into a
@@ -223,7 +252,9 @@ parallel-consumer-streams/bin/regen-patch.sh                # re-derives pc-stre
 Field reports are the point of publishing this. Please report on
 **[astubbs#255](https://github.com/astubbs/parallel-consumer/issues/255)**, and include:
 
-1. **Your topology's shape** - stateless, stateful, windowed, joins; whether caching is disabled.
+1. **Your topology's shape** - stateless or stateful, and whether caching is disabled. If it refused, say
+   which construct it named: a refusal you consider wrong is the single most useful report we can get,
+   because the refused list is what the supported envelope is made of.
 2. **The switch state** - `pc.streams.dispatch.enabled` and `poolSize`, and whether the same run is
    correct with the switch off. *A result with no switch-off control arm cannot be attributed to this
    module.*
