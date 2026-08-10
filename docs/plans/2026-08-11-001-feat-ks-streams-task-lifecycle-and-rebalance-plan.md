@@ -15,7 +15,8 @@ issue: astubbs#255
 
 **Status: executed.** This is the plan as written *before* implementation, kept as the decision record.
 Where the work refuted it, the outcome is in the commit and in
-`docs/inflight/pr-streams-task-lifecycle-and-rebalance.md`; the two divergences worth knowing before
+`docs/inflight/pr-streams-rebalance-coverage-gaps.md` (which replaced the original inflight entry once
+its seven divergences closed); the two divergences worth knowing before
 reading on are noted under [What execution refuted](#what-execution-refuted).
 
 **Headless disclosure.** Composed without the scoping-confirmation gate: this run has no interactive
@@ -512,7 +513,8 @@ re-recorded with evidence that it does not bite.
 **Dependencies:** U10.1-U10.6
 
 **Files:**
-- `docs/inflight/pr-streams-task-lifecycle-and-rebalance.md`
+- `docs/inflight/pr-streams-rebalance-coverage-gaps.md` (renamed from
+  `pr-streams-task-lifecycle-and-rebalance.md` when its seven divergences closed)
 - `parallel-consumer-streams/README.md` (proven-scope claim, if it changes)
 - `CHANGELOG.adoc` (only if operator-visible)
 

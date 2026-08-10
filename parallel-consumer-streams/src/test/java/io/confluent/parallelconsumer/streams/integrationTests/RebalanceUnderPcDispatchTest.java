@@ -116,6 +116,20 @@ class RebalanceUnderPcDispatchTest extends BrokerStreamsIntegrationTest {
      */
     private static final int DUPLICATE_BOUND = POOL_SIZE * PARTITIONS + 60;
 
+    /**
+     * The in-flight half of {@link #DUPLICATE_BOUND} on its own: how many records one instance can have
+     * inside the processor chain when a partition is revoked, and therefore how many keys can legitimately be
+     * processed by <em>both</em> instances across one handover.
+     * <p>
+     * <b>Separate from {@link #DUPLICATE_BOUND} because asserting the same number twice proves nothing.</b>
+     * Every key processed by both instances was delivered at least twice, so it necessarily contributes at
+     * least one to the total duplicate count - which makes "keys processed by both {@code <=} DUPLICATE_BOUND"
+     * arithmetically implied by "duplicates {@code <=} DUPLICATE_BOUND" and unable to fail on its own. Two
+     * instances concurrently owning one partition would sit inside the looser bound while breaking this one,
+     * which is the whole point of asserting it.
+     */
+    private static final int IN_FLIGHT_BOUND = POOL_SIZE * PARTITIONS;
+
     private String inputTopic;
     private String outputTopic;
 
@@ -217,10 +231,12 @@ class RebalanceUnderPcDispatchTest extends BrokerStreamsIntegrationTest {
         final Set<String> processedByBoth = new HashSet<>(keysByA);
         processedByBoth.retainAll(keysByB);
         assertThat(processedByBoth.size())
-                .as("a key processed by both instances is a re-delivery across the handover, which is "
-                        + "permitted inside the same capacity window. Two instances owning one partition at "
-                        + "the same time would put this far outside it")
-                .isLessThanOrEqualTo(DUPLICATE_BOUND);
+                .as("a key processed by both instances is a re-delivery across the handover, bounded by what "
+                        + "was IN FLIGHT when the partition was revoked (%s) - deliberately tighter than the "
+                        + "overall duplicate bound, because two instances owning one partition at the same "
+                        + "time would put this far outside the in-flight window while still sitting inside "
+                        + "the looser one", IN_FLIGHT_BOUND)
+                .isLessThanOrEqualTo(IN_FLIGHT_BOUND);
 
         log.info("[rebalance-ledger] produced={} uniqueConsumed={} totalOutputs={} duplicates={} bound={} "
                         + "keysByA={} keysByB={} bothInstances={}",
