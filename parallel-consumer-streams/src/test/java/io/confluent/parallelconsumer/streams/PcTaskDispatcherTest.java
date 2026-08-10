@@ -13,6 +13,8 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.record.TimestampType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +32,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -302,13 +305,13 @@ class PcTaskDispatcherTest {
 
         PcTaskDispatcher.WorkPreparer preparer = record -> {
             String key = new String(record.key(), StandardCharsets.UTF_8);
-            return () -> {
+            return prepared(record, () -> {
                 if (poisonKey.equals(key)) {
                     poisonAttempts.incrementAndGet();
                     throw new IllegalStateException("processor blew up on " + key);
                 }
                 completedKeys.add(key);
-            };
+            });
         };
 
         dispatcher.registerRecords(PARTITION, records(12, offset -> "key-" + (offset % 4)));
@@ -367,14 +370,35 @@ class PcTaskDispatcherTest {
                                                                 final LongFunction<String> keyForOffset) {
         List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
         for (long offset = 0; offset < count; offset++) {
-            batch.add(new ConsumerRecord<>(
-                    partition.topic(),
-                    partition.partition(),
-                    offset,
-                    keyForOffset.apply(offset).getBytes(StandardCharsets.UTF_8),
-                    ("value-" + offset).getBytes(StandardCharsets.UTF_8)));
+            batch.add(record(partition, offset, offset, keyForOffset.apply(offset)));
         }
         return batch;
+    }
+
+    /**
+     * One record, with its timestamp said out loud.
+     * <p>
+     * The default batch uses <b>offset as timestamp</b>, which is what Kafka's own {@code StreamTaskTest}
+     * does for the same reason: it makes the timestamp of every record obvious at the call site and gives a
+     * monotone sequence for free. The stream-time tests (astubbs#255, U13) need out-of-order timestamps, and
+     * this overload is what lets them say so rather than encoding it in an offset.
+     */
+    private static ConsumerRecord<byte[], byte[]> record(final TopicPartition partition,
+                                                         final long offset,
+                                                         final long timestamp,
+                                                         final String key) {
+        return new ConsumerRecord<>(
+                partition.topic(),
+                partition.partition(),
+                offset,
+                timestamp,
+                TimestampType.CREATE_TIME,
+                ConsumerRecord.NULL_SIZE,
+                ConsumerRecord.NULL_SIZE,
+                key.getBytes(StandardCharsets.UTF_8),
+                ("value-" + offset).getBytes(StandardCharsets.UTF_8),
+                new RecordHeaders(),
+                Optional.empty());
     }
 
     /**
@@ -400,10 +424,10 @@ class PcTaskDispatcherTest {
         }
 
         @Override
-        public Runnable prepare(final ConsumerRecord<byte[], byte[]> record) {
+        public PcTaskDispatcher.PreparedRecord prepare(final ConsumerRecord<byte[], byte[]> record) {
             String key = new String(record.key(), StandardCharsets.UTF_8);
             long offset = record.offset();
-            return () -> {
+            return prepared(record, () -> {
                 int concurrent = inFlight.incrementAndGet();
                 peakConcurrency.accumulateAndGet(concurrent, Math::max);
 
@@ -424,7 +448,7 @@ class PcTaskDispatcherTest {
                     inFlight.decrementAndGet();
                     completed.add(new Completion(key, offset));
                 }
-            };
+            });
         }
 
         private int distinctKeysInFlight() {
@@ -513,7 +537,7 @@ class PcTaskDispatcherTest {
                 .as("nothing has completed yet - registration alone is not commit-worthy")
                 .isFalse();
 
-        boolean quiescent = dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        boolean quiescent = dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> { }), PUMP_TIMEOUT);
         assertThat(quiescent).as("three no-op records must drain").isTrue();
 
         assertThat(dispatcher.hasCommitDataOutstanding())
@@ -533,7 +557,7 @@ class PcTaskDispatcherTest {
     void collectionDoesNotClearDirtyButTheSuccessAckDoes() {
         dispatcher = new PcTaskDispatcher("task-ack", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(2, offset -> "one-key"));
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> { }), PUMP_TIMEOUT);
 
         var collected = dispatcher.collectCommitData();
         assertThat(dispatcher.hasCommitDataOutstanding())
@@ -561,7 +585,7 @@ class PcTaskDispatcherTest {
         dispatcher.abortClose();
         dispatcher.abortClose(); // idempotent - a second crash of a dead dispatcher is a no-op
 
-        assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+        assertThat(dispatcher.dispatchAvailable(record -> prepared(record, () -> { })))
                 .as("a crashed dispatcher hands out nothing")
                 .isZero();
 
@@ -577,10 +601,10 @@ class PcTaskDispatcherTest {
         PcTaskDispatcher second = new PcTaskDispatcher("task-multi-b", INPUT_PARTITIONS, 4);
         try {
             PcTaskDispatcher.abortAllActive();
-            assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+            assertThat(dispatcher.dispatchAvailable(record -> prepared(record, () -> { })))
                     .as("first dispatcher crashed")
                     .isZero();
-            assertThat(second.dispatchAvailable(record -> () -> { }))
+            assertThat(second.dispatchAvailable(record -> prepared(record, () -> { })))
                     .as("second dispatcher crashed too - the registry covers every live instance")
                     .isZero();
         } finally {
@@ -615,10 +639,10 @@ class PcTaskDispatcherTest {
         final CountDownLatch inChain = new CountDownLatch(1);
         final CountDownLatch releaseWorker = new CountDownLatch(1);
         dispatcher.registerRecords(PARTITION, records(1, offset -> "held-key"));
-        dispatcher.dispatchAvailable(record -> () -> {
+        dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             inChain.countDown();
             awaitLatch(releaseWorker);
-        });
+        }));
 
         assertThat(inChain.await(30, TimeUnit.SECONDS))
                 .as("the worker must actually be inside the chain before the predicates are read, or this "
@@ -641,7 +665,7 @@ class PcTaskDispatcherTest {
             releaseWorker.countDown();
         }
 
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> { }), PUMP_TIMEOUT);
 
         assertThat(dispatcher.hasCommitDataOutstanding())
                 .as("once complete and fed back, the work is commit data")
@@ -673,9 +697,9 @@ class PcTaskDispatcherTest {
         dispatcher = new PcTaskDispatcher("task-failed-not-stuck", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(3, offset -> "same-key"));
 
-        dispatcher.pumpUntilQuiescent(record -> () -> {
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> {
             throw new IllegalStateException("KABOOM");
-        }, PUMP_TIMEOUT);
+        }), PUMP_TIMEOUT);
 
         assertThat(dispatcher.getRecordsFailed())
                 .as("precondition: the record really did fail")
@@ -744,7 +768,7 @@ class PcTaskDispatcherTest {
     void theOutstandingWorkQueryIsAnswerableFromAForeignThread() throws Exception {
         dispatcher = new PcTaskDispatcher("task-foreign-query", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(2, offset -> "k" + offset));
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> { }), PUMP_TIMEOUT);
 
         assertThat(dispatcher.hasUncommittedWork())
                 .as("precondition: there is completed, uncommitted work to report")
@@ -874,17 +898,17 @@ class PcTaskDispatcherTest {
         final CountDownLatch inChain = new CountDownLatch(1);
         final CountDownLatch releaseWorker = new CountDownLatch(1);
         dispatcher.registerRecords(second, records(second, 1, offset -> "doomed"));
-        dispatcher.dispatchAvailable(record -> () -> {
+        dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             inChain.countDown();
             awaitLatch(releaseWorker);
-        });
+        }));
         assertThat(inChain.await(30, TimeUnit.SECONDS)).as("the record is in flight").isTrue();
 
         // The rebalance lands while the record is still inside the chain.
         dispatcher.updatePartitions(UniSets.of(PARTITION));
         releaseWorker.countDown();
 
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> { }), PUMP_TIMEOUT);
 
         assertThat(dispatcher.collectCommitData())
                 .as("the late outcome belongs to a partition this instance no longer owns - committing its "
@@ -900,7 +924,7 @@ class PcTaskDispatcherTest {
 
         dispatcher.updatePartitions(UniSets.of(PARTITION));
 
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> { }), PUMP_TIMEOUT);
         assertThat(dispatcher.getRecordsSucceeded())
                 .as("Kafka calls the assignment paths on every rebalance; a spurious epoch bump here would "
                         + "discard work that was never reassigned")
@@ -921,7 +945,7 @@ class PcTaskDispatcherTest {
         final int activeBefore = PcTaskDispatcher.activeCount();
         dispatcher = new PcTaskDispatcher("task-teardown-contract", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(2, offset -> "k" + offset));
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> { }), PUMP_TIMEOUT);
 
         assertThat(PcTaskDispatcher.activeCount())
                 .as("precondition: the dispatcher is live in the JVM-wide registry")
@@ -993,6 +1017,20 @@ class PcTaskDispatcherTest {
     }
 
     /**
+     * The chain execution plus a stream timestamp, which is what a {@code WorkPreparer} returns since
+     * astubbs#255 U13.
+     * <p>
+     * These tests have no {@code TimestampExtractor} and no Kafka Streams at all, so the record's own
+     * timestamp stands in for the extracted one. Tests that care about the value set it deliberately on the
+     * record they register; every other test just needs something monotone, and offsets-as-timestamps gives
+     * that.
+     */
+    private static PcTaskDispatcher.PreparedRecord prepared(final ConsumerRecord<byte[], byte[]> record,
+                                                            final Runnable chainExecution) {
+        return new PcTaskDispatcher.PreparedRecord(chainExecution, record.timestamp());
+    }
+
+    /**
      * Runs the body on a fresh thread and rethrows whatever it threw on the caller's thread, so an assertion
      * failure inside is a test failure rather than a stack trace on stderr and a green run.
      */
@@ -1049,7 +1087,7 @@ class PcTaskDispatcherTest {
         dispatcher = new PcTaskDispatcher("task-cross-thread-query", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(1, offset -> "one-key"));
 
-        assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+        assertThat(dispatcher.dispatchAvailable(record -> prepared(record, () -> { })))
                 .as("the single record goes to a worker")
                 .isEqualTo(1);
 
@@ -1099,9 +1137,9 @@ class PcTaskDispatcherTest {
         dispatcher = new PcTaskDispatcher("task-failure-not-outstanding", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(1, offset -> "one-key"));
 
-        dispatcher.dispatchAvailable(record -> () -> {
+        dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             throw new IllegalStateException("processing blew up");
-        });
+        }));
         await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getRecordsFailed() == 1);
 
         assertThat(dispatcher.hasCommitDataOutstanding())
