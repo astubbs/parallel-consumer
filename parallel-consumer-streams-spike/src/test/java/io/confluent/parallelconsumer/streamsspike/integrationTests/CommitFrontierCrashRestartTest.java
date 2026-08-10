@@ -7,10 +7,12 @@ import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import io.confluent.parallelconsumer.streamsspike.PcDispatchSwitch;
 import io.confluent.parallelconsumer.streamsspike.PcTaskDispatcher;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -25,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
 import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
@@ -256,11 +259,13 @@ class CommitFrontierCrashRestartTest extends BrokerIntegrationTest<String, Strin
      * previous phase's durable outputs and the restart assertions pass on evidence the restart never
      * produced (U9 review findings on this class - the vacuous-restart-assert defect).
      */
+    @SneakyThrows
     private long outputEndOffset(final TopicPartition outputPartition) {
-        try (KafkaConsumer<String, String> consumer =
-                     getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            return consumer.endOffsets(UniSets.of(outputPartition)).get(outputPartition);
-        }
+        // The shared AdminClient, as the rest of the suite does for end-offset lookups - a whole KafkaConsumer
+        // for one stateless metadata call is construction cost for nothing.
+        return getKcu().getAdmin()
+                .listOffsets(UniMaps.of(outputPartition, OffsetSpec.latest()))
+                .partitionResult(outputPartition).get().offset();
     }
 
     /**
@@ -274,21 +279,22 @@ class CommitFrontierCrashRestartTest extends BrokerIntegrationTest<String, Strin
             consumer.assign(UniLists.of(outputPartition));
             consumer.seek(outputPartition, fromOffset);
             await().atMost(Duration.ofSeconds(90)).until(() -> {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(500));
-                for (ConsumerRecord<String, String> record : polled) {
-                    outputs.add(record.value());
-                }
+                pollInto(consumer, outputs);
                 return outputs.size() >= atLeast;
             });
-            // a few quiet polls so late arrivals (replays) are captured before asserting on contents
+            // A few quiet polls before asserting on contents: the await above is satisfied by a COUNT, which
+            // at-least-once duplicates can reach before every distinct expected value has arrived.
             for (int quiet = 0; quiet < 3; quiet++) {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(500));
-                for (ConsumerRecord<String, String> record : polled) {
-                    outputs.add(record.value());
-                }
+                pollInto(consumer, outputs);
             }
         }
         return outputs;
+    }
+
+    private static void pollInto(final KafkaConsumer<String, String> consumer, final List<String> outputs) {
+        for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
+            outputs.add(record.value());
+        }
     }
 
     private void produceBlockerThenFastRecords(final String inputTopic) {
@@ -350,10 +356,7 @@ class CommitFrontierCrashRestartTest extends BrokerIntegrationTest<String, Strin
                      getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
             consumer.subscribe(UniLists.of(outputTopic));
             await().atMost(Duration.ofSeconds(60)).until(() -> {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(500));
-                for (ConsumerRecord<String, String> record : polled) {
-                    outputs.add(record.value());
-                }
+                pollInto(consumer, outputs);
                 return outputs.size() >= expected;
             });
         }

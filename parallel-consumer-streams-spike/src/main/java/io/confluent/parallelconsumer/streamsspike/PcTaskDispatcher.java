@@ -141,7 +141,8 @@ public class PcTaskDispatcher implements Closeable {
     private final AtomicReference<Throwable> firstFailure = new AtomicReference<>();
 
     /**
-     * How many records the last {@link #dispatchAvailable} handed to the pool, or -1 before the first one.
+     * How many records the last {@link #dispatchAvailable} consumed - dispatched to the pool, dropped, or
+     * failed during preparation - or -1 before the first one.
      * <p>
      * This, and not "does PC still hold records", is what defines {@link #isQuiescent()}. With retries
      * disabled a failed record's KEY shard stays blocked forever, and the records queued behind it stay
@@ -455,6 +456,11 @@ public class PcTaskDispatcher implements Closeable {
      * Every dispatcher currently alive in this JVM. Exists so a test can reach dispatchers buried inside
      * running {@code StreamTask}s to {@link #abortClose()} them - the crash-injection surface for the R10
      * kill-restart proof. Registered at construction, removed on either close path.
+     * <p>
+     * <b>Invariant for callers: any test that constructs a dispatcher must run {@code @Isolated}</b>, because
+     * {@link #abortAllActive()} reaches every live instance in this JVM - including one belonging to a
+     * concurrently running test class. This module inherits concurrent test execution from core's test jar,
+     * so that isolation is load-bearing rather than decorative.
      */
     private static final Set<PcTaskDispatcher> ACTIVE = ConcurrentHashMap.newKeySet();
 

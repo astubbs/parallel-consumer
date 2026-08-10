@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import pl.tlinkowski.unij.api.UniSets;
 
@@ -58,6 +59,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 // execution from core's junit-platform.properties. Left concurrent, these methods read each other's counters
 // and toggle each other's switch. Per-dispatcher counters cover most of it; this covers the switch.
 @Execution(ExecutionMode.SAME_THREAD)
+// And @Isolated, not merely same-thread: these tests call PcTaskDispatcher.abortAllActive(), which kills
+// every live dispatcher in the JVM - including one belonging to a concurrently running test class.
+// SAME_THREAD only serialises this class's own methods; the sibling IT classes carry @Isolated for the
+// same process-wide reason.
+@Isolated
 class PcTaskDispatcherTest {
 
     private static final String TOPIC = "spike-in";
@@ -425,7 +431,7 @@ class PcTaskDispatcherTest {
         }
     }
 
-    // ------- the commit surface (U9 review finding: previously IT-only coverage) -------------------------
+    // ------- the commit surface -------------------------------------------------------------------------
 
     /**
      * The commit protocol's read side, seen from the StreamThread: a worker's completion becomes visible to
