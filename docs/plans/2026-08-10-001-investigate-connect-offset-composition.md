@@ -31,8 +31,19 @@ javadoc - see `docs/solutions/integration-issues/kafka-streams-task-lifecycle-ca
 never gives it, or requires PC to commit an offset no lane has declared durable. Both are answers, not
 blockers.
 
-**Tail ownership.** Investigation only. No implementation units, no production code. The output is a
-written verdict plus the experiment that produced it.
+**Tail ownership.** Investigation only. The output is a written verdict plus the experiment that produced
+it - no implementation units, and no production code **except one carve-out**: U3 may add a
+deferred-completion seam behind `PcTaskDispatcher.WorkPreparer` if the surviving candidate needs one.
+Without that carve-out the probe cannot test what would ship. `WorkPreparer.prepare` returns a bare
+`Runnable` (`PcTaskDispatcher.java:115`) and `runOnWorker` completes the work the instant it returns
+(`:332-336`), so under today's seam a record is durable-by-definition the moment `put()` returns, which is
+the exact claim under investigation. A probe built on that seam would confirm the composition by
+construction and KTD3's negative control would prove nothing about the real path.
+
+Blocking inside the `Runnable` is **not** an alternative to the seam: `dispatchAvailable` computes capacity
+as `poolSize - inFlight` (`:288`) and `inFlight` only decrements in `runOnWorker`'s `finally` (`:340`), so
+waiting for durability inside the callback stalls the pump at capacity and deadlocks the very lanes whose
+flush it is waiting on.
 
 ---
 
@@ -84,6 +95,13 @@ records B holds.
   Three, not two, because the likely real answer is the middle one - C2 already flags that many sinks write
   `SinkRecord.kafkaOffset()` into their output - and a binary verdict rounds that to "sound", shipping the
   precondition as a footnote instead of a gate.
+  - R1a. A **sound-conditional** verdict states, for each precondition PC cannot verify at runtime, that the
+    next plan must carry either a detection or an explicit connector opt-in. A precondition with neither is
+    an unenforced assumption wearing a verdict's clothes.
+  - R1b. An **unsound** verdict says whether it is unsound *in principle* or unsound *given A1's lane
+    primitive*, and names the responsible property. These have different next moves - abandon the approach,
+    versus revisit the primitive - and A1 freezes that primitive without being itself under test, so a
+    verdict that does not distinguish them returns only the pessimistic reading.
 - R6. Every whole-partition assumption U1 step 3 surfaces - `SinkTaskContext.offset()` rewind, `pauseAll()`
   on `RetriableException`, `assignment()` - is classified as absent, benign under split lanes, or a
   separate gate. A sound or sound-conditional verdict is not issued while any is unclassified. Offset
@@ -95,8 +113,12 @@ records B holds.
   described.
 - R4. A candidate is rejected only on a stated mechanism, never on effort. "Too many places to change" is
   not a finding.
-- R5. If the verdict is "unsound", the investigation states precisely what partition-affine mode costs in
-  the terms `STRATEGY.md` uses - head-of-line blocking avoided, achieved fan-out versus configured max.
+- R5. If the verdict is "unsound", the investigation states what partition-affine mode costs **as an
+  analytic claim, not a measurement**: the fan-out ceiling equals the partition count, and per-partition
+  head-of-line blocking is unaddressed. R5 fires exactly when no working key-affine Connect arm exists to
+  measure against, and `STRATEGY.md` emits neither quantity as its own meter, so there is nothing to
+  measure. **The Streams module's figures must not be quoted as Connect numbers** - different runtime,
+  different dispatch path, and the tempting filler is precisely the false one.
 
 ### Success Criteria
 
@@ -133,6 +155,9 @@ returns an answer.
 
 - KTD2. **Reject candidates on a named interleaving, never on argument.** Each rejection in U2 must carry
   the concrete two-lane, one-partition completion order that breaks it. Governs R2, R4.
+  **C4 is exempt**, and not as a courtesy: it puts one lane on a partition, so the two-lane interleaving
+  this rule demands cannot exist for it. C4 is the comparison baseline under KTD4 and is retained
+  throughout rather than passing a test it is structurally immune to.
   Rejected: reasoning from Connect's javadoc, which
   `docs/solutions/integration-issues/kafka-streams-task-lifecycle-callbacks-do-not-mean-what-they-are-named.md`
   shows is a description of intent rather than a contract - `postCommit` is reached after a swallowed
@@ -162,7 +187,8 @@ Read before U2, and reconcile against it rather than re-deriving:
 ## Candidates To Evaluate
 
 Recorded now so the investigation tests them rather than rediscovering them, and so a reader can see what
-was considered. **None is yet endorsed.**
+was considered. **None is yet endorsed, and the list is not closed** - U1 exists to change what is known,
+so U2 step 0 re-enumerates against U1's findings before rejecting anything.
 
 - C1. **Minimum across lanes owning the partition.** Commit `min(watermark)` over every lane holding
   records for P. Likely safe and likely useless: a lane whose highest *seen* offset is low pins the
@@ -184,7 +210,16 @@ was considered. **None is yet endorsed.**
   `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ExternalEngine.java` is the
   in-repo analogue. Assess whether those objections still bind in the patched-runtime shape.
 - C4. **Partition-affine only.** One lane per partition; watermarks are honest by construction. The
-  ceiling is the partition count. Include for comparison, and to quantify R5.
+  ceiling is the partition count. The comparison baseline, not a split-partition candidate: it is retained
+  throughout rather than reduced in U2, and is exempt from KTD2. Include to quantify R5.
+- C5. **Split the partition's *identity*, not its offset space.** Each lane sees the physical partition
+  under a distinct `TopicPartition` - so its watermark, its `SinkTaskContext.offset()` rewind and its
+  `close()` are all honest *for the partition it believes it owns*, with no synthetic offsets and no
+  deferred completion. Structurally distinct from C1-C3, which all keep one `TopicPartition` and reconcile
+  after the fact. The question is what breaks on the way back: whether PC can map lane-partitions to real
+  partitions on the commit path, and whether a connector that derives output identity from
+  `SinkRecord.topic()`/`kafkaPartition()` - the partition-affine sinks - is simply excluded here too.
+  Added after the doc review, which found the list had closed before U1 could inform it.
 
 ---
 
@@ -214,24 +249,40 @@ was considered. **None is yet endorsed.**
 **Goal.** Determine, from `WorkerSinkTask`'s call sites, exactly what a `SinkTask` knows about offsets it
 did not receive - and therefore what its watermark can and cannot mean.
 
-**Requirements.** R2.
+**Requirements.** R2, R6.
 
 **Files.** Read-only: `parallel-consumer-connect/target/connect-patched/org/apache/kafka/connect/runtime/WorkerSinkTask.java`
 (generated at build time; run `./mvnw -pl parallel-consumer-connect -am -DskipTests generate-sources` if
 absent). Findings recorded in this plan under Findings.
 
 **Approach.**
+0. **Decide what map each lane's `preCommit` is handed, and which component hands it over.** This is a PC
+   design choice the plan cannot skip, because it decides the answer. `PcSinkTaskLane` holds a bare
+   `SinkTask` and calls only `put` - there is no per-lane `currentOffsets` anywhere today, so something has
+   to construct one. Name the owning component (patched `WorkerSinkTask`, `PcConnectDispatchBridge`, or a
+   new composer), the thread it runs on, and fix the map to **that lane's own consumed subset**.
+
+   Handing a lane the partition-wide map is not a neutral default. `SinkTask.preCommit`'s base
+   implementation in connect-api 3.9.2 is `flush(currentOffsets); return currentOffsets;` - verified by
+   disassembly, not javadoc - so for every connector that does not override `preCommit`, the partition-wide
+   map both returns an over-claiming watermark *and* instructs the connector to flush up to offsets that
+   lane never saw. C1 then collapses to that same over-claim for the whole default-implementation
+   population, which is most connectors.
 1. Trace `origOffsets` -> `currentOffsets` -> `preCommit` -> `commitOffsets`, naming each call site.
 2. Establish what `currentOffsets` contains when a task received only a subset of a partition's records.
 3. Determine whether Connect anywhere assumes a task owns whole partitions in a way that a split violates
    beyond the offset question - `SinkTaskContext.assignment()`, `offset()` rewind, and pause/resume are
    the suspects.
 
-**Verification.** Each claim in Findings carries a `WorkerSinkTask.java` call-site citation.
+**Verification.** Each claim in Findings carries a `WorkerSinkTask.java` call-site citation, step 0's
+chosen owner and map are written down, and every whole-partition assumption from step 3 is classified per
+R6.
 
 ### U2. Falsify or survive each candidate on paper
 
-**Goal.** Reduce C1-C4 to at most one live candidate, with a stated reason for each rejection.
+**Goal.** Reduce the split-partition candidates - C1, C2, C3, C5, plus anything step 0 adds - to at most one
+live candidate, with a stated reason for each rejection. **C4 is not in the reduction**: it is retained
+throughout as the comparison baseline per KTD4 and is exempt from KTD2's interleaving test.
 
 **Requirements.** R1, R2, R4.
 
@@ -242,16 +293,23 @@ absent). Findings recorded in this plan under Findings.
   rejection interleaving, or the survivor's requirement, under Findings)
 
 **Approach.**
+0. **Re-enumerate before rejecting.** Read U1's findings against the candidate list and add any candidate
+   they make visible. The list above was written before the runtime was traced, and a reduction step that
+   can only subtract will never recover a candidate the list was missing.
 1. For each candidate, construct the interleaving that would break it: two lanes, one partition,
    completions out of order across lanes.
 2. Reject on mechanism only. Record the interleaving that does the rejecting.
-3. For any survivor, state what it requires from Connect and confirm Connect provides it.
+3. For any survivor, state what it requires from Connect and confirm Connect provides it - **and state its
+   invariant**: the property that makes it safe, in a form U3 can test directly. Surviving U2 means no
+   counterexample was imagined, which is weaker than the verdict needs. Rejections carry a named
+   interleaving; the survivor must carry a named reason it cannot break, or U3 inherits U2's blind spot
+   by construction and cannot see it.
 
 **Execution note.** Write the predicted outcome for each candidate *before* tracing it, and record
 refutations as prominently as confirmations - `docs/solutions/best-practices/chase-refuted-predictions.md`.
 
-**Verification.** Every rejected candidate has a named interleaving; the survivor has a named requirement
-and the call site that satisfies it.
+**Verification.** Every rejected candidate has a named interleaving; the survivor has a named requirement,
+the call site that satisfies it, and a stated invariant.
 
 ### U3. Run the experiment that settles the survivor
 
@@ -262,7 +320,27 @@ and the call site that satisfies it.
 **Dependencies.** U2.
 
 **Files.**
-- `parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/OffsetCompositionProbeTest.java` (create - throwaway probe, deleted or promoted once the verdict lands)
+- `parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/OffsetCompositionProbeTest.java` (create - in-memory probe, surefire; deleted or promoted once the verdict lands)
+- `parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/integrationTests/OffsetCompositionCrashRestartTest.java` (create - broker-backed arm, failsafe)
+- `parallel-consumer-connect/pom.xml` (modify - test-scope dependencies the crash-restart arm needs)
+- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java` (modify, only if the survivor needs it - the deferred-completion seam the Goal Capsule's carve-out permits)
+
+**The crash-restart arm cannot live beside the probe**, and this is enforced three ways, so discovering it
+during U3 would cost a rebuild: `TestConventionRules.integration_tests_must_live_in_an_integrationTest_package`
+fails any Testcontainers-using or `BrokerIntegrationTest`-derived class outside an `integrationTest(s)`
+package; surefire excludes `**/integrationTest*/**/*.java` and failsafe includes exactly that; and the
+module currently declares no testcontainers dependency at all.
+
+It also **cannot extend `BrokerStreamsIntegrationTest`** the way `CommitFrontierCrashRestartTest` does -
+that class is package-private in the streams module's test sources and streams publishes no tests
+classifier. Extend core's `BrokerIntegrationTest<String, String>` directly; the `parallel-consumer-core`
+`tests` classifier is already a test dependency of this module.
+
+The pom needs, all at test scope: `org.testcontainers:testcontainers`, `:junit-jupiter`, `:kafka`,
+`org.awaitility:awaitility`, and `org.apache.commons:commons-lang3` - the last because
+`BrokerIntegrationTest` itself uses it and test-scope dependencies are not transitive, which
+`parallel-consumer-streams/pom.xml:153-159` records having learned the hard way (the container fails to
+start with `NoClassDefFoundError`).
 
 **Approach.**
 1. Build the smallest harness that reproduces the interleaving U2 identified as decisive: one partition,
@@ -270,9 +348,15 @@ and the call site that satisfies it.
 2. Include a **negative control that must fail** - a variant where the composition is deliberately wrong,
    proving the probe can detect breakage. A probe that cannot fail proves nothing
    (`docs/solutions/best-practices/control-arms-vary-exactly-one-term.md`).
-3. If the survivor holds, extend to a crash-restart in the shape of the Streams module's
+3. **Exhaust the small space rather than sampling it.** Two lanes and four offsets is a completion-order
+   space small enough to enumerate in full, so enumerate it and assert the composed frontier never exceeds
+   the lowest incomplete offset. This is what stops U3 from only re-testing the interleaving U2 already
+   imagined - the one place a U2 blind spot would otherwise stay invisible.
+4. If the survivor holds, extend to a crash-restart in the shape of the Streams module's
    `CommitFrontierCrashRestartTest`: park a record, let others complete around it, kill, restart, assert
-   the resume point.
+   the resume point. Copy its **live offset-scoped reader**, not its described outline - a phase-2 read
+   from earliest is satisfiable by pre-crash data and proves nothing
+   (`docs/solutions/test-issues/a-restart-assertion-satisfiable-by-pre-crash-data-proves-nothing.md`).
 
 **Test scenarios.**
 - Two lanes hold one partition; lane A's records complete after lane B's higher-offset records. The
@@ -283,11 +367,15 @@ and the call site that satisfies it.
 - All lanes return an empty map. No commit occurs.
 - Negative control: composition deliberately takes the maximum rather than the safe function. The probe
   detects the resulting over-commit.
-- Crash-restart: after a kill, redelivery begins at or below the composed frontier and no durable record
-  is delivered twice beyond the at-least-once contract.
+- Exhaustive: every completion order across two lanes and four offsets. The composed frontier never
+  exceeds the lowest incomplete offset in any of them.
+- Crash-restart (failsafe): after a kill, redelivery begins at or below the composed frontier and no
+  durable record is delivered twice beyond the at-least-once contract.
 
-**Verification.** `./mvnw -pl parallel-consumer-connect -am test` green, both existing regression arms
-still running Kafka's `WorkerSinkTaskTest` unchanged, and the negative control failing when inverted.
+**Verification.** `./mvnw -pl parallel-consumer-connect -am test` green for the probe, `./mvnw -pl
+parallel-consumer-connect -am verify` green for the crash-restart arm (failsafe, needs Docker), both
+existing regression arms still running Kafka's `WorkerSinkTaskTest` unchanged, and the negative control
+failing when inverted.
 
 ### U4. Write the verdict
 
@@ -305,9 +393,8 @@ still running Kafka's `WorkerSinkTaskTest` unchanged, and the negative control f
 
 **Approach.**
 1. State the verdict in one sentence, then the evidence.
-2. If unsound: quantify what partition-affine costs using `STRATEGY.md`'s metrics - head-of-line blocking
-   avoided, achieved fan-out versus configured max - and say plainly that the module then matches
-   `tasks.max`.
+2. If unsound: state what partition-affine costs per R5 - as the analytic claim, not a measurement - and
+   say plainly that the module then matches `tasks.max`. Do not reach for the Streams module's figures.
 3. Name the next plan: implement the mechanism, or implement partition-affine and close the concurrency
    claim.
 
@@ -329,8 +416,14 @@ still running Kafka's `WorkerSinkTaskTest` unchanged, and the negative control f
 
 | Gate | Command | Covers |
 |---|---|---|
-| Probe and regression arms | `./mvnw -pl parallel-consumer-connect -am test` | U3 |
+| Probe and regression arms | `./mvnw -pl parallel-consumer-connect -am test` | U3 steps 1-3 |
+| Crash-restart arm (Docker) | `./mvnw -pl parallel-consumer-connect -am verify` | U3 step 4 |
 | Full gate before any merge | `bin/ci-build.sh` | all |
+
+The crash-restart arm needs its own row because surefire never runs it: it lives in an `integrationTests`
+package, which surefire excludes and failsafe includes. A `test`-phase gate would report green having
+skipped the arm entirely - the exact silent false negative this module's regression design exists to
+prevent.
 
 `-am` is mandatory: without it `reactorModuleConvergence` fails, the module never recompiles, and the
 result is a silent false negative. `-Dtest=` cannot be used on this module - it applies globally, and the
@@ -339,105 +432,69 @@ stock regression arm runs with an empty classes directory by design.
 Java 8 API surface only (`--release 8` via Jabel), so `List.of` and `List.copyOf` are unavailable despite
 the Java 17 source level.
 
-## Open Review Findings - unapplied, from the 2026-08-10 doc review
+## Review Findings - from the 2026-08-10 doc review, now applied
 
-Three reviewers (coherence, feasibility, adversarial) ran on this plan. **Six fixes were applied
-in place**: the `close`/`commit` ordering correction, the clamp caveat, A3 recast as a mechanism
+Three reviewers (coherence, feasibility, adversarial) ran on this plan. **Six fixes were applied on the
+first pass**: the `close`/`commit` ordering correction, the clamp caveat, A3 recast as a mechanism
 constraint, C3 restated in its owning-lane form, R1's third verdict shape plus new R6, and the Prior Art
-section. The findings below were **not** applied and need a decision before U1 starts. Each names the
-reviewer and its confidence.
+section. The remaining eleven were recorded here unapplied; **all eleven are now applied**, and this
+section is kept as the record of where each landed rather than as a queue.
 
-Worth noting for whoever picks this up: two of the applied fixes corrected claims this plan's author had
-personally verified against `WorkerSinkTask` source and still got backwards. Treat the unverified claims
-below as suspect by default.
+Worth noting for whoever picks this up: two of the first-pass fixes corrected claims this plan's author had
+personally verified against `WorkerSinkTask` source and still got backwards. That is why the three P1
+code-claims below were re-verified against the artifacts before being applied rather than taken on the
+reviewer's word - and two of them turned out to be **understated**.
 
-### P1 - blocking, resolve before U3
+| Finding | Reviewer | Landed in |
+|---|---|---|
+| Crash-restart arm unbuildable at U3's path | feasibility, 100 | U3 Files + the three-way enforcement note; Verification Contract `verify` row |
+| No decision on what map a lane's `preCommit` gets | feasibility, 100 | U1 step 0 |
+| C3's probe needs a forbidden seam | feasibility, 100 | Goal Capsule carve-out; U3 Files; DoD |
+| An unsound verdict would be undiagnosable | adversarial, 75 | R1b |
+| U1 step 3's findings had no consumer | adversarial, 75 | U1 Requirements (R6), U1 Verification, DoD |
+| C4 immune to KTD2's rejection test | coherence, 75 | KTD2 exemption; U2 Goal |
+| Candidates survive by absence of counterexample | adversarial, 75 | U2 step 3 invariant; U3 step 3 exhaustive arm |
+| Candidate list closed before U1 runs | adversarial, 75 | C5; U2 step 0 |
+| R5 has no measurable comparator | adversarial, 75 | R5 restated; U4 step 2 |
+| Verdict conditional on undetectable behaviour | adversarial, 75 | R1a |
+| Crash-restart must copy the live reader | residual | U3 step 4 |
 
-- **The crash-restart arm cannot be built at the path U3 names** (feasibility, 100).
-  `CommitFrontierCrashRestartTest` extends a Testcontainers base; this module's own
-  `TestConventionsArchTest` fails any such class outside an `integrationTest(s)` package; the module
-  declares no testcontainers dependency (test scope is not transitive); and `mvn test` excludes those
-  packages regardless. *Fix:* put the arm in
-  `parallel-consumer-connect/src/test/java/io/confluent/parallelconsumer/connect/integrationTests/`, add
-  the testcontainers / junit-jupiter / kafka test dependencies `parallel-consumer-streams/pom.xml` already
-  carries, and change U3's Verification Contract row to `verify` so failsafe runs it.
+**What re-verification changed.** Two findings were applied in a stronger form than filed:
 
-- **The plan never fixes what map each lane's `preCommit` receives** (feasibility, 100).
-  `PcSinkTaskLane` holds a bare `SinkTask`, so no per-lane `currentOffsets` exists - what a lane is handed
-  is a PC design choice this plan never makes, and it decides the answer. connect-api 3.9.2's default
-  `SinkTask.preCommit` returns its argument verbatim, so handing a lane the partition-wide map makes C1
-  collapse to that same over-claiming value for every connector that does not override `preCommit`.
-  *Fix:* add a first step to U1 naming the component that calls `preCommit` per lane and fixing the map to
-  that lane's own consumed subset.
+- The `preCommit` default is not merely "returns its argument". Disassembling connect-api 3.9.2 shows
+  `flush(currentOffsets); return currentOffsets;` - so handing a lane the partition-wide map also
+  *instructs the connector to flush* to offsets it never saw, which is a data claim, not just an
+  over-claim. In U1 step 0.
+- The crash-restart arm cannot extend `BrokerStreamsIntegrationTest` at all: it is package-private in the
+  streams module's test sources and streams publishes no tests classifier. It must extend core's
+  `BrokerIntegrationTest<String, String>`, and needs `commons-lang3` on top of the testcontainers set -
+  a dependency the streams pom documents having discovered by container-start failure. In U3 Files.
 
-- **C3's probe needs a seam this plan forbids** (feasibility, 100). `PcTaskDispatcher` completes work the
-  instant `chainExecution.run()` returns, and `WorkPreparer` hands back a bare `Runnable` with no
-  completion handle - so a record is complete when `put()` returns, before durability. Deferring that
-  requires a new seam in `parallel-consumer-streams`, which "no production code" prohibits, so U3 would
-  test something other than what ships and KTD3's negative control would prove nothing about the real
-  path. *Fix:* amend Tail ownership to permit U3 adding a deferred-completion seam behind the existing
-  `WorkPreparer` interface. **Note:** a blocking `Runnable` is not a workaround - `dispatchAvailable`
-  computes capacity as `poolSize - inFlight` and `inFlight` only decrements in `runOnWorker`'s finally, so
-  the pump stalls at capacity.
-
-- **An "unsound" verdict would be undiagnosable** (adversarial, 75). A1 fixes the lane primitive, so the
-  verdict cannot distinguish "unsound in principle" from "unsound given *this* primitive" - different
-  answers with different next moves, and the plan returns only the pessimistic one. A1 is legitimately out
-  of revision this round; what is missing is the verdict recording that its negative result is conditional
-  on it. *Fix:* extend R1 so an unsound verdict states which, and names the responsible property.
-
-- **U1 step 3's findings had no consumer** (adversarial, 75). *Partly addressed* by the new R6, which
-  requires each whole-partition assumption to be classified. Still open: R6 is not yet reflected in the
-  Definition of Done, and U1's Requirements line still cites only R2.
-
-### P2 - worth settling, not blocking
-
-- **C4 is immune to KTD2's rejection test** (coherence, 75). KTD2 demands every rejection carry a two-lane
-  interleaving; C4 is one-lane-per-partition, so no such interleaving exists. *Fix:* scope U2's goal to
-  "reduce C1-C3", and state C4 is retained throughout as the comparison baseline per KTD4, exempt from
-  KTD2.
-
-- **Candidates survive by absence of a counterexample** (adversarial, 75). Rejections need a named
-  interleaving; the survivor needs nothing. U3 then builds its probe from that same survivor's imagined
-  interleaving, so a blind spot in U2 is invisible to U3 by construction. For a verdict authorising offset
-  commits, "we could not break it" is materially weaker than "here is why it cannot break". *Fix:* require
-  the survivor to carry a stated invariant, and add a U3 arm enumerating every completion order across two
-  lanes and four offsets - a small enough space to exhaust.
-
-- **The candidate list closed before U1 runs** (adversarial, 75). U2's goal is reduction only, with no step
-  for adding candidates, yet U1 exists precisely to change what is known. At least one structurally
-  distinct candidate is absent: splitting partition *identity* rather than offset space, so each lane sees
-  the physical partition under a distinct `TopicPartition` and its watermark, rewind and close all stay
-  honest per lane. *Fix:* add U2 step 0 - re-enumerate against U1's findings before rejecting anything -
-  and require an unsound verdict to argue the space is closed rather than that the list was exhausted.
-
-- **R5's cost figure has no measurable comparator** (adversarial, 75). R5 fires exactly when no working
-  key-affine Connect arm exists to measure, and `STRATEGY.md` says neither metric is emitted as its own
-  meter. The likely filler is the Streams module's 57x/8x presented as a Connect number. *Fix:* restate R5
-  as an analytic claim - fan-out ceiling equals partition count, per-partition head-of-line blocking
-  unaddressed - and forbid quoting the Streams figures as Connect measurements.
-
-- **The verdict may be conditional on connector behaviour PC cannot detect** (adversarial, 75). *Partly
-  addressed* by R1's new sound-conditional shape. Still open: nothing yet requires the next plan to carry
-  a detection or opt-in gate where PC cannot verify the precondition at runtime.
+The third P1 held exactly as filed: `WorkPreparer.prepare` returns a bare `Runnable`
+(`PcTaskDispatcher.java:115`), `runOnWorker` completes on return (`:332-336`), and capacity is
+`poolSize - inFlight` with the decrement in `finally` (`:288`, `:340`) - so blocking in the callback
+deadlocks rather than defers.
 
 ### Residual risks the reviewers raised but did not file
 
-- The crash-restart arm must inherit `CommitFrontierCrashRestartTest`'s *live* offset-scoped reader, not
-  its described outline - the earlier phase-2-reads-from-earliest defect is written up in
-  `docs/solutions/test-issues/a-restart-assertion-satisfiable-by-pre-crash-data-proves-nothing.md`.
 - U1's reading of `WorkerSinkTask` and U3's probe share one model of the runtime. A misreading would be
   invisible to both arms at once, and the negative control - which inverts the composition function -
-  cannot detect a modelling error.
+  cannot detect a modelling error. The crash-restart arm is the only check that runs against a real
+  broker rather than against the model, which is a second reason it is not optional.
 - The verdict is pinned to Kafka 3.9.2 package-private internals read from a build-time-generated copy.
   These are not public contract and can change without deprecation, so the verdict must carry its version.
-- KTD1's investigate-only boundary is thinner than it reads: U3 builds a composition function, a two-lane
-  harness and a crash-restart arm, which is most of the mechanism.
+- KTD1's investigate-only boundary is thinner than it reads, and the P1 carve-out thinned it further: U3
+  now builds a composition function, a two-lane harness, a crash-restart arm and possibly a dispatcher
+  seam, which is most of the mechanism. That is accepted rather than denied - the alternative was a probe
+  testing something other than what ships - but it means the DoD's "deleted or promoted deliberately" line
+  applies to the seam as much as to the probe, and that an "unsound" verdict must still end with the
+  carve-out reverted.
 
 ### Reviewer questions worth answering in U4
 
-- Which component owns the composed `preCommit` call - the patched `WorkerSinkTask`,
-  `PcConnectDispatchBridge`, or a new composer - and on which thread does it run?
+- ~~Which component owns the composed `preCommit` call, and on which thread?~~ **Promoted to U1 step 0** -
+  it turned out to be a decision the investigation depends on, not a question the write-up could answer
+  afterwards.
 - If sound, does the composed frontier reach the broker through `WorkerSinkTask`'s own `doCommit` or
   through PC's commit path, and which owns the encoded incomplete-offset metadata?
 - Does lane membership survive conversion and SMTs? A key-rewriting SMT breaks the assumption that a
@@ -450,9 +507,17 @@ below as suspect by default.
 
 ## Definition of Done
 
-- The Verdict section answers R1 in one sentence, with evidence beneath it.
-- Every rejected candidate names the interleaving that rejected it.
+- The Verdict section answers R1 in one sentence, with evidence beneath it - and satisfies R1a or R1b if
+  it is sound-conditional or unsound.
+- Every rejected candidate names the interleaving that rejected it; the survivor names its invariant.
+- Every whole-partition assumption U1 step 3 surfaced is classified per R6 - absent, benign under split
+  lanes, or a separate gate. No unclassified assumption remains beneath a sound or sound-conditional
+  verdict.
+- U1 step 0's answer is recorded: which component calls `preCommit` per lane, on which thread, with which
+  map.
 - U3's negative control demonstrably fails when the composition is inverted.
 - Both existing regression arms still run 30/30, unchanged.
-- The probe is deleted or promoted deliberately - not left as an orphan test.
+- The probe is deleted or promoted deliberately - not left as an orphan test. If the U3 carve-out added a
+  seam to `PcTaskDispatcher`, it is likewise kept deliberately or reverted, not left behind as unused
+  production surface.
 - No test assertion was weakened to reach green.
