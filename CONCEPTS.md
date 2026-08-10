@@ -98,9 +98,10 @@ on stock Kafka Streams' single processing thread. It is the module's central dev
 behaviour must be identical to stock, which is what lets the module use Apache Kafka's own unmodified
 test suite as its behaviour-preservation evidence.
 
-Because that evidence depends on seam-off runs staying stock, every refusal is conditional on the seam
-rather than unconditional. A check that fired with the seam off would refuse constructs Kafka's own
-suite builds, and would void the claim it exists to protect.
+Because that evidence depends on seam-off runs staying stock, every run-time refusal is conditional on
+the seam rather than unconditional. A check that fired with the seam off would refuse constructs Kafka's
+own suite builds, and would void the claim it exists to protect. The build-time half of a refusal is the
+exception, and cannot be otherwise - see **Refused construct**.
 
 **Supported envelope**
 The set of Kafka Streams constructs that stay correct when records are dispatched concurrently rather
@@ -122,6 +123,14 @@ A refusal names both the construct and the mechanism that breaks it, and says it
 topology changes or the seam is turned off. That last part is load-bearing rather than padding: the
 condition is a property of the topology and the switch rather than a transient fault, so a handler that
 responds by replacing the failed thread will rebalance in a loop.
+
+A refusal is announced twice, and the two halves differ in an easily missed way. The build-time
+announcement is attached to the Kafka Streams method itself and cannot be conditional, because it is
+fixed at the point the method is compiled and nothing there can read a switch; the run-time refusal is
+conditional on the seam, and stays silent while the seam is off. Because the build-time half decorates a
+method Apache Kafka owns rather than anything this project wrote, it has to name this project as the
+party refusing and keep its objection distinct from any deprecation Apache Kafka has of its own - a
+marker on someone else's symbol is read as that symbol's owner speaking unless it says otherwise.
 
 ## Test reliability
 
