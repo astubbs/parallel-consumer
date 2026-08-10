@@ -73,6 +73,11 @@
              files keep the Confluent header, fork-original files use the fork header - see AGENTS.md
              "Copyright rules for this fork". Skip it with -Dcopyright.skip=true. -->
         <copyright.skip>false</copyright.skip>
+        <!-- OSS Index dependency audit. Off by default because the API needs an account token that
+             not every contributor will have - see the ossindex-maven-plugin config below for how to
+             supply one and switch this to false. -->
+        <ossindex.skip>true</ossindex.skip>
+        <ossindex.fail>true</ossindex.fail>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
 
         <!-- standard props -->
@@ -579,7 +584,20 @@
                 <version>3.2.0</version>
                 <configuration>
                     <scope>runtime</scope>
-                    <fail>false</fail>
+                    <!-- Off by default and visibly off, rather than on and hoping: the API no longer
+                         serves anonymous component-report requests, and a run without credentials 401s
+                         and still reports SUCCESS - so a green audit is never by itself evidence that
+                         it scanned. `authId` names a <server> in settings.xml holding the account
+                         token; once that exists, run it with `mvn test-compile -Dossindex.skip=false`
+                         (not `validate` - the mojo needs test-scope resolution) and confirm the run
+                         actually returned findings, because nothing else will. Clear the client's
+                         on-disk report cache first, or a warm cache will answer for it.
+
+                         Why `fail` cannot police this, both traps in full, and what the first
+                         authenticated run found: docs/inflight/ci-ossindex-audit-dead.md -->
+                    <authId>ossindex</authId>
+                    <skip>${ossindex.skip}</skip>
+                    <fail>${ossindex.fail}</fail>
                 </configuration>
                 <executions>
                     <execution>
