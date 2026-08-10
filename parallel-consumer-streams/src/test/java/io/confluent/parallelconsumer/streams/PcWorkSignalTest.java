@@ -176,15 +176,7 @@ class PcWorkSignalTest {
 
         awaitWorkerRunning(dispatchOneBlockingOn(release));
 
-        Thread releaser = new Thread(() -> {
-            // The production counter increments at the moment the wait is entered, so this is a latch on the
-            // real hook rather than sleep arithmetic: the completion provably follows the park.
-            await().atMost(Duration.ofSeconds(30))
-                    .until(() -> PcDispatchCounters.getSplitPollWaits() > 0);
-            release.countDown();
-        }, "wake-on-work-releaser");
-        releaser.setDaemon(true);
-        releaser.start();
+        Thread releaser = runOnceTheWaitHasBegun("wake-on-work-releaser", release::countDown);
 
         long elapsed = timeMillis(() -> PcWorkSignal.awaitWorkForRemainderOf(GENEROUS_BUDGET));
         releaser.join(TimeUnit.SECONDS.toMillis(30));
@@ -230,13 +222,7 @@ class PcWorkSignalTest {
         assertThat(dispatched).isEqualTo(1);
         awaitWorkerRunning(started);
 
-        Thread releaser = new Thread(() -> {
-            await().atMost(Duration.ofSeconds(30))
-                    .until(() -> PcDispatchCounters.getSplitPollWaits() > 0);
-            release.countDown();
-        }, "wake-on-work-failure-releaser");
-        releaser.setDaemon(true);
-        releaser.start();
+        Thread releaser = runOnceTheWaitHasBegun("wake-on-work-failure-releaser", release::countDown);
 
         long elapsed = timeMillis(() -> PcWorkSignal.awaitWorkForRemainderOf(GENEROUS_BUDGET));
         releaser.join(TimeUnit.SECONDS.toMillis(30));
@@ -295,13 +281,7 @@ class PcWorkSignalTest {
         awaitWorkerRunning(dispatchOneBlockingOn(release));
 
         Thread owner = Thread.currentThread();
-        Thread shutdowner = new Thread(() -> {
-            await().atMost(Duration.ofSeconds(30))
-                    .until(() -> PcDispatchCounters.getSplitPollWaits() > 0);
-            PcWorkSignal.wakeOwner(owner);
-        }, "wake-on-work-shutdowner");
-        shutdowner.setDaemon(true);
-        shutdowner.start();
+        Thread shutdowner = runOnceTheWaitHasBegun("wake-on-work-shutdowner", () -> PcWorkSignal.wakeOwner(owner));
 
         try {
             long elapsed = timeMillis(() -> PcWorkSignal.awaitWorkForRemainderOf(GENEROUS_BUDGET));
@@ -470,6 +450,30 @@ class PcWorkSignalTest {
                 "the-key".getBytes(StandardCharsets.UTF_8),
                 "the-value".getBytes(StandardCharsets.UTF_8)));
         dispatcher.registerRecords(PARTITION, batch);
+    }
+
+    /**
+     * Starts a daemon thread that runs {@code action} once the production code has provably entered its wait.
+     * <p>
+     * The gate is {@link PcDispatchCounters#getSplitPollWaits()}, which the production code increments at the
+     * moment it parks - a latch on the real hook rather than sleep arithmetic. That is what turns "a completion
+     * could arrive while the thread is parked" into "a completion did", and it is the reason these tests are
+     * not passing for the wrong reason most of the time. See the class javadoc.
+     * <p>
+     * Named and shared rather than repeated at each site: three tests force the same coincidence and only the
+     * action differs, and a copy that quietly loses the counter gate would still pass while proving nothing.
+     *
+     * @return the started thread, so the caller can join it before asserting
+     */
+    private static Thread runOnceTheWaitHasBegun(final String threadName, final Runnable action) {
+        Thread thread = new Thread(() -> {
+            await().atMost(Duration.ofSeconds(30))
+                    .until(() -> PcDispatchCounters.getSplitPollWaits() > 0);
+            action.run();
+        }, threadName);
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
     }
 
     private static void awaitWorkerRunning(final CountDownLatch started) throws InterruptedException {
