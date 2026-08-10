@@ -1392,7 +1392,15 @@ failure as it hands it over, and a bar that cleared with it would leave `suspend
 dispatch the entire remaining backlog of a task that is already dying.
 
 **The exception is also now the one stock would have thrown.** It was wrapped in a generic
-`StreamsException` regardless of cause, which buried a `TimeoutException` that stock rethrows unchanged.
+`StreamsException` regardless of cause, losing the identity of the record that failed.
+
+**One thing review changed after the fact, and it reverses an earlier claim in this document.** The first
+version of that classification passed a `TimeoutException` through unchanged, to match stock. That was
+wrong, and dangerously so: stock's raw rethrow means *retriable* to `TaskExecutor`, which keeps the task
+running and waits to be called again - a contract this path cannot honour, because retries are off and the
+failure bar has closed dispatch. The task would have stopped processing forever with no exception, no
+thread death and nothing in the log, reachable from an ordinary broker timeout. Matching stock's exception
+*type* would have broken stock's exception *contract*. It is wrapped instead.
 The classification now mirrors stock's catch ladder, and the message names the topic, partition and offset
 - which matters more here than in stock, because the failure is one record out of `poolSize` running
 concurrently.

@@ -338,14 +338,20 @@ class PcTaskDispatcherTest {
                 .as("work already in flight when the failure happened is left to finish, not interrupted "
                         + "mid-chain")
                 .isNotEmpty();
+        assertThat(completedKeys)
+                .as("STRICTLY fewer than the 9 the pre-bar dispatcher completed. isNotEmpty() alone was a "
+                        + "weakened assertion: 9 satisfies it, so the test passed identically with the bar "
+                        + "deleted and pinned nothing")
+                .hasSizeLessThan(9);
         assertThat(completedKeys).doesNotContain(poisonKey);
         assertThat(dispatcher.hasPendingFailure())
                 .as("the dispatcher knows a record failed, and that bar is what stops further dispatch")
                 .isTrue();
         assertThat(dispatcher.getRecordsDispatched())
-                .as("dispatch stopped at the failure, so the whole batch cannot have been handed out - this "
-                        + "is the bound U14 installed, and without it every remaining record would run")
-                .isLessThan(12);
+                .as("dispatch stopped at the failure. STRICTLY fewer than the 10 the pre-bar dispatcher "
+                        + "handed out - isLessThan(12) was satisfied by that 10, so it could not tell the "
+                        + "bar from its absence, which is the whole property this test claims to pin")
+                .isLessThan(10);
 
         PcTaskDispatcher.Failure failure = dispatcher.pollFailure();
         assertThat(failure)

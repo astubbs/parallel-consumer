@@ -131,14 +131,14 @@ heap. They are now counted, so the pause and the resume work as Kafka intends.
 | | Peak records held in memory |
 |---|---|
 | `-Dpc.streams.backpressure.enabled=false` | **596** of 600 - effectively the whole topic |
-| default (on) | **30**, against a derived bound of 34 |
+| default (on) | **30**, against a derived bound of 30 |
 
 **One thing to know before tuning.** On the stock path `buffered.records.per.partition` is purely a memory
 knob, because a serial engine draws no benefit from a deeper buffer. Under PC dispatch the buffer is also
 the pool of distinct keys concurrency is drawn from, so **setting it low now costs throughput as well as
 memory**. If you tuned it down for stock Kafka Streams, revisit it here.
 
-The bound is the threshold plus one poll batch, because `addRecords` is handed a whole batch and can only
+The bound is exactly the threshold plus one poll batch - measured peak lands on it, with no slack - because `addRecords` is handed a whole batch and can only
 pause after registering it - stock has the identical property, which is why `max.poll.records` matters to
 the figure above.
 
@@ -185,8 +185,15 @@ EOS tests hitting the refusal below, which is the mechanism working. The other 2
 [Backpressure](#backpressure-and-what-bufferedrecordsperpartition-now-means) above. And the late failure is
 now *bounded* rather than merely late: the dispatcher stops handing out work the moment it knows a record
 has failed, so what runs in the gap is limited to what was already in flight instead of to a whole poll
-budget. A failure also now arrives as the exception stock would have thrown - a `TimeoutException` stays a
-`TimeoutException` instead of being buried in a wrapper - and names the record that caused it.
+budget. A failure also now names the record that caused it - topic, partition and offset - which matters
+more here than in stock, because the failure is one record out of several running concurrently.
+
+**A `TimeoutException` is deliberately *not* passed through as itself**, and the reason is worth knowing if
+you are comparing against stock. Stock rethrows it raw, and Kafka reads that as "retriable - keep the
+record and call me again". This path cannot honour that contract: retries are off, so the record is
+permanently failed. Passing the type through would leave Kafka waiting for a retry that can never come, and
+the task would stop processing with no exception and nothing in the log. It is wrapped instead, so the task
+dies loudly.
 
 **Crash safety is not on that list.** Offsets are committed from Parallel Consumer's own completion
 tracking, so a commit covers only work that is genuinely finished and a crash cannot skip a record that

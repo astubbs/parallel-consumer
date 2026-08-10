@@ -1,6 +1,6 @@
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java kafka-patched/org/apache/kafka/streams/kstream/CogroupedKStream.java
 --- a/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-08-11 10:10:23.007681102 +1200
++++ b/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-08-11 10:49:48.498042131 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -53,7 +53,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java 
  }
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-08-11 10:10:23.008824179 +1200
++++ b/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-08-11 10:49:48.498816963 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -97,7 +97,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/CogroupedKSt
              builder,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-08-11 10:10:23.009466758 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-08-11 10:49:48.499425003 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -141,7 +141,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KGroupedStre
              windows,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KStreamImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-08-11 10:10:23.011347288 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-08-11 10:49:48.501465914 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -185,7 +185,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KStreamImpl.
  
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KTableImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KTableImpl.java
 --- a/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-08-11 10:10:23.013019820 +1200
++++ b/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-08-11 10:49:48.503496658 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream.internals;
@@ -229,7 +229,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KTableImpl.j
          Objects.requireNonNull(joiner, "joiner can't be null");
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java kafka-patched/org/apache/kafka/streams/kstream/KGroupedStream.java
 --- a/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-08-11 10:10:23.014264187 +1200
++++ b/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-08-11 10:49:48.504769697 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -280,7 +280,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java ka
      /**
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-patched/org/apache/kafka/streams/kstream/KStream.java
 --- a/org/apache/kafka/streams/kstream/KStream.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KStream.java	2026-08-11 10:10:23.020980355 +1200
++++ b/org/apache/kafka/streams/kstream/KStream.java	2026-08-11 10:49:48.512086761 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -683,7 +683,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-pat
                                           final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> valueJoiner,
 diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patched/org/apache/kafka/streams/kstream/KTable.java
 --- a/org/apache/kafka/streams/kstream/KTable.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/kstream/KTable.java	2026-08-11 10:10:23.024495583 +1200
++++ b/org/apache/kafka/streams/kstream/KTable.java	2026-08-11 10:49:48.515896459 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.kstream;
@@ -1044,7 +1044,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patc
                                          final ValueJoiner<V, VO, VR> joiner,
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
 --- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-11 10:10:23.025819492 +1200
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-11 10:49:48.516543708 +1200
 @@ -44,8 +44,13 @@
      private final Serde<?> keySerde;
      private final Serde<?> valueSerde;
@@ -1173,7 +1173,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractPr
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
 --- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-11 10:10:23.026648487 +1200
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-11 10:49:48.517244456 +1200
 @@ -243,7 +243,11 @@
                      "multiple times.");
          }
@@ -1219,7 +1219,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorC
      }
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
 --- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-11 10:10:23.027535981 +1200
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-11 10:49:48.518228953 +1200
 @@ -64,6 +64,7 @@
  import java.util.Objects;
  import java.util.Optional;
@@ -1253,7 +1253,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordColl
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
 --- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-11 10:13:33.192547630 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-11 10:51:12.429192056 +1200
 @@ -16,6 +16,9 @@
   */
  package org.apache.kafka.streams.processor.internals;
@@ -1447,7 +1447,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
                      // we need to flush the store caches before flushing the record collector since it may cause some
                      // cached records to be processed and hence generate more records to be sent out
                      //
-@@ -588,6 +695,18 @@
+@@ -588,6 +695,24 @@
      public void updateInputPartitions(final Set<TopicPartition> topicPartitions, final Map<String, List<String>> allTopologyNodesToSourceTopics) {
          super.updateInputPartitions(topicPartitions, allTopologyNodesToSourceTopics);
          partitionGroup.updatePartitions(topicPartitions, recordQueueCreator::createQueue);
@@ -1461,12 +1461,18 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +        // owns.
 +        if (pcDispatcher != null) {
 +            pcDispatcher.updatePartitions(topicPartitions);
++            // Prune the paused set the same way the dispatcher prunes its buffered counts, and for a
++            // sharper reason than symmetry. A revoked partition's buffered count drops to zero, which reads
++            // as "resume me" - so a stale entry here puts a partition the consumer no longer owns into
++            // partitionsToResume, and mainConsumer.resume() throws IllegalStateException for an unassigned
++            // partition, killing the StreamThread on the next poll after a routine cooperative rebalance.
++            pcPausedPartitions.retainAll(topicPartitions);
 +        }
 +
          processorContext.getProcessorMetadata().setNeedsCommit(true);
      }
  
-@@ -598,6 +717,16 @@
+@@ -598,6 +723,16 @@
          clearCommitStatuses();
          switch (state()) {
              case SUSPENDED:
@@ -1483,7 +1489,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
                  stateMgr.recycle();
                  partitionGroup.close();
                  recordCollector.closeClean();
-@@ -645,7 +774,9 @@
+@@ -645,7 +780,9 @@
      public void maybeCheckpoint(final boolean enforceCheckpoint) {
          // commitNeeded indicates we may have processed some records since last commit
          // and hence we need to refresh checkpointable offsets regardless whether we should checkpoint or not
@@ -1494,7 +1500,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              stateMgr.updateChangelogOffsets(checkpointableOffsets());
          }
  
-@@ -655,7 +786,9 @@
+@@ -655,7 +792,9 @@
      private void validateClean() {
          // It may be that we failed to commit a task during handleRevocation, but "forgot" this and tried to
          // closeClean in handleAssignment. We should throw if we detect this to force the TaskManager to closeDirty
@@ -1505,7 +1511,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              log.debug("Tried to close clean but there was pending uncommitted data, this means we failed to"
                            + " commit and should close as dirty instead");
              throw new TaskMigratedException("Tried to close dirty task as clean");
-@@ -673,6 +806,12 @@
+@@ -673,6 +812,12 @@
       * You must commit a task and checkpoint the state manager before closing as this will release the state dir lock
       */
      private void close(final boolean clean) {
@@ -1518,7 +1524,15 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          switch (state()) {
              case SUSPENDED:
                  TaskManager.executeAndMaybeSwallow(
-@@ -765,12 +904,20 @@
+@@ -723,6 +868,7 @@
+         record = null;
+         closeTaskSensor.record();
+         partitionsToResume.clear();
++        pcPausedPartitions.clear();
+ 
+         transitionTo(State.CLOSED);
+     }
+@@ -765,12 +911,20 @@
       */
      @SuppressWarnings("unchecked")
      public boolean process(final long wallClockTime) {
@@ -1539,7 +1553,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              record = partitionGroup.nextRecord(recordInfo, wallClockTime);
  
              // if there is no record to process, return immediately
-@@ -780,10 +927,13 @@
+@@ -780,10 +934,13 @@
          }
  
          try {
@@ -1555,7 +1569,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              }
  
              // update the consumed offset map after processing is done
-@@ -792,7 +942,7 @@
+@@ -792,7 +949,7 @@
  
              // after processing this record, if its partition queue's buffered size has been
              // decreased to the threshold, we can then resume the consumption on this partition
@@ -1564,7 +1578,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
                  partitionsToResume.add(partition);
              }
  
-@@ -843,8 +993,15 @@
+@@ -843,8 +1000,15 @@
          throw error;
      }
  
@@ -1581,7 +1595,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          // process the record by passing to the source node of the topology
          final ProcessorNode<Object, Object, Object, Object> currNode = (ProcessorNode<Object, Object, Object, Object>) recordInfo.node();
          log.trace("Start processing one record [{}]", record);
-@@ -870,16 +1027,184 @@
+@@ -870,16 +1034,204 @@
          log.trace("Completed processing one record [{}]", record);
      }
  
@@ -1629,11 +1643,19 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +        // resumePollingForPartitionsWithAvailableSpace(), which Kafka calls at the top of every runOnce
 +        // before pollPhase, is what actually applies this set. Without this loop it stays empty forever on
 +        // the PC path and a pause set in addRecords is never undone.
-+        if (PcDispatchSwitch.isBackpressureEnabled() && !pcPausedPartitions.isEmpty()) {
++        // NOT gated on isBackpressureEnabled(). The pause is a durable effect on the consumer while the
++        // switch is only a flag, so gating the resume on it strands every partition this path had paused
++        // the moment an operator flips the escape hatch off - turning the switch installed to rescue
++        // someone from a silent stall into the cause of one. Resuming is unconditionally safe here because
++        // the set only ever contains partitions this path paused itself.
++        if (!pcPausedPartitions.isEmpty()) {
++            // Switched off, every pause this path holds is released regardless of occupancy: "disabled"
++            // has to mean the consumer ends up unpaused, not frozen wherever the flag happened to catch it.
++            final boolean releaseAll = !PcDispatchSwitch.isBackpressureEnabled();
 +            final Iterator<TopicPartition> paused = pcPausedPartitions.iterator();
 +            while (paused.hasNext()) {
 +                final TopicPartition partition = paused.next();
-+                if (pcDispatcher.getBufferedRecordCount(partition) <= maxBufferedSize) {
++                if (releaseAll || pcDispatcher.getBufferedRecordCount(partition) <= maxBufferedSize) {
 +                    partitionsToResume.add(partition);
 +                    paused.remove();
 +                }
@@ -1666,9 +1688,21 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +    private RuntimeException pcClassifyFailure(final PcTaskDispatcher.Failure failure) {
 +        final Throwable cause = failure.getCause();
 +
-+        if (cause instanceof TimeoutException) {
-+            return (TimeoutException) cause;
-+        }
++        // NO TimeoutException passthrough, and this is the correction that matters most in this method.
++        // Stock rethrows a TimeoutException raw, and TaskExecutor reads that as RETRIABLE: it calls
++        // maybeInitTaskTimeoutOrThrow, logs "will move to next task and retry later", and keeps the task
++        // RUNNING. That contract is safe on the stock path only because the record is still sitting in the
++        // RecordQueue and genuinely will be re-selected.
++        //
++        // The PC path cannot honour it. Retries are disabled, so the record is permanently failed, and the
++        // dispatcher's failure bar closes dispatch for good - so process() returns false forever, no second
++        // exception is ever produced, task.timeout.ms never trips, and the partition stays paused above its
++        // threshold. Zero throughput, no exception, nothing in the log: the exact silent stall this module
++        // exists to prevent, reachable from an ordinary broker timeout.
++        //
++        // So matching stock's TYPE would break stock's CONTRACT. Wrapping tells the truth - this task is
++        // dead - and TaskExecutor's StreamsException branch kills it loudly, which is what stock does for a
++        // failure it cannot retry. Falls through to the default wrap below.
 +        if (cause instanceof FailedProcessingException) {
 +            return pcWrapFailure(failure, cause.getCause());
 +        }
@@ -1770,7 +1804,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      /**
-@@ -1102,6 +1427,35 @@
+@@ -1102,6 +1454,35 @@
       */
      @Override
      public void addRecords(final TopicPartition partition, final Iterable<ConsumerRecord<byte[], byte[]>> records) {
@@ -1806,7 +1840,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          final int newQueueSize = partitionGroup.addRawRecords(partition, records);
  
          if (log.isTraceEnabled()) {
-@@ -1288,8 +1642,43 @@
+@@ -1288,8 +1669,43 @@
          return sb.toString();
      }
  
@@ -1850,7 +1884,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          // we need to do an extra check if the flag was false, that
          // if the consumer position has been updated; this is because
          // there may be non data records such as control markers bypassed
-@@ -1357,6 +1746,16 @@
+@@ -1357,6 +1773,16 @@
  
      public void updateCommittedOffsets(final TopicPartition topicPartition, final Long offset) {
          committedOffsets.put(topicPartition, offset);
@@ -1867,7 +1901,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      public void updateEndOffsets(final TopicPartition topicPartition, final Long offset) {
-@@ -1372,7 +1771,18 @@
+@@ -1372,7 +1798,18 @@
      }
  
      // below are visible for testing only
@@ -1888,7 +1922,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamThread.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamThread.java
 --- a/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-08-11 10:10:23.031266042 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-08-11 10:49:48.528265010 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.processor.internals;

@@ -450,8 +450,10 @@ public class PcTaskDispatcher implements Closeable {
      * load-bearing: PC can refuse a record after the epoch filter - bootstrap truncation does exactly that,
      * and it is observed against the mock consumer this dispatcher builds - and a refused record is never
      * handed out, so counting it would leave the count permanently high and pause the partition forever.
-     * Measuring the delta in PC's own incomplete-offset count across {@code registerWork} asks PC what it
-     * accepted instead of predicting it.
+     * Asking PC, per record and before registration, which of them it has not already completed - see
+     * {@link #countRecordsPcWillQueue} for why the incomplete-offset delta is the wrong unit. (An earlier
+     * revision of this javadoc described that delta approach, which the code twenty lines below explicitly
+     * forbids.)
      */
     public void registerRecords(final TopicPartition partition, final Iterable<ConsumerRecord<byte[], byte[]>> records) {
         List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
@@ -508,8 +510,13 @@ public class PcTaskDispatcher implements Closeable {
      * the way it is queued. The real fix is for {@code WorkManager.registerWork} to report how many records
      * it queued, since {@code PartitionState.maybeRegisterNewPollBatchAsWork} already computes exactly that
      * - but that is a shared {@code parallel-consumer-core} API change made for a streams-module gain, so it
-     * is recorded here rather than smuggled in. The blast radius is bounded: a mismatch shows up as a
-     * non-zero {@link #getBufferedUnderflowCount()}, which is why that counter exists and is asserted on.
+     * is recorded here rather than smuggled in.
+     *
+     * <p><b>Only one direction of that drift has a detector, and it is not the dangerous one.</b>
+     * {@link #getBufferedUnderflowCount()} fires when the count runs <em>low</em> - more decrements than
+     * increments. The opposite drift, a count that never returns to zero because this method counted a
+     * record {@code registerWork} then refused, is the one that pauses a partition permanently, and nothing
+     * observes it. Do not read the underflow counter as coverage for both.
      */
     private int countRecordsPcWillQueue(final TopicPartition partition,
                                         final EpochAndRecordsMap<byte[], byte[]> batch) {

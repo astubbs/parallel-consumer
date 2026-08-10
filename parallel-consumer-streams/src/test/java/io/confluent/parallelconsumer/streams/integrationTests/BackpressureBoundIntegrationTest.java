@@ -83,10 +83,16 @@ class BackpressureBoundIntegrationTest extends BrokerStreamsIntegrationTest {
     private static final int MAX_POLL_RECORDS = 20;
 
     /**
-     * What the fixed arm must stay under. Derived, not tuned: the threshold plus one poll batch, plus the
-     * pool because a record handed to a worker has left the buffer but a replacement can arrive immediately.
+     * What the fixed arm must stay under. Derived, not tuned: the resume only fires at or below the
+     * threshold, and one poll batch is the most that can then arrive before the pause re-applies.
+     * <p>
+     * <b>No pool-size term.</b> An earlier version added one, reasoning that a record handed to a worker
+     * frees room for a replacement - but {@code dispatchAvailable} <em>decrements</em> the counted quantity
+     * when it hands a record out, so workers can only lower this number, never raise it, and the
+     * replacement arrives inside the next poll batch that is already counted. Those 4 records were 13%
+     * of silent regression budget in the one assertion this unit rests on.
      */
-    private static final int BOUND = BUFFERED_RECORDS_PER_PARTITION + MAX_POLL_RECORDS + POOL_SIZE;
+    private static final int BOUND = BUFFERED_RECORDS_PER_PARTITION + MAX_POLL_RECORDS;
 
     private final AtomicInteger peakBuffered = new AtomicInteger();
 
