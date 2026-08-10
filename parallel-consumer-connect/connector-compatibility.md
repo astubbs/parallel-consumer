@@ -51,9 +51,15 @@ cannot help, however correctly it runs.
 | BigQuery sink | Unknown | Streaming-insert idempotency depends on configuration | **Unknown** |
 | Debezium *sinks* (JDBC) | Key-affine | Same as JDBC upsert; note Debezium is mostly *source* connectors, which are out of scope entirely | **Predicted, untested** |
 
-Connectors relying on any of the deliberately unsupported features - SMTs, `errors.tolerance` / DLQ,
-`ConfigProvider` secret resolution - are out of scope regardless of which group they fall into, because
-the module rejects those configs rather than silently ignoring them.
+SMTs, `errors.tolerance` / DLQ, and `ConfigProvider` secret resolution are **not yet wired**, which is a
+different statement from unsupported. Under the patched-runtime design these are Connect's own features,
+still present in the runtime we patch - nothing here rejects them, and nothing reimplements them. They are
+listed as not-yet-exercised because no test has driven them through the PC dispatch path, so a connector
+depending on one is untested rather than excluded.
+
+(The earlier embed design *did* reject those configs at construction, deliberately, because it was
+rebuilding a reduced runtime and silently ignoring them would have misled an operator. That rejection went
+with the design - see the superseded `docs/plans/2026-08-08-001-feat-connect-sink-in-pc-plan.md`.)
 
 ## The bar for Verified
 
