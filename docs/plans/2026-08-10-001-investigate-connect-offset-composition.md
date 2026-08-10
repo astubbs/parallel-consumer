@@ -432,6 +432,84 @@ not predictions. Each is marked HELD or REFUTED once U1 and U2 run, and refutati
 **Prediction about the shape of the answer:** sound-conditional, not sound - with the condition being
 connector observability of offsets rather than anything about ordering.
 
+### U1. What a lane can honestly claim
+
+Traced against `parallel-consumer-connect/target/connect-patched/.../WorkerSinkTask.java` by a reader given
+the questions but not this plan's Problem Frame, so its answers are not a confirmation of our own reading.
+All line numbers below are that patched copy; it differs from Apache's released 3.9.2 source by exactly the
+two additive hunks `PatchHarnessTest` pins (import at `:19`, flag at `:81`), and `target/connect-pristine/`
+was verified byte-identical to the released sources jar. Nothing on the offset path is modified.
+
+**The plan's two previously-corrected claims both hold.** `task.close` runs in the `finally` of the
+`preCommit` try (`:449`) and `doCommit` after it (`:488`), so revocation order is preCommit -> close ->
+commit; the source's own trace string at `:448` reads "Closing the task before committing the offsets".
+And the clamp at `:466-:467` compares the returned offset against `offsetsToCommit.get(partition)` - a copy
+of the very map handed to `preCommit` at `:432` - so it is not a guard against a lane over-claiming within
+the partition-wide union.
+
+#### U1.1 - The decisive finding: a subset is inexpressible in the type
+
+`preCommit` receives and returns `Map<TopicPartition, OffsetAndMetadata>` (`:413-:415`, `:432`) - **one
+scalar per partition**, whose meaning is a contiguous prefix boundary. There is no representation for a
+sparse or non-contiguous set of handled offsets anywhere on this path.
+
+So for a lane holding a hash-sharded subset of partition P - say offsets {0, 2, 4} - the map says `5`,
+exactly as it would if the lane held every record below 5. The framework's own record and the lane's actual
+subset are indistinguishable at this interface. If a lane succeeded on 0 and 2 but not 4, the only move
+available to it is to return a **lower** watermark, which abandons its own progress on everything above.
+
+This is the mechanism behind the Problem Frame's high-water-mark tension, now located at the type rather
+than argued from behaviour, and it is what every candidate has to route around.
+
+#### U1.2 - Three hazards the plan did not have
+
+- **There is no floor under the returned offset** (`:467-:468`). The only check is `taskOffset <=
+  currentOffset`; a value *below* the last committed offset is accepted silently - no warning, no clamp -
+  overwriting the last-committed seed in the map that `:488` commits. A task can walk a consumer group's
+  committed offset backwards. This bears directly on C1, whose minimum is not monotonic.
+- **Offsets advance for records never delivered to `put()`** (`:522-:525` precedes the `transRecord !=
+  null` guard at `:526`). Records dropped by a converter, transform or error-tolerance still advance the
+  value later promoted at `:616` and handed to `preCommit`. Even in stock Connect the map over-reports.
+- **`currentOffsets` is cumulative and is pruned only on the *lost* path** (`:682`; the graceful branch at
+  `:684` prunes `lastCommittedOffsets` only). `preCommit` therefore receives an entry for every partition
+  the task has ever been assigned and not lost, including gracefully-revoked ones, and `closeAllPartitions`
+  keys off that same stale set (`:667`).
+
+#### U1.3 - R6 classification: every whole-partition assumption
+
+R6 requires each classified as absent, benign under split lanes, or a separate gate. **None is benign.**
+
+| Assumption | Deciding line | Under split lanes | Classification |
+|---|---|---|---|
+| `SinkTaskContext.offset()` rewind | `:652` `consumer.seek(tp, offset)`, then `:653-:654` overwrite `lastCommittedOffsets` *and* `currentOffsets` for the whole partition | One lane's rewind re-reads every lane's records and destroys the others' tracked progress | **Separate gate** - a connector calling `context.offset()` is unsupported until PC translates the request per lane |
+| `pauseAll()` on `RetriableException` | `:599` `consumer.pause(consumer.assignment())`, called from `:632` | One record's retriable failure halts consumption of *every* partition the task owns | **Absent by construction, conditionally** - PC drives dispatch, so `deliverMessages`' retry path never runs. Only true if PC handles `RetriableException` itself; that becomes a design requirement, not an assumption |
+| `SinkTaskContext.assignment()` | `WorkerSinkTaskContext.java:106` returns the raw consumer assignment | Subset is inexpressible in the `Set<TopicPartition>` return type | **Separate gate** for any connector that derives behaviour from it; benign for connectors that only log it |
+| `onPartitionsAssigned` seeding | `:718` one `consumer.position(tp)` per partition into both offset maps | No notion of "the part of this partition I own" | **Separate gate** - PC must own this seeding, not Connect |
+| Batch redelivery on `RetriableException` | `:618` `messageBatch.clear()` skipped, whole batch re-`put` | Already-succeeded records in the batch are re-delivered, with no per-record tracking | **Benign here** - the router calls `put` with a singleton list, so "the whole batch" is one record |
+
+#### U1.4 - Step 0: who calls `preCommit`, on which thread, with which map
+
+The plan could not skip this and it decides the answer.
+
+- **Map:** each lane is handed **only its own consumed subset** - for each `TopicPartition`, the maximum
+  offset *that lane* received, plus one. Never the partition-wide map. Handing over the partition-wide map
+  is not a neutral default: `SinkTask.preCommit`'s base implementation is `flush(offsets); return offsets;`
+  (verified by disassembling connect-api 3.9.2, not from javadoc), so for every connector that does not
+  override it, the partition-wide map both returns an over-claiming watermark *and* instructs the connector
+  to flush to offsets that lane never saw.
+- **Owner:** a new per-lane ledger, written from `PcSinkTaskLaneRouter.prepare()`. That already runs on the
+  dispatcher's owner thread and already resolves the lane (`PcTaskDispatcher.java:104-:108`,
+  `PcSinkTaskLaneRouter.java:66-:70`), so the ledger needs no locking of its own. Mirror Connect's
+  staged-then-promoted shape (`:522-:525` then `:616`): stage at prepare, promote when that lane's `put`
+  returns normally.
+- **Thread for the `preCommit` call itself:** *not* the owner thread. It must hold the lane's lock, because
+  `preCommit` is a `SinkTask` method that must not interleave with an in-flight `put`
+  (`PcSinkTaskLane.runExclusively`) - and a real connector flushes inside it. Blocking the owner thread on
+  a connector flush would stall the dispatch pump for every lane at once. It runs off-thread and signals
+  results through the dispatcher's existing `ConcurrentLinkedQueue`, which is exactly how the Vert.x module
+  already completes deferred work from an arbitrary thread
+  (`VertxParallelEoSStreamProcessor.java:191-:195`).
+
 ## Verdict
 
 *Populated by U4. One sentence, then the evidence.*

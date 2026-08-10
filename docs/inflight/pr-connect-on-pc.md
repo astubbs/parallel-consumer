@@ -118,6 +118,34 @@ Not started. Two distinct audiences, and the second is the one that gets skipped
 Packaging and licensing are tracked separately in `next-patched-kafka-packaging.md`, and block publishing
 either spike.
 
+## Earmarked for a compounding run: a review severity calibrated on an unchecked premise
+
+Not yet written up as a learning. Do it before this PR merges, while the evidence is still to hand.
+
+The 2026-08-10 doc review filed C3's deferred-completion requirement as **P1-blocking**, on the reasoning
+that deferring completion "requires a new seam in `parallel-consumer-streams`, which 'no production code'
+prohibits". That was accepted and paid for with a scope carve-out in the plan's Goal Capsule.
+
+It is a fourth instance of a pattern core already ships. `ExternalEngine.addToMailBoxOnUserFunctionSuccess`
+is deliberately a no-op for async work, and `VertxParallelEoSStreamProcessor` completes the
+`WorkContainer` later from the Vert.x event loop
+(`VertxParallelEoSStreamProcessor.java:191-:195`); Reactor does the same. `PcTaskDispatcher`'s `completed`
+queue is already a `ConcurrentLinkedQueue` drained on the owner thread, so a completion signalled from an
+arbitrary thread needs no new concurrency design.
+
+The generalisable lesson, and the reason it is worth compounding rather than just noting: **before
+classifying a required seam as new production surface, check whether the codebase already implements that
+shape for a sibling integration.** A novel seam and a fourth instance of an existing pattern carry
+completely different risk, and the review's severity - which bought a real scope concession - was
+calibrated on the novel reading without that check being run. The nearest existing learning,
+`patch-the-seam-rather-than-reimplement-the-subset.md`, is about not rebuilding what the *dependency*
+already does; this is the same mistake pointed inward, at our own repository.
+
+Also worth capturing from the same review: the finding's accompanying warning that a blocking `Runnable`
+would deadlock the pump (`poolSize - inFlight`, decrement in `finally`) is correct but describes a design
+nobody proposed - `inFlight` tracks *pool occupancy*, not durability, so deferring the completion signal
+never requires blocking a worker at all.
+
 ## Unrelated defect found while reviewing
 
 `AGENTS.md` said `**/*IT.java` is included in failsafe. The root pom's failsafe `<includes>` lists only
