@@ -885,7 +885,7 @@ clean" verdict here carries no information and must not be cited as evidence the
 - `AGENTS.md` (modify)
 - `docs/refactoring.md` (modify)
 - `docs/inflight/next-connect-sink.md` (create)
-- `docs/TODO_INDEX.md` (regenerate if any marker was added)
+- `docs/todo-index.md` (regenerate if any marker was added)
 
 **Approach.**
 1. Add the module to `AGENTS.md`'s Module Structure table.
@@ -905,7 +905,7 @@ clean" verdict here carries no information and must not be cited as evidence the
 6. **Do not add a CHANGELOG.adoc entry.** `AGENTS.md`: "In a PR the changelog is never added to. No new
    entries, and no `== Unreleased` section." The per-PR changelog gate passing is not compliance with this
    rule.
-7. Re-run `bin/todo-index.sh` and commit `docs/TODO_INDEX.md` if any `TODO`/`FIXME`/`XXX` marker was added;
+7. Re-run `bin/todo-index.sh` and commit `docs/todo-index.md` if any `TODO`/`FIXME`/`XXX` marker was added;
    `bin/todo-index.sh --check` is a required PR check.
 
 **Test expectation: none** - documentation and bookkeeping only. The gates below are the proof.
