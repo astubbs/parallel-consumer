@@ -264,6 +264,14 @@ Nothing lints commit messages, so all of this is on you.
   reading if it says where you looked, and ruling one out is a real result (astubbs#220 is the
   worked example). Do this at merge prep, once the class is understood; doing it mid-diagnosis just
   widens the investigation.
+- **Read the commits you inherit.** After any rebase, merge or replay onto a moved base, run
+  `git log --oneline <old-base>..<new-base>` and read the *bodies* of anything touching your area.
+  You inherit decisions, constraints and sometimes instructions addressed to your branch - and a
+  green build proves only that the code compiles, not that the ground under your design held.
+  Commit bodies are load-bearing here because release notes are generated from them. When you
+  override an inherited decision, record the reasoning you are overriding, where you override it.
+  [`docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md`](docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md)
+  has the worked example and the method.
 - **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates fix-ups
   nobody wants in the permanent log, but usually also two or three genuinely separate pieces of
   work. Do not default; look at the actual commits:
