@@ -67,6 +67,24 @@ The offset analysis transfers unchanged and is the expensive part:
 - Connect's `preCommit()` contract: lower offsets honoured, higher rejected, an omitted partition means
   leave it where it was, an empty map means skip the commit entirely.
 
+## Documentation owed when this ships
+
+Not started. Two distinct audiences, and the second is the one that gets skipped:
+
+- **End-user documentation** - how to point the module at a connector class and config, which
+  `ParallelConsumerOptions` are constrained and why, what the operating modes mean and how one is chosen
+  per connector, and the delivery guarantee. Goes in `src/docs/README_TEMPLATE.adoc` with `tag=`-delimited
+  regions of real module source so the examples cannot rot. **Never hand-edit `README.adoc`** - regenerate
+  with `./mvnw process-sources -N`.
+- **Promotional material** - the README needs to say plainly what this is for and who should reach for it,
+  next to the existing pitch. The honest hook is running Connect sink connectors in-process with no worker,
+  no REST API and no internal topics, plus key-level concurrency beyond partition count for connectors that
+  allow it. State the ceiling for connectors that do not, rather than letting a reader discover it after
+  adopting.
+
+Packaging and licensing are tracked separately in `next-patched-kafka-packaging.md`, and block publishing
+either spike.
+
 ## Unrelated defect found while reviewing
 
 `AGENTS.md` said `**/*IT.java` is included in failsafe. The root pom's failsafe `<includes>` lists only
