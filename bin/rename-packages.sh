@@ -81,9 +81,16 @@
 # `git blame -C`, and anything else reading the log get 233 true renames instead of four false ones
 # and a fabricated deletion. That is worth the cost of a first commit that does not compile.
 #
-# DEFAULT: two commits. `--single-commit` is available for a branch where one atomic commit matters
-# more than history fidelity - but the numbers above are the reason it is not the default, and a
-# single-commit run is verified by the same assertions, so it will TELL you what it cost.
+# TWO COMMITS IS THE ONLY SUPPORTED SHAPE. `--single-commit` is NOT an option to choose: it exists
+# solely as the self-test's experiment arm, where it is the negative control proving the mis-pairing
+# detector actually fires. On this repo it cannot succeed - the verification catches the four
+# invented renames and refuses.
+#
+# It is rejected for a reason that outlives the measurement above: git's rename detection cannot be
+# configured from the repository. There is no `.gitattributes` mechanism for `-M`, `-B`,
+# `merge.renameLimit` or `diff.renames`, so any "it is safe if you set X" answer holds on the clone
+# that set it and silently does not on CI, on a contributor's machine, or in the next worktree. The
+# default behaviour has to be correct, which leaves one shape.
 #
 # RUNNING THIS ON EVERY OPEN PR BRANCH IS MANDATORY, NOT A CONVENIENCE. Merging a renamed master into
 # a PR branch that has NOT been renamed reported ZERO conflicts and silently applied the PR's edit to
@@ -123,7 +130,7 @@
 #   bin/rename-packages.sh                  # apply and commit (move commit + content commit)
 #   bin/rename-packages.sh --dry-run        # report the work set, touch nothing
 #   bin/rename-packages.sh --no-commit      # apply to the working tree, do not commit
-#   bin/rename-packages.sh --single-commit  # one atomic commit instead of two (see above)
+#   # (--single-commit is not listed here on purpose - it is a self-test arm, not a usage mode)
 #   bin/rename-packages.sh --verify-only    # completeness check only, change nothing
 #   bin/rename-packages.sh --defer-prose --skip-readme-regen
 #
@@ -270,7 +277,8 @@ lose one rename outright.
 
   --dry-run             report the work set and exit; change nothing
   --no-commit           apply to the working tree, leave it uncommitted
-  --single-commit       one atomic commit instead of the two-commit default
+  --single-commit       SELF-TEST ARM ONLY, not a usage mode. Rejected shape: git mis-pairs the
+                        renames and the run will refuse. See COMMIT SHAPE in the header.
   --defer-prose         proceed past the prose guards. The guarded sentences are then REWRITTEN
                         mechanically (same false claim, new spelling) and listed as follow-ups
   --skip-readme-regen   do not run ./mvnw -N process-sources for README.adoc
