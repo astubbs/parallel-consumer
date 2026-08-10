@@ -71,6 +71,29 @@ it rests on correctness, it binds you. If it rests on human effort, it does not.
   reasoning past it.
 - **Irreversible or outward-facing actions.** Cheap to perform is not the same as safe to perform.
 
+## Read the commits you inherit
+
+When you merge, rebase, or replay onto a moved branch, **read the commit messages you just took on** -
+`git log --oneline <old-base>..<new-base>`, then read the bodies of anything that touches your area.
+Inheriting commits means inheriting decisions, constraints, and sometimes instructions addressed to you.
+A green build proves the code still compiles; it proves nothing about whether the ground under your
+design moved.
+
+Three things hide there, and none of them announce themselves:
+
+- **Instructions to your branch.** On astubbs#240 the parent's tip commit said, in its body, *"Connect
+  inherits this and should extend the second persona rather than re-litigate whether one exists."* Never
+  read, so it was obeyed only by luck.
+- **Decisions that reshape your work.** The same rebase renamed a module and its package. That was
+  discovered by tripping over a merge conflict, and a new `STRATEGY.md` naming this project's approach
+  was discovered only because the owner asked whether it had been read.
+- **Arguments against what you are about to do.** A commit you are overriding usually explains why it
+  did what it did. Record that reasoning where you override it, or the next agent reads your change as
+  an oversight and reverts it.
+
+Cost is not a defence: reading a dozen commit messages is seconds, and this is exactly the kind of work
+an agent is fast at (see *You are a machine running techniques written for humans* above).
+
 ## Before you investigate anything
 
 Do all five checks below **before** forming a hypothesis, and say in your write-up what they returned

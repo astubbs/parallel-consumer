@@ -27,9 +27,20 @@ version-sensitive: in plugin 0.8.0 `skipPublishing=true` on the reactor-last mod
 aggregated bundle upload; per-module evaluation arrived in 0.9.0+ (root pom pins 0.10.0). Both halves,
 per module, always.
 
-## History, so this does not get "fixed" back
+## History, and the argument on the other side
 
-The Streams module briefly shipped as a published alpha, with its NOTICE and README work done properly.
-Publishing is an owner call, and the owner has now made it: not yet. This file is the record. An agent
-that believes publication should be re-enabled should surface the argument to the owner, not edit the
-poms.
+The Streams module shipped briefly as a published alpha, with its NOTICE and README work done properly,
+and the case for it was not weak. From that commit: *"depending on the artifact IS the opt-in, so a user
+who adds it should not then have to switch it on."* Publishing is what makes a field-testing request real
+- a module nobody can depend on gets no field testers, and work that lives only on a branch dies.
+
+That argument is recorded here rather than paraphrased away, because a gate that looks like an oversight
+gets "fixed" by the next agent, while a gate that visibly overrode a real argument does not. It was
+overridden on a ground the argument does not address: both jars ship compiled, modified
+`org.apache.kafka.*` classes, so publishing is redistribution of a modified Apache Kafka, and the
+trademark, NOTICE and section-4 obligations attach at that moment - before any of them has an answer.
+Opt-in semantics are a usability question; redistribution is a legal one, and it is the owner's call.
+
+So: an agent who believes publication should be re-enabled should surface the argument to the owner, not
+edit the poms. The blocking questions are in `next-patched-kafka-packaging.md`, and answering those is
+the path to re-enabling - not re-making the opt-in case, which was already heard.
