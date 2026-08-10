@@ -5,10 +5,13 @@ package io.confluent.parallelconsumer.connect;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 
 import java.util.Collection;
+import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -20,9 +23,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * dispatcher owns - so the exclusion has to be explicit. The lock also supplies the happens-before edge
  * between them, which a connector accumulating state across {@code put} calls depends on.
  *
- * <p>This class deliberately does <b>not</b> call {@code preCommit}, {@code flush}, or any offset
- * machinery. Completion here means the callback returned, which is not a durability claim; composing task
- * watermarks with Parallel Consumer's frontier is a later design and is out of scope for this proof.
+ * <p>{@link #put} returning is <b>not</b> a durability claim - a connector may still be holding the record
+ * in memory. {@link #preCommit} is where durability is asked for, and
+ * {@link PcSinkTaskDurabilityBarrier} is what interprets the answer. This class only guarantees exclusion
+ * and the happens-before edge; it draws no conclusion from either call.
  */
 @Slf4j
 public class PcSinkTaskLane {
@@ -47,6 +51,32 @@ public class PcSinkTaskLane {
         lock.lock();
         try {
             task.put(records);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Asks this task what it has durably written, under the same lock as {@code put}.
+     *
+     * <p>The lock is not optional: {@code preCommit} reads the state {@code put} is writing, and a
+     * connector's implementation typically flushes a buffer that an interleaved {@code put} is still adding
+     * to. Connect's own runtime needs no such lock only because one loop drives both.
+     *
+     * <p><b>The map handed in must contain only offsets this lane received.</b> {@code SinkTask}'s base
+     * implementation is {@code flush(offsets); return offsets;} - and {@code flush}'s own base body is a
+     * bare {@code return} - so for a connector that overrides neither, this call is a pure echo. Handing it
+     * a partition-wide map would therefore not merely return an over-claiming watermark: for a connector
+     * that overrides {@code flush}, it actively instructs a flush to offsets this lane never saw.
+     *
+     * @return whatever the task returned, unmodified - interpreting it is
+     *         {@link PcSinkTaskDurabilityBarrier}'s job, not this class's
+     */
+    public Map<TopicPartition, OffsetAndMetadata> preCommit(
+            final Map<TopicPartition, OffsetAndMetadata> laneOffsets) {
+        lock.lock();
+        try {
+            return task.preCommit(laneOffsets);
         } finally {
             lock.unlock();
         }

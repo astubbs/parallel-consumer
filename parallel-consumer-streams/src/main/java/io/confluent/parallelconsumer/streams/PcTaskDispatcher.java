@@ -33,6 +33,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -113,6 +114,60 @@ public class PcTaskDispatcher implements Closeable {
          *         consumed.
          */
         Runnable prepare(ConsumerRecord<byte[], byte[]> record);
+    }
+
+    /**
+     * Signals the outcome of one record whose completion is deferred past the worker call. Safe to call from
+     * any thread, exactly once.
+     *
+     * @see DeferringWorkPreparer
+     */
+    public interface CompletionHandle {
+        /** The record is durable. Only now does it count as complete, and only now can the frontier pass it. */
+        void succeeded();
+
+        /** The record failed durably. Treated exactly as a throw from the worker call would have been. */
+        void failed(Throwable cause);
+    }
+
+    /**
+     * A {@link WorkPreparer} for which returning from the worker call is <b>not</b> a completion claim.
+     * <p>
+     * The default seam completes a record the instant its {@link Runnable} returns, which is right when the
+     * work is the processing. It is wrong when the callee only <em>buffers</em> - a Kafka Connect sink task
+     * accumulating inside {@code put()} being the case this exists for - because the record is then complete
+     * in PC's accounting while still being only in the sink's memory, and the frontier passes an offset no
+     * one has durably written.
+     * <p>
+     * This is not a new shape for the codebase: {@code ExternalEngine.addToMailBoxOnUserFunctionSuccess} is
+     * deliberately a no-op for async work, and the Vert.x module completes the {@code WorkContainer} later
+     * from the Vert.x event loop. Same idea, expressed through this dispatcher's own seam.
+     * <p>
+     * <b>Do not block a worker waiting for durability instead.</b> {@link #dispatchAvailable} computes
+     * capacity as {@code poolSize - inFlight}, and {@code inFlight} only falls when the worker call returns,
+     * so waiting inside the {@link Runnable} stalls the pump at capacity - and, for a sink that flushes on a
+     * timer, deadlocks against the very flush it is waiting on. Deferring the <em>signal</em> costs nothing;
+     * the worker still returns immediately and its slot is freed.
+     */
+    public interface DeferringWorkPreparer extends WorkPreparer {
+
+        /**
+         * @param handle the completion this record's outcome must eventually be reported through - exactly
+         *               once, from any thread
+         * @return the work to run on a worker, or null if the record was dropped during preparation (which
+         *         still counts as consumed, and completes it immediately - the handle is then unused)
+         */
+        Runnable prepare(ConsumerRecord<byte[], byte[]> record, CompletionHandle handle);
+
+        /**
+         * Never called on this path; {@link #prepare(ConsumerRecord, CompletionHandle)} replaces it. Present
+         * only because the dispatcher's field is typed to the parent interface.
+         */
+        @Override
+        default Runnable prepare(ConsumerRecord<byte[], byte[]> record) {
+            throw new UnsupportedOperationException(
+                    "a DeferringWorkPreparer must be driven through prepare(record, handle)");
+        }
     }
 
     /**
@@ -293,9 +348,12 @@ public class PcTaskDispatcher implements Closeable {
             int syncCompleted = 0;
             for (WorkContainer<byte[], byte[]> work : available) {
                 consumed++;
+                final boolean deferred = preparer instanceof DeferringWorkPreparer;
                 Runnable chainExecution;
                 try {
-                    chainExecution = preparer.prepare(work.getCr());
+                    chainExecution = deferred
+                            ? ((DeferringWorkPreparer) preparer).prepare(work.getCr(), handleFor(work))
+                            : preparer.prepare(work.getCr());
                 } catch (RuntimeException e) {
                     // Preparation failed on the StreamThread - deserialisation, most likely. Treat it exactly
                     // as a processing failure so the record does not vanish from PC's accounting.
@@ -315,7 +373,7 @@ public class PcTaskDispatcher implements Closeable {
                 inFlight.incrementAndGet();
                 recordsDispatched.incrementAndGet();
                 PcDispatchCounters.onDispatchedToPool();
-                workerPool.execute(() -> runOnWorker(work, chainExecution));
+                workerPool.execute(() -> runOnWorker(work, chainExecution, deferred));
             }
             if (syncCompleted == 0) {
                 break;
@@ -327,18 +385,53 @@ public class PcTaskDispatcher implements Closeable {
         return consumed;
     }
 
-    private void runOnWorker(final WorkContainer<byte[], byte[]> work, final Runnable chainExecution) {
+    private void runOnWorker(final WorkContainer<byte[], byte[]> work, final Runnable chainExecution,
+                             final boolean deferred) {
         try {
             chainExecution.run();
-            work.onUserFunctionSuccess();
-            recordsSucceeded.incrementAndGet();
-            PcDispatchCounters.onCompletedSuccessfully();
-            completed.add(work);
+            // A deferred preparer's return says only "buffered", so completing here would let the frontier
+            // pass an offset nothing has durably written. Its CompletionHandle carries the real outcome.
+            // inFlight still falls in the finally below: it measures POOL OCCUPANCY, and the worker is
+            // genuinely free - conflating the two is what would stall the pump.
+            if (!deferred) {
+                recordSuccess(work);
+            }
         } catch (Throwable t) {
             recordFailure(work, t);
         } finally {
             inFlight.decrementAndGet();
         }
+    }
+
+    /**
+     * The completion a {@link DeferringWorkPreparer} reports through. Feeding {@link #completed} is what
+     * makes it safe off the owner thread - it is a concurrent queue drained by the owner in
+     * {@link #drainCompletions()}, which is the same route the Vert.x module's mailbox uses.
+     */
+    private CompletionHandle handleFor(final WorkContainer<byte[], byte[]> work) {
+        final AtomicBoolean reported = new AtomicBoolean();
+        return new CompletionHandle() {
+            @Override
+            public void succeeded() {
+                if (reported.compareAndSet(false, true)) {
+                    recordSuccess(work);
+                }
+            }
+
+            @Override
+            public void failed(final Throwable cause) {
+                if (reported.compareAndSet(false, true)) {
+                    recordFailure(work, cause);
+                }
+            }
+        };
+    }
+
+    private void recordSuccess(final WorkContainer<byte[], byte[]> work) {
+        work.onUserFunctionSuccess();
+        recordsSucceeded.incrementAndGet();
+        PcDispatchCounters.onCompletedSuccessfully();
+        completed.add(work);
     }
 
     private void recordFailure(final WorkContainer<byte[], byte[]> work, final Throwable cause) {

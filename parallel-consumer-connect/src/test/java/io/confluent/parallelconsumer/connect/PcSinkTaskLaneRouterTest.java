@@ -3,6 +3,7 @@ package io.confluent.parallelconsumer.connect;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.sink.SinkRecord;
@@ -100,6 +101,25 @@ class PcSinkTaskLaneRouterTest {
         return s == null ? null : s.getBytes(StandardCharsets.UTF_8);
     }
 
+    /**
+     * These arms exercise the lane lock, not the durability barrier, so the completion is discarded. Offset
+     * composition has its own probe - {@link OffsetCompositionProbeTest}.
+     */
+    private static Runnable prepared(final PcSinkTaskLaneRouter router,
+                                     final ConsumerRecord<byte[], byte[]> record) {
+        return router.prepare(record, new PcTaskDispatcher.CompletionHandle() {
+            @Override
+            public void succeeded() {
+                // discarded: this test asserts on exclusion, not on durability
+            }
+
+            @Override
+            public void failed(final Throwable cause) {
+                throw new AssertionError("no arm here fails a record", cause);
+            }
+        });
+    }
+
     private static SinkRecord project(final ConsumerRecord<byte[], byte[]> r) {
         return new SinkRecord(r.topic(), r.partition(), Schema.OPTIONAL_BYTES_SCHEMA, r.key(),
                 Schema.OPTIONAL_BYTES_SCHEMA, r.value(), r.offset());
@@ -170,7 +190,7 @@ class PcSinkTaskLaneRouterTest {
         final List<ConsumerRecord<byte[], byte[]>> distinctLaneRecords = twoRecordsOnDistinctLanes(router);
         final ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            distinctLaneRecords.forEach(r -> pool.submit(router.prepare(r)));
+            distinctLaneRecords.forEach(r -> pool.submit(prepared(router, r)));
 
             assertThat(bothEntered.await(AWAIT_SECONDS, TimeUnit.SECONDS))
                     .as("both lanes must be inside put() together - if this times out they serialised")
@@ -198,7 +218,7 @@ class PcSinkTaskLaneRouterTest {
                 pool.submit(() -> {
                     start.await();
                     for (int i = 0; i < perThread; i++) {
-                        router.prepare(record(0, "k" + id + "-" + i, i)).run();
+                        prepared(router, record(0, "k" + id + "-" + i, i)).run();
                     }
                     return null;
                 });
@@ -259,7 +279,7 @@ class PcSinkTaskLaneRouterTest {
 
         final ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            pool.submit(router.prepare(record(0, "k", 0)));
+            pool.submit(prepared(router, record(0, "k", 0)));
             assertThat(inPut.await(AWAIT_SECONDS, TimeUnit.SECONDS)).isTrue();
 
             final AtomicInteger callbackRan = new AtomicInteger();

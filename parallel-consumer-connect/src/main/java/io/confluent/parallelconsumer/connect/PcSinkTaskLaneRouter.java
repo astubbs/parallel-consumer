@@ -4,15 +4,21 @@ package io.confluent.parallelconsumer.connect;
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import io.confluent.parallelconsumer.connect.PcSinkTaskDurabilityBarrier.ConfirmationRule;
 import io.confluent.parallelconsumer.state.ShardKey;
 import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
+import io.confluent.parallelconsumer.streams.PcTaskDispatcher.CompletionHandle;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -39,10 +45,12 @@ import java.util.Objects;
  * next design step and deliberately absent here.
  */
 @Slf4j
-public class PcSinkTaskLaneRouter implements PcTaskDispatcher.WorkPreparer {
+public class PcSinkTaskLaneRouter implements PcTaskDispatcher.DeferringWorkPreparer {
 
     private final List<PcSinkTaskLane> lanes;
+    private final List<PcSinkTaskDurabilityBarrier> barriers;
     private final RecordProjection projection;
+    private final ConfirmationRule rule;
 
     /** Turns a raw record into the {@link SinkRecord} the task sees. */
     public interface RecordProjection {
@@ -50,23 +58,81 @@ public class PcSinkTaskLaneRouter implements PcTaskDispatcher.WorkPreparer {
     }
 
     public PcSinkTaskLaneRouter(final List<PcSinkTaskLane> lanes, final RecordProjection projection) {
+        this(lanes, projection, ConfirmationRule.OWNING_LANE);
+    }
+
+    /**
+     * @param rule which watermark confirms a record. Anything but
+     *             {@link ConfirmationRule#OWNING_LANE} is a deliberately-broken control arm for the probe.
+     */
+    public PcSinkTaskLaneRouter(final List<PcSinkTaskLane> lanes, final RecordProjection projection,
+                                final ConfirmationRule rule) {
         if (lanes == null || lanes.isEmpty()) {
             throw new IllegalArgumentException("at least one lane is required");
         }
         // Java 8 API surface: this module compiles at --release 8, so List.copyOf is unavailable.
         this.lanes = Collections.unmodifiableList(new ArrayList<>(lanes));
+        final List<PcSinkTaskDurabilityBarrier> built = new ArrayList<>(this.lanes.size());
+        for (final PcSinkTaskLane lane : this.lanes) {
+            built.add(new PcSinkTaskDurabilityBarrier(lane));
+        }
+        this.barriers = Collections.unmodifiableList(built);
         this.projection = Objects.requireNonNull(projection, "projection");
+        this.rule = Objects.requireNonNull(rule, "rule");
     }
 
     /**
      * Runs on the dispatcher's owner thread. Chooses the lane and projects the record here, so the worker
      * is handed nothing but the call - keeping every shared-state read on the single-threaded side.
+     *
+     * <p>The record is <b>not</b> completed when this {@link Runnable} returns: {@code put} returning means
+     * the sink has the record, not that it wrote it. The record is staged against its lane's barrier and
+     * completed later, when that lane's own {@code preCommit} declares a watermark covering it.
      */
     @Override
-    public Runnable prepare(final ConsumerRecord<byte[], byte[]> record) {
-        final PcSinkTaskLane lane = laneFor(record);
+    public Runnable prepare(final ConsumerRecord<byte[], byte[]> record, final CompletionHandle handle) {
+        final int index = laneIndexFor(record);
+        final PcSinkTaskLane lane = lanes.get(index);
+        final PcSinkTaskDurabilityBarrier barrier = barriers.get(index);
         final SinkRecord projected = projection.project(record);
-        return () -> lane.put(Collections.singletonList(projected));
+        final TopicPartition partition = new TopicPartition(record.topic(), record.partition());
+
+        barrier.staged(partition, record.offset(), handle);
+        return () -> {
+            lane.put(Collections.singletonList(projected));
+            // Promoted only now, exactly as WorkerSinkTask promotes origOffsets into currentOffsets only
+            // after task.put returns (WorkerSinkTask.java:616). A throw skips this, so the offset never
+            // reaches preCommit and the record cannot be confirmed durable by a later cycle.
+            barrier.delivered(partition, record.offset());
+        };
+    }
+
+    /**
+     * Asks every lane what it has durably written, completing whatever the answers cover.
+     *
+     * <p>Call this off the dispatcher's owner thread - it holds each lane's lock in turn and a connector
+     * flushes inside {@code preCommit}.
+     *
+     * @return how many records were confirmed durable across all lanes
+     */
+    public int runDurabilityCycle() {
+        // Two phases on purpose. Gather every lane's watermark BEFORE confirming any of them, so the
+        // cross-lane ceiling describes this cycle rather than the previous one. Built from the previous
+        // cycle it starts empty, the inverted rule degenerates into the sound one, and the probe's negative
+        // control silently cannot fire - which is how it first shipped, and what the probe caught.
+        final List<Map<TopicPartition, OffsetAndMetadata>> watermarks = new ArrayList<>(barriers.size());
+        final Map<TopicPartition, Long> ceiling = new HashMap<>();
+        for (final PcSinkTaskDurabilityBarrier barrier : barriers) {
+            final Map<TopicPartition, OffsetAndMetadata> returned = barrier.pollWatermarks();
+            watermarks.add(returned);
+            returned.forEach((partition, offset) -> ceiling.merge(partition, offset.offset(), Math::max));
+        }
+
+        int confirmed = 0;
+        for (int index = 0; index < barriers.size(); index++) {
+            confirmed += barriers.get(index).confirm(rule, watermarks.get(index), ceiling);
+        }
+        return confirmed;
     }
 
     /**
@@ -77,8 +143,12 @@ public class PcSinkTaskLaneRouter implements PcTaskDispatcher.WorkPreparer {
      * serialised against each other, which costs throughput but never correctness.
      */
     PcSinkTaskLane laneFor(final ConsumerRecord<byte[], byte[]> record) {
+        return lanes.get(laneIndexFor(record));
+    }
+
+    private int laneIndexFor(final ConsumerRecord<byte[], byte[]> record) {
         final ShardKey shard = ShardKey.of(record, ProcessingOrder.KEY);
-        return lanes.get(Math.floorMod(shard.hashCode(), lanes.size()));
+        return Math.floorMod(shard.hashCode(), lanes.size());
     }
 
     public int laneCount() {
