@@ -141,11 +141,20 @@ Two lines that survived scrutiny and belong in whatever gets written for the rel
   count, which is the same problem PC solves, but they operate at the *consumer* layer: nothing in
   KIP-932 gives Kafka Streams or Kafka Connect key-concurrent processing inside a task, because those
   frameworks build their own execution model on top of the consumer. Patching that execution model is
-  precisely what these two modules do. The repo already has the comparison written up
-  (`STRATEGY.md`, the KIP-932 section) - so the claim can be made without hand-waving, which is the
-  only way it lands rather than reading as noise. Check the section is still accurate before quoting
+  precisely what these two modules do.
+
+  **Where the comparison actually lives** (an earlier draft of this note sent readers to the wrong
+  place): the substantive table is in the generated README, "When to use this library (vs KIP-932
+  Share Groups)" - edit `src/docs/README_TEMPLATE.adoc`, never `README.adoc`. `STRATEGY.md` carries a
+  single sentence of it under Target problem. So the claim can be made without hand-waving, which is
+  the only way it lands rather than reading as noise. Check the table is still accurate before quoting
   it, and keep the tone light: the substance carries it, and a swipe that turns out to be wrong is
   worse than no swipe.
+
+  **This line is also strategy input, not only promotion.** The README's table compares Share Groups
+  and PC as two ways to consume; the framework point is a level up from that, and it is the argument
+  for PC as an execution engine underneath other frameworks. It has been fed into `STRATEGY.md`
+  rather than living only here.
 
 Pair both with their caveats, per `next-fork-packaging-docs-and-licensing.md`.
 

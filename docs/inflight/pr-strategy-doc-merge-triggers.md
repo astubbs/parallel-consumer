@@ -44,6 +44,15 @@ the client-side bet stops being about your application and starts being about th
 it. Whichever of these lands first should decide whether the persona widens or a second persona is
 named, so the later one inherits a decision rather than reopening it.
 
+**Settled by the Streams branch, which arrived first.** `STRATEGY.md` now names a **second persona**
+rather than widening the primary one - "my downstream outscales my partitions" and "my topology has
+one slow stage" are different self-descriptions reached from different starting points, and one
+sentence covering both describes neither. "Our approach" gained its second clause (the same engine
+runs underneath another framework, not only inside your own application), and Target problem gained
+the reason Share Groups do not reach this: they operate at the consumer layer, while Streams and
+Connect build their own execution model above it. **Connect inherits this decision** - it should
+extend the second persona, not re-litigate whether one exists.
+
 **Watch the commit-metadata field as these progress.** PC keeps its state in the commit metadata
 field, which is free-form and shared with anything else that has ever owned the group. astubbs#118
 names Kafka Streams *first* among the things that leave bytes PC cannot decode - and the Streams
@@ -53,6 +62,21 @@ should not carry a caveat for a risk that has not materialised. But if PC become
 frameworks that also want that field, an isolation footnote turns into a question about whether the
 client-side bet holds in the substrate role - and *that* is a claim in "Our approach". The trigger to
 revisit is a spike hitting a metadata collision it cannot simply survive, not the spikes merging.
+
+**Status: the trigger has half fired, and the resolution is worth knowing.** The Streams module did
+meet the collision, and did not merely survive it - on its dispatch path PC now **owns** the commit
+metadata field outright, and Kafka Streams' own `TopicPartitionMetadata` is deliberately not written
+(plan KTD-S7). That is a designed-in divergence rather than a robustness escape: partition time and
+processor metadata are not persisted there, two of Kafka's own tests stay red by design, and a
+stock restart on a PC-committed group decodes the payload leniently to UNKNOWN.
+
+It still does not belong in `STRATEGY.md` as a caveat, for the reason the paragraph above gives -
+a guiding policy should not carry footnotes for handled risks. But the *shape* of the answer is
+strategic and should be watched: the recorded direction is that PC's encoding grows a generalised
+opaque rider, so an embedding framework hands PC a blob to carry rather than becoming a second
+writer. One owner, one decoder. If that direction fails - if some framework's state genuinely
+cannot ride inside PC's payload - then the substrate role has a real limit and *that* is a claim in
+"Our approach".
 
 ## Change what the tracks contain
 
