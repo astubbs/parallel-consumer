@@ -184,7 +184,8 @@ docs/solutions/
 docs/inflight/
 docs/TODO_INDEX.md
 .semaphore/
-bin/check-copyright-headers.sh"
+bin/check-copyright-headers.sh
+bin/test-check-copyright-headers.sh"
 
 # SWEEP_EXCLUDE - the narrow set the completeness check is allowed to ignore, because `io.confluent`
 # survives there LEGITIMATELY. The check prints every match it skipped in each of these, so the
@@ -204,12 +205,28 @@ bin/check-copyright-headers.sh"
 #                       deciding the file is fork-original, turning a REQUIRED Confluent header into
 #                       a violation. A targeted edit moves only the newpath half, so the oldpath
 #                       halves legitimately still read io/confluent, and the check prints them all.
+#                       Its PACKAGE_MOVES table names BOTH spellings for the same reason: it is the
+#                       rule that maps a moved file back to its fork-point path.
+#   test-check-         its fixtures move a file from io/confluent to bz/stub and assert the scanner
+#   copyright-          still resolves provenance across the move. That fixture IS the negative
+#   headers.sh          control for the rule above, so rewriting the old spelling out of it does not
+#                       update a test, it deletes one - and the deletion reads as a pass.
+#   AGENTS.md           both DESCRIBE the rename rather than reference the package: "the
+#   repo-hygiene.yml    io.confluent.* -> bz.stub.* package-rename tool", and the sweep pattern
+#                       `grep -rn "io\.confluent"` quoted as the trap it is. Neither matches any
+#                       rewrite rule (they are not whole package names), and rewriting them would
+#                       turn each sentence into nonsense - "the bz.stub.* -> bz.stub.* tool". They
+#                       are NOT frozen, so a real package reference added to either is still
+#                       rewritten; this only silences the residue, and the check prints it.
 SWEEP_EXCLUDE="\
 CHANGELOG.adoc
 docs/plans/
 docs/solutions/
 docs/inflight/
-bin/check-copyright-headers.sh"
+bin/check-copyright-headers.sh
+bin/test-check-copyright-headers.sh
+AGENTS.md
+.github/workflows/repo-hygiene.yml"
 
 # Excluded from both the rewrite and the completeness check, because they must carry the old spelling
 # as DATA. Matched on BASENAME, not on a hardcoded path, so moving or renaming this script cannot
@@ -628,21 +645,18 @@ do_regenerate() {
     # -N: the asciidoc-template plugin is <inherited>false</inherited> and bound to the ROOT pom, so
     # a non-recursive run regenerates the README without building the reactor.
     #
-    # -Dcopyright.skip=true is REQUIRED here, not a convenience, and this is the sharp edge of the
-    # whole rename. bin/check-copyright-headers.sh is bound to the `validate` phase via
-    # exec-maven-plugin, so it runs before ANY goal - and after the move it reports ~197 violations,
-    # because it resolves provenance by exact path against the fork-point tree and every
-    # upstream-derived file has just stopped matching. Without the skip, maven dies in validate,
-    # process-sources never runs, README.adoc is silently left stale, and the completeness check
-    # below is what tells you (loudly, which is the point). Skipping it here does not weaken
-    # anything: the copyright gate still runs in copyright.yml and in every ordinary build, and it
-    # is RED until the provenance model is repaired - see the closing notes.
-    #
-    # The property is `copyright.skip`. `-Dlicense.skip` no longer exists (AGENTS.md -> Code Style);
-    # do not copy it from an older doc.
-    echo "  regenerating README.adoc (./mvnw -N -Dcopyright.skip=true process-sources) ..."
-    if ! ./mvnw -N -q -Dcopyright.skip=true process-sources; then
-        note_manual "./mvnw -N -Dcopyright.skip=true process-sources FAILED - README.adoc is stale. The completeness check below will fail on it; that is correct. Fix the build, regenerate, commit."
+    # NO -Dcopyright.skip. This used to be mandatory, and it was the sharp edge of the whole rename:
+    # bin/check-copyright-headers.sh is bound to the `validate` phase via exec-maven-plugin, so it
+    # runs before ANY goal, and it resolved provenance by exact path against the fork-point tree -
+    # so the moment the move landed, every upstream-derived file missed the lookup, was judged
+    # fork-original, and its REQUIRED Confluent header became a violation. 197 of them, and maven
+    # died in validate before doing anything at all. That scanner now maps a path back through its
+    # PACKAGE_MOVES table before every lookup, so the rename is invisible to it and the gate runs
+    # here exactly as it does on any other build - which is the point: the run that changes ~200
+    # copyright headers is the last run that should be skipping the copyright gate.
+    echo "  regenerating README.adoc (./mvnw -N process-sources) ..."
+    if ! ./mvnw -N -q process-sources; then
+        note_manual "./mvnw -N process-sources FAILED - README.adoc is stale. The completeness check below will fail on it; that is correct. Fix the build, regenerate, commit. If it died in the validate phase, read the copyright violations it printed: the provenance model is what is broken, and -Dcopyright.skip=true would only hide it."
         echo "  WARNING: README regeneration failed; the completeness check will report it" >&2
     fi
 }
@@ -986,15 +1000,6 @@ if [ -s "$MANUAL_FOLLOWUPS" ]; then
 fi
 echo
 echo "  NOT covered here, and NOT green merely because this exited 0:"
-echo "   - BLOCKER, not a nicety: bin/check-copyright-headers.sh resolves provenance by EXACT PATH"
-echo "     against the fork-point tree, so after the move every upstream-derived file misses that"
-echo "     lookup and is judged fork-original - INVERTING its verdict rather than degrading, to"
-echo "     ~197 violations. It is bound to maven's VALIDATE phase, so until it is repaired EVERY"
-echo "     './mvnw ...' on this tree dies before doing anything - which is why the README"
-echo "     regeneration above has to pass -Dcopyright.skip=true. The fix is a path-normalisation"
-echo "     rule mapping bz/stub/ back to io/confluent/ before the lookup, plus a case in"
-echo "     bin/test-check-copyright-headers.sh that fails without it. A design change to another"
-echo "     script, deliberately not folded in here."
 echo "   - The mutation lane EXITS 0 when it matches nothing. On the first PR after this lands,"
 echo "     change a class under the decidable packages and read the job summary for a mutation score"
 echo "     and a survivor list. A green tick carrying 'nothing to mutate, skipping' is the FAILURE"

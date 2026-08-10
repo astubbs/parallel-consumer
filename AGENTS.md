@@ -2,6 +2,36 @@
 
 Project context for AI coding agents (Claude Code, Copilot, Cursor, etc.).
 
+## IN FLIGHT: the package rename - rename your branch BEFORE you merge master
+
+The fork is moving `io.confluent.*` to `bz.stub.*` with `bin/rename-packages.sh`. Until every open
+branch has run it, this binds **any** agent merging **any** branch. Delete this section once no open
+branch predates the rename. Reasoning and measurements:
+`docs/plans/2026-08-11-001-refactor-package-rename-plan.md` (until it merges:
+`git show refactor/package-rename:docs/plans/2026-08-11-001-refactor-package-rename-plan.md`).
+
+- **Run `bin/rename-packages.sh` on your branch first, then merge master.** Both sides then agree on
+  where every file lives and what it is called, so the merge is ordinary.
+- **This is mandatory, not tidiness, and a clean merge is not evidence that you skipped it safely.**
+  Merging renamed master into a branch that had NOT been renamed reported **zero conflicts** and
+  silently applied the streams module's ArchUnit test edit into the *mutiny* module's file: git
+  paired the five near-identical `TestConventionsArchTest.java` files across modules. Measured, not
+  predicted. Renamed on both sides, the same case surfaces as a rename/rename conflict on the right
+  file, for a human to resolve.
+- **Sweep with `grep -rnE 'io[\\./]*conflu'`, never `grep -rn "io\.confluent"`.** Three files encode
+  the package as an escaped regex (`io\.confluent\.parallelconsumer\.`) and one as a misspelling
+  (`parallalconsumer`); the habitual sweep reports success without `bin/lib/quarantine-common.sh`
+  even appearing in its output.
+- **Assert the renames git RECORDED, and their pairing - a bare R-count is not enough.**
+  `git show --raw -M <rev>` must show one R per moved file *and* each old path must map to its new
+  path under the same transformation: squashing the rename into one commit invented four
+  cross-module renames and dropped a fifth file to an add/delete pair. `bin/rename-packages.sh`
+  asserts both; if you moved anything by hand, assert both by hand.
+- **Confirm the mutation lane scored mutants instead of trusting the tick.** `bin/ci-mutation-test.sh`
+  exits **0** printing "nothing to mutate, skipping" when its package regex is stale, which is
+  indistinguishable from a pass in the job summary. Read the summary for a mutation score and a
+  survivor list.
+
 ## Where things live (read this before concluding something isn't tracked)
 
 Documentation is split by *purpose*, and the split is enforced by convention rather than tooling - so
@@ -242,6 +272,11 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
     `RENAMED_FROM_UPSTREAM` (`newpath|oldpath` lines) and extractions in `EXTRACTED_FROM_UPSTREAM`
     inside `bin/check-copyright-headers.sh`. Renames with content changes, and all extractions,
     also require the modifications line
+  - A whole-package MOVE is a rule, not ~200 rename entries: `PACKAGE_MOVES` in the same script maps
+    a current path back to its fork-point path before every lookup, so provenance survives
+    `io.confluent.*` → `bz.stub.*`. Without it the verdict *inverts* - every upstream file misses the
+    fork-point lookup, is judged fork-original, and its required Confluent header becomes a violation
+    (measured: 0 → 197, in maven's `validate` phase, so every `./mvnw` dies before it starts)
 - **Google Truth**: Used for test assertions alongside JUnit 5 and Mockito.
 
 ## CI
