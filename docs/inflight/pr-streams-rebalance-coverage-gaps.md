@@ -41,9 +41,14 @@ across threads, so the constructor's bind is the only one that happens. Four ind
 this as an overclaim in the first draft of this work.
 
 It is not dead code - it removes an unstated assumption, and the cross-thread hazard that actually bit
-(the state updater calling `maybeCheckpoint`) is handled by the dispatcher's read-only surface instead.
+(the state updater calling `maybeCheckpoint`) is handled by the dispatcher's query surface instead.
 But treat it as unexercised capability, not a closed gap. If a real hand-off point is ever identified,
 wire it there; until then no test can prove more than that the method works when called directly.
+
+**The module's unit suite structurally cannot catch this class.** It has no Kafka Streams in it, so no
+second thread ever asks the dispatcher anything - which is why the state-updater defect reached the
+integration suite before anything went red. Cross-thread properties here need either a test that drives a
+foreign thread by hand, or an integration arm.
 
 ## Open: the `duplicates=0` result is not yet evidence of correctness
 

@@ -41,6 +41,7 @@ import java.util.function.LongFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The seam itself, with Kafka Streams taken out of the picture.
@@ -695,12 +696,15 @@ class PcTaskDispatcherTest {
         dispatcher = new PcTaskDispatcher("task-rebind", INPUT_PARTITIONS, 4);
         final Thread constructingThread = Thread.currentThread();
 
-        assertThat(dispatcher.hasCommitDataOutstanding())
+        // Probed through collectCommitData, not hasCommitDataOutstanding: the latter stopped being guarded
+        // when it became a genuine query, so it can no longer witness a guard at all. collectCommitData
+        // reaches WorkManager and therefore still carries the rule this test is about.
+        assertThat(dispatcher.collectCommitData())
                 .as("precondition: the constructing thread owns the commit surface")
-                .isFalse();
+                .isEmpty();
 
         runOnNewThread("new-owner", () -> {
-            assertThatThrownBy(dispatcher::hasCommitDataOutstanding)
+            assertThatThrownBy(dispatcher::collectCommitData)
                     .as("before rebinding, the new thread is a stranger")
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("owner-thread-only")
@@ -708,13 +712,13 @@ class PcTaskDispatcherTest {
 
             dispatcher.bindToCurrentThread();
 
-            assertThat(dispatcher.hasCommitDataOutstanding())
+            assertThat(dispatcher.collectCommitData())
                     .as("after rebinding the new owner may drive the commit surface - this is the "
                             + "legitimate call the construction-time bind used to reject")
-                    .isFalse();
+                    .isEmpty();
         });
 
-        assertThatThrownBy(dispatcher::hasCommitDataOutstanding)
+        assertThatThrownBy(dispatcher::collectCommitData)
                 .as("and ownership MOVED rather than being shared - the old owner is now the stranger, or "
                         + "the guard would be protecting nothing")
                 .isInstanceOf(IllegalStateException.class)
@@ -1021,6 +1025,138 @@ class PcTaskDispatcherTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * The defect that made this method a query rather than a drain, reproduced without Kafka Streams.
+     * <p>
+     * Kafka Streams' {@code DefaultStateUpdater} calls {@code StreamTask.maybeCheckpoint} <b>from its own
+     * thread</b> for every task it is restoring, and the patched {@code maybeCheckpoint} asks the dispatcher
+     * whether a commit is outstanding before refreshing changelog offsets. So this question arrives on a
+     * second thread, concurrently with the StreamThread, and it arrives in production - it is not a
+     * hypothetical a guard invented. While the answer came from a mailbox drain, that meant
+     * {@code WorkManager} and its partition state, neither of them thread-safe, touched by two threads at
+     * once; the owner-thread guard converted that silent race into a deterministic
+     * {@code IllegalStateException} that took the integration suite down.
+     * <p>
+     * Three properties, and the middle one is the one worth guarding: the call must not throw, the answer
+     * must be <em>right</em> from over there, and it must be reached without draining. A thread-safe answer
+     * that reported "nothing to commit" about finished work would be a worse defect than the crash, because
+     * it loses records instead of stopping.
+     */
+    @Test
+    void commitOutstandingIsAnswerableFromAnotherThreadWithoutDraining() throws InterruptedException {
+        dispatcher = new PcTaskDispatcher("task-cross-thread-query", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "one-key"));
+
+        assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+                .as("the single record goes to a worker")
+                .isEqualTo(1);
+
+        // inFlight is decremented in runOnWorker's finally block, AFTER the completion has been published,
+        // so zero in flight means the completion is sitting in the mailbox. Nothing has drained it: only the
+        // owner thread drains, and the owner thread is this one, parked here.
+        await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getInFlightCount() == 0);
+
+        assertThat(dispatcher.getWorkManager().isDirty())
+                .as("precondition: PC itself does not know the record completed yet - which is precisely the "
+                        + "state a draining query would have had to mutate away, from the wrong thread")
+                .isFalse();
+
+        AtomicReference<Boolean> answer = new AtomicReference<>();
+        Throwable thrown = runOffOwnerThread("test-StateUpdater-1",
+                () -> answer.set(dispatcher.hasCommitDataOutstanding()));
+
+        assertThat(thrown)
+                .as("the state updater asks this from its own thread on every restoring task; a query that "
+                        + "throws there takes the application down, deterministically")
+                .isNull();
+        assertThat(answer.get())
+                .as("and the answer must be right from over there: the record has completed and no commit "
+                        + "has covered it, so a thread-safe FALSE would lose it")
+                .isTrue();
+        assertThat(dispatcher.getWorkManager().isDirty())
+                .as("and it must not have drained to work that out - the drain is what reached WorkManager "
+                        + "from the wrong thread")
+                .isFalse();
+
+        assertThat(dispatcher.collectCommitData())
+                .as("the owner-thread path still folds the completion in, so nothing is stranded by the "
+                        + "query staying passive")
+                .containsKey(PARTITION)
+                .satisfies(map -> assertThat(map.get(PARTITION).offset()).isEqualTo(1L));
+    }
+
+    /**
+     * The accuracy trap in the other direction, and the reason the query counts successes rather than the
+     * mailbox's size: a failed record leaves its offset incomplete, PC never turns the partition dirty, and
+     * there is nothing new to commit. Answering "outstanding" here would be permanent - retries are disabled,
+     * so the record never succeeds - and {@code validateClean} would turn it into a spurious
+     * {@code TaskMigratedException} on an otherwise clean close.
+     */
+    @Test
+    void aFailedCompletionIsNotCommitOutstanding() {
+        dispatcher = new PcTaskDispatcher("task-failure-not-outstanding", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(1, offset -> "one-key"));
+
+        dispatcher.dispatchAvailable(record -> () -> {
+            throw new IllegalStateException("processing blew up");
+        });
+        await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getRecordsFailed() == 1);
+
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("a failure is not commit data - counting the mailbox rather than its successes would "
+                        + "report true here, and never stop")
+                .isFalse();
+
+        dispatcher.collectCommitData();
+        assertThat(dispatcher.hasCommitDataOutstanding())
+                .as("and still not, once the failure has actually been fed back to PC")
+                .isFalse();
+    }
+
+    /**
+     * The other half of the same rule: the two methods that really do reach {@code WorkManager} keep the
+     * owner-thread guard. {@link PcTaskDispatcher#hasCommitDataOutstanding()} lost it by becoming a query, not
+     * by the rule being relaxed, and the difference is what this pins - deleting the guard would restore the
+     * silent cross-thread corruption it was added to expose.
+     */
+    @Test
+    void theWorkManagerTouchingCommitMethodsStayOwnerThreadOnly() throws InterruptedException {
+        dispatcher = new PcTaskDispatcher("task-owner-guard", INPUT_PARTITIONS, 4);
+
+        assertThat(runOffOwnerThread("test-StateUpdater-1", dispatcher::collectCommitData))
+                .as("collecting drains the mailbox into PC, so it stays owner-thread-only")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("collectCommitData");
+
+        assertThat(runOffOwnerThread("test-StateUpdater-1",
+                () -> dispatcher.onCommitSuccess(Collections.emptyMap())))
+                .as("and acknowledging a commit writes partition state, so it does too")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("onCommitSuccess");
+    }
+
+    /**
+     * Runs {@code body} on a thread named after Kafka Streams' state updater - the thread this module's
+     * commit surface is actually reached from - and returns whatever it threw, or null.
+     */
+    private static Throwable runOffOwnerThread(final String threadName, final Runnable body)
+            throws InterruptedException {
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread thread = new Thread(() -> {
+            try {
+                body.run();
+            } catch (Throwable t) { //NOSONAR - the point is to report whatever the call did, including Errors
+                thrown.set(t);
+            }
+        }, threadName);
+        thread.start();
+        thread.join(PUMP_TIMEOUT.toMillis());
+        assertThat(thread.isAlive())
+                .as("the off-thread call must return rather than block - a query that can block is not one")
+                .isFalse();
+        return thrown.get();
     }
 
     private static final class Completion {
