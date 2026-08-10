@@ -47,10 +47,16 @@ the conservative generalisation - never ahead of stock, equal to stock whenever 
 - **The seam-ON `StreamTaskTest` baseline is 30 failures, not 33.** Measured on this base branch after
   U9 and U10 (101 run, 24 failures, 6 errors). The 33 in the master plan predates both.
 
-So the honest pile F prediction is **2 failing to 1**, not 2 to 0, and even that one is at risk of
-becoming *flaky* rather than green - see [Predictions](#predictions-stated-before-execution). The real
-proof of U13 is module-owned: a punctuator that fires, a divergence that is measured, and a stock
-control arm.
+So the honest pile F prediction is **2 failing to 1 at best**, not 2 to 0, and even that one may only
+have its failure *relocated* to a later assertion - see
+[Predictions](#predictions-stated-before-execution).
+
+**Read that as a statement about the metric, not about the unit.** Both pile F cases are written for a
+dispatcher that consumes exactly one record per `process()` call and selects across partitions in
+timestamp order. That is stock's shape, and PC deliberately has neither property, so the pile F count
+cannot measure whether stream time works. The gate is module-owned instead: **a punctuator that fires,
+a divergence that is measured, and a stock control arm.** Pile F is reported because R11 requires the
+comparison, not because it is the success criterion.
 
 **Nothing is reinstated here.** U13 makes the refusal *messages* factually wrong - twelve of them say
 stream time "never advances on the PC path" - so correcting those strings is in scope. Deciding that a
@@ -265,10 +271,10 @@ flowchart TB
         SC -.reads.-> SE["maybePunctuateStreamTime()<br/>currentStreamTimeMs()"]
     end
 
-    subgraph pc["PC path (seam ON) - what U13 adds"]
+    subgraph pcpath["PC path (seam ON) - what U13 adds"]
         PA["addRecords()"] --> PB["PcTaskDispatcher.registerRecords<br/>PC WorkManager, KEY-ordered shards"]
-        PB --> PC1["dispatchAvailable()<br/>owner thread"]
-        PC1 --> PD["pcPrepare()<br/>RecordQueue.poll -> extracted timestamp"]
+        PB --> PCD["dispatchAvailable()<br/>owner thread"]
+        PCD --> PD["pcPrepare()<br/>RecordQueue.poll -> extracted timestamp"]
         PD --> PE["worker pool<br/>up to poolSize chains in parallel"]
         PE --> PF["completed mailbox"]
         PF --> PG["drainCompletions()<br/>owner thread"]
@@ -584,9 +590,9 @@ Recorded here so refutations are reportable rather than quietly absorbed, per U1
 |---|---|---|
 | P1 | `shouldPunctuateOnceStreamTimeAfterGap` will **not** pass after U13. It fails at `numBuffered()` (pile C), and behind that it demands one record per `process()` call and cross-partition timestamp ordering. | It passes. Then the batching analysis is wrong and pile C is less coupled than measured. |
 | P2 | `shouldRespectPunctuateCancellationStreamTime` will get **past** its current failure at `StreamTaskTest:1303`. | It still fails at 1303, meaning the mark is not reaching `canPunctuateStreamTime` at all. |
-| P3 | P2 is not the same as passing. The test then calls `assertTrue(task.process(0L))` twice more, and each needs the previous batch's workers to have finished before the next pump - which nothing in the test waits for. Expect **green-but-racy**, or a failure that has moved to a later line. | It is stably green over N repeats. Report N. |
-| P4 | Pile F therefore goes **2 to 1**, not 2 to 0. | Either of the above. |
-| P5 | Total seam-ON `StreamTaskTest` failures go 30 to 29. No other case changes. | Any other case moves. A pile A or pile B regression bought with a pile F win is not a win, and gets reported first. |
+| P3 | P2 is not the same as passing, and the more likely outcome is that the failure **moves to the next `assertTrue(task.process(0L))`** rather than disappearing. With two records in flight and nothing waiting for them, the next pump computes `capacity = poolSize - inFlight`, finds both KEY shards blocked, consumes nothing, and correctly returns false. Expect *failure relocated*, or green-but-racy. | It is stably green over N repeats. Report N and the reproduction rate; a test that flips is recorded UNRESOLVED, not green. |
+| P4 | Pile F therefore goes **2 to 1 at best, and possibly 2 to 2 with the second case failing for a different and better-understood reason.** The count is a weak metric for this unit; the module-owned punctuation proof is the gate. | Pile F reaching 0. That would mean the batching analysis in P1 and P3 is wrong twice. |
+| P5 | Total seam-ON `StreamTaskTest` failures go 30 to 29, or stay at 30 with one case failing later. No **other** case changes. | Any other case moves. A pile A or pile B regression bought with a pile F win is not a win, and gets reported first. |
 | P6 | The published mark is never greater than `maxDispatchedTimestamp`, in every test and every run. | A single counter-example. This is the safety property; it failing means the design is wrong, not the code. |
 | P7 | Punctuation firing points are **not** reproducible across two runs over identical input under concurrency. | They are identical over repeated runs, which would mean completion timing is more deterministic than assumed - and would make the divergence far easier to live with. |
 | P8 | Correcting the refusal messages will change **no** test outcome, because refusal behaviour is unchanged. | A refusal test moves. |
@@ -613,8 +619,9 @@ Inferred rather than confirmed, because this run had no interactive user.
 | Gate | Command | Bar |
 |---|---|---|
 | Behaviour preservation, seam OFF | module `test` (the pom pins the seam off for that execution) | `StreamTaskTest` 101, `StreamThreadTest` 231 (21 skipped by Kafka's own annotations), `RecordCollectorTest` 59, `ProcessorContextImplTest` 28 - **419, zero failures** |
-| Pile F, seam ON | module `test` with `-Dpc.streams.dispatch.enabled=true -Dincluded.groups=<nonexistent>`, read `target/surefire-reports-kafka-upstream/` | 2 failing to 1, with P1-P4 reported |
-| Full seam-ON set | same run, full failing list diffed against this plan's baseline | 30 to 29; **any case that got worse is reported first** |
+| Punctuation actually works | new module integration test, seam ON, with the seam-OFF control arm | **the real gate.** A `STREAM_TIME` punctuator fires, arguments non-decreasing, never above the highest timestamp fed in |
+| Pile F, seam ON | module `test` with `-Dpc.streams.dispatch.enabled=true -Dincluded.groups=<nonexistent>`, read `target/surefire-reports-kafka-upstream/` | reported with P1-P4, and with the *failing line* for each case - not a bare count |
+| Full seam-ON set | same run, full failing list diffed against this plan's baseline | no case gets worse; **any that does is reported first** |
 | Module unit suite | `./mvnw -pl .,parallel-consumer-streams test -Dcopyright.skip=true` | green |
 | Module integration suite | `verify` - streams ITs run under failsafe, not surefire | green |
 | Patch integrity | `bin/regen-patch.sh`, then compare added/removed line **bodies** old against new | every line the old patch added is still added; hunk count is a hint only |
@@ -624,6 +631,10 @@ Inferred rather than confirmed, because this run had no interactive user.
 - `StreamTaskTest`: 101 run, 24 failures, 6 errors - **30 distinct failing cases**
 - `StreamThreadTest`: 231 run, 16 failures, 25 errors, 21 skipped - 41 distinct failing cases
 - `RecordCollectorTest`: 59 run, 0 failing. `ProcessorContextImplTest`: 28 run, 0 failing.
+
+**Measured twice, and the failing sets are identical case-for-case** (N=2), so a single case moving
+after the change is signal rather than noise. Anyone re-measuring should do the same before reading a
+delta: this suite runs a real worker pool, and one run is not a baseline.
 
 **Proving the upstream suite actually ran is part of the gate.** `-Dtest=...` silently overrides the
 execution's `<includes>`, so the suite does not run and the build goes green having computed nothing.
@@ -684,10 +695,12 @@ result.
 
 ## Definition of Done
 
-1. Task stream time advances on the PC path, and `ProcessorContext.currentStreamTimeMs()` returns it.
+1. Task stream time advances on the PC path, proven by a punctuator that fires against a seam-OFF
+   control arm, and `ProcessorContext.currentStreamTimeMs()` returns it.
 2. Seam-OFF 419, zero failures - unchanged.
-3. Seam-ON `StreamTaskTest` measured the same way before and after, both counts quoted, with proof the
-   upstream execution ran; every case that got worse reported before any that got better.
+3. Seam-ON `StreamTaskTest` measured the same way before and after, both counts quoted **with the
+   failing line for each pile F case**, and with proof the upstream execution ran; every case that got
+   worse reported before any that got better.
 4. The divergence from stock is characterised with numbers, including the determinism probe, and written
    up in the result document.
 5. Every refusal message that asserted "stream time never advances" is corrected; no construct is
