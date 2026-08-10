@@ -143,11 +143,28 @@ jobs:
 
       # A green `claude-review` must mean "this PR was reviewed", not "the job finished". The action
       # above exits 0 in several situations where it reviews nothing, and this job then reports
-      # success indistinguishably from "reviewed, no findings". That is not hypothetical here twice
-      # over: the `--comment` note above is one instance, and the action's workflow-validation guard
-      # - which skips it whenever THIS FILE differs from the default branch, i.e. on every PR that
-      # edits the reviewer - is the other. PR astubbs#124 hit the latter and sat mergeable with a green
-      # check and no review of any kind.
+      # success indistinguishably from "reviewed, no findings". That is not hypothetical here three
+      # times over:
+      #
+      #   1. The `--comment` note above: the plugin printed its review to the log and posted nothing.
+      #   2. The action's workflow-validation guard, which skips it whenever THIS FILE differs from
+      #      the default branch, i.e. on every PR that edits the reviewer. PR astubbs#124 hit it and
+      #      sat mergeable with a green check and no review of any kind.
+      #   3. The reviewer announced it would review in the background, and then the job ended. On PR
+      #      astubbs#271 the sticky comment said "Claude finished @astubbs's task in 4m 10s" over a
+      #      task list with two boxes still unticked and a closing line promising findings "once
+      #      complete"; no review was ever submitted. The same shape hit astubbs#266 three times.
+      #      `track_progress: true` is what makes this the DEFAULT path rather than an edge case -
+      #      the tracking comment carries the run URL and is posted at the START of the run, so a
+      #      gate that only asks "did a comment cite this run" is satisfied before any review begins.
+      #      The gate now also requires that comment to have no unticked task-list box left in it,
+      #      which is the reviewer's own account of whether it finished.
+      #
+      # The `--jq` below emits a boundary line between comment bodies. Without it the gate receives
+      # every comment on the PR as one undivided stream and cannot tell whose unticked box it is
+      # looking at - which would fail runs that genuinely reviewed, as on astubbs#257 where one run
+      # left a stale tracker behind alongside a full review. Keep the marker identical to
+      # COMMENT_BOUNDARY in bin/check-review-posted.sh.
       #
       # Runs on failure too (not just success): a crashed or timed-out action must not leave the
       # unreviewed state unreported either. Skipped on cancellation, where the concurrency group has
@@ -163,6 +180,6 @@ jobs:
           REVIEW_OUTCOME: ${{ steps.claude-review.outcome }}
         run: |
           gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
-              --paginate --jq '.[].body' \
+              --paginate --jq '.[] | .body, "<!-- check-review-posted: comment boundary -->"' \
             | bash bin/check-review-posted.sh "${{ github.run_id }}" "$REVIEW_OUTCOME"
 
