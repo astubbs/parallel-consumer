@@ -55,6 +55,19 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
+      - name: Resolve the sources jars the experimental modules unpack
+        # dependency:go-offline resolves declared dependencies only. The Streams and Connect modules
+        # fetch CLASSIFIER artifacts (kafka-streams sources, connect-runtime sources) through
+        # dependency:unpack executions that go-offline never sees, so without this step every test lane
+        # re-downloads them from Central and inherits its read timeouts - which failed both lanes three
+        # times running on PR astubbs/parallel-consumer#269.
+        #
+        # It must be a full `package`, not a phase-only walk: the modules' test-scope resolution needs
+        # core's tests-classifier jar, which only exists once core reaches package, so a
+        # generate-test-sources walk dies on exactly that before performing a single unpack. -pl the
+        # Connect module with -am pulls Streams and core along, so every unpack runs; -DskipTests keeps
+        # it to a build rather than a test round.
+        run: ./mvnw --batch-mode -Pci -pl parallel-consumer-connect -am -DskipTests package
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
