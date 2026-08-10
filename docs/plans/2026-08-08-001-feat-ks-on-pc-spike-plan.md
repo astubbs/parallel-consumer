@@ -53,6 +53,7 @@ spike is designed so a red or ambiguous result sends the question back to the al
 | R7 | No Apache Kafka source is committed to this repository. The CI gates pass without being bypassed or weakened. |
 | R8 | The spike reports the size and shape of the change set. The patch file is that report: its line count, the classes it touches, and whether any new PC API was required. |
 | R9 | The spike exercises at least one code path where the thread-confinement fix is actually load-bearing, so a green result distinguishes "confinement works" from "confinement was never needed here". |
+| R10 | A commit that lands while records are in flight never covers an unfinished record: after a crash mid-run, every input record's effect is eventually present (at-least-once). Demonstrated by a kill-restart test, not asserted from the design. *(Added when U9 was planned - the alpha shipped with optimistic commit as a recorded shortcoming, and this is the requirement that retires it. No existing R changed.)* |
 
 ### Scope Boundaries
 
@@ -63,10 +64,14 @@ minimal stateful arm (U7) so the result can discriminate.
 
 **Non-goals (this spike):**
 - The build-time parallel-safe reachability pass in `InternalTopologyBuilder` (report §4.9).
-- Moving committable-offset ownership to PC (report §4.6).
+- ~~Moving committable-offset ownership to PC (report §4.6).~~ *(Reversed when U9 was planned:
+  KTD-S7 takes input-partition commit data from PC on the PC path, and R10 demands it. The
+  exclusion held through the alpha; the stock path is untouched.)*
 - Windowed operators, joins, suppression, punctuators, EOS, standby/restore.
 - Caching-enabled state, and therefore the cache-layer concurrency problems entirely.
-- Throughput measurement. "Faster" is not the question.
+- Throughput measurement. "Faster" is not the question. *(Narrowed when U8 was planned:
+  per-record latency distribution is the measured question, and wall-clock sweeps serve only as
+  controls on the premise - throughput as a goal remains out.)*
 - The Web GUI stretch goal on astubbs#255 - it needs the parallel-safe tagging pass.
 
 **Ships as alpha.** The module lands on master and publishes as an alpha/experimental artifact alongside
@@ -242,6 +247,31 @@ single-path property is unaffected: it is a switch either way, never a fan-out.)
 group, `StreamTask.addRecords` pauses a partition once its buffer fills, and the run would stall with
 the consumer paused and no error. `streamTime` would also never advance, since it advances at selection.
 
+**KTD-S7. On the PC path, commit data comes from PC - and PC owns the commit metadata field.**
+*(session-settled: user-approved - chosen over repairing `consumedOffsets` with synchronisation: a
+single `Long` per partition cannot represent "12 done, 10 and 11 still in flight" under any locking,
+so the structure is the defect, not the access to it.)*
+`committableOffsetsAndMetadata()` on the PC path returns
+`WorkManager.collectCommitDataForDirtyPartitions()` wholesale: offset = the frontier (lowest
+incomplete), metadata = PC's encoded map of completed-but-non-contiguous offsets beyond it, with
+PC's own graceful no-metadata fallback when the encoding is too large. Consequences accepted with
+eyes open:
+
+- **Streams' `TopicPartitionMetadata` (partition time + processor metadata) is not written for input
+  partitions on the PC path.** Partition time already does not advance there (see
+  [Current Shortcomings](#current-shortcomings): stream time), and processor metadata is a Processor
+  API nicety. Verified safe on restart: PC's payload is valid base64 whose leading magic byte is a
+  printable letter, never version 1 or 2, so `TopicPartitionMetadata.decode` takes its
+  version-switch default branch, warns "Unsupported offset metadata version found. Supported
+  version <= 2. Found version {n}.", and returns UNKNOWN - a stock (seam-off) restart on a
+  PC-committed group degrades gracefully rather than crashing. When PC's too-large fallback
+  committed a bare offset, decode returns early on the empty string with no warning at all.
+- The two `StreamTaskTest` cases that assert Streams' metadata *encoding* in the commit are therefore
+  expected to stay red by design, and U9 says so up front rather than discovering it.
+
+*Rejected:* merging both encodings into one metadata field - two decoders would each see the other's
+bytes as corruption, and the field would carry two owners forever.
+
 ### Assumptions
 
 - **Corrected from an earlier draft:** `kafka-streams:3.9.2` ships class-file **major 52 (Java 8)** -
@@ -251,7 +281,8 @@ the consumer paused and no error. `streamTime` would also never advance, since i
   sources will not compile until both are added at compile scope.
 - `ParallelConsumerOptions.validate()` requires a `Consumer` instance, but `PCModule`/`WorkManager`
   construction never invokes `validate()`. Whether the bridge passes a mock or the Streams consumer is
-  resolved at U5.
+  resolved at U5. *(Resolved: the bridge passes a mock, and U9 keeps it - see U9 approach step 6
+  for why that stays sound once PC's commit data becomes real.)*
 
 ---
 
@@ -310,6 +341,10 @@ flowchart TD
     U5 -->|"works"| U6["U6 stateless proof"]
     U5 -->|"blocked"| STOP2["write the result doc:<br/>seam blocked, and where"]
     U6 --> U7["U7 stateful arm<br/>+ write-up lands on master"]
+    U6 --> U8["U8 benchmarks:<br/>latency, not throughput"]
+    U7 --> U8
+    U5 --> U9["U9 commit data from PC"]
+    U7 --> U9
 
     style STOP1 fill:#7f1d1d,stroke:#fca5a5,color:#fff
     style STOP2 fill:#7f1d1d,stroke:#fca5a5,color:#fff
@@ -496,8 +531,11 @@ worker pool, not via `partitionGroup.nextRecord()` on the StreamThread.
    Assumptions here.
 2. Adapt records via `EpochAndRecordsMap` - `registerWork` takes that, not a record collection.
 3. **Single path, switched** (KTD8): `addRecords` feeds `WorkManager` *instead of* the partition group,
-   with a bridge flag selecting stock or PC dispatch, **defaulting to stock**. That default is what
-   keeps U3's control arm and U6's stock path runnable after this unit lands.
+   with a bridge flag selecting stock or PC dispatch, defaulting to stock *(as built at U5;
+   reversed by KTD-S6 - the shipped flag defaults to PC dispatch, and U3's control arm and U6's
+   stock path now disable the seam explicitly at each site rather than inheriting a default. The
+   superseded rationale was that the stock default kept those arms runnable after this unit
+   landed.)*
 4. Replace the selection step in `process()` with a pull from `getWorkIfAvailable(int)`, dispatching
    each `WorkContainer` to the worker pool running the existing `doProcess` path.
 5. Report completion through `onSuccessResult` / `onFailureResult` so PC's shard invariant holds - under
@@ -734,6 +772,227 @@ records at 25ms behind it, pool of 4, both arms in one JVM on the patched classe
 
 ---
 
+### U9. Commit data from PC, not from `consumedOffsets` (pile A)
+
+**Goal:** Retire the only shortcoming that can lose data. On the PC path, the offsets and metadata
+handed to the consumer-group commit come from `WorkManager.collectCommitDataForDirtyPartitions()` -
+the frontier plus encoded holes - instead of Streams' one-`Long`-per-partition high-water map, which
+cannot represent out-of-order completion at all (see KTD-S7 for why this is a deletion, not a repair).
+
+**Requirements:** R3, R8, R10. Also the measured pile-A delta: 14 of the 33 seam-on `StreamTaskTest`
+failures are offset/commit accounting (see [the classification](#the-33-failing-streamtasktest-cases-classified)),
+and this unit measures how many it resolves.
+
+**Dependencies:** U5 (the dispatcher and seam), U7 (the stateful arm, whose changelog checkpoint this
+unit must not disturb)
+
+**Files:**
+- `parallel-consumer-streams-spike/src/main/patch/pcspike.patch` (modify - `StreamTask` hunks only;
+  the other three patched classes are untouched, and the patch surface stays at four)
+- `parallel-consumer-streams-spike/src/main/java/io/confluent/parallelconsumer/streamsspike/PcTaskDispatcher.java`
+  (modify - expose commit-data collection, a commit-outstanding signal, the commit-success
+  acknowledgement pass-through, and an abort-style close - no drain, no completion feed-back,
+  immediate `shutdownNow` - for the crash test; module class, free to grow)
+- `parallel-consumer-streams-spike/src/test/java/io/confluent/parallelconsumer/streamsspike/integrationTests/CommitFrontierCrashRestartTest.java`
+  (create)
+- `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (modify - record the measured pile-A delta
+  against the predictions)
+
+**Approach:**
+
+1. In patched `StreamTask`, when the dispatcher is active, `committableOffsetsAndMetadata()` returns
+   the dispatcher's commit data - `collectCommitDataForDirtyPartitions()` delegated through
+   `PcTaskDispatcher` - for input partitions. The stock path is untouched, per KTD8's
+   single-path-switched rule.
+2. Per KTD-S7, PC's `OffsetAndMetadata` is taken wholesale: frontier offset, PC-encoded metadata,
+   PC's existing too-large fallback. No Streams `TopicPartitionMetadata` is written on this path.
+3. Delete the `consumedOffsets.put` in `pcRunChain` - the worker-side chain-completion callback in
+   patched `StreamTask` - then find every remaining `consumedOffsets` reader on the PC path and
+   re-point it. The direct readers in the 3.9.2 sources are exactly three:
+   `committableOffsetsAndMetadata()` (step 1), `commitNeeded()`, and `checkpointableOffsets()`.
+   The repartition-purge derivation reads the separate `committedOffsets` map, fed after a
+   successful commit - step 8's territory, not a re-point site.
+4. `commitNeeded()` on the PC path derives from the dispatcher - completions not yet covered by a
+   **successful** commit, not by a collection - rather than from the volatile flag the drain sets
+   today. Two gates must both be satisfied: the `commitNeeded()` *method*, and the private
+   `commitNeeded` **field** that `prepareCommit()` checks before ever calling
+   `committableOffsetsAndMetadata()` and that additionally gates the pre-commit `flush()` -
+   re-point that field check to the dispatcher in the same hunk that re-points
+   `committableOffsetsAndMetadata()`, or nothing on the PC path ever commits at all.
+5. Close the loop on success: patched `postCommit()` - reached only after the commit has
+   succeeded - reports the committed input-partition offsets back through `PcTaskDispatcher` to
+   `WorkManager.onOffsetCommitSuccess(...)`. That is the only caller of PC's `setClean`, so
+   without it every partition stays dirty forever, `commitNeeded()` never goes false, and a
+   commit that fails after collection would strand its data - the dirty partition re-collects on
+   the next cycle instead.
+6. The dispatcher's `MockConsumer` stays, and its javadoc must be updated - its current rationale
+   ("offset commit stays on the stock Streams path... never committed from") is the premise this
+   unit deletes. Why it remains sound once commits are real: PC's bootstrap truncation
+   (`PartitionState.maybeTruncateBelowOrAbove`) aligns the frontier to the first record Streams
+   polls after resume, and collection only returns dirty partitions, so a first PC commit cannot
+   regress the group's committed offset. Do NOT "fix" the javadoc contradiction by handing PC the
+   real Streams consumer: PC's bootstrap would then decode the group's older stock-format commit
+   metadata and fail under the default `invalidOffsetMetadataPolicy` (FAIL) - exactly the
+   seam-off-then-seam-on flow KTD-S6 makes normal.
+7. `checkpointableOffsets()` is the recorded trap: it merges `recordCollector.offsets()` (changelog,
+   producer-side, already correct) with `consumedOffsets`. Only the input-partition half moves to PC;
+   the changelog merge must not change.
+8. The repartition-purge derivation flows from committed offsets, so once commit data is PC's frontier
+   it becomes frontier-safe with no further change - verify rather than modify.
+9. **Non-goal: metadata read-back on assignment.** Loading PC's encoded metadata into the `WorkManager`
+   at partition assignment would let a restart skip already-completed records. At-least-once does not
+   require it - the frontier alone prevents loss; replaying completed-beyond-frontier records is a
+   permitted duplicate. Record it as the follow-up that turns "no loss" into "no loss and minimal
+   replay", and note that when it lands, `invalidOffsetMetadataPolicy` must be set to IGNORE for the
+   spike's module so a group's older Streams-format metadata is dropped gracefully instead of read as
+   PC's.
+
+**Execution note:** Prediction-first, both at the test level and the suite level. Before implementing,
+run seam-on `StreamTaskTest` **N times, stating N** - single runs are noise in exactly the cases
+being measured, since these tests assert immediately after `process()` while workers complete
+asynchronously - and write a per-test prediction for all 14 pile-A cases - including the
+two metadata-encoding assertions predicted to stay red under KTD-S7. Start from the failing
+commit-frontier test below, red against the current mechanism, so the defect is demonstrated before it
+is removed. After implementing, record the per-test outcome against each prediction, refuted ones most
+prominently.
+
+**Test scenarios:**
+- **Commit-frontier (the defect, directly):** single partition; the record at frontier offset F parked
+  on a latch inside the chain; later records on other keys complete behind it; a commit lands (short
+  commit interval - not via `suspend()`, which drains and would mask the defect). Assert via
+  `consumer.committed()` that the committed offset is exactly F. Red today: the current mechanism
+  commits the high-water mark past F while F is still in flight.
+- **Kill-restart, no loss (R10):** same shape; await a commit, then kill without ceremony - the
+  dispatcher's abort-style close, not a clean `close()`, because the patched `suspend()` drains
+  via `pumpUntilQuiescent` and the close path commits on the way down, which would hand the
+  "crash" an orderly shutdown's repair pass and stall each repetition on the pool-termination
+  timeout. Restart with the seam on. The parked record's output appears after restart. Every input's
+  effect is present at least once; duplicates are permitted only for records at or beyond the frontier.
+- **Stock restart on PC metadata:** after a PC-path commit, start the same application id seam-off.
+  It runs: partition time UNKNOWN, no crash, and - only when the commit carried a metadata
+  payload - one "Unsupported offset metadata version found. Supported version <= 2. Found
+  version {n}." warning; a bare-offset commit (PC's too-large fallback) decodes silently.
+  Prefer asserting the behaviour (no crash, UNKNOWN time) over pinning the log line.
+- **Changelog half untouched:** the U7 stateful fixture still checkpoints changelog offsets from the
+  record collector after this change.
+- **Steady-state duplicates unchanged:** the existing proof-test drain discipline (surplus polls)
+  stays green - taking commit data from PC must not introduce re-dispatch.
+- **Pile-A delta:** seam-on `StreamTaskTest` before and after, per-test, against the predictions.
+
+**Verification:** The commit-frontier test is documented red-then-green. The kill-restart test is
+green over repeated runs, with the reproduction count stated. Kafka's 188 stay green seam-off,
+untouched. The pile-A delta is recorded in the result document with refuted predictions called out; both the
+baseline and the after-measurement are N-run, and a test that flips across runs is recorded as
+UNRESOLVED, not resolved.
+`pcspike.patch` still applies cleanly and its new hunk count is reported (R8).
+
+---
+
+## The 33 failing StreamTaskTest cases, classified
+
+Run with the seam **on**: 101 run, 33 failures. Read and grouped rather than fixed, because the point
+was to find out how much of the gap is work and how much is design.
+
+| Pile | Count | What it is |
+|---|---|---|
+| **A. Offset and commit accounting** | 14 | `shouldUpdateOffsetIf*` (6), `shouldCommit*` (3), `shouldCheckpoint*` (2), `shouldMaybeReturnOffsetsForRepartitionTopicsForPurging` (2), `shouldRespectCommitNeeded` |
+| **B. Close / suspend / recycle lifecycle** | 5 | `shouldThrowOnCloseClean*`, `shouldThrowIf*ingDirtyTask`, `shouldThrowExceptionOnCloseCleanError` |
+| **C. Buffering and pause/resume** | 4 | `shouldBeProcessableIfAllPartitionsBuffered`, `shouldPauseAndResumeBasedOnBufferedRecords`, `shouldRecordBufferedRecords`, `shouldResumePartitionWhenSkippingOverRecordsWithInvalidTs` |
+| **D. Error surfacing and timeouts** | 3 | `shouldWrapKafkaExceptionWithStreamsExceptionWhenProcess`, and the two `TimeoutException` cases |
+| **E. EOS gating around `prepareCommit`** | 3 | `should(Not)ProcessRecordsAfterPrepareCommitWhenEos*` |
+| **F. Stream-time punctuation** | 2 | `shouldPunctuateOnceStreamTimeAfterGap`, `shouldRespectPunctuateCancellationStreamTime` |
+| **G. Ordering** | 1 | `shouldProcessInOrder` |
+| **H. Metrics** | 1 | `shouldRecordE2ELatencyOnSourceNodeAndTerminalNodes` |
+
+**Piles A to D are 26 of 33 - work, not design, except two of A's 14: the metadata-encoding
+assertions KTD-S7 leaves red by design.** A alone is 14, and A is exactly the item already
+identified as PC's own competency: stop maintaining Streams' `consumedOffsets` on the PC path and take
+commit data from `WorkManager.collectCommitDataForDirtyPartitions()`. If that lands, close to half the
+failures are addressed by deleting a mechanism rather than adding one.
+
+**E, F and G are semantic** - six failures - and all three are already on the shortcomings list as
+deliberate divergences rather than defects; with KTD-S7's two by-design pile-A cases that makes
+eight deliberate divergences in all, every one recorded as such.
+
+**Root cause: asynchrony, not a broken harness. Settled by probe, not assumed.**
+
+Most failures read `expected: <true> but was: <false>`, which is `assertTrue(task.process(...))`, and
+`shouldProcessInOrder` is starker still - `expected: <5> but was: <0>` is not an ordering violation,
+nothing was processed at all. Two causes would produce that, and they imply very different amounts of
+work: either the work *was* dispatched and the assertion ran before the worker finished, or the work
+never became dispatchable because these tests drive `StreamTask` with a mock consumer and PC's
+`WorkManager` needs assignment and epoch bookkeeping a real consumer provides.
+
+Instrumenting `dispatchAvailable` settles it: `dispatched=2 available=2 inFlight=2`. Records reach the
+`WorkManager`, are handed back, and go to the pool. The mock-consumer harness works.
+
+So these are synchronous assertions against an asynchronous dispatcher - the tests call `process()` and
+check immediately, which stock's inline execution satisfies and a worker pool cannot. **Pile A is
+genuine offset-accounting work, not blocked behind harness repair**, which is the answer the triage was
+run to get.
+
+One incidental observation, worth knowing before pile A: PC logs *"Truncating state - removing records
+lower than 10 ... Bootstrap polled 10 but expected 0 from loaded commit data"* against the mock
+consumer. Harmless here, but it means PC's bootstrap reconciliation is running against synthetic offsets
+and should not be mistaken for a defect when it reappears.
+
+### Cutting the unsupported API surface - feasible, and no new patched class
+
+Verified against `ProcessorTopology` in the 3.9.2 sources. It exposes `stateStores()` returning the
+constructed `StateStore` instances and `processors()` returning the node list, which is enough to
+detect every unsupported construct at task construction:
+
+| Unsupported | Detected by |
+|---|---|
+| Windowed and session operators | a `stateStores()` entry that is a `WindowStore` or `SessionStore` |
+| Joins | the join processor nodes in `processors()` |
+| Suppression | the suppress processor node in `processors()` |
+| EOS | `processing.guarantee` in config, not the topology |
+
+`StreamTask` is **already patched**, and its constructor holds both the topology and the config, so the
+check costs no new class in the patch surface - the R8 objection that applies to the `poll.ms` fix does
+not apply here.
+
+**Fail at construction, with a message that names the construct and how to turn the seam off.** A user
+who cannot express the broken thing cannot be silently wrong at 3am, and refusing a topology is far
+cheaper than a README nobody reads. This is the one shortcoming whose fix *removes* risk rather than
+adding capability.
+
+**Annotate and throw - do not delete the methods.** Three layers, each catching what the one above it
+cannot:
+
+| Layer | Mechanism | Refuses at |
+|---|---|---|
+| 1 | `@DoNotCall` on the unsupported DSL methods, plus `@Deprecated` | **compile time** |
+| 2 | The method body throws `UnsupportedOperationException`, **guarded on the seam being enabled** | the call |
+| 3 | `ProcessorTopology` check at task construction | startup - and covers the Processor API |
+
+**Keeping the signatures is the whole point, and an earlier draft of this plan got that wrong by
+proposing deletion.** Kafka's own test suite calls `join`, `windowedBy` and `suppress` extensively.
+Delete those methods and that suite stops *compiling* - forfeiting the 188-test result that is
+currently this module's strongest behaviour-preservation evidence, and foreclosing ever running more of
+it. The evidence base is worth far more than the tidiness of a removed method.
+
+**Layer 2 must be conditional on the seam**, for the same reason. Guarded by
+`PcDispatchSwitch.isEnabled()`, a seam-off run stays behaviourally identical to stock and Kafka's tests
+keep passing exactly as they do today; a seam-on run refuses the construct at the call, with a message
+naming it and saying how to turn the seam off.
+
+**Layer 1 uses the standard mechanism rather than a bespoke one.** ErrorProne's
+`com.google.errorprone.annotations.DoNotCall` exists for exactly this - "this method must never be
+called" - and ErrorProne reports a call as an **error**, not a warning. It is already on this module's
+dependency tree at 2.41.0, and it is an annotations-only artifact, so it imposes nothing on a user who
+does not run ErrorProne. `@Deprecated` alongside it gives everyone else an ordinary compiler warning,
+which `-Werror` escalates for those who want it.
+
+Together that yields compile-time refusal for users while the sources still compile for Kafka's own
+tests - which deletion cannot do. The earlier draft's argument against the DSL layer was separately
+wrong on its own terms: it priced the work as "you would have to patch six types", which is a count of
+edits rather than a technical cost.
+
+A restricted builder of our own remains a possible fourth layer, but it is additive and bypassable, so
+it does not need deciding now.
+
 ## Current Shortcomings
 
 **This is a worklist, not a list of permanent limitations.** Each item below is something the PC path
@@ -750,7 +1009,9 @@ The README points here.
 `StreamTaskTest` is 101/101 against the patched classes; with it **on**, it is **68/101**. Those 33
 failures - clustered in the result document's §9 - are what this list looks like when written by Kafka's
 own authors, and working this section top-down is the same thing as working that table top-down. Offset
-and commit accounting is the largest cluster (11) and the one blocking crash-safety.
+and commit accounting is the largest cluster (14 - see
+[the classification](#the-33-failing-streamtasktest-cases-classified), which supersedes the result
+document's §9 grouping) and the one blocking crash-safety.
 
 ### Stream time never advances
 
@@ -783,7 +1044,10 @@ Stock Streams throws straight to the uncaught-exception handler.
 commit offset N for a partition while a *lower* offset from that same partition is still in flight; crash
 at that moment and those records are gone. Parallel Consumer's own `WorkManager` already does this
 correctly - it is the problem PC exists to solve - but offset ownership was deliberately left on the
-stock Streams path as deferred work. **The largest `StreamTaskTest` cluster (11 tests) is this item.**
+stock Streams path as deferred work. **The largest `StreamTaskTest` cluster (14 tests) is this item.**
+
+**Worklist: planned as [U9](#u9-commit-data-from-pc-not-from-consumedoffsets-pile-a), governed by
+KTD-S7 and R10.** This entry retires when U9 lands.
 
 ### Caching must be disabled on stateful stores
 
@@ -931,6 +1195,9 @@ speak for the design.
    KTD-S6, it turns off itself rather than inheriting from a default.
 7. `pcspike.patch` applies cleanly from a clean checkout, and the build fails loudly if it does not.
 8. The result document and inflight note exist **on master**, whatever the verdict.
+9. U9's commit-frontier test is documented red-then-green; the kill-restart test (R10) is green
+   over repeated runs with the reproduction count stated; Kafka's 188 remain green seam-off,
+   untouched.
 
 ---
 
@@ -945,7 +1212,7 @@ speak for the design.
 | The patched class set grows until it is effectively a fork. | U3 names the set up front and sets a stop-threshold, with sprawl reported as a verdict (R8). |
 | Patch iteration friction makes the spike unpleasant enough to abandon. | U1 ships `regen-patch.sh`; KTD1 states the cost openly rather than pretending it away. |
 | A half-applied patch produces an incoherent build. | U1 runs `patch --dry-run` first and fails on any rejected hunk. |
-| Optimistic commit means the spike is not crash-safe. | Deliberate and in Scope Boundaries; U7 records it. |
+| Optimistic commit means the spike is not crash-safe. | Being retired by U9 (KTD-S7, R10); tracked in Current Shortcomings until U9 lands. |
 | The result never reaches anyone because the branch does not land. | Resolved by KTD-S5: the module and its documents land together in one PR. |
 | A published alpha artifact is mistaken for a supported one. | The artifact's own name says `-spike`; the pom `<name>`/`<description>` lead with ALPHA/EXPERIMENTAL; the README leads with it and points at [Current Shortcomings](#current-shortcomings), which names the optimistic offsets and the absent distribution shape. *(Under KTD-S6 the off-by-default seam is no longer part of this mitigation - taking the dependency is the opt-in, so labelling carries the whole load.)* |
 
