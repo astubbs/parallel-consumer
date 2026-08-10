@@ -1338,7 +1338,9 @@ in a second worktree, so this is one decision for a family of modules rather tha
 The README points here.
 
 **The size of the gap is measured, not estimated.** With the seam **off**, Apache Kafka's own
-`StreamTaskTest` is 101/101 against the patched classes; with it **on**, it is **68/101**. Those 33
+`StreamTaskTest` is 101/101 against the patched classes; with it **on**, it is **67/101** (68/101 when
+this was written; re-derived twice on 2026-08-11 - the figure moves with the dispatcher, so re-derive it
+rather than copying it). Those 34
 failures - clustered in the result document's §9 - are what this list looks like when written by Kafka's
 own authors, and working this section top-down is the same thing as working that table top-down. Offset
 and commit accounting is the largest cluster (14 - see

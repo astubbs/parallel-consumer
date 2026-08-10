@@ -450,6 +450,10 @@ excluded and no assertion was relaxed.
 > comment in `parallel-consumer-streams/pom.xml`, that module's README, and here. If it changes,
 > change all three.
 
+> **Re-derived 2026-08-11: the seam-on figure is now 67/101, a 34-test delta.** The measurement below
+> is left as it was taken; the classification underneath it still holds, and the moved figure is the
+> reason to re-derive this number rather than quote it from here. Both runs of the re-derivation agreed.
+
 Re-running `StreamTaskTest` with PC dispatch **on** gives **68/101**. That 33-test delta is not a
 defect report. It is the best thing this spike produced after the verdict itself: **a quantified,
 executable specification of the gap between the PC path and stock Streams**, written by Kafka's own

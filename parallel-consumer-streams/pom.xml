@@ -412,9 +412,17 @@
                             <!-- The 188 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only
                                  means that with the seam OFF. Stated here rather than inherited: the
                                  seam now defaults ON (PcDispatchSwitch - depending on the artifact is
-                                 the opt-in), and with it on Kafka's StreamTaskTest is 68/101, recorded
+                                 the opt-in), and with it on Kafka's StreamTaskTest is 67/101, recorded
                                  separately as the measured gap. Nothing about this execution may depend
-                                 on what the default happens to be. -->
+                                 on what the default happens to be.
+
+                                 The seam-ON figure was 68/101 when first recorded; re-derived as 67/101
+                                 on 2026-08-11, twice, by flipping this one property to true. It moves
+                                 with the dispatcher, so re-derive it rather than copying it. -->
+                            <!-- Re-derive the seam-OFF counts with the module's whole `test` phase, and
+                                 read them from surefire-reports-kafka-upstream/. Do NOT scope the run
+                                 with -Dtest=: it silently overrides the <includes> above, this suite
+                                 does not run at all, and the build still goes green. -->
                             <systemPropertyVariables>
                                 <pc.streams.dispatch.enabled>false</pc.streams.dispatch.enabled>
                             </systemPropertyVariables>
