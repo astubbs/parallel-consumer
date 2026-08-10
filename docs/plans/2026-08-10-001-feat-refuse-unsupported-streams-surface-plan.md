@@ -187,13 +187,15 @@ config - so layer 3 costs **no new patched class**.
 
 Recorded rather than confirmed, because this plan was produced without an interactive user:
 
-- **A1.** The eight new shadowed classes are an acceptable cost. This takes `patched.classes` from 4 to
-  12, and `docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md`
+- **A1.** The eight new shadowed classes are an acceptable cost. This takes `patched.classes` from 5 to
+  13, and `docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md`
   names "roughly a dozen" as the point where the sprawl is itself the answer and you are maintaining a
-  fork by instalments. Twelve is *at* that line. The alternative that stays at five - drop layer 2 and put
-  everything in a single `InternalStreamsBuilder` graph-node check - is recorded in Open Questions.
+  fork by instalments. Thirteen is *past* that line, which is stated rather than absorbed. The smaller
+  alternative - drop layer 2 and put everything in a single `InternalStreamsBuilder` graph-node check - is
+  recorded in Open Questions; note that it does not get back to five, because R4's compile-time refusal
+  still needs the four DSL interfaces annotated wherever layer 2's logic lives.
 - **A2.** `NOTICE` may be edited. It is a repo-root file, outside `parallel-consumer-streams`, but Apache
-  2.0 §4(b) requires it to name every modified Apache Kafka class, and it currently names exactly four.
+  2.0 §4(b) requires it to name every modified Apache Kafka class, and it currently names exactly five.
 - **A3.** The `parallel-consumer-streams/README.md` "Known gaps" paragraph should be updated in this pass.
   It currently says these constructs "do not work"; after this change they refuse, which is a different
   and better claim.
@@ -435,7 +437,7 @@ topology does not.
 1. `ShadowedClassLoadingTest.GENERATED` carries a binding comment requiring it to match `patched.classes`.
    Add all eight new classes. A class that is generated but missing there is unguarded; one listed but not
    generated fails loudly - both are the behaviour we want.
-2. `NOTICE` names exactly four modified Apache Kafka classes today. Apache 2.0 §4(b) makes this an
+2. `NOTICE` names exactly five modified Apache Kafka classes today. Apache 2.0 §4(b) makes this an
    obligation, not bookkeeping. Add the eight.
 3. The README's "Known gaps" paragraph says windows, joins and suppression "do not work". After this
    change they *refuse*. Rewrite that sentence, and the field-report template bullet that asks reporters
@@ -494,9 +496,11 @@ existing test genuinely must change, that is a finding to report, not a change t
   landed first, or the refused surface is defined by what nobody has looked at. Deferred, not rejected.
 - **OQ2. Is thirteen shadowed classes the right trade for layer 2?** The cheaper shape is to drop the four
   DSL impls and put a single check in `InternalStreamsBuilder`, keyed on the graph-node types the DSL
-  builds (`StreamStreamJoinNode`, `StreamTableJoinNode`, and the windowed store builders) - five shadowed
+  builds (`StreamStreamJoinNode`, `StreamTableJoinNode`, and the windowed store builders) - ten shadowed
   classes instead of thirteen, at the cost of a slightly less direct message and a check that is one step
-  removed from the method the user called. Recorded here because the settled approach names the method
+  removed from the method the user called. Ten rather than five, because R4's compile-time refusal keeps the
+  four DSL *interfaces* patched no matter where layer 2's logic lives; only the four impls go away, and
+  `InternalStreamsBuilder` arrives. Recorded here because the settled approach names the method
   bodies explicitly, so this plan follows it; the alternative is real and cheap to switch to.
 - **OQ3. RESOLVED by running: yes.** `TopologyTestDriver` does propagate `processing.guarantee` into
   `TaskConfig.eosEnabled`, so `exactlyOnceIsRefusedOnAnOtherwiseSupportedTopology` exercises the real

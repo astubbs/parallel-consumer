@@ -79,7 +79,16 @@ public final class PcSupportedEnvelope {
             return;
         }
 
-        throw new UnsupportedOperationException("Task " + taskId + ": " + PcRefusalMessage.forConstructs(found));
+        // The recurrence sentence is not padding. This throw leaves StreamTask's constructor, is caught by
+        // nothing on the way out, and reaches KafkaStreams' uncaught-exception handler - which under
+        // StreamsUncaughtExceptionHandlerResponse.REPLACE_THREAD replaces the thread unconditionally, with no
+        // backoff and no attempt counter. The refusal is a property of the topology and the switch, so the
+        // replacement thread is refused too, and the application rebalances in a loop. Whoever reads this
+        // message is looking at that loop; the message has to tell them it will not stop on its own.
+        throw new UnsupportedOperationException("Task " + taskId + ": " + PcRefusalMessage.forConstructs(found)
+                + " This is a property of the topology and the switch, not a transient failure, so every task "
+                + "creation refuses again: a REPLACE_THREAD uncaught-exception handler will rebalance in a loop "
+                + "until the topology changes or the seam is turned off.");
     }
 
     /**

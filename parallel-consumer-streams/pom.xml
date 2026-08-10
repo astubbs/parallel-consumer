@@ -59,9 +59,11 @@
              which is why the four IMPLS carry the runtime refusal. Neither half substitutes for the other.
 
              This list is now thirteen, which is past the point at which the patch-do-not-vendor learning says the
-             sprawl is itself the answer. Stated rather than absorbed: the alternative that stays at five is a
-             single check in InternalStreamsBuilder keyed on the DSL's graph-node types, at the cost of a
-             message one step removed from the method the user actually called. -->
+             sprawl is itself the answer. Stated rather than absorbed: the smaller alternative is a single check
+             in InternalStreamsBuilder keyed on the DSL's graph-node types, at the cost of a message one step
+             removed from the method the user actually called. It reaches ten, not five - the four IMPLS go away
+             and InternalStreamsBuilder arrives, but the four INTERFACES stay patched, because the compile-time
+             refusal is the half that has to sit on the symbol a call site resolves to. -->
         <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamThread.java,org/apache/kafka/streams/kstream/KStream.java,org/apache/kafka/streams/kstream/KTable.java,org/apache/kafka/streams/kstream/KGroupedStream.java,org/apache/kafka/streams/kstream/CogroupedKStream.java,org/apache/kafka/streams/kstream/internals/KStreamImpl.java,org/apache/kafka/streams/kstream/internals/KTableImpl.java,org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java,org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java</patched.classes>
 
         <!-- Module-local and explicitly versioned on purpose: pinning jackson-databind in root
@@ -461,9 +463,10 @@
                             <!-- The 419 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only
                                  means that with the seam OFF. Stated here rather than inherited: the
                                  seam now defaults ON (PcDispatchSwitch - depending on the artifact is
-                                 the opt-in), and with it on Kafka's StreamTaskTest is 68/101, recorded
-                                 separately as the measured gap. Nothing about this execution may depend
-                                 on what the default happens to be. -->
+                                 the opt-in), and with it on Kafka's StreamTaskTest is 65/101, recorded
+                                 separately as the measured gap - 30 of those 36 are the gap and 6 are EOS
+                                 tests hitting the refusal, which is the mechanism working. Nothing about
+                                 this execution may depend on what the default happens to be. -->
                             <systemPropertyVariables>
                                 <pc.streams.dispatch.enabled>false</pc.streams.dispatch.enabled>
                             </systemPropertyVariables>

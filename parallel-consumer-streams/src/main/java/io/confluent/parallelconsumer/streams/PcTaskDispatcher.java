@@ -545,6 +545,18 @@ public class PcTaskDispatcher implements Closeable {
      */
     private static final Set<PcTaskDispatcher> ACTIVE = ConcurrentHashMap.newKeySet();
 
+    /**
+     * How many dispatchers are live in this JVM right now.
+     * <p>
+     * Exists so a test can prove a <b>negative</b>: that a task refused by {@link PcSupportedEnvelope} built no
+     * dispatcher. That ordering - the envelope check before this constructor - is the difference between a
+     * refused task and a leaked worker pool, and it is otherwise asserted only by a comment in the patched
+     * {@code StreamTask}, which nothing enforces.
+     */
+    public static int activeCount() {
+        return ACTIVE.size();
+    }
+
     /** Crash-injection for tests: {@link #abortClose()} every live dispatcher in the JVM. */
     public static void abortAllActive() {
         for (PcTaskDispatcher dispatcher : ACTIVE) {

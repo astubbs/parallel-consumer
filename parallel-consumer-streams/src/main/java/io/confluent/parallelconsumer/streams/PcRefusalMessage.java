@@ -58,8 +58,11 @@ final class PcRefusalMessage {
                     .append('.');
             supported = "which supports it";
         } else {
+            // "in this topology or its configuration", not "in this topology": exactly-once comes off the task
+            // config and is not a topology shape at all, so it can be one of the entries listed below.
             message.append(constructs.size())
-                    .append(" constructs in this topology are not supported on the Parallel Consumer dispatch path:");
+                    .append(" constructs in this topology or its configuration are not supported on the "
+                            + "Parallel Consumer dispatch path:");
             for (final PcUnsupportedConstruct construct : constructs) {
                 message.append("\n  - ")
                         .append(construct.getDisplayName())
