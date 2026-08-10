@@ -1,6 +1,6 @@
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
 --- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-10 18:23:33.591138720 +1200
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-10 21:33:30.334157788 +1200
 @@ -44,8 +44,13 @@
      private final Serde<?> keySerde;
      private final Serde<?> valueSerde;
@@ -129,7 +129,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractPr
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
 --- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-10 18:23:33.600450645 +1200
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-10 21:33:30.335138181 +1200
 @@ -243,7 +243,11 @@
                      "multiple times.");
          }
@@ -175,7 +175,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorC
      }
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
 --- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-10 18:23:33.642384019 +1200
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-10 21:33:30.336098117 +1200
 @@ -64,6 +64,7 @@
  import java.util.Objects;
  import java.util.Optional;
@@ -209,7 +209,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordColl
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
 --- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-10 19:51:11.963318696 +1200
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-10 21:33:40.852147539 +1200
 @@ -16,6 +16,7 @@
   */
  package org.apache.kafka.streams.processor.internals;
@@ -481,7 +481,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          // process the record by passing to the source node of the topology
          final ProcessorNode<Object, Object, Object, Object> currNode = (ProcessorNode<Object, Object, Object, Object>) recordInfo.node();
          log.trace("Start processing one record [{}]", record);
-@@ -870,16 +986,104 @@
+@@ -870,16 +986,108 @@
          log.trace("Completed processing one record [{}]", record);
      }
  
@@ -501,7 +501,11 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +     * time advances at partition-group selection - noted as a caveat, and irrelevant to the stateless and
 +     * non-windowed topologies this module runs.
 +     *
-+     * @return true if any record was handed to the worker pool this call
++     * @return true if any record was CONSUMED from the WorkManager this call - deliberately not
++     *         "handed to the worker pool". A record resolved without ever reaching the pool, such as a
++     *         corrupted one dropped inline, still counts. The caller reads this as "was there
++     *         progress", and a false sends the StreamThread back into a blocking poll, so counting
++     *         pool submissions instead would report a stall on every route that bypasses the pool.
 +     */
 +    private boolean pcProcess(final long wallClockTime) {
 +        final Throwable failure = pcDispatcher.pollFailure();
@@ -589,7 +593,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      /**
-@@ -1102,6 +1306,15 @@
+@@ -1102,6 +1310,15 @@
       */
      @Override
      public void addRecords(final TopicPartition partition, final Iterable<ConsumerRecord<byte[], byte[]>> records) {
@@ -605,7 +609,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          final int newQueueSize = partitionGroup.addRawRecords(partition, records);
  
          if (log.isTraceEnabled()) {
-@@ -1288,8 +1501,28 @@
+@@ -1288,8 +1505,28 @@
          return sb.toString();
      }
  
@@ -634,7 +638,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          // we need to do an extra check if the flag was false, that
          // if the consumer position has been updated; this is because
          // there may be non data records such as control markers bypassed
-@@ -1357,6 +1590,16 @@
+@@ -1357,6 +1594,16 @@
  
      public void updateCommittedOffsets(final TopicPartition topicPartition, final Long offset) {
          committedOffsets.put(topicPartition, offset);

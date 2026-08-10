@@ -1258,16 +1258,22 @@ failure surfaces when the dispatcher next pumps and observes the failed work con
 at the moment of the throw - and records dispatched into the worker pool in that window will have run.
 Stock Streams throws straight to the uncaught-exception handler.
 
-### Offset commit is optimistic - a crash can lose records
+### ~~Offset commit is optimistic - a crash can lose records~~ RESOLVED by U9
 
-`consumedOffsets.put(...)` fires when `doProcess` returns. Workers finish out of order, so Streams can
-commit offset N for a partition while a *lower* offset from that same partition is still in flight; crash
-at that moment and those records are gone. Parallel Consumer's own `WorkManager` already does this
-correctly - it is the problem PC exists to solve - but offset ownership was deliberately left on the
-stock Streams path as deferred work. **The largest `StreamTaskTest` cluster (14 tests) is this item.**
+**No longer a shortcoming.** Commit data now comes from `WorkManager.collectCommitDataForDirtyPartitions()`
+rather than Streams' `consumedOffsets` high-water mark, so the committed offset is the frontier - the
+lowest genuinely incomplete offset - and completions beyond it ride in the metadata. A commit can no
+longer cover a record that is still in flight, by construction rather than by timing.
 
-**Worklist: planned as [U9](#u9-commit-data-from-pc-not-from-consumedoffsets-pile-a), governed by
-KTD-S7 and R10.** This entry retires when U9 lands.
+What remains, and it is not this: **the 14-test `StreamTaskTest` cluster still fails.** That cluster was
+predicted to go green with U9 and did not - the measured delta was zero. Those tests assert Kafka's
+*encoding* of the commit metadata, which KTD-S7 has this module owning wholesale, so they are detecting
+the deliberate divergence rather than any loss. Crash safety was never observable in them; it is proven
+in the integration arm instead, red-then-green, by `CommitFrontierCrashRestartTest`.
+
+Kept rather than deleted because the retirement is the interesting part: the entry that motivated U9 is
+gone, but the test failures it was blamed for are not, and a future reader counting failures needs to
+know those 14 are accounted for.
 
 ### Caching must be disabled on stateful stores
 

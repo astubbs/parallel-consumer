@@ -102,12 +102,18 @@ The living list, with the mechanism behind each item and an assessment of what i
 is **[Current Shortcomings in the plan](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)**.
 
 **Read that section before relying on this anywhere that matters.** In summary, and without the detail:
-stream-time-driven behaviour (punctuation, windows, joins, suppression) does not work; offsets are
-committed optimistically, so a crash can lose records; caching must be disabled on state stores, which
-changes what your topology emits; retries are off and failures surface a pump cycle late; and EOS is out
-of scope. The size of the gap is measured, not estimated - **33 of Apache Kafka's own `StreamTaskTest`
-cases fail with the seam on** (68/101, against 101/101 with it off), and the shortcomings list maps onto
-those failures.
+stream-time-driven behaviour (punctuation, windows, joins, suppression) does not work; caching must be
+disabled on state stores, which changes what your topology emits; retries are off and failures surface a
+pump cycle late; and EOS is out of scope. The size of the gap is measured, not estimated - **33 of Apache
+Kafka's own `StreamTaskTest` cases fail with the seam on** (68/101, against 101/101 with it off), and the
+shortcomings list maps onto those failures.
+
+**Crash safety is not on that list.** Offsets are committed from Parallel Consumer's own completion
+tracking, so a commit covers only work that is genuinely finished and a crash cannot skip a record that
+was still in flight. Note that 14 of the 33 failures above are Kafka's offset and commit tests, which
+still fail - not because anything can be lost, but because they assert Kafka's *encoding* of the commit
+metadata, and this module deliberately owns that field. A failing test there is the divergence being
+detected, not data being lost.
 
 ## The 188-test claim
 
