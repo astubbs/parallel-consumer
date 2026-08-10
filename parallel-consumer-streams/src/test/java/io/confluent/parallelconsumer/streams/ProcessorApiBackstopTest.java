@@ -16,8 +16,10 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.parallel.Isolated;
 
+import java.util.Arrays;
 import java.util.Properties;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -95,6 +97,20 @@ class ProcessorApiBackstopTest {
                 .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY + "=false");
     }
 
+    @Test
+    void aSuppressionBufferBuiltThroughTheProcessorApiIsRefused() {
+        PcDispatchSwitch.enable(2);
+
+        assertThatThrownBy(() -> openAndClose(
+                topologyWith(RefusedStoreFixtures.suppressionBufferBuilder()), atLeastOnce()))
+                .as("the suppression buffer is a state store like the other three, so it has to be proven "
+                        + "through a real StreamTask too - classifying it correctly in a unit test says nothing "
+                        + "about whether the backstop sees it")
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(PcUnsupportedConstruct.SUPPRESSION_BUFFER.getDisplayName())
+                .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY + "=false");
+    }
+
     // ---------------------------------------------------------------------------------------------------
     // EOS - configuration, not topology shape.
     // ---------------------------------------------------------------------------------------------------
@@ -112,6 +128,43 @@ class ProcessorApiBackstopTest {
     }
 
     // ---------------------------------------------------------------------------------------------------
+    // The ordering the refusal depends on.
+    // ---------------------------------------------------------------------------------------------------
+
+    /**
+     * A refused task must build no dispatcher, which is why {@code PcSupportedEnvelope.checkTask} is called
+     * before {@code PcTaskDispatcher.createIfEnabled} in {@code StreamTask}'s constructor and not after.
+     * <p>
+     * Without this, that ordering is asserted only by a comment. Swapping the two lines would leave every
+     * other assertion in this class green while orphaning a worker pool, a {@code WorkManager} and a
+     * {@code PcWorkSignal} registration per refused task - and a refused task is one a rebalance will try to
+     * create again.
+     */
+    @Test
+    void aRefusedTaskBuildsNoDispatcher() {
+        PcDispatchSwitch.enable(2);
+
+        final int before = PcTaskDispatcher.activeCount();
+
+        for (final StoreBuilder<?> refused : Arrays.asList(
+                RefusedStoreFixtures.windowStoreBuilder(),
+                RefusedStoreFixtures.sessionStoreBuilder(),
+                RefusedStoreFixtures.suppressionBufferBuilder(),
+                RefusedStoreFixtures.versionedKeyValueStoreBuilder())) {
+            assertThatThrownBy(() -> openAndClose(topologyWith(refused), atLeastOnce()))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+        assertThatThrownBy(() -> openAndClose(topologyWith(RefusedStoreFixtures.keyValueStoreBuilder()),
+                exactlyOnce()))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThat(PcTaskDispatcher.activeCount())
+                .as("every refusal above must happen before the dispatcher is constructed; a live dispatcher "
+                        + "here is a worker pool nothing will ever shut down")
+                .isEqualTo(before);
+    }
+
+    // ---------------------------------------------------------------------------------------------------
     // Control arms. The seam-off pair is what distinguishes a conditional guard from an unconditional one.
     // ---------------------------------------------------------------------------------------------------
 
@@ -122,6 +175,7 @@ class ProcessorApiBackstopTest {
         assertThatCode(() -> {
             openAndClose(topologyWith(RefusedStoreFixtures.windowStoreBuilder()), atLeastOnce());
             openAndClose(topologyWith(RefusedStoreFixtures.sessionStoreBuilder()), atLeastOnce());
+            openAndClose(topologyWith(RefusedStoreFixtures.suppressionBufferBuilder()), atLeastOnce());
             openAndClose(topologyWith(RefusedStoreFixtures.versionedKeyValueStoreBuilder()), atLeastOnce());
             openAndClose(topologyWith(RefusedStoreFixtures.keyValueStoreBuilder()), exactlyOnce());
         }).as("with the seam off the patched StreamTask must construct exactly as stock does - this is the "

@@ -86,7 +86,7 @@ class PcSupportedEnvelopeTest {
                     .isInstanceOf(UnsupportedOperationException.class)
                     .hasMessageContaining(construct.getDisplayName())
                     .hasMessageContaining(construct.getReason())
-                    .hasMessageContaining("astubbs#255")
+                    .hasMessageContaining(PcRefusalMessage.ISSUE)
                     // The property is the whole escape hatch. A refusal that does not carry it is a dead end
                     // for whoever hits it.
                     .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY + "=false");
