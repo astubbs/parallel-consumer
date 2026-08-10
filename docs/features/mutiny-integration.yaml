@@ -1,0 +1,44 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: SmallRye Mutiny integration
+category: integration
+module: parallel-consumer-mutiny
+maturity: stable
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - The existing module is first published by this fork in 0.6.0.0; its implementation commit predates the release but is in no released tag.
+  - Confirm the built artifact declares and runs on Java 17 before changing this record to published.
+summary: >-
+  An adapter that lets a Parallel Consumer record handler return a SmallRye Mutiny Uni, completing and committing the
+  record only when that asynchronous work resolves successfully.
+use_this_when:
+  - Your application already uses SmallRye Mutiny and needs ordered, concurrent Kafka record processing.
+  - You run the consuming application on Java 17 or later.
+setup:
+  maven:
+    group_id: bz.stub.parallelconsumer
+    artifact_id: parallel-consumer-mutiny
+    version: 0.6.0.0
+  api:
+    type: io.confluent.parallelconsumer.mutiny.MutinyProcessor
+    completion: Return a Uni from onRecord; its success or failure drives record completion.
+opt_in:
+  mechanism: Add the parallel-consumer-mutiny artifact.
+  isolated_from_stable_modules: true
+  explanation: Core, Vert.x and Reactor users do not pull Mutiny or its Java 17 runtime requirement transitively.
+boundaries:
+  - Requires Java 17, unlike the other modules. See java-compatibility.yaml for what that means at build versus run time.
+  - The module is stable for reliability only when the v6 release validation passes; its public API remains pre-1.0.
+  - Do not block the Mutiny worker thread; return asynchronous work promptly.
+validation:
+  - Verify MutinyPCTest's delayed-Uni, bounded-concurrency and commit behavior against the built artifact.
+  - Verify the target application runs on Java 17 or later before selecting this integration.
+references:
+  - label: Implementation introduction
+    url: https://github.com/confluentinc/parallel-consumer/commit/7cb4ce885c16b192bed426d9d9240fb972e7358d
+  - label: Module-specific evidence
+    path: docs/data/testing-evidence.yaml

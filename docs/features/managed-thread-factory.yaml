@@ -1,0 +1,35 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Managed thread factory for the worker pool
+category: operability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.3.2.0
+  evidence:
+    tag: 0.3.2.0
+    path: CHANGELOG.adoc
+    basis: The release entry adding Java EE managed executor support introduced the managed thread factory option in the same change.
+summary: Name the JNDI thread factory that creates the worker threads running your processing function, so a Java EE container owns them.
+use_this_when:
+  - Your Java EE or Jakarta EE container requires application threads to come from its own ManagedThreadFactory.
+  - You already set managedExecutorService and need the worker pool covered too; see managed-executor-service.yaml for the control-thread half of the same pair.
+setup:
+  option: ParallelConsumerOptions.managedThreadFactory
+  default_jndi_name: java:comp/DefaultManagedThreadFactory
+  applies_to: The ThreadPoolExecutor that runs user functions, created in AbstractParallelEoSStreamProcessor.setupWorkerPool.
+opt_in:
+  mechanism: Set the managed thread factory JNDI name in the options.
+  isolated_from_stable_modules: false
+boundaries:
+  - A failed JNDI lookup falls back to Executors.defaultThreadFactory and logs at debug, the same Java SE fallback shape the sibling executor option uses.
+  - Parallel Consumer renames each thread it obtains with a "pc-" prefix and, when set, the instance id, so the factory does not decide the final thread name.
+  - The factory supplies threads; it does not size the pool. Core sizes the pool from maxConcurrency, and the external engines (Vert.x, Reactor) override it to a single thread.
+references:
+  - label: Managed thread factory option
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+  - label: Worker pool construction and JNDI fallback
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java

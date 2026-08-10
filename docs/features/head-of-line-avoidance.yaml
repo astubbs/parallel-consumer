@@ -1,0 +1,33 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Head-of-line blocking avoidance
+category: processing
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The initial repository baseline and first tagged release contain the ordering behavior that avoids unrelated head-of-line blocking.
+readme_anchor: head-of-line-blocking
+summary: Let unrelated work progress while a failed or slow record is retried, without committing unfinished work.
+use_this_when:
+  - One record can wait on a slow dependency while unrelated keys or records should continue.
+  - Preserving strict partition sequence is less important than progress for independent work.
+setup:
+  configure:
+    - Choose KEY or UNORDERED ordering rather than PARTITION ordering.
+    - Configure retry behavior for the failed record and monitor its failure path.
+opt_in:
+  mechanism: Select a non-PARTITION ordering mode.
+  isolated_from_stable_modules: false
+boundaries:
+  - PARTITION ordering intentionally keeps the head-of-line behavior because strict partition order takes priority.
+  - Retried failures still hold back their own ordering unit and are not silently skipped.
+references:
+  - label: Retry and head-of-line behavior
+    path: README.adoc#head-of-line-blocking

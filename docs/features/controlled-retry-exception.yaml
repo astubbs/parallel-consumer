@@ -1,0 +1,30 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Controlled retriable failure signal
+category: operability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.5.2.4
+  evidence:
+    tag: 0.5.2.4
+    path: CHANGELOG.adoc
+    basis: Added PCRetriableException to request a retry without error-log noise.
+summary: Signal an expected, retryable processing failure without treating it as an unexpected application error in the logs.
+use_this_when:
+  - A handler knows a failure is transient and ordinary retries are appropriate.
+  - Expected retry conditions would otherwise bury actionable errors in log noise.
+setup:
+  mechanism: Throw PCRetriableException from the processing callback.
+opt_in:
+  mechanism: Throw PCRetriableException only for failures that should follow the configured retry policy.
+  isolated_from_stable_modules: false
+boundaries:
+  - This does not skip a record or make it succeed; it requests the normal retry path.
+  - Do not classify programmer errors or permanent data errors as retriable merely to suppress logs.
+references:
+  - label: PCRetriableException source
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/PCRetriableException.java

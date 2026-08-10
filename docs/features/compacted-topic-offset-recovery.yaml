@@ -1,0 +1,30 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Compacted-topic and offset-reset recovery
+category: delivery
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.5.2.4
+  evidence:
+    tag: 0.5.2.4
+    path: CHANGELOG.adoc
+    basis: Added support for compacted topics and commit-offset resetting by reconciling tracked incomplete offsets with polled records.
+summary: Recover completion tracking when compaction or an offset reset means records previously represented in the offset map are no longer present in a poll.
+use_this_when:
+  - A consumer processes compacted topics.
+  - Operations can reset a consumer group's offsets and the library must reconcile its stored completion state.
+setup:
+  configuration: Automatic as Parallel Consumer rebuilds state from assigned and polled records.
+opt_in:
+  mechanism: Use Parallel Consumer with the compacted topic or reset group; no separate feature flag is required.
+  isolated_from_stable_modules: false
+boundaries:
+  - Offset reset is an operational data-position decision; this recovery does not choose the reset point for you.
+  - Compaction can remove records, so application semantics must not depend on replaying every historical tombstone or superseded value.
+references:
+  - label: Offset-state implementation
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/PartitionState.java

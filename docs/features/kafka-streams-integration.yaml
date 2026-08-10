@@ -1,0 +1,48 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Using Parallel Consumer with Kafka Streams
+category: integration
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The first tagged release ships the README's Kafka Streams usage guidance and the parallel-consumer-example-streams example module.
+  milestones:
+    - release: 0.6.0.0
+      basis: >-
+        The Streams example became runnable outside its own test: StreamsApp takes bootstrapServers in its
+        constructor rather than leaving its client methods as stubs. Evidenced by the source, not the
+        changelog, whose unreleased section is regenerated at release time.
+readme_anchor: streams-usage
+release_assumptions:
+  - The 0.6.0.0 milestone is conditional until that release ships.
+summary: >-
+  Preprocess in a Kafka Streams topology, produce to a topic, and subscribe a Parallel Consumer to that topic for the
+  slow or high-concurrency stage.
+use_this_when:
+  - A Streams topology has one stage whose latency is dominated by an external call, and per-task sequential processing is the bottleneck.
+  - You want concurrency for that stage without splitting the topic into far more partitions or running many Streams instances.
+setup:
+  pattern: Streams writes to an intermediate topic; Parallel Consumer consumes it with its own Consumer, group id and ordering mode.
+  example: parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/io/confluent/parallelconsumer/examples/streams/StreamsApp.java
+  readme_code: README.adoc#streams-usage-code
+opt_in:
+  mechanism: Add a topic boundary between the topology and the parallel stage; no extra artifact beyond the Parallel Consumer module you already use.
+  isolated_from_stable_modules: false
+boundaries:
+  - Parallel Consumer runs beside a Streams topology, not inside it. The reasoning and its KIP citations are in the README section referenced below.
+  - The parallel stage is a separate consumer group with its own offsets, so it is outside the topology's exactly-once boundary, state stores and punctuators. Any end-to-end guarantee has to be built from the two halves.
+  - The intermediate topic's partitioning and the chosen ordering mode determine what concurrency is available; see ordering-modes.yaml.
+  - The example module is a reference example and is not published to Maven Central.
+  - Running a Streams topology on Parallel Consumer's worker pool is a separate, unlanded alpha experiment, tracked in ../inflight/next-experimental-module-records.md.
+references:
+  - label: Using with Kafka Streams
+    path: README.adoc#streams-usage
+  - label: Kafka Streams concurrent processing code example
+    path: README.adoc#streams-usage-code

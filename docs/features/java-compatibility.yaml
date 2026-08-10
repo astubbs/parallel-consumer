@@ -1,0 +1,37 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Per-module Java compatibility
+category: compatibility
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.1.0
+  documented_since: 0.2.0.0
+  evidence:
+    tag: 0.1.0
+    path: pom.xml
+    basis: The initial repository baseline and first release target Java 8 bytecode; the README first named Java 8 compatibility in 0.2.0.0.
+  milestones:
+    - release: 0.3.0.2
+      basis: GitHub CI began exercising the Java 8 build.
+readme_anchor: java-version-per-module
+summary: Choose an artifact whose bytecode and dependencies support the Java runtime used by the application.
+use_this_when:
+  - You need to select a Parallel Consumer module for a Java 8, 11 or 17 deployment.
+setup:
+  # The per-module minimum is declared once, in module-maturity.yaml's minimum_java. Restating it
+  # here would put the same fact in two places with nothing keeping them in step.
+  matrix_source: ../data/module-maturity.yaml
+opt_in:
+  mechanism: Select the artifact whose minimum Java version matches the application runtime.
+  isolated_from_stable_modules: false
+boundaries:
+  # The consequence and its worked example are in the README's java-version-per-module WARNING.
+  - Maven resolves a dependency it cannot load at runtime, so the minimum is not enforced at build time.
+  - The final release artifact remains the authority if a module changes its Java target.
+references:
+  - label: README Java version table
+    path: README.adoc#java-version-per-module

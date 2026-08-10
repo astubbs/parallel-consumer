@@ -1,0 +1,36 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Bulk Kafka transactions
+category: delivery
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.2.0.0
+  evidence:
+    tag: 0.2.0.0
+    path: README.adoc
+    basis: Producer transactional commit mode first committed produced records and source offsets together.
+  milestones:
+    - release: 0.5.2.3
+      basis: Transactional commit-mode improvements added the documented bulk-transaction model and lock timeouts.
+readme_anchor: transaction-system
+summary: Commit produced Kafka records and their consumed offsets together in one periodic bulk Kafka transaction.
+use_this_when:
+  - Processing produces records back to Kafka and the input offsets must commit with those output records.
+  - Your correctness boundary stays within Kafka transactions.
+setup:
+  option: ParallelConsumerOptions.commitMode
+  value: PERIODIC_TRANSACTIONAL_PRODUCER
+  requirement: Supply a Kafka Producer when selecting transactional commit mode.
+opt_in:
+  mechanism: Select transactional commit mode and use a producer-capable processing flow.
+  isolated_from_stable_modules: false
+boundaries:
+  - The transaction is periodic and bulk, not one transaction per input record or worker.
+  - External side effects are outside Kafka's exactly-once boundary and require idempotency or their own transaction design.
+references:
+  - label: Transaction model
+    path: README.adoc#transaction-system

@@ -1,0 +1,32 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: SASL authentication retry
+category: operability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.5.3.1
+  evidence:
+    tag: 0.5.3.1
+    path: CHANGELOG.adoc
+    basis: Added support for a SaslAuthenticationException retry timeout as part of the improved offset commit retry.
+summary: Keep retrying consumer poll and synchronous commit through a transient SaslAuthenticationException instead of stopping the consumer.
+use_this_when:
+  - A broker-side or identity-provider hiccup makes SASL authentication fail intermittently, and an immediate shutdown is worse than waiting.
+setup:
+  options:
+    - ParallelConsumerOptions.saslAuthenticationRetryTimeout defaults to Duration.ofSeconds(0), which means no retry.
+    - ParallelConsumerOptions.saslAuthenticationExceptionRetryBackoff defaults to SASL_AUTHENTICATION_EXCEPTION_RETRY_BACKOFF, 5 seconds.
+opt_in:
+  mechanism: Set saslAuthenticationRetryTimeout to a duration greater than zero; nothing is retried until you do.
+  isolated_from_stable_modules: false
+boundaries:
+  - Zero is the default, so the shipped behaviour is the pre-existing one - the exception propagates and the consumer stops.
+  - Retrying masks a genuinely wrong or expired credential for the length of the timeout; size it for a transient outage, not a misconfiguration.
+  - A close request is honoured during the backoff rather than waiting it out; the mechanism is in the option's Javadoc.
+references:
+  - label: SASL retry options
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java

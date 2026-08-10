@@ -1,0 +1,36 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Reflective auto-commit check escape hatch
+category: compatibility
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.5.3.0
+  evidence:
+    tag: 0.5.3.0
+    path: CHANGELOG.adoc
+    basis: Released as the fix for the auto-commit check failing against kafka-clients 3.7.0 and later.
+summary: Allow startup to continue when the reflective check that consumer auto-commit is disabled cannot inspect the supplied consumer.
+use_this_when:
+  - You pass a wrapped, extended or proxied KafkaConsumer whose internals the check cannot reach.
+  - A newer kafka-clients release changes consumer internals and startup fails on the check before a library fix is available.
+setup:
+  option: ParallelConsumerOptions.ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck
+  values:
+    - Default is false.
+  affects: AbstractParallelEoSStreamProcessor.checkAutoCommitIsDisabled, which reads the consumer's auto-commit setting by reflection because the client exposes no runtime configuration accessor.
+opt_in:
+  mechanism: Set the flag to true when building ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - This is a last-resort or temporary work-around, not a supported long-term configuration.
+  - It only suppresses the inability to inspect. If the field is readable and auto-commit is enabled, the Parallel Consumer still fails - the library owns commits.
+  - With the flag set, the outcome is a WARN rather than a ParallelConsumerException, so an application that really does have auto-commit on can start and double-commit offsets.
+references:
+  - label: Option and its Javadoc
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+  - label: The check itself
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java

@@ -1,0 +1,39 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Partition, key and unordered processing modes
+category: processing
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The initial repository baseline and first tagged release contain partition, key and unordered processing.
+  milestones:
+    - release: 0.3.0.0
+      basis: KEY became the default ordering mode, replacing UNORDERED.
+readme_anchor: ordering-guarantees
+summary: >-
+  Select the ordering guarantee that matches the work: per partition, per key, or no ordering restriction.
+use_this_when:
+  - You know whether correctness depends on partition order, key order, or only successful completion.
+  - You need to make the concurrency versus ordering trade-off explicit in application configuration.
+setup:
+  option: ParallelConsumerOptions.ordering
+  values:
+    - PARTITION preserves partition order and limits in-flight work per partition.
+    - KEY preserves order for one key within a partition while different keys can run concurrently.
+    - UNORDERED permits the highest concurrency when ordering is not required.
+opt_in:
+  mechanism: Set the ordering option when constructing ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - UNORDERED is unsuitable for key-order-sensitive or non-idempotent downstream systems.
+  - KEY ordering requires a meaningful record key; it cannot infer an application ordering relationship.
+references:
+  - label: Ordering guarantees
+    path: README.adoc#ordering-guarantees

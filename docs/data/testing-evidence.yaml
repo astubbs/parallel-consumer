@@ -1,0 +1,240 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: testing-evidence
+release: 0.6.0.0
+reader_contract:
+  audience: Skeptical technical evaluator who needs to verify claims quickly.
+  presentation_rule: A renderer should keep the inspection path, claim boundary and limitation beside every claim.
+  argument: Show how the suite can be wrong and how the project notices, rather than using test counts as a proxy for quality.
+release_claim:
+  condition: 0.6.0.0 ships only when every known defect in its release scope has a landed resolution and a reproducible guard.
+  status_until_cut: Release gate; not a claim about an uncut source tree.
+  known_defect_scope: Diagnosed product defects recorded in the release ledger, solution corpus and selected v6 fix queue.
+  does_not_claim: Unknown defects cannot exist, every desired capability ships, or an alpha module inherits stable-module confidence.
+v6_stability_exception:
+  # The release note carries the positioning paragraph. Not repeated here.
+  positioning: ../inflight/release-0.6.0.0.md
+  release_gate: >-
+    Before cutting 0.6.0.0, reconcile the known-defect scope against the final merged queue, verify each resolution's
+    recurrence guard, and leave no known defect open. Amend the claim rather than cut the release if this fails.
+  # No snapshot of the open queue lives here. roadmap.yaml's update_policy states the rule this data
+  # follows: do not copy individual issue state into a document, link readers to the tracker instead.
+  # A snapshot of open pull requests is stale the day after it is written and nothing updates it.
+  queue: Open v6 product-fix and test-integrity pull requests on astubbs/parallel-consumer are the release inputs.
+  explicit_deferrals: Virtual threads, micro-batching and the dead-letter queue are deferred features, not open defects.
+claim_boundaries:
+  - The data records known failure modes and their controls; it does not claim that unknown defects cannot exist.
+  - A passing test does not replace diagnosis, a control arm or investigation evidence for a concurrency fix.
+  - An experimental module must supply its own evidence and does not inherit the stable-module claim.
+  - A green non-gating lane is evidence with a stated scope, not a merge or release approval.
+test_layers:
+  - id: unit
+    proves: Deterministic behavior in isolation, including offset encoding, foreign metadata handling and commit decisions.
+    command: bin/ci-unit-test.sh
+    merge_gate: true
+    why_it_matters: Deterministic fakes make scheduler, ordering and offset decisions directly observable without broker timing.
+    limitation: Does not prove broker protocol, consumer-group or transaction behavior.
+    inspect:
+      - path: parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
+        demonstrates: Shared deterministic processor harness with a long-polling mock consumer and commit history.
+      - path: parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/BatchTestMethods.java
+        demonstrates: Common batch behavior checks applied across processing adapters.
+  - id: broker-integration
+    proves: Consumer-group progress, rebalances, transactions and real Kafka behavior.
+    command: bin/ci-integration-test.sh
+    merge_gate: true
+    why_it_matters: Uses real Kafka brokers and deliberately isolates broker work by JVM fork in CI so a passing run is not shared-broker luck.
+    limitation: The standard suite cannot exhaust every schedule or reproduce every production topology.
+    inspect:
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerIntegrationTest.java
+        demonstrates: Shared real-broker base with diagnostic waits and failure context.
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java
+        demonstrates: Canonical production of test records and real Kafka clients, including controlled topic setup.
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/RebalanceEoSDeadlockTest.java
+        demonstrates: The confluentinc#857 deadlock condition under a real broker.
+  - id: performance
+    proves: Behavior under sustained concurrent processing.
+    command: bin/performance-test.sh
+    merge_gate: true
+    why_it_matters: Makes performance-tagged behavior visible in the ordinary PR path instead of relying only on developer machines.
+    limitation: Passing a performance suite is not a throughput promise for every workload or hardware profile.
+    inspect:
+      - path: bin/performance-test.sh
+        demonstrates: Performance-tagged tests run with their tags explicitly selected.
+  - id: mutation
+    proves: Tests detect meaningful changes to the code they cover.
+    command: bin/ci-mutation-test.sh
+    merge_gate: false
+    status: Advisory, PR-scoped evidence.
+    why_it_matters: A green assertion is stronger when a relevant code mutation has been shown to make it fail.
+    limitation: It covers changed, decidable offset classes on a PR; a skipped or narrow run is not a project-wide coverage claim.
+    inspect:
+      - path: bin/ci-mutation-test.sh
+        demonstrates: PR-scoped mutation selection and an explicit warning that a green skip is not evidence.
+  - id: chaos
+    proves: Rebalance, revocation and stalled-progress behavior under calibrated disruption.
+    command: bin/chaos-test.sh
+    merge_gate: false
+    status: >-
+      Runs per PR on the self-hosted highcpu lane and on demand as a seeded investigation lane. That lane
+      is explicitly non-gating - it is skipped for fork PRs and its runner may be offline - so it cannot
+      block a merge. What the chaos entry's optional flag buys is that a red shows as red rather than
+      neutral, which makes it a real finding to act on rather than a required check.
+    why_it_matters: Seeded schedules, progress probes and a no-loss/bounded-duplicate ledger target alive-but-not-progressing failures that normal tests can miss.
+    limitation: A calibrated detector hunts known failure classes; it does not establish the absence of every concurrency defect.
+    inspect:
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java
+        demonstrates: Reproducible chaos schedules with recorded seeds and workload control.
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosChurnStormIT.java
+        demonstrates: Calibrated consumer-churn detection for stalled progress.
+      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosRevokeUnderWorkIT.java
+        demonstrates: Revocation while work is active and protocol-invisible lag stagnation detection.
+  - id: soak
+    proves: Long-running behavior outside the merge gate.
+    command: bin/soak-test.sh
+    merge_gate: false
+    why_it_matters: Deliberate CPU pressure and repeated measurement expose failure-rate behavior that a short test cannot.
+    limitation: A successful finite soak is a sample, not a reliability proof.
+    inspect:
+      - path: bin/soak-test.sh
+        demonstrates: Failure-rate measurement under deliberately constrained CPU, with per-run logs.
+test_harness:
+  deterministic_harness:
+    claim: The core harness makes ordering, commit and bounded-concurrency assertions causal rather than wall-clock guesses.
+    inspect:
+      - parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
+      - parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/BatchTestMethods.java
+  real_broker_harness:
+    claim: Shared broker utilities make transactional clients, topic creation and failure diagnostics consistent instead of reimplemented per test.
+    inspect:
+      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerIntegrationTest.java
+      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java
+  failure_classification:
+    claim: The ambient probe records rebalance dwell, stagnant lag and frozen committed offsets on a broker-test failure, separating contention evidence from a lost-progress lead.
+    limitation: The probe is observational and best-effort; a clean probe does not prove the test has no fault.
+    inspect:
+      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/AmbientProbeExtension.java
+      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ProgressProbe.java
+module_evidence:
+  - id: core
+    artifact: parallel-consumer-core
+    coverage: Deterministic processor/offset tests, real-broker integration, ambient diagnostics and chaos scenarios.
+    inspect:
+      - parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
+      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/RebalanceEoSDeadlockTest.java
+      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosChurnStormIT.java
+    limitation: The breadth of core evidence does not automatically prove an adapter's own execution boundary.
+  - id: vertx
+    artifact: parallel-consumer-vertx
+    coverage: Adapter unit harness plus a real-Kafka, WireMock-backed concurrency and drain integration test.
+    inspect:
+      - parallel-consumer-vertx/src/test/java/io/confluent/parallelconsumer/vertx/VertxBaseUnitTest.java
+      - parallel-consumer-vertx/src/test-integration/java/io/confluent/parallelconsumer/vertx/integrationTests/VertxConcurrencyIT.java
+    limitation: The real-broker adapter test is one configured workload, not a full broker matrix.
+  - id: reactor
+    artifact: parallel-consumer-reactor
+    coverage: Reactor adapter tests inherit processor semantics and exercise delayed reactive completion, bounded concurrency and commits.
+    inspect:
+      - parallel-consumer-reactor/src/test/java/io/confluent/parallelconsumer/reactor/ReactorUnitTestBase.java
+      - parallel-consumer-reactor/src/test/java/io/confluent/parallelconsumer/reactor/ReactorPCTest.java
+    limitation: Reactor currently has no adapter-specific real-broker integration suite.
+  - id: mutiny
+    artifact: parallel-consumer-mutiny
+    coverage: Mutiny adapter tests inherit processor semantics and exercise delayed Uni completion, bounded concurrency and commits.
+    inspect:
+      - parallel-consumer-mutiny/src/test/java/io/confluent/parallelconsumer/mutiny/MutinyUnitTestBase.java
+      - parallel-consumer-mutiny/src/test/java/io/confluent/parallelconsumer/mutiny/MutinyPCTest.java
+    limitation: Mutiny currently has no adapter-specific real-broker integration suite; its Java 17 runtime floor is independently verified at release.
+  - id: examples
+    artifact: parallel-consumer-examples
+    coverage: Runnable application wiring for core, Reactor and Vert.x plus real-broker Streams and metrics examples.
+    inspect:
+      - parallel-consumer-examples/parallel-consumer-example-core/src/test/java/io/confluent/parallelconsumer/examples/core/CoreAppTest.java
+      - parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java
+      - parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java
+    limitation: Examples demonstrate wiring and operability; they are not a runtime-library compatibility guarantee.
+  - id: streams-alpha
+    artifact: parallel-consumer-streams-spike
+    coverage: Planned alpha evidence must exercise the release artifact's opt-in boundary, comparison switch and supported topology/recovery claims.
+    inspect:
+      - astubbs#255
+    limitation: No stable-module reliability claim applies before this module has its own release-time evidence.
+  - id: connect-alpha
+    artifact: parallel-consumer-connect
+    coverage: Planned alpha evidence must exercise connector task lifecycle, offsets, rebalances, recovery and its opt-in artifact boundary.
+    inspect:
+      - astubbs#240
+    limitation: No stable-module reliability claim applies before this module has its own release-time evidence.
+regression_controls:
+  diagnosis_first:
+    # AGENTS.md states this rule; it is not restated here, because a paraphrase that cites the
+    # original as its own evidence drifts from it silently.
+    rule: AGENTS.md#testing
+  negative_control:
+    rule: Where practical, a regression test must fail without its fix or a deliberately broken control arm.
+    examples:
+      - investigation: ../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md
+        control: The old single-nudge pattern fails deterministically; LatestResetTailNudgeIT passes with the shared helper.
+      - investigation: ../solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md
+        control: Synchronizing record arrival makes the old vacuous await fail deterministically before the test is rewritten.
+      - pull_request: https://github.com/astubbs/parallel-consumer/pull/265
+        control: A deliberately non-blocking function makes the repaired BlockedThreadAsserter guard fail 20/20 times.
+  ambient_probe:
+    rule: AGENTS.md#testing
+    mechanism: AmbientProbeExtension
+quality_system:
+  - id: test-convention-architecture
+    detects: Accidental Testcontainers or integration-test discovery inside the unit lane.
+    posture: Required by the ordinary test path.
+    inspect: parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/TestConventionsArchTest.java
+  - id: required-suite-gates
+    detects: Unit, integration and performance regressions before merge.
+    posture: Merge-gated.
+    inspect: .github/workflows/maven.yml
+  - id: quarantine-audit
+    detects: Registry drift, missing diagnosis and invalid owner claims before test execution.
+    posture: Merge-gated audit; quarantined execution remains visible in its separate non-gating lane.
+    inspect: .github/workflows/maven.yml
+  - id: static-analysis
+    detects: Static bug patterns, duplicate code and dependency vulnerabilities in the PR path.
+    posture: PR analysis with its workflow-specific gate status; do not infer a clean bill of health beyond the tool's scope.
+    inspect: .github/workflows/maven.yml
+  - id: mutation-analysis
+    detects: Assertions that survive relevant mutations in changed offset code.
+    posture: Advisory PR-scoped signal; full sweep is separately invoked.
+    inspect: bin/ci-mutation-test.sh
+  - id: review-delivery
+    detects: A missing automated-review result rather than claiming a review happened because a job was green.
+    posture: The workflow's final gate verifies a review comment was posted for that run.
+    inspect: .github/workflows/claude-code-review.yml
+investigation_records:
+  - defect: Drain-path zombie and busy-spin under contention.
+    proof: A real drain-path defect was isolated while investigating a flaky integration test; no timeout was loosened.
+    recurrence_guard: BrokerPollSystemDrainTest and the documented diagnosis.
+    source: ../solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
+  - defect: Latest-offset-reset nudge race in the integration harness.
+    proof: The old control arm fails deterministically when reset position is established after its only nudge.
+    recurrence_guard: LatestResetTailNudgeIT and BrokerIntegrationTest.awaitWithTopicNudge.
+    source: ../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md
+  - defect: Vacuous backpressure await condition.
+    proof: Arrival synchronization proves the original condition was unsatisfiable after work arrived.
+    recurrence_guard: A rewritten steady-state assertion with named 150/50 bounds.
+    source: ../solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md
+  - defect: Thread-parallel test contention made suite behavior depend on shared static state.
+    proof: Process forks were measured as faster and reliable while JUnit thread parallelism was intermittent.
+    recurrence_guard: CI uses JVM forks; the module configuration leak and causality-sleep sweep are tracked in astubbs#265.
+    source: ../solutions/test-flakiness/unit-tests-parallelise-by-forking-not-threading-2026-07-29.md
+quarantine:
+  # The registry states its own rules and is the source for them. Do not restate them here; they
+  # would drift, and this file would then contradict the document it is citing as evidence.
+  rules: ../QUARANTINED_TESTS.md
+  current_status: Empty - no test carries the annotation, and the registry records why the last two were re-enabled.
+  verification:
+    - bin/check-quarantine-registry.sh
+    - bin/check-quarantine-owners.sh
+  meaning: A mechanism that exists, is enforced, and is currently unused is a different claim from having no mechanism.
+transparency:
+  solved: ../solutions/
+  open: ../inflight/
+  rule: Surface a thin or unresolved area as open work instead of weakening a claim to make it sound complete.

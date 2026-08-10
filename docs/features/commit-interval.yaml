@@ -1,0 +1,45 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Commit interval
+category: delivery
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
+    basis: >-
+      The first tagged release already carries a user-settable commit interval, as timeBetweenCommits on
+      the processor. The changelog does not name it at any release, so the source is the evidence.
+  milestones:
+    - release: 0.3.0.0
+      basis: The default moved to the Kafka client's own auto-commit frequency of five seconds.
+    - release: 0.5.2.3
+      basis: >-
+        Moved onto ParallelConsumerOptions as commitInterval, with the processor-level setter deprecated
+        and a separate, shorter default under transactions.
+summary: Set how often offsets are committed, trading broker load against how much work is replayed after a failure.
+use_this_when:
+  - Commit load on the brokers needs tuning against replay volume after a crash or rebalance.
+  - READ_COMMITTED consumers downstream of a transactional flow need a shorter open-transaction window.
+setup:
+  option: ParallelConsumerOptions.commitInterval
+  values:
+    - DEFAULT_COMMIT_INTERVAL is 5 seconds, matching ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG.
+    - DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS is 100ms, matching Kafka Streams' commit.interval.ms.
+opt_in:
+  mechanism: Set commitInterval when building ParallelConsumerOptions; otherwise the default applies.
+  isolated_from_stable_modules: false
+boundaries:
+  - Use the builder. The setCommitInterval setter is @Deprecated and marked for deletion in the next major version.
+  - Under PERIODIC_TRANSACTIONAL_PRODUCER, validate() substitutes DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS only when commitInterval was left at its default; an explicitly set value is kept.
+  - Shortening it trades broker load against replay. The CommitMode Javadoc states the trade, and the README includes it.
+references:
+  - label: commitInterval option and transactionsValidation
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+  - label: Interval reduction under transactions, in the CommitMode Javadoc
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java#transactionalJavadoc

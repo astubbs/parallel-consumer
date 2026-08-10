@@ -1,0 +1,30 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Last failure reason in record context
+category: observability
+module: parallel-consumer-core
+maturity: stable
+availability:
+  status: published
+  since: 0.5.3.0
+  evidence:
+    tag: 0.5.3.0
+    path: CHANGELOG.adoc
+    basis: Added RecordContext access to the most recent processing failure reason.
+summary: Inspect the latest recorded failure for a record while making retry or diagnostic decisions in processing code.
+use_this_when:
+  - Retry logic or observability needs the cause of the previous attempt.
+setup:
+  accessor: RecordContext.getLastFailureReason
+  result: Optional<Throwable>
+opt_in:
+  mechanism: Read the value from RecordContext supplied to processing or retry-delay logic.
+  isolated_from_stable_modules: false
+boundaries:
+  - The value describes the latest tracked failure, not a complete durable history of attempts.
+  - An absent value is normal when no prior failure has been recorded for that work item.
+references:
+  - label: RecordContext source
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/RecordContext.java
