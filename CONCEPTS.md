@@ -5,7 +5,8 @@ project-specific meaning. Seeded with core domain vocabulary, then accretes as c
 ce-compound-refresh process learnings; direct edits are fine. Glossary only, not a spec or catch-all.
 
 Seeded from the transactional-commit learning of 2026-08-07, so it covers the concurrency and
-transactional-commit area. Other areas of the project are not yet described here.
+transactional-commit area, and extended since with the vocabulary of running Kafka Streams on this
+project's dispatch. Other areas of the project are not yet described here.
 
 ## Relationships
 
@@ -85,9 +86,42 @@ records completed *beyond* the frontier — into the commit's metadata field, so
 the frontier without losing the in-flight records and without repeating the completed ones. The same
 shape as TCP's cumulative ACK plus SACK blocks. Contrast with a **high-water mark**, a single
 per-partition number that assumes sequential completion and silently loses in-flight records when
-completion is out of order — the defect class the Kafka Streams module's U9 exists to remove, and the
+completion is out of order — the defect class the Kafka Streams commit path was changed to remove, and the
 reason that fix is a deletion rather than a repair: no amount of locking lets one number express
 "12 done, 10 and 11 still running".
+
+## Kafka Streams on this project's dispatch
+
+**Seam**
+The switch that decides whether a Kafka Streams topology runs on this project's concurrent dispatch or
+on stock Kafka Streams' single processing thread. It is the module's central device: with the seam off,
+behaviour must be identical to stock, which is what lets the module use Apache Kafka's own unmodified
+test suite as its behaviour-preservation evidence.
+
+Because that evidence depends on seam-off runs staying stock, every refusal is conditional on the seam
+rather than unconditional. A check that fired with the seam off would refuse constructs Kafka's own
+suite builds, and would void the claim it exists to protect.
+
+**Supported envelope**
+The set of Kafka Streams constructs that stay correct when records are dispatched concurrently rather
+than one at a time. Membership is decided once, when a task is constructed, rather than per record, so a
+topology reaching outside the envelope fails at startup instead of quietly producing wrong answers.
+
+The boundary is currently drawn as a named set of refused constructs with everything else admitted, so
+an unrecognised construct is allowed by default. The stronger form, in which everything is refused until
+proven supported, is a known and deliberately deferred alternative: it needs the whole upstream suite
+running first, or the refused surface is defined by whatever nobody has looked at.
+
+**Refused construct**
+A Kafka Streams feature the module rejects outright rather than documenting as a caveat, because
+concurrent dispatch would make it answer wrongly rather than fail. Most of them are refused for one
+underlying reason: they gate on stream time, the clock Kafka Streams advances as records are read in
+order, and that clock does not advance on this project's dispatch path.
+
+A refusal names both the construct and the mechanism that breaks it, and says it will recur until the
+topology changes or the seam is turned off. That last part is load-bearing rather than padding: the
+condition is a property of the topology and the switch rather than a transient fault, so a handler that
+responds by replacing the failed thread will rebalance in a loop.
 
 ## Test reliability
 
