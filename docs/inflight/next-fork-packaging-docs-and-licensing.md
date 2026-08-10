@@ -9,9 +9,13 @@ to a family of modules rather than one, and answering them once is cheaper than 
 Neither module has user-facing documentation in the generated README. Both need it, and the Streams
 one has a substantiated claim worth using:
 
-> 419 of Apache Kafka's own Streams tests (`StreamTaskTest` 101, `StreamThreadTest` 231,
-> `RecordCollectorTest` 59, `ProcessorContextImplTest` 28) pass unmodified against the patched classes,
-> zero failures.
+> 419 of Apache Kafka's own Streams tests (`StreamTaskTest` 101, `RecordCollectorTest` 59,
+> `ProcessorContextImplTest` 28, `StreamThreadTest` 231) pass unmodified against the patched
+> classes, zero failures.
+
+The 21 cases `StreamThreadTest` skips are skipped by Kafka's own annotations, and an unpatched
+control run skips exactly the same 21 - say so rather than saying "zero skipped", because the honest
+form of the claim has to survive a reader opening the surefire output.
 
 **These figures move. Re-derive them before quoting, do not copy them from here.** This note has been
 wrong twice already: it said 188 after `StreamThreadTest` was added by the wake-on-work work, and it
@@ -66,9 +70,9 @@ So: state the claim with the minimum, quote the speedup as the median, and never
 headline speed multiplier.
 
 **Pair it with the control, always** - same rule as the 419 above. With every record on a **single
-key** the same benchmark gives about **1.00x**, and whole-batch drain reaches parity at 1.01x. It was
-0.69x before wake-on-work landed; that fix is what closed it, and the earlier figure is worth keeping in
-mind because it is what the claim looked like when it was false. KEY ordering permits at most one
+key** the same benchmark gives **0.99x** - PC ties with stock rather than losing to it - and whole-batch
+drain reaches parity at 1.01x. It was 0.69x before wake-on-work landed; quote the current number, and
+keep the old one only where the point being made is that the poll wait was the cause. KEY ordering permits at most one
 in-flight record per key, so there is nothing to parallelise and the honest answer is "no better, and no
 worse", which is the reassurance a cautious reader actually wants. That is not an embarrassment to
 bury; it is what makes the headline credible, and it tells a reader exactly when this helps them.
@@ -92,7 +96,7 @@ wants before adopting anything. ("No cost for convergence state" is read here as
 otherwise degenerate case, where key concurrency cannot help.)
 
 **That half of the claim is now TRUE, and it was not when this was written.** Wake-on-work landed and
-single-key moved from 0.69x to about 1.00x, with whole-batch drain at 1.01x - checked deliberately,
+single-key moved from 0.69x to 0.99x, with whole-batch drain at 1.01x - checked deliberately,
 because drain is the statistic a sceptic computes first and per-record latency can reach parity while
 end-to-end does not. So the no-cost claim is publishable. Keep drain time printed in every arm so a
 regression cannot hide behind a healthy-looking median.

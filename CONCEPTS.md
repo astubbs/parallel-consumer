@@ -20,7 +20,30 @@ about when one side may be taken or must wait.
 **Control loop**
 The project's single controller thread: it drains completions, decides when to commit, and hands work
 out to the worker pool. It is the only thread that commits, which is why commit decisions are
-described from its point of view.
+described from its point of view. It is the project's own **owner thread**; when the project is
+embedded in a host framework, the owner is one of that framework's threads instead.
+
+**Owner thread**
+The one thread permitted, at a given moment, to touch work state that is not thread-safe. Distinct
+from the control loop, which is only the standalone case of it: an embedding hands ownership to
+whichever of the host framework's threads drives that unit of work, and the owner can differ at
+different points in the unit's life.
+
+Ownership is enforced by refusing calls from every other thread, so anything a foreign thread must
+legitimately be able to ask has to be answerable without touching owned state at all. That is why a
+question is never allowed to mutate here: a predicate that quietly drains the **completion mailbox**
+"to stay accurate" turns a safe read into an ownership violation, and the violation is silent unless
+something is checking.
+
+**Completion mailbox**
+The queue workers publish finished work into, and which only the owner thread drains. Workers never
+touch the work state directly; publishing is the whole of their interaction with it, and the drain is
+where completions become visible to commit decisions.
+
+Whether outstanding work is counted at publication or at the drain is a real distinction, not an
+implementation detail. A count taken at the drain is safe for any thread to read and still wrong,
+because it reports nothing outstanding for work that has genuinely finished and is merely waiting to
+be drained - and "nothing outstanding" about finished work is the answer that loses records.
 
 **Broker poller**
 The thread that fetches records from the broker and keeps the consumer's group membership alive,
@@ -34,7 +57,9 @@ parallel. This is how the project gets concurrency without adding partitions.
 
 **In-flight work**
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
-merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
+merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain. A
+record leaves this state by being published to the **completion mailbox**, so at every instant a
+dispatched record is either in flight or published, never neither.
 
 ## Transactional commit
 

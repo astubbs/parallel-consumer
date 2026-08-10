@@ -728,23 +728,31 @@ public class PcTaskDispatcher implements Closeable {
             // reaches PcWorkSignal's wait between the add and the decrement above leaves on the pending
             // outcome without any signal, and still reads the stale count.
             //
-            // THE ORIGINAL WORDING HERE SAID "at poolSize >= 2 the spare slot absorbs it". THAT IS
-            // REFUTED - a harness reproducing this exact ordering measured lost-dispatch reads at every
-            // pool size (2764 of them at poolSize 8 with 10us work). Do not restore it, and if a merge
-            // offers it back, take this side.
+            // AN EARLIER VERSION OF THIS COMMENT UNDERSTATED THE BOUND, and review caught it twice. It said
+            // "only bites at poolSize 1 - at poolSize >= 2 the spare slot absorbs it". That is wrong. The
+            // stale read overstates inFlight by exactly one, so it bites whenever the OTHER poolSize - 1
+            // slots are already busy, at any pool size - which under load is the normal state, not a corner.
+            // At poolSize 1 that condition is vacuously true, which is what made it look like a poolSize-1
+            // defect. A harness reproducing this exact ordering measured lost-dispatch reads at every pool
+            // size: 2764 of them at poolSize 8 with 10us work. If a merge offers the old wording back, take
+            // this side.
             //
-            // The COST, however, is not one poll budget at every size, which a first correction also got
-            // wrong by inheriting it. At poolSize 1 the wake-on-work gate reads false and a full stock
-            // poll is paid; at poolSize >= 2 the gate stays open, so the cost is SHORT_POLL (1ms) plus
-            // time-to-next-completion. The default pool is 4, so the expensive case is the benchmark's
-            // control arm rather than the shipped configuration.
+            // THE COST IS NOT "one poll budget" AT EVERY SIZE, which the first correction inherited from the
+            // wording it was fixing. dispatchAvailable reads capacity 0 and dispatches nothing; what the next
+            // wait costs then depends on the wake-on-work gate. At poolSize 1 the gate reads false and a full
+            // stock poll is paid - that is the one-poll-budget case. At poolSize >= 2 the gate stays OPEN, so
+            // the cost is SHORT_POLL (1ms) plus time-to-next-completion. The default pool is 4, so the
+            // expensive case is the benchmark's control arm rather than the shipped configuration. No hang,
+            // no lost record, either way.
             //
             // Closing it properly means answering "how many are in the pool" without reading a counter a
-            // worker is concurrently writing. Note that astubbs#255 U13's inFlightStreamTimestamps map is
-            // already exactly that: it is populated BEFORE workerPool.execute and emptied in the drain, on
-            // the owner thread only, so its size() is the exact in-flight count with no window and no
-            // atomics. Deliberately not wired up here - it re-keys every reader of getInFlightCount(), and
-            // that is a separate decision.
+            // worker is concurrently writing. Note that simply hoisting this decrement above completed.add
+            // does NOT work: it moves the identical window onto PcWorkSignal's gate instead, where a zero
+            // inFlight with an undrained outcome is the state hasActiveWork() exists to catch. What would
+            // work is already here - astubbs#255 U13's inFlightStreamTimestamps map is populated BEFORE
+            // workerPool.execute and emptied in the drain, on the owner thread only, so its size() is the
+            // exact in-flight count with no window and no atomics. Deliberately not wired up here: it re-keys
+            // every reader of getInFlightCount(), and that is a separate decision.
             workSignal.signalWorkAvailable();
         }
     }
