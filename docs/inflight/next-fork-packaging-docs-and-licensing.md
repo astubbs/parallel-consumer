@@ -57,7 +57,15 @@ is the place to correct it.) That half of the claim is **not true yet**: single-
 0.69x until the poll-wait fix lands, item 3 of `pr-ks-spike-next-work.md`. Write the explanation now,
 publish the no-cost claim after.
 
-**Also build a realistic-domain benchmark, as devil's-advocate cover for the synthetic one.** The
+**Also build a realistic-domain benchmark, as devil's-advocate cover for the synthetic one - BUILT.**
+Results in [`docs/plans/2026-08-11-001-realistic-benchmark-result.md`](../plans/2026-08-11-001-realistic-benchmark-result.md);
+the demonstration's front door is [`parallel-consumer-streams/DEMO.md`](../../parallel-consumer-streams/DEMO.md)
+and `bin/streams-benchmark.sh` runs any of it. The headline is now a relatable one - a 1200-record
+backlog cleared in 15s instead of 47s - and the write-up publishes the cells where the seam does
+nothing, including a single-key floor at 0.99x and the halving of the advantage when key skew rises
+from s=1.0 to s=1.5. The original ask, kept for the reasoning:
+
+The
 head-of-line blocking experiment was designed to expose PC's advantage - one blocker, fast records on
 other keys, blocking IO. That is legitimate experiment design, because isolating the property is the
 whole point, but it is also exactly the shape a sceptical reader dismisses as rigged: attack the design

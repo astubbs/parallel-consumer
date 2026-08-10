@@ -33,8 +33,11 @@ SCENARIOS  (--scenario, default: payments)
              workload, readable output.                             ~6 minutes
   backlog    Cold-start backlog catch-up, swept over three backlog depths, plus the
              warm-up and arm-order controls. The headline experiment. ~12 minutes
-  matrix     The synthetic matrix: key distribution, processing profile, data shape.
-             This is where the cells that DON'T favour PC live.      ~10 minutes
+  matrix     The synthetic matrix: key distribution, processing profile, data shape,
+             and the single-key no-penalty check. This is where the cells that
+             DON'T favour PC live.                                   ~5 minutes
+  partitions "Just add partitions" - the reviewer's counter-proposal,
+             measured rather than argued with.                       ~2 minutes
   all        Everything above.                                       ~25 minutes
 
 WORKLOAD OPTIONS  (each overrides the default the scenario would otherwise pick)
@@ -95,11 +98,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$SCENARIO" in
-  payments) TESTS="PaymentAuthorisationBenchmarkTest" ;;
-  backlog)  TESTS="BacklogCatchUpBenchmarkTest" ;;
-  matrix)   TESTS="WorkloadMatrixBenchmarkTest" ;;
-  all)      TESTS="PaymentAuthorisationBenchmarkTest,BacklogCatchUpBenchmarkTest,WorkloadMatrixBenchmarkTest" ;;
-  *)        fail "unknown scenario '$SCENARIO' (expected: payments, backlog, matrix, all)" ;;
+  payments)   TESTS="PaymentAuthorisationBenchmarkTest" ;;
+  backlog)    TESTS="BacklogCatchUpBenchmarkTest" ;;
+  matrix)     TESTS="WorkloadMatrixBenchmarkTest" ;;
+  partitions) TESTS="PartitionScalingBenchmarkTest" ;;
+  all)        TESTS="PaymentAuthorisationBenchmarkTest,BacklogCatchUpBenchmarkTest,WorkloadMatrixBenchmarkTest,PartitionScalingBenchmarkTest" ;;
+  *)          fail "unknown scenario '$SCENARIO' (expected: payments, backlog, matrix, partitions, all)" ;;
 esac
 
 echo "streams-benchmark: scenario=$SCENARIO repeat=$REPEAT"
