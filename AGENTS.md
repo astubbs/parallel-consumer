@@ -2,6 +2,56 @@
 
 Project context for AI coding agents (Claude Code, Copilot, Cursor, etc.).
 
+## How to write this file
+
+Every agent session loads this file whole, whatever the task. That makes it a **router**: the rules
+that bind every agent, plus a complete map to the topic docs that hold everything else. Its real
+cost is not tokens but **attention** - each rule competes with every other one for compliance, and a
+rule buried in a long file is followed less reliably than the same rule in a short one. Never
+weakening a test protects the product; the mirror-title format does not; a file long enough to
+flatten that difference has already failed.
+
+**The test for whether something belongs here is: does an agent need this whatever it is doing?**
+If yes, it goes here. If it only matters once you are already in a topic - releasing, chasing a
+CI failure, writing a mirror - it goes in that topic's doc and gets a row in the table below. No
+check can make this call; it is a judgement for whoever writes and reviews the change.
+
+**For anything situational, the deciding question is what catches a miss:**
+
+- **A gate or script enforces it** (copyright headers, issue references, the quarantine registry,
+  the PR checklist, PR dependencies) - safe to relocate. Forget the rule and CI tells you, so this
+  file needs only the rule in one line and the name of its enforcer.
+- **Nothing enforces it** (worktree ownership, the commit subject format, "a PR never adds a
+  changelog entry", keeping the upstream manifest in sync) - it stays here even when situational,
+  because the failure is silent and the agent will not know to go looking. Most rules in this repo
+  exist precisely because something went wrong with no check to catch it.
+
+**It grows by accretion, and the history says so**: `git log --numstat -- AGENTS.md` is a column of
+additions with almost no deletions, mostly from learning-capture commits. Rules get added when
+something goes wrong and are never retired once they stop earning their place. So **retiring and
+relocating is part of adding** - if you are here to write a rule, you are also here to ask whether
+an older one has been superseded, absorbed by tooling, or is now stated twice.
+
+**Writing a rule:**
+
+- An entry is **the rule, a one-line why, and a citation**. Detail lives where it can be looked up:
+  the topic doc, the dated plan, `docs/solutions/`, the PR, or the enforcing script's own header
+  comment.
+- **Cite incidents, never retell them.** If the story behind a rule has no durable home yet, write
+  it into `docs/solutions/` first and link it from there.
+- **Never state a fact twice** - duplicates drift apart, and this file has carried two descriptions
+  of one workflow before. Cross-reference whichever doc owns it.
+- **Do not pre-empt misreadings.** A rule needing three paragraphs to defend it against
+  misinterpretation is a rule that needs rewriting.
+
+**Backstops, if the judgement above is slipping.** `wc -l AGENTS.md` past ~400 lines means
+something situational has crept in; each of these fires earlier and names its own fix: a section
+outgrowing about a screen (move it to a topic doc, add a table row, keep rule plus pointer); a
+rule's backstory longer than the rule (move the story to `docs/solutions/`, cite it); the same fact
+in two places (collapse into the owner, cross-reference); a rule now enforced by a script (keep the
+rule, name the enforcer, delete what the enforcer's header already explains); routine conflicts on
+unrelated PRs (the file is doing too many jobs).
+
 ## Where things live (read this before concluding something isn't tracked)
 
 Documentation is split by *purpose*, enforced by convention only - so the commonest mistake is not
