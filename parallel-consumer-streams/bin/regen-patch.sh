@@ -31,16 +31,33 @@
 #
 #   bin/regen-patch.sh kafka-test-pristine kafka-test-patched src/main/patch/pc-streams-testfixtures.patch
 #
-# The three arguments are all-or-nothing; with none, the main tree above is assumed.
+# The first three arguments are all-or-nothing; with none, the main tree above is assumed. A fourth
+# optional argument points at another module, so a sibling that generates and patches Kafka sources the
+# same way reuses this implementation instead of copying it - parallel-consumer-connect does.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-module_dir="$(dirname "$here")"
+default_module_dir="$(dirname "$here")"
 
 pristine_name="${1:-kafka-pristine}"
 patched_name="${2:-kafka-patched}"
 patch_rel="${3:-src/main/patch/pc-streams.patch}"
+module_dir="${4:-$default_module_dir}"
+
+if [[ $# -ne 0 && $# -ne 3 && $# -ne 4 ]]; then
+    echo "usage: regen-patch.sh [<pristine-name> <patched-name> <patch-path> [<module-dir>]]" >&2
+    exit 2
+fi
+
+# Checked explicitly rather than relying on the cd below: under `set -e`, a failed command substitution
+# in an assignment does not reliably exit, so a missing directory would silently yield an empty path.
+if [[ ! -d "$module_dir" ]]; then
+    echo "regen-patch: module directory does not exist: $module_dir" >&2
+    exit 1
+fi
+
+module_dir="$(cd "$module_dir" && pwd)"
 
 pristine="$module_dir/target/$pristine_name"
 patched="$module_dir/target/$patched_name"
@@ -49,7 +66,7 @@ patch_file="$module_dir/$patch_rel"
 for d in "$pristine" "$patched"; do
     if [[ ! -d "$d" ]]; then
         echo "regen-patch: missing $d" >&2
-        echo "regen-patch: run './mvnw -pl parallel-consumer-streams generate-sources' first" >&2
+        echo "regen-patch: run the module's generate-sources phase first" >&2
         exit 1
     fi
 done

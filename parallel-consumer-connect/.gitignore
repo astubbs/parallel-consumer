@@ -1,0 +1,2 @@
+# Generated at build time from the connect-runtime sources jar. Never track Kafka source or classes.
+target/
