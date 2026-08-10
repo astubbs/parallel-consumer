@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
 
+import static io.confluent.parallelconsumer.streams.PreparedRecords.prepared;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
@@ -1014,20 +1015,6 @@ class PcTaskDispatcherTest {
                             + "calls cannot interleave, so no ack can cross a revocation boundary")
                     .isInstanceOf(IllegalStateException.class);
         });
-    }
-
-    /**
-     * The chain execution plus a stream timestamp, which is what a {@code WorkPreparer} returns since
-     * astubbs#255 U13.
-     * <p>
-     * These tests have no {@code TimestampExtractor} and no Kafka Streams at all, so the record's own
-     * timestamp stands in for the extracted one. Tests that care about the value set it deliberately on the
-     * record they register; every other test just needs something monotone, and offsets-as-timestamps gives
-     * that.
-     */
-    private static PcTaskDispatcher.PreparedRecord prepared(final ConsumerRecord<byte[], byte[]> record,
-                                                            final Runnable chainExecution) {
-        return new PcTaskDispatcher.PreparedRecord(chainExecution, record.timestamp());
     }
 
     /**

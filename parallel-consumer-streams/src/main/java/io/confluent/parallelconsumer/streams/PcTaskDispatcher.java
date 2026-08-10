@@ -602,6 +602,31 @@ public class PcTaskDispatcher implements Closeable {
     }
 
     /**
+     * Restore stream time from a committed partition time, on task initialisation (astubbs#255, U13).
+     * <p>
+     * This is the PC-path counterpart of {@code PartitionGroup.setPartitionTime}, which raises stock's
+     * {@code streamTime} to a seed decoded out of the commit metadata. Without it, routing
+     * {@code StreamTask.streamTime()} through this dispatcher makes stream time restart at
+     * {@link ConsumerRecord#NO_TIMESTAMP} on a path where nothing else restores it - which Kafka's own
+     * {@code shouldReadCommittedStreamTime*} cases catch.
+     * <p>
+     * A seed can only ever raise the mark. It flows through {@link #maxDispatchedStreamTimestamp} rather
+     * than straight to the published value, so a subsequent empty pool reports the seed rather than falling
+     * back below it - the two arms have to agree or the mark would sag the moment the first record
+     * completed.
+     * <p>
+     * <b>What this does not solve:</b> a group whose commits this module wrote carries PC's frontier payload,
+     * not Streams' {@code TopicPartitionMetadata}, so there is nothing to decode and nothing to seed from.
+     * The general case still needs KTD-S7's opaque rider.
+     */
+    public void seedStreamTime(final long committedPartitionTime) {
+        if (committedPartitionTime > maxDispatchedStreamTimestamp) {
+            maxDispatchedStreamTimestamp = committedPartitionTime;
+        }
+        publishStreamTime();
+    }
+
+    /**
      * Register a dispatched record's stream timestamp, and count it if the mark has already passed it.
      * Dispatching thread only.
      */
