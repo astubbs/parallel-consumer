@@ -54,13 +54,38 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ---
 
+## Breaking changes LANDING IN 0.6.0.0
+
+**0.6.0.0 is the major bump**, so this is the window the section below has been
+saving things for. Entries here have already landed on `master` (or are in an open
+PR) and change the public surface, so they belong in the release notes and in any
+upgrade guidance. Do not confuse this list with the *queued* one that follows:
+this is what shipped, that is what is still owed.
+
+- **Removed `WorkManager.getSuccessfulWorkListeners()`** - replaced by
+  `WorkManager.addSuccessfulWorkListener(Consumer<WorkContainer<K, V>>)`
+  (astubbs/parallel-consumer#267). The Lombok `@Getter(PUBLIC)` handed callers the
+  live internal list, so registration was `getSuccessfulWorkListeners().add(..)`.
+  That is what hid a real concurrency defect: searching the field name found the
+  declaration and the iteration but never a write, so the field read as dead code
+  and a sweep for exactly that defect class walked past it. It also let any caller
+  reorder or `clear()` the listeners. Binary- and source-incompatible for anyone
+  who called it; in practice only this repository's own tests did, and nothing has
+  ever shipped under the `bz.stub.parallelconsumer` coordinate, so the removal is
+  clean rather than merely permitted.
+
+**Because 0.6.0.0 is the bump, the queued list below is actionable now, not
+later.** It has been accumulating against precisely this release. Anything left
+undone when v6 ships rolls to v7 and waits another major.
+
 ## Breaking changes queued for next major version
 
 API/behaviour changes that are ready in principle but must wait for a major-version
-bump (current line is 0.6.x). Unlike the internal refactors below - which are
-non-breaking and can land any time - these change the public, user-visible surface,
-so they are **release-gated**: do not fold them into a minor/patch. Collected here
-so a major-release prep can action them in one pass.
+bump - **which 0.6.0.0 is**, so these are live candidates rather than indefinitely
+deferred. Unlike the internal refactors below - which are non-breaking and can land
+any time - these change the public, user-visible surface, so they are
+**release-gated**: do not fold them into a minor/patch. Collected here so a
+major-release prep can action them in one pass.
 
 - **Remove the deprecated `commitInterval` options** -
   `internal/AbstractParallelEoSStreamProcessor.java` L87-103.
