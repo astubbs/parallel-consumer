@@ -143,7 +143,11 @@ What layer 3 inspects, and from where:
 | Windowed operators | a `ProcessorTopology.stateStores()` entry that is a `WindowStore` |
 | Session operators | a `stateStores()` entry that is a `SessionStore` |
 | Suppression | a `stateStores()` entry that is a `TimeOrderedKeyValueBuffer` |
+| Versioned stores | a `stateStores()` entry that is a `VersionedKeyValueStore` - added after review, see OQ4, and the easiest of the four to miss because it is not a `WindowStore` |
 | EOS | `config.eosEnabled` on the `TaskConfig` - configuration, not topology |
+
+Global stores are deliberately **not** inspected: they are driven by `GlobalStreamThread`, one thread, never
+the PC dispatch path, so refusing one would refuse something this module does not break.
 
 Verified against the Kafka 3.9.2 sources: `ProcessorTopology` exposes `stateStores()` returning the
 constructed `StateStore` instances, and `StreamTask`'s constructor already holds both the topology and the
@@ -484,9 +488,20 @@ existing test genuinely must change, that is a finding to report, not a change t
   classes instead of thirteen, at the cost of a slightly less direct message and a check that is one step
   removed from the method the user called. Recorded here because the settled approach names the method
   bodies explicitly, so this plan follows it; the alternative is real and cheap to switch to.
-- **OQ3. Does `TopologyTestDriver` propagate `processing.guarantee` into `TaskConfig.eosEnabled`?** If not,
-  the EOS backstop is provable only at U1's unit level plus a broker-backed integration test. Resolve by
-  running, not by reading - and report which it was.
+- **OQ3. RESOLVED by running: yes.** `TopologyTestDriver` does propagate `processing.guarantee` into
+  `TaskConfig.eosEnabled`, so `exactlyOnceIsRefusedOnAnOtherwiseSupportedTopology` exercises the real
+  constructor path with no broker. The fallback (unit-level only) was not needed.
+- **OQ4. RAISED AND FIXED IN REVIEW: `VersionedKeyValueStore` was missed.** It extends `StateStore`
+  directly rather than `WindowStore`, so the original three-way classification let it through - reachable
+  with no refused DSL call at all, via `Materialized.as(Stores.persistentVersionedKeyValueStore(...))`. It
+  belongs in the refused set by this plan's own criterion and by a stronger one: `RocksDBVersionedStore`
+  keeps a non-volatile `observedStreamTime` and *silently drops* puts older than it, so concurrent dispatch
+  loses writes rather than reordering them. Now `VERSIONED_KEY_VALUE_STORE`, with its own tests.
+- **OQ5. Not covered: how the refusal reads to a user in a real run.** Every layer-3 test uses
+  `TopologyTestDriver`, which constructs `StreamTask` synchronously. In a live run the throw happens inside
+  the rebalance callback, is wrapped by Kafka, and reaches the user through the uncaught-exception handler
+  with our message in the *cause*. Whether it stays legible there is unverified; one broker-backed
+  integration test would settle it, and the module already has the harness.
 
 ---
 

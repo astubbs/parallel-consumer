@@ -42,11 +42,13 @@ final class PcRefusalMessage {
         }
 
         final StringBuilder message = new StringBuilder("PC dispatch (astubbs#255): ");
+        final String supported;
         if (constructs.size() == 1) {
             message.append(constructs.get(0).getDisplayName())
                     .append(" is not supported on the Parallel Consumer dispatch path, because ")
                     .append(constructs.get(0).getReason())
                     .append('.');
+            supported = "which supports it";
         } else {
             message.append(constructs.size())
                     .append(" constructs in this topology are not supported on the Parallel Consumer dispatch path:");
@@ -57,12 +59,15 @@ final class PcRefusalMessage {
                         .append(construct.getReason())
                         .append('.');
             }
+            supported = "which supports all of the above";
         }
 
         return message.append("\n\nThis is refused rather than allowed to produce silently wrong results. "
                         + "Run with -D")
                 .append(PcDispatchSwitch.ENABLED_PROPERTY)
-                .append("=false for stock Kafka Streams dispatch, which supports all of the above. ")
+                .append("=false for stock Kafka Streams dispatch, ")
+                .append(supported)
+                .append(". ")
                 .append(REFERENCE)
                 .toString();
     }

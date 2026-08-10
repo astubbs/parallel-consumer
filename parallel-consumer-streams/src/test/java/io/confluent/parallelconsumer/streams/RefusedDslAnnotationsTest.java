@@ -14,6 +14,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -55,24 +57,32 @@ class RefusedDslAnnotationsTest {
     private static final List<String> KTABLE_REFUSED = Arrays.asList("join", "leftJoin", "outerJoin", "suppress");
     private static final List<String> WINDOWED_BY = Arrays.asList("windowedBy");
 
+    private static final int KSTREAM_OVERLOADS = 28;
+    private static final int KTABLE_OVERLOADS = 25;
+    private static final int KGROUPED_STREAM_OVERLOADS = 3;
+    private static final int COGROUPED_KSTREAM_OVERLOADS = 3;
+
+    private static final int TOTAL_REFUSED_OVERLOADS =
+            KSTREAM_OVERLOADS + KTABLE_OVERLOADS + KGROUPED_STREAM_OVERLOADS + COGROUPED_KSTREAM_OVERLOADS;
+
     @Test
     void everyRefusedKStreamMethodIsDeprecated() {
-        assertEveryOverloadDeprecated(KStream.class, KSTREAM_REFUSED, 28);
+        assertEveryOverloadDeprecated(KStream.class, KSTREAM_REFUSED, KSTREAM_OVERLOADS);
     }
 
     @Test
     void everyRefusedKTableMethodIsDeprecated() {
-        assertEveryOverloadDeprecated(KTable.class, KTABLE_REFUSED, 25);
+        assertEveryOverloadDeprecated(KTable.class, KTABLE_REFUSED, KTABLE_OVERLOADS);
     }
 
     @Test
     void everyKGroupedStreamWindowedByIsDeprecated() {
-        assertEveryOverloadDeprecated(KGroupedStream.class, WINDOWED_BY, 3);
+        assertEveryOverloadDeprecated(KGroupedStream.class, WINDOWED_BY, KGROUPED_STREAM_OVERLOADS);
     }
 
     @Test
     void everyCogroupedKStreamWindowedByIsDeprecated() {
-        assertEveryOverloadDeprecated(CogroupedKStream.class, WINDOWED_BY, 3);
+        assertEveryOverloadDeprecated(CogroupedKStream.class, WINDOWED_BY, COGROUPED_KSTREAM_OVERLOADS);
     }
 
     @Test
@@ -84,6 +94,34 @@ class RefusedDslAnnotationsTest {
                             refused.getSimpleName(), DO_NOT_CALL_DESCRIPTOR)
                     .contains(DO_NOT_CALL_DESCRIPTOR);
         }
+    }
+
+    /**
+     * The per-method half of layer 1, which the class-file scan above cannot give: the constant pool holds one
+     * UTF8 entry for the descriptor however many methods use it, so that assertion would pass with 1 of 59
+     * annotated. Counting the annotations in the tracked patch is exhaustive, and it is the only check that
+     * covers the four {@code KTable} foreign-key overloads Kafka had <em>already</em> deprecated itself - for
+     * those, {@link #everyRefusedKTableMethodIsDeprecated()} passes whether or not the patch touched them.
+     */
+    @Test
+    void thePatchAnnotatesEveryRefusedOverloadIndividually() throws IOException {
+        final List<String> patchLines = Files.readAllLines(
+                Paths.get("src/main/patch/pc-streams.patch"), StandardCharsets.UTF_8);
+
+        int doNotCallAdded = 0;
+        for (final String line : patchLines) {
+            // An added line in a unified diff is "+" then the source line, so the "+" has to come off before
+            // trimming - trim() alone leaves it in front of the indentation and matches nothing.
+            if (line.startsWith("+") && line.substring(1).trim().startsWith("@DoNotCall(")) {
+                doNotCallAdded++;
+            }
+        }
+
+        assertThat(doNotCallAdded)
+                .as("the patch must add one @DoNotCall per refused overload: 28 on KStream, 25 on KTable, 3 on "
+                        + "KGroupedStream, 3 on CogroupedKStream. A lower number means an overload is reachable "
+                        + "without a compile error; a higher one means something is annotated that should not be.")
+                .isEqualTo(TOTAL_REFUSED_OVERLOADS);
     }
 
     @Test
@@ -123,12 +161,23 @@ class RefusedDslAnnotationsTest {
     }
 
     private static void assertNotDeprecated(final Class<?> type, final String methodName) {
+        final List<Method> found = new ArrayList<>();
         for (final Method method : type.getMethods()) {
             if (method.getName().equals(methodName)) {
-                assertThat(method.isAnnotationPresent(Deprecated.class))
-                        .as("%s#%s is a supported operator and must not be refused", type.getSimpleName(), methodName)
-                        .isFalse();
+                found.add(method);
             }
+        }
+
+        // Without this, a typo - or Kafka renaming the method - turns the control silently into a no-op, and
+        // the control is the only thing stopping "deprecate the whole interface" from passing every test here.
+        assertThat(found)
+                .as("%s#%s does not exist, so this control proves nothing", type.getSimpleName(), methodName)
+                .isNotEmpty();
+
+        for (final Method method : found) {
+            assertThat(method.isAnnotationPresent(Deprecated.class))
+                    .as("%s#%s is a supported operator and must not be refused", type.getSimpleName(), methodName)
+                    .isFalse();
         }
     }
 

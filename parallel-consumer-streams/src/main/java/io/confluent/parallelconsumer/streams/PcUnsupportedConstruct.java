@@ -73,8 +73,9 @@ public enum PcUnsupportedConstruct {
 
     WINDOW_STORE(
             "a WindowStore",
-            "a window store is only meaningful alongside stream-time-driven window close, which does not work on "
-                    + "the PC path"),
+            "the store keeps its own non-volatile observedStreamTime and uses it to decide which records are too "
+                    + "late to retain - so under concurrent dispatch it drops records based on a value that is being "
+                    + "corrupted by read-modify-write from several workers at once"),
 
     SESSION_STORE(
             "a SessionStore",
@@ -85,11 +86,19 @@ public enum PcUnsupportedConstruct {
             "a suppression buffer",
             "the buffer emits on stream time, which never advances on the PC path"),
 
+    VERSIONED_KEY_VALUE_STORE(
+            "a versioned key-value store",
+            "the store keeps a non-volatile observedStreamTime and silently DROPS any put older than "
+                    + "observedStreamTime minus the grace period, so concurrent dispatch loses writes rather than "
+                    + "merely reordering them - and reads outside history retention are rejected off the same field"),
+
     EXACTLY_ONCE(
             "exactly-once processing (processing.guarantee)",
-            "the Kafka Streams transaction is per-StreamThread, not per-task, so a worker's send joins a "
-                    + "transaction covering every task on that thread - one task's work cannot be committed without "
-                    + "committing every other worker's in-flight work (KTD7: this module is at-least-once)");
+            "under exactly_once_v2 the Kafka Streams transaction is per-StreamThread rather than per-task, so a "
+                    + "worker's send joins a transaction covering every task on that thread and one task's work "
+                    + "cannot be committed without committing every other worker's in-flight work; the older "
+                    + "per-task exactly_once is no better placed, because StreamsProducer.transactionInFlight is a "
+                    + "non-volatile check-then-act (KTD7: this module is at-least-once)");
 
     /**
      * How this construct is named back to the user. Deliberately the name they would recognise from their own
@@ -98,8 +107,8 @@ public enum PcUnsupportedConstruct {
     private final String displayName;
 
     /**
-     * Why it is refused. Carried with the construct rather than written at the throw site, so the thirteen call
-     * sites in the generated Kafka sources stay one line each and cannot drift apart.
+     * Why it is refused. Carried with the construct rather than written at the throw site, so the twelve
+     * {@link #refuse()} call sites in the generated Kafka sources stay one line each and cannot drift apart.
      */
     private final String reason;
 

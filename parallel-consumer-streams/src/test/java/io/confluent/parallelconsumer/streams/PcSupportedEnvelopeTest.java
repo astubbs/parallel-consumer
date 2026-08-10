@@ -3,17 +3,13 @@ package io.confluent.parallelconsumer.streams;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.processor.StateStore;
-import org.apache.kafka.streams.state.Stores;
-import org.apache.kafka.streams.state.internals.InMemoryTimeOrderedKeyValueChangeBuffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.parallel.Isolated;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -31,11 +27,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * actually calls it. A single end-to-end test would conflate "we do not detect a session store" with "we
  * never got asked", and those have different fixes.
  * <p>
- * <b>The stores here are real Kafka stores, not stubs.</b> {@code Stores.inMemoryWindowStore(...)} built
- * through a {@code StoreBuilder} produces the same {@code MeteredWindowStore}-over-wrappers stack that
- * {@code ProcessorTopology.stateStores()} hands us at runtime, so this exercises the {@code instanceof}
- * chain against the shape it will actually meet. A hand-rolled stub implementing {@code WindowStore}
- * directly would pass while telling us nothing about the wrappers.
+ * The stores come from {@link RefusedStoreFixtures}, and they are real Kafka stores rather than stubs - see
+ * that class for why that matters to the {@code instanceof} chain being exercised here.
  *
  * @author Antony Stubbs
  */
@@ -111,17 +104,26 @@ class PcSupportedEnvelopeTest {
     }
 
     @Test
-    void aSessionStoreIsClassifiedAsSessionWindowingRatherThanWindowing() {
-        // A SessionStore is also a WindowStore's cousin but not a WindowStore; reporting it as one would send
-        // the reader looking for a windowedBy(TimeWindows) they never wrote.
+    void aSessionStoreIsClassifiedAsSessionWindowing() {
         assertThat(PcSupportedEnvelope.findUnsupported(Collections.singletonList(sessionStore()), AT_LEAST_ONCE))
                 .containsExactly(PcUnsupportedConstruct.SESSION_STORE);
     }
 
     @Test
-    void aSuppressionBufferIsClassifiedAsSuppressionRatherThanAsAWindowStore() {
+    void aSuppressionBufferIsClassifiedAsSuppression() {
         assertThat(PcSupportedEnvelope.findUnsupported(Collections.singletonList(suppressionBuffer()), AT_LEAST_ONCE))
                 .containsExactly(PcUnsupportedConstruct.SUPPRESSION_BUFFER);
+    }
+
+    @Test
+    void aVersionedKeyValueStoreIsRefusedEvenThoughItIsNotAWindowStore() {
+        // The one that gets missed. VersionedKeyValueStore extends StateStore directly, so it satisfies none of
+        // the window/session/buffer checks and looks like an ordinary key-value store - yet RocksDBVersionedStore
+        // silently DROPS puts older than its non-volatile observedStreamTime. Reachable with no refused DSL call
+        // anywhere: Materialized.as(Stores.persistentVersionedKeyValueStore(...)) is enough.
+        assertThat(PcSupportedEnvelope.findUnsupported(
+                Collections.singletonList(versionedKeyValueStore()), AT_LEAST_ONCE))
+                .containsExactly(PcUnsupportedConstruct.VERSIONED_KEY_VALUE_STORE);
     }
 
     @Test
@@ -140,7 +142,8 @@ class PcSupportedEnvelopeTest {
                         PcUnsupportedConstruct.EXACTLY_ONCE,
                         PcUnsupportedConstruct.WINDOW_STORE,
                         PcUnsupportedConstruct.SESSION_STORE,
-                        PcUnsupportedConstruct.SUPPRESSION_BUFFER);
+                        PcUnsupportedConstruct.SUPPRESSION_BUFFER,
+                        PcUnsupportedConstruct.VERSIONED_KEY_VALUE_STORE);
     }
 
     @Test
@@ -190,6 +193,7 @@ class PcSupportedEnvelopeTest {
                 .hasMessageContaining(PcUnsupportedConstruct.WINDOW_STORE.getDisplayName())
                 .hasMessageContaining(PcUnsupportedConstruct.SESSION_STORE.getDisplayName())
                 .hasMessageContaining(PcUnsupportedConstruct.SUPPRESSION_BUFFER.getDisplayName())
+                .hasMessageContaining(PcUnsupportedConstruct.VERSIONED_KEY_VALUE_STORE.getDisplayName())
                 .hasMessageContaining(PcUnsupportedConstruct.EXACTLY_ONCE.getDisplayName())
                 .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY + "=false");
     }
@@ -209,37 +213,28 @@ class PcSupportedEnvelopeTest {
         stores.add(windowStore());
         stores.add(sessionStore());
         stores.add(suppressionBuffer());
+        stores.add(versionedKeyValueStore());
         stores.add(keyValueStore());
         return stores;
     }
 
     private static StateStore windowStore() {
-        return Stores.windowStoreBuilder(
-                        Stores.inMemoryWindowStore("windows", Duration.ofMinutes(10), Duration.ofMinutes(1), false),
-                        Serdes.String(),
-                        Serdes.String())
-                .build();
+        return RefusedStoreFixtures.build(RefusedStoreFixtures.windowStoreBuilder());
     }
 
     private static StateStore sessionStore() {
-        return Stores.sessionStoreBuilder(
-                        Stores.inMemorySessionStore("sessions", Duration.ofMinutes(10)),
-                        Serdes.String(),
-                        Serdes.String())
-                .build();
+        return RefusedStoreFixtures.build(RefusedStoreFixtures.sessionStoreBuilder());
     }
 
     private static StateStore suppressionBuffer() {
-        return new InMemoryTimeOrderedKeyValueChangeBuffer.Builder<>(
-                "suppression", Serdes.String(), Serdes.String())
-                .build();
+        return RefusedStoreFixtures.build(RefusedStoreFixtures.suppressionBufferBuilder());
+    }
+
+    private static StateStore versionedKeyValueStore() {
+        return RefusedStoreFixtures.build(RefusedStoreFixtures.versionedKeyValueStoreBuilder());
     }
 
     private static StateStore keyValueStore() {
-        return Stores.keyValueStoreBuilder(
-                        Stores.inMemoryKeyValueStore("counts"),
-                        Serdes.String(),
-                        Serdes.Long())
-                .build();
+        return RefusedStoreFixtures.build(RefusedStoreFixtures.keyValueStoreBuilder());
     }
 }

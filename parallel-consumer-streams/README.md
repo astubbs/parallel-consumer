@@ -171,13 +171,18 @@ plausible, wrong answers. So the patch closes them:
 
 | You get | When |
 |---|---|
-| A **compile error** (`@DoNotCall`), or a deprecation warning without ErrorProne | you write `join`, `windowedBy` or `suppress` against `KStream`, `KTable`, `KGroupedStream` or `CogroupedKStream` |
+| A **compile error** (`@DoNotCall`), or a deprecation warning without ErrorProne | you write `join`, `leftJoin`, `outerJoin`, `windowedBy` or `suppress` against `KStream`, `KTable`, `KGroupedStream` or `CogroupedKStream` |
 | An `UnsupportedOperationException` naming the construct | you build that topology with the seam on |
-| An `UnsupportedOperationException` at task construction | your topology reaches a `WindowStore`, `SessionStore` or suppression buffer through the **Processor API**, or sets `processing.guarantee` to exactly-once |
+| An `UnsupportedOperationException` at task construction | your topology reaches a `WindowStore`, `SessionStore`, versioned key-value store or suppression buffer through the **Processor API**, or sets `processing.guarantee` to exactly-once |
 
-Every one of those is conditional on the seam. **With `-Dpc.streams.dispatch.enabled=false` all of them
-build and run exactly as stock Kafka Streams does** - which is both the escape hatch and the reason
-Apache Kafka's own 419 tests still pass unmodified.
+**The two runtime rows are conditional on the seam: with `-Dpc.streams.dispatch.enabled=false` both build
+and run exactly as stock Kafka Streams does.** That is both the escape hatch and the reason Apache Kafka's
+own 419 tests still pass unmodified.
+
+**The compile-time row is not, and cannot be.** An annotation in a class file cannot consult a system
+property, so `@DoNotCall` fires in any build running ErrorProne no matter what the switch says. If you
+have deliberately turned the seam off and want the call anyway, suppress the ErrorProne check at the call
+site - the property will not do it for you.
 
 **The method signatures are all still there.** Nothing was deleted: Kafka's own test suite calls these
 methods heavily, and deleting them would stop that suite compiling and forfeit the evidence below.

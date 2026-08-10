@@ -7,6 +7,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
@@ -119,18 +122,54 @@ class ShadowedClassLoadingTest {
     void generatedAndJarClassesShareOneRuntimePackage() {
         for (String name : GENERATED) {
             Class<?> generated = load(name);
-            Class<?> jarSibling = jarResidentSiblingOf(generated);
 
+            // Asserted against the declared set rather than against the sibling looked up below: the lookup
+            // selects its sibling BY package name, so comparing the two afterwards could never fail.
             assertThat(generated.getPackage().getName())
-                    .as("%s must sit in the same package as the jar-resident classes it reaches into", generated.getName())
-                    .isEqualTo(jarSibling.getPackage().getName());
+                    .as("%s is generated into a package this test does not know about. Every generated package "
+                                    + "needs a declared jar-resident sibling, or its coexistence is unproven.",
+                            generated.getName())
+                    .isIn(generatedPackages());
 
+            Class<?> jarSibling = jarResidentSiblingOf(generated);
             assertThat(generated.getClassLoader())
                     .as("%s must share a classloader with %s, or they are in different runtime packages and "
                                     + "package-private access fails despite the matching package name",
                             generated.getName(), jarSibling.getName())
                     .isSameAs(jarSibling.getClassLoader());
         }
+    }
+
+    /**
+     * The list here has to match {@code patched.classes} in this module's pom, and a comment saying so is not a
+     * check. Surefire passes the property through so this can be one.
+     */
+    @Test
+    void theGeneratedListMatchesThePomProperty() {
+        String property = System.getProperty("patched.classes");
+        assertThat(property)
+                .as("patched.classes was not passed through by surefire, so this test cannot tell whether the "
+                        + "list above is still complete - fix the pom rather than deleting this test")
+                .isNotBlank();
+
+        List<String> fromPom = new ArrayList<>();
+        for (String path : property.split(",")) {
+            fromPom.add(path.trim().replace(".java", "").replace('/', '.'));
+        }
+
+        assertThat(Arrays.asList(GENERATED))
+                .as("GENERATED and patched.classes have drifted apart. A class in the pom but not here is "
+                        + "generated and unproven; one here but not in the pom is loaded from the jar and every "
+                        + "assertion about it is a lie.")
+                .containsExactlyInAnyOrderElementsOf(fromPom);
+    }
+
+    private static List<String> generatedPackages() {
+        List<String> packages = new ArrayList<>();
+        for (String name : JAR_RESIDENT_SIBLINGS) {
+            packages.add(load(name).getPackage().getName());
+        }
+        return packages;
     }
 
     /**

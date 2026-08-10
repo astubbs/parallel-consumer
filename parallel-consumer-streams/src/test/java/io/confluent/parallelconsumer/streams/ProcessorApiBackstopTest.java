@@ -10,17 +10,14 @@ import org.apache.kafka.streams.TopologyTestDriver;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.state.StoreBuilder;
-import org.apache.kafka.streams.state.Stores;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.parallel.Isolated;
 
-import java.time.Duration;
 import java.util.Properties;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -67,7 +64,7 @@ class ProcessorApiBackstopTest {
     void aWindowStoreBuiltThroughTheProcessorApiIsRefused() {
         PcDispatchSwitch.enable(2);
 
-        assertThatThrownBy(() -> openDriver(topologyWith(windowStoreBuilder()), atLeastOnce()))
+        assertThatThrownBy(() -> openAndClose(topologyWith(RefusedStoreFixtures.windowStoreBuilder()), atLeastOnce()))
                 .as("a window store reached without ever touching KStream must still be refused - this is the "
                         + "hole layer 3 exists to close")
                 .isInstanceOf(UnsupportedOperationException.class)
@@ -79,9 +76,22 @@ class ProcessorApiBackstopTest {
     void aSessionStoreBuiltThroughTheProcessorApiIsRefused() {
         PcDispatchSwitch.enable(2);
 
-        assertThatThrownBy(() -> openDriver(topologyWith(sessionStoreBuilder()), atLeastOnce()))
+        assertThatThrownBy(() -> openAndClose(topologyWith(RefusedStoreFixtures.sessionStoreBuilder()), atLeastOnce()))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(PcUnsupportedConstruct.SESSION_STORE.getDisplayName())
+                .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY + "=false");
+    }
+
+    @Test
+    void aVersionedKeyValueStoreBuiltThroughTheProcessorApiIsRefused() {
+        PcDispatchSwitch.enable(2);
+
+        assertThatThrownBy(() -> openAndClose(
+                topologyWith(RefusedStoreFixtures.versionedKeyValueStoreBuilder()), atLeastOnce()))
+                .as("a versioned store is not a WindowStore and so is the easiest of these to leave unguarded - "
+                        + "and it is the one that drops writes rather than merely reordering them")
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(PcUnsupportedConstruct.VERSIONED_KEY_VALUE_STORE.getDisplayName())
                 .hasMessageContaining(PcDispatchSwitch.ENABLED_PROPERTY + "=false");
     }
 
@@ -93,7 +103,7 @@ class ProcessorApiBackstopTest {
     void exactlyOnceIsRefusedOnAnOtherwiseSupportedTopology() {
         PcDispatchSwitch.enable(2);
 
-        assertThatThrownBy(() -> openDriver(topologyWith(keyValueStoreBuilder()), exactlyOnce()))
+        assertThatThrownBy(() -> openAndClose(topologyWith(RefusedStoreFixtures.keyValueStoreBuilder()), exactlyOnce()))
                 .as("EOS cannot be inferred from the topology - it has to come off the task config, and this "
                         + "is the only test that proves that wiring")
                 .isInstanceOf(UnsupportedOperationException.class)
@@ -110,9 +120,10 @@ class ProcessorApiBackstopTest {
         PcDispatchSwitch.disable();
 
         assertThatCode(() -> {
-            closeQuietly(openDriver(topologyWith(windowStoreBuilder()), atLeastOnce()));
-            closeQuietly(openDriver(topologyWith(sessionStoreBuilder()), atLeastOnce()));
-            closeQuietly(openDriver(topologyWith(keyValueStoreBuilder()), exactlyOnce()));
+            openAndClose(topologyWith(RefusedStoreFixtures.windowStoreBuilder()), atLeastOnce());
+            openAndClose(topologyWith(RefusedStoreFixtures.sessionStoreBuilder()), atLeastOnce());
+            openAndClose(topologyWith(RefusedStoreFixtures.versionedKeyValueStoreBuilder()), atLeastOnce());
+            openAndClose(topologyWith(RefusedStoreFixtures.keyValueStoreBuilder()), exactlyOnce());
         }).as("with the seam off the patched StreamTask must construct exactly as stock does - this is the "
                 + "assertion that would fail if the backstop were unconditional, and Apache Kafka's own "
                 + "StreamTaskTest would fail with it")
@@ -125,26 +136,16 @@ class ProcessorApiBackstopTest {
 
         // Non-windowed stateful work is inside the supported envelope (KTD3). Without this, a backstop that
         // refused every state store would satisfy every other assertion in this class.
-        TopologyTestDriver driver = null;
-        try {
-            driver = openDriver(topologyWith(keyValueStoreBuilder()), atLeastOnce());
-            assertThat(driver).isNotNull();
-        } finally {
-            closeQuietly(driver);
-        }
+        assertThatCode(() -> openAndClose(topologyWith(RefusedStoreFixtures.keyValueStoreBuilder()), atLeastOnce()))
+                .doesNotThrowAnyException();
     }
 
     @Test
     void aStatelessTopologyStillConstructsWithTheSeamOn() {
         PcDispatchSwitch.enable(2);
 
-        TopologyTestDriver driver = null;
-        try {
-            driver = openDriver(topologyWith(null), atLeastOnce());
-            assertThat(driver).isNotNull();
-        } finally {
-            closeQuietly(driver);
-        }
+        assertThatCode(() -> openAndClose(topologyWith(null), atLeastOnce()))
+                .doesNotThrowAnyException();
     }
 
     // ---------------------------------------------------------------------------------------------------
@@ -163,14 +164,15 @@ class ProcessorApiBackstopTest {
         return topology;
     }
 
-    private static TopologyTestDriver openDriver(final Topology topology, final Properties config) {
-        return new TopologyTestDriver(topology, config);
-    }
-
-    private static void closeQuietly(final TopologyTestDriver driver) {
-        if (driver != null) {
-            driver.close();
-        }
+    /**
+     * Construct the driver and close it again. Construction is the whole claim - the refusal happens in
+     * {@code StreamTask}'s constructor - and closing on the way out matters most in the cases that are
+     * <em>expected</em> to throw: if the refusal ever stops happening, a leaked driver would turn one clean
+     * failure into a cascade of state-directory-lock noise from every test after it.
+     */
+    private static void openAndClose(final Topology topology, final Properties config) {
+        final TopologyTestDriver driver = new TopologyTestDriver(topology, config);
+        driver.close();
     }
 
     private static Properties baseConfig() {
@@ -190,23 +192,6 @@ class ProcessorApiBackstopTest {
         final Properties config = baseConfig();
         config.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         return config;
-    }
-
-    private static StoreBuilder<?> windowStoreBuilder() {
-        return Stores.windowStoreBuilder(
-                Stores.inMemoryWindowStore("windows", Duration.ofMinutes(10), Duration.ofMinutes(1), false),
-                Serdes.String(), Serdes.String());
-    }
-
-    private static StoreBuilder<?> sessionStoreBuilder() {
-        return Stores.sessionStoreBuilder(
-                Stores.inMemorySessionStore("sessions", Duration.ofMinutes(10)),
-                Serdes.String(), Serdes.String());
-    }
-
-    private static StoreBuilder<?> keyValueStoreBuilder() {
-        return Stores.keyValueStoreBuilder(
-                Stores.inMemoryKeyValueStore("counts"), Serdes.String(), Serdes.String());
     }
 
     /**

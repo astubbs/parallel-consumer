@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.streams;
 
 import org.apache.kafka.streams.processor.StateStore;
 import org.apache.kafka.streams.state.SessionStore;
+import org.apache.kafka.streams.state.VersionedKeyValueStore;
 import org.apache.kafka.streams.state.WindowStore;
 import org.apache.kafka.streams.state.internals.TimeOrderedKeyValueBuffer;
 
@@ -51,6 +52,11 @@ public final class PcSupportedEnvelope {
      * <p>
      * Called <b>before</b> the task's PC dispatcher is created, so a refused task never allocates a worker pool
      * that nothing will shut down.
+     *
+     * <b>Global stores are deliberately out of scope.</b> {@code ProcessorTopology.globalStateStores()} is not
+     * inspected, because a global store is read and written by {@code GlobalStreamThread} - one thread, its own
+     * task type, never the PC dispatch path. Refusing one here would refuse a construct this module does not
+     * actually break.
      *
      * @param taskId      named in the message, because a user with several tasks needs to know which topology
      *                    is at fault
@@ -107,8 +113,9 @@ public final class PcSupportedEnvelope {
      *         aggregation) and must not be refused, or the module's own stateful proof stops running.
      */
     private static PcUnsupportedConstruct classify(final StateStore store) {
-        // Checked before WindowStore: the suppression buffer is a distinct construct with its own explanation,
-        // and reporting it as "a WindowStore" would send the reader looking for a windowedBy they never wrote.
+        // The four store interfaces are disjoint in Kafka 3.9.2, so this order does not currently disambiguate
+        // anything. It is written most-specific-first anyway, so that a future Kafka in which one of them
+        // starts extending another reports the narrower construct rather than the vaguer one.
         if (store instanceof TimeOrderedKeyValueBuffer) {
             return PcUnsupportedConstruct.SUPPRESSION_BUFFER;
         }
@@ -117,6 +124,13 @@ public final class PcSupportedEnvelope {
         }
         if (store instanceof WindowStore) {
             return PcUnsupportedConstruct.WINDOW_STORE;
+        }
+        // Easy to miss, and the most dangerous of the four: VersionedKeyValueStore extends StateStore directly
+        // rather than WindowStore, so it looks like an ordinary key-value store and is reachable with no refused
+        // DSL call anywhere - Materialized.as(Stores.persistentVersionedKeyValueStore(...)) is enough. Its
+        // observedStreamTime does not merely mis-order under concurrency, it silently discards puts.
+        if (store instanceof VersionedKeyValueStore) {
+            return PcUnsupportedConstruct.VERSIONED_KEY_VALUE_STORE;
         }
         return null;
     }

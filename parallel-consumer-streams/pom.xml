@@ -426,6 +426,13 @@
                     <classpathDependencyExcludes>
                         <classpathDependencyExclude>org.slf4j:slf4j-reload4j</classpathDependencyExclude>
                     </classpathDependencyExcludes>
+                    <!-- Handed to ShadowedClassLoadingTest so it can assert its own list against the real
+                         property rather than against a "keep in sync" comment. A class added here and not
+                         there would otherwise be silently unproven - which is precisely the false positive
+                         that test exists to prevent. -->
+                    <systemPropertyVariables>
+                        <patched.classes>${patched.classes}</patched.classes>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>
