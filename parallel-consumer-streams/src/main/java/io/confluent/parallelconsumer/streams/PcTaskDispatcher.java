@@ -69,13 +69,25 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <caption>Who may call what</caption>
  *   <tr><th>Surface</th><th>Methods</th><th>Callable from</th><th>Why</th></tr>
  *   <tr>
- *     <td><b>Mutating</b></td>
- *     <td>{@link #registerRecords}, {@link #dispatchAvailable}, {@link #pumpUntilQuiescent},
- *         {@link #collectCommitData}, {@link #onCommitSuccess}, {@link #hasCommitDataOutstanding},
+ *     <td><b>Mutating, guard enforced</b></td>
+ *     <td>{@link #collectCommitData}, {@link #onCommitSuccess}, {@link #hasCommitDataOutstanding},
  *         {@link #updatePartitions}</td>
- *     <td><b>The owner thread only</b>, enforced by {@code assertOwnerThread}</td>
- *     <td>Each one reaches {@code WorkManager}, its shards or its partition state, none of which is
- *         thread-safe. A second caller corrupts offset bookkeeping without throwing.</td>
+ *     <td><b>The owner thread only</b>, and {@code assertOwnerThread} throws otherwise</td>
+ *     <td>Each reaches {@code WorkManager}, its shards or its partition state, none of which is
+ *         thread-safe. A second caller corrupts offset bookkeeping without throwing. These are the ones a
+ *         caller wiring up its own commit path is most likely to reach from the wrong thread.</td>
+ *   </tr>
+ *   <tr>
+ *     <td><b>Mutating, convention only</b></td>
+ *     <td>{@link #registerRecords}, {@link #dispatchAvailable}, {@link #pumpUntilQuiescent},
+ *         {@link #pollFailure}, {@link #close}, {@link #abortClose}</td>
+ *     <td>The owner thread only, <b>unenforced</b></td>
+ *     <td>Just as unsafe off-thread as the row above, but reached only from Kafka's own single-threaded
+ *         call sites ({@code addRecords}, {@code process}, {@code suspend}, task teardown) rather than
+ *         from anything an integrator wires up. Adding the guard here is a behaviour change with real
+ *         blast radius - it would turn today's silent misuse into a thrown exception mid-run - so it is
+ *         deliberately left as a separate, measured decision rather than smuggled in with this one.
+ *         <b>Do not read this row as "safe from any thread".</b></td>
  *   </tr>
  *   <tr>
  *     <td><b>Read-only</b></td>
@@ -488,15 +500,18 @@ public class PcTaskDispatcher implements Closeable {
      */
     private void drainCompletions() {
         WorkContainer<byte[], byte[]> work;
-        boolean handledAny = false;
-        while ((work = completed.poll()) != null) {
+        // PEEK, handle, publish, THEN remove - and the order is the whole point. Polling first takes the
+        // outcome out of `completed` before `pcDirty` has been republished, which opens a window where a
+        // foreign reader sees an empty queue, a zero in-flight count and a stale-false pcDirty all at once,
+        // and hasUncommittedWork() answers "nothing outstanding" for work that is very much outstanding.
+        // That is the one direction that guarantee may not fail in. Leaving the item on the queue until
+        // after the publish means it is always visible through one term or the other.
+        while ((work = completed.peek()) != null) {
             workManager.handleFutureResult(work);
-            handledAny = true;
-        }
-        if (handledAny) {
-            // Publish for the cross-thread readers, on the thread that just changed the thing being
-            // published. See pcDirty for why this is a publication rather than a shadow.
+            // Publish before the remove, on the thread that just changed the value being published. See
+            // pcDirty for why this is a publication rather than a shadow.
             publishDirtyState();
+            completed.poll();
         }
     }
 
@@ -582,15 +597,16 @@ public class PcTaskDispatcher implements Closeable {
      * the same trap {@link #isQuiescent()} exists to avoid. A failed record is not lost by closing: it was
      * never completed, so the frontier never rose over it and whoever owns the partition next re-reads it.
      *
-     * <p>The three terms leave no gap for a live record to hide in. A worker enqueues its outcome
-     * <em>before</em> it decrements the in-flight count, so at every instant a dispatched record is counted
-     * by {@code inFlight}, or sitting in {@code completed}, or already folded into {@link #pcDirty} by the
-     * owner thread's drain. A reader can therefore be stale in the direction of "yes, work exists" for a
-     * few microseconds, and never in the direction of "no, nothing outstanding" - which is the only
-     * direction that would be unsafe.
+     * <p>The three terms leave no gap for a live record to hide in, and <b>two orderings are what close
+     * that gap</b> - neither is incidental. A worker enqueues its outcome <em>before</em> it decrements the
+     * in-flight count, so a record is never missing from both at once. And {@link #drainCompletions} leaves
+     * an outcome on the queue until <em>after</em> it has republished {@link #pcDirty}, so a record is never
+     * missing from both the queue and the dirty flag at once. A reader can therefore be stale in the
+     * direction of "yes, work exists" for a few microseconds, and never in the direction of "no, nothing
+     * outstanding" - which is the only direction that would be unsafe.
      */
     public boolean hasUncommittedWork() {
-        return pcDirty || inFlight.get() > 0 || !completed.isEmpty();
+        return pcDirty || inFlight.get() > 0 || hasPendingCompletions();
     }
 
     /**

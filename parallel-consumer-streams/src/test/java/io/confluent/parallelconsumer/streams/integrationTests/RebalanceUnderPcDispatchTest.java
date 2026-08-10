@@ -8,6 +8,7 @@ import io.confluent.parallelconsumer.streams.PcDispatchCounters;
 import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.admin.ListOffsetsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -22,14 +23,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
-import pl.tlinkowski.unij.api.UniMaps;
 
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
@@ -280,20 +282,54 @@ class RebalanceUnderPcDispatchTest extends BrokerStreamsIntegrationTest {
      */
     @SneakyThrows
     private List<Long> outputEndOffsets() {
-        List<Long> offsets = new ArrayList<>();
-        for (int partition = 0; partition < PARTITIONS; partition++) {
-            TopicPartition topicPartition = new TopicPartition(outputTopic, partition);
-            offsets.add(getKcu().getAdmin()
-                    .listOffsets(UniMaps.of(topicPartition, OffsetSpec.latest()))
-                    .partitionResult(topicPartition).get().offset());
+        // One batched listOffsets rather than one call per partition. Cheaper, but the reason that matters
+        // here is consistency: this is the BOUNDARY the handover assertion is scoped to, and four
+        // sequentially-fetched offsets are four instants rather than one.
+        final Map<TopicPartition, OffsetSpec> query = new LinkedHashMap<>();
+        for (TopicPartition partition : outputPartitions()) {
+            query.put(partition, OffsetSpec.latest());
+        }
+        final ListOffsetsResult result = getKcu().getAdmin().listOffsets(query);
+
+        final List<Long> offsets = new ArrayList<>();
+        for (TopicPartition partition : outputPartitions()) {
+            offsets.add(result.partitionResult(partition).get().offset());
         }
         return offsets;
     }
 
+    private List<TopicPartition> outputPartitions() {
+        List<TopicPartition> partitions = new ArrayList<>();
+        for (int partition = 0; partition < PARTITIONS; partition++) {
+            partitions.add(new TopicPartition(outputTopic, partition));
+        }
+        return partitions;
+    }
+
+    /**
+     * Block until the output topic holds at least {@code atLeast} records.
+     * <p>
+     * <b>One consumer, polled incrementally</b> - deliberately not a `drainAll()` in an Awaitility
+     * condition. That shape builds a fresh consumer and re-reads the entire topic from offset zero on every
+     * check, and {@link #pollUntilQuiet} demands three consecutive empty polls before it returns, so each
+     * check cost a floor of 1.5s plus a re-read that grows as the run proceeds. This is a synchronisation
+     * gate, not an assertion - the ledger is still collected by a full {@link #drainAll()} afterwards, so
+     * nothing about what is asserted changes.
+     */
     private void awaitOutputCount(final int atLeast) {
-        await().atMost(Duration.ofMinutes(3))
-                .pollInterval(Duration.ofSeconds(1))
-                .until(() -> drainAll().size() >= atLeast);
+        final List<ConsumerRecord<String, String>> seen = new ArrayList<>();
+        try (KafkaConsumer<String, String> consumer =
+                     getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
+            List<TopicPartition> partitions = outputPartitions();
+            consumer.assign(partitions);
+            consumer.seekToBeginning(partitions);
+            await().atMost(Duration.ofMinutes(3)).until(() -> {
+                for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
+                    seen.add(record);
+                }
+                return seen.size() >= atLeast;
+            });
+        }
     }
 
     /** Every output record, from the beginning - the no-loss and duplicate ledger wants the whole topic. */
@@ -301,10 +337,7 @@ class RebalanceUnderPcDispatchTest extends BrokerStreamsIntegrationTest {
         List<ConsumerRecord<String, String>> out = new ArrayList<>();
         try (KafkaConsumer<String, String> consumer =
                      getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            List<TopicPartition> partitions = new ArrayList<>();
-            for (int partition = 0; partition < PARTITIONS; partition++) {
-                partitions.add(new TopicPartition(outputTopic, partition));
-            }
+            List<TopicPartition> partitions = outputPartitions();
             consumer.assign(partitions);
             consumer.seekToBeginning(partitions);
             pollUntilQuiet(consumer, out);
@@ -320,10 +353,7 @@ class RebalanceUnderPcDispatchTest extends BrokerStreamsIntegrationTest {
         List<ConsumerRecord<String, String>> out = new ArrayList<>();
         try (KafkaConsumer<String, String> consumer =
                      getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            List<TopicPartition> partitions = new ArrayList<>();
-            for (int partition = 0; partition < PARTITIONS; partition++) {
-                partitions.add(new TopicPartition(outputTopic, partition));
-            }
+            List<TopicPartition> partitions = outputPartitions();
             consumer.assign(partitions);
             for (int partition = 0; partition < PARTITIONS; partition++) {
                 consumer.seek(partitions.get(partition), fromOffsets.get(partition));
