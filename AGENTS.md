@@ -7,8 +7,9 @@ Project context for AI coding agents (Claude Code, Copilot, Cursor, etc.).
 The fork is moving `io.confluent.*` to `bz.stub.*` with `bin/rename-packages.sh`. Until every open
 branch has run it, this binds **any** agent merging **any** branch. Delete this section once no open
 branch predates the rename. Reasoning and measurements:
-`docs/plans/2026-08-11-001-refactor-package-rename-plan.md` (until it merges:
-`git show refactor/package-rename:docs/plans/2026-08-11-001-refactor-package-rename-plan.md`).
+`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`, which lands with
+astubbs/parallel-consumer#277 - this tooling merges first, so on master that file arrives after this
+section does. The rules below stand alone; the plan is the evidence behind them, not a dependency.
 
 - **Run `bin/rename-packages.sh` on your branch first, then merge master.** Both sides then agree on
   where every file lives and what it is called, so the merge is ordinary.
