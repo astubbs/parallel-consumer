@@ -79,7 +79,7 @@ settled the last question of this shape, and the traps that voided someone's ear
 | Prior investigations | `ls docs/plans/`, then grep them | The same question already answered, and how it was proved |
 | Solved problems | `grep -rl <mechanism> docs/solutions/` | A documented root cause with a signature you can rule in or out |
 | In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` | A known-open defect you are about to rediscover |
-| Open PRs | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> --name-only` | A fix already in flight, and files your change would collide with |
+| Open PRs | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` | A fix already in flight, and files your change would collide with |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` | The PR that last fixed something in this exact file - the richest prior art there is, and invisible to a search on the *open* list |
 | Existing issues | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` and filter by title - fork issues *and* the `upstream-mirror` ones | An upstream bug already triaged; read the upstream issue itself, not the mirror's summary |
 
@@ -285,7 +285,7 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 ## CI
 
-**Reading a failed job's log.** `gh run view --log` refuses while *any* job in the run is still going
+**Reading a failed job's log.** The `--log` flag on `gh run view` refuses while *any* job in the run is still going
 ("logs will be available when it is complete"), and `--log-failed` is often empty for a Maven job,
 because the failure text is ordinary stdout rather than an `::error::` annotation. Neither means the
 log is unavailable. Fetch the job directly - this works as soon as **that job** finishes, regardless
