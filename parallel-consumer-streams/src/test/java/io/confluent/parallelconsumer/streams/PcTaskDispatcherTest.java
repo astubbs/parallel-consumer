@@ -1300,6 +1300,35 @@ class PcTaskDispatcherTest {
                 .isEqualTo(90L);
     }
 
+    /**
+     * The one test that can tell the two timestamps apart, and the only thing protecting the
+     * {@code WorkPreparer} signature change from being reverted as pointless.
+     * <p>
+     * Every other stream-time test here reaches the dispatcher through {@link PreparedRecords#prepared},
+     * which derives the stream timestamp from the record - so in all of them the extracted and broker
+     * timestamps are the same number <em>by construction</em>, and swapping the production read to
+     * {@code work.getCr().timestamp()} would leave the whole suite green. This one builds a
+     * {@link PcTaskDispatcher.PreparedRecord} directly with a timestamp the record does not carry, which is
+     * exactly the shape a payload-time {@code TimestampExtractor} produces - the topologies the design
+     * argument is about.
+     */
+    @Test
+    void theMarkFollowsTheTimestampThePreparerSuppliedNotTheBrokersOwn() {
+        dispatcher = new PcTaskDispatcher("task-st-extracted", INPUT_PARTITIONS, 4);
+        // Broker timestamp 0; the extractor will say 5000.
+        dispatcher.registerRecords(PARTITION,
+                Collections.singletonList(PreparedRecords.record(PARTITION, 0, 0L, "key-a")));
+
+        dispatcher.pumpUntilQuiescent(
+                record -> new PcTaskDispatcher.PreparedRecord(() -> { }, 5_000L), PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("the extractor's timestamp, not ConsumerRecord.timestamp() - taking the broker's would "
+                        + "be silently wrong on exactly the topologies that care most about stream time, "
+                        + "and every other test here cannot tell the two apart")
+                .isEqualTo(5_000L);
+    }
+
     @Test
     void aRecordDroppedDuringPreparationContributesNoTimestamp() {
         dispatcher = new PcTaskDispatcher("task-st-dropped", INPUT_PARTITIONS, 4);

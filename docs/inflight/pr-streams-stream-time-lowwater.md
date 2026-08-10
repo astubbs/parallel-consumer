@@ -35,6 +35,44 @@ stream-time tests in `PcTaskDispatcherTest`.
    a grep for "never advances on the PC path" returns **zero** hits in the patch.
 4. **U13.6's divergence records**, including the README's known-gaps text and `CONCEPTS.md`.
 
+## Coverage holes the testing review named, and none of these are U13.4's integration test
+
+The one it found first is **fixed**: no test could tell the extractor's timestamp from the broker's,
+because every stream-time test derived one from the other through `PreparedRecords.prepared`. Swapping
+the production read to `work.getCr().timestamp()` left all nine green. Now pinned by
+`theMarkFollowsTheTimestampThePreparerSuppliedNotTheBrokersOwn`, and the pin is **mutation-verified**:
+with that swap applied, exactly one test goes red and it is that one.
+
+Still open:
+
+- **`seedStreamTime`'s call site has no coverage at all.** Delete the
+  `if (pcDispatcher != null) { pcDispatcher.seedStreamTime(...) }` block from the patch and the build
+  stays green. The unit test drives `seedStreamTime` directly, so it pins the arithmetic and not the
+  wiring; and the only execution that runs Kafka's `shouldReadCommittedStreamTime*` cases pins the seam
+  **off**, so the branch never executes there. Consequence: a task restarted against a stock-written
+  group restarts stream time at -1 and re-fires punctuators over closed windows, with nothing red. The
+  suggested shape is a third, narrow surefire execution running only the stream-time cases with the seam
+  on - which is also what would turn `pcAwareStreamTime()`'s PC branch from measured-by-hand into gated.
+- **`pcAwareStreamTime()`'s PC branch is unexercised by any automated run**, for the same reason. That
+  covers `ProcessorContext.currentStreamTimeMs()` as well as punctuation. Distinct from the missing
+  end-to-end topology test: the seam-on arm of Kafka's own `StreamTaskTest` already exists as a
+  measurement and has simply never been made a gate.
+- **The warn-once `STREAM_TIME` punctuator branch** in the patched `schedule()` has no test - and it is
+  the only channel telling a user their punctuator's output sits outside PC's commit frontier.
+- **`aRecordDroppedDuringPreparationContributesNoTimestamp` cannot observe its own claim.** With every
+  record dropped, `dispatchedToPool` is 0, so the publish is gated off and the mark could not have moved
+  whatever the implementation recorded into `maxDispatchedStreamTimestamp`.
+- **`releaseAndDrain` synchronises on `getInFlightCount()`**, which works only because `runOnWorker`
+  enqueues the completion before decrementing. `runOnWorker`'s own comment schedules that order for
+  change; when it changes, `theMarkFollowsTheLowestTimestampStillInFlight` starts flaking and the blame
+  will land on stream time.
+- **The clean-close-with-forced-pool branch** - `dropStreamTimeHoldsWithoutPublishing()`'s actual claim -
+  is untested; only the abort path is. And the abort test goes red if `abortClose()` gains a publish, but
+  stays green if it gains the map clear whose absence is the point.
+- **"Exactly what stock holds" is asserted about the dispatcher and only described as equal to stock.**
+  No stock value is computed anywhere in these tests, so the never-ahead-of-stock property still rests on
+  prose. U13.4's seam-OFF control arm is what changes that.
+
 ## The thing to read before trusting a number here
 
 **Kafka's upstream suites cannot measure this unit, and that is a finding rather than an excuse.**
