@@ -38,7 +38,7 @@
 
              Deliberately NOT under target/generated-sources: the root pom adds that whole directory as an
              *integration-test* source root for every module (see its build-helper add-integration-test-source
-             execution). Generating there compiles these four classes a second time into target/test-classes,
+             execution). Generating there compiles these five classes a second time into target/test-classes,
              which then precedes target/classes on the surefire classpath - two copies of the same patched
              Kafka classes, and the one that wins is an accident of classpath order rather than a decision. -->
         <kafka.patched.dir>${project.build.directory}/kafka-patched</kafka.patched.dir>
@@ -149,7 +149,7 @@
         </dependency>
 
         <!-- Apache Kafka's own test suite, and the fixtures it is built on. These are what make the
-             188-test upstream execution below possible; see the comment on that surefire execution. -->
+             419-test upstream execution below possible; see the comment on that surefire execution. -->
 
         <!-- Kafka's compiled tests, plus the org.apache.kafka.test.* fixtures they are built on
              (InternalMockProcessorContext, MockSourceNode, MockClientSupplier, ...). Preferred over

@@ -93,7 +93,7 @@ patch's line count is the honest answer to "how much had to change" -
   source root for every module, which compiles the patched classes a second time into
   `target/test-classes` - and that precedes `target/classes` on the surefire classpath.
   Two copies, and the winner is an accident. `parallel-consumer-streams/pom.xml:37-45`.
-- **Name the class set; do not discover it.** `patched.classes` lists exactly four
+- **Name the class set; do not discover it.** `patched.classes` lists exactly five
   files, with a comment for each one the compiler would never have demanded.
   `RecordCollectorImpl` is constructed outside `StreamTask`, so nothing forces it into
   the set, yet its non-concurrent maps are written from every worker thread.
@@ -172,7 +172,7 @@ with `javap -p -classpath target/classes ...` before believing any result.
 **6. Handle the licence at distribution time, not at commit time.** Not committing the
 source removes the commit-time obligation, but publishing an artifact containing
 *compiled, modified* Apache 2.0 classes triggers section 4(b): the distribution must
-carry prominent notices stating that you changed the files. This repo names the four
+carry prominent notices stating that you changed the files. This repo names the five
 modified classes in `NOTICE`, attributes the ASF, states plainly that they were changed,
 and points at the patch as the complete expression of the change. `NOTICE:12-29`.
 
@@ -224,7 +224,7 @@ here wrote. The only remaining obligation attaches to the published artifact, an
   classpath. Classpath order is not a distribution contract. Publish a fork under a
   different coordinate, or upstream the change.
 - **Do not apply when** the target is a moving trunk rather than a pinned release. These
-  four classes have already diverged materially on Kafka 4.x, so a green result on 3.9
+  patched classes have already diverged materially on Kafka 4.x, so a green result on 3.9
   does not transfer unexamined. `parallel-consumer-streams/README.md:140-152`.
 
 ## Examples
@@ -276,7 +276,7 @@ independently of anything you intend to change.
 
 ```
 The parallel-consumer-streams artifact additionally contains MODIFIED versions of
-four classes from Apache Kafka:
+five classes from Apache Kafka:
   ...
 These files have been CHANGED by Antony Stubbs and contributors ... The changes are
 expressed as, and limited to, the patch tracked at

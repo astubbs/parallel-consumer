@@ -359,13 +359,24 @@ public class PcTaskDispatcher implements Closeable {
             //
             // KNOWN RESIDUAL, and this ordering narrows it rather than closing it. A StreamThread that
             // reaches PcWorkSignal's wait between the add and the decrement above leaves on the pending
-            // outcome without any signal, and still reads the stale count. It only bites at poolSize 1,
-            // where the stale read means capacity 0 and the next pass waits a poll budget with a
-            // dispatchable record in hand; at poolSize >= 2 the spare slot absorbs it. Closing it properly
-            // means splitting this counter in two - a pool-capacity count the worker owns and decrements
-            // BEFORE enqueuing, and an outstanding count the StreamThread owns and decrements as it drains -
-            // so that neither question is ever answered from the other's window. Deliberately not done here:
-            // it re-keys every reader of getInFlightCount(), and this defect is bounded and non-hanging.
+            // outcome without any signal, and still reads the stale count.
+            //
+            // AN EARLIER VERSION OF THIS COMMENT UNDERSTATED THE BOUND, and code review caught it: it said
+            // "only bites at poolSize 1 - at poolSize >= 2 the spare slot absorbs it". That is wrong. The
+            // stale read overstates inFlight by exactly one, so it bites whenever the OTHER poolSize - 1
+            // slots are already busy, at any pool size - which under load is the normal state, not a corner.
+            // At poolSize 1 that condition is vacuously true, which is what made it look like a poolSize-1
+            // defect. What IS bounded is the cost: dispatchAvailable reads capacity 0, dispatches nothing,
+            // and the next wait takes a poll budget before trying again with a correct count. One poll
+            // budget, no hang, no lost record.
+            //
+            // Closing it properly means splitting this counter in two - a pool-capacity count the worker owns
+            // and decrements BEFORE enqueuing, and an outstanding count the StreamThread owns and decrements
+            // as it drains - so that neither question is ever answered from the other's window. Note that
+            // simply hoisting this decrement above completed.add does NOT work: it moves the identical window
+            // onto PcWorkSignal's gate instead, where a zero inFlight with an undrained outcome is the state
+            // hasActiveWork() exists to catch. Deliberately not done here: it re-keys every reader of
+            // getInFlightCount(), and the defect costs one poll budget and cannot hang.
             workSignal.signalWorkAvailable();
         }
     }

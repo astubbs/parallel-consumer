@@ -382,6 +382,46 @@ class PcWorkSignalTest {
     }
 
     /**
+     * <b>The rebalance re-check</b>, which is the one branch the gate cannot cover.
+     * <p>
+     * The StreamThread asks the gate, then runs a short poll, and only then waits - and a poll runs
+     * {@code ConsumerRebalanceListener} callbacks inline. A revocation there tears this thread's tasks down and
+     * deregisters their dispatchers, so by the time the wait begins the work the gate said yes to is gone.
+     * Without the second check inside {@link PcWorkSignal#awaitWorkForRemainderOf} the thread would then park
+     * for its whole budget on work that can never complete, in the middle of a rebalance, which is exactly when
+     * the consumer most needs polling.
+     * <p>
+     * Deleting that check leaves every other test in this class green, because they all reach the wait with
+     * either no signal at all or genuine work still in flight. This is the test that turns red.
+     */
+    @Test
+    void aDispatcherThatWentAwayBeforeTheWaitMakesItANoOp() throws InterruptedException {
+        dispatcher = new PcTaskDispatcher("wake-revoked", INPUT_PARTITIONS, 4);
+        CountDownLatch release = new CountDownLatch(1);
+
+        awaitWorkerRunning(dispatchOneBlockingOn(release));
+        assertThat(PcWorkSignal.hasActiveWorkOnCurrentThread())
+                .as("the gate must be open first, or the re-check below is not the thing being tested")
+                .isTrue();
+
+        // The revocation, standing in for the one that would have run inside the short poll: the task goes away
+        // on this very thread, between the gate saying yes and the wait starting.
+        dispatcher.abortClose();
+        release.countDown();
+
+        long elapsed = timeMillis(() -> PcWorkSignal.awaitWorkForRemainderOf(GENEROUS_BUDGET));
+
+        assertThat(elapsed)
+                .as("the work the gate approved no longer exists, so the wait must be a no-op rather than a "
+                        + "%s park during a rebalance", GENEROUS_BUDGET)
+                .isLessThan(GENEROUS_BUDGET.toMillis() / 2);
+        assertThat(PcDispatchCounters.getSplitPollWaits())
+                .as("and it must not even be counted as a split wait - the thread never parked, and a counter "
+                        + "that says otherwise would overstate how often the mechanism ran")
+                .isZero();
+    }
+
+    /**
      * The kill switch, which is also the benchmark's control arm - so it has to genuinely restore the stock
      * path rather than merely skip the wait.
      */

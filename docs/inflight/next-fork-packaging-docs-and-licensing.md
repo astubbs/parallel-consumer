@@ -9,8 +9,13 @@ to a family of modules rather than one, and answering them once is cheaper than 
 Neither module has user-facing documentation in the generated README. Both need it, and the Streams
 one has a substantiated claim worth using:
 
-> 188 of Apache Kafka's own Streams tests (`StreamTaskTest` 101, `RecordCollectorTest` 59,
-> `ProcessorContextImplTest` 28) pass unmodified against the patched classes, zero skipped.
+> 419 of Apache Kafka's own Streams tests (`StreamTaskTest` 101, `RecordCollectorTest` 59,
+> `ProcessorContextImplTest` 28, `StreamThreadTest` 231) pass unmodified against the patched
+> classes, zero failures.
+
+The 21 cases `StreamThreadTest` skips are skipped by Kafka's own annotations, and an unpatched
+control run skips exactly the same 21 - say so rather than saying "zero skipped", because the honest
+form of the claim has to survive a reader opening the surefire output.
 
 **Do not quote that alone.** It holds with the seam **off**. With the seam **on**, `StreamTaskTest` is
 68/101 - the 33 failures are the known semantic gap (offset/commit accounting, buffering, punctuation,
@@ -31,12 +36,15 @@ it: under stock dispatch even the luckiest record behind the blocker waited for 
 `PartitionGroup.nextRecord()` hands the partition over one record at a time. Under PC dispatch the
 quickest paid its own 25ms and nothing else.
 
-**Pair it with the control, always** - same rule as the 188 above. With every record on a **single
-key** the same benchmark gives **0.69x**: PC is *slower*, because KEY ordering permits at most one
-in-flight record per key and the pool handoff still costs something. That is not an embarrassment to
-bury; it is what makes the headline credible, and it tells a reader exactly when this helps them.
-Quoted alone the headline reads as "PC is 57x faster than Kafka Streams", which is false and which
-the first competent reader will falsify.
+**Pair it with the control, always** - same rule as the 419 above. With every record on a **single
+key**, so KEY ordering permits at most one in-flight record and the seam can offer nothing, the same
+benchmark now gives **0.99x**: PC ties with stock rather than losing to it. That control is what makes
+the headline credible, and it tells a reader exactly when this helps them. Quoted alone the headline
+reads as "PC is 57x faster than Kafka Streams", which is false and which the first competent reader
+will falsify.
+
+(The single-key arm measured **0.69x** before wake-on-work, astubbs#255 item 3. Quote the current
+number, and keep the old one only where the point being made is that the poll wait was the cause.)
 
 Two further caveats belong with any published version: the comparison is **within one partition**
 (stock Streams parallelises across partitions, and that is not what is being measured), and the
@@ -53,9 +61,10 @@ The same write-up should carry the converging case explicitly - the workload whe
 disappears should cost **nothing** against stock, which is the reassurance a cautious reader actually
 wants before adopting anything. ("No cost for convergence state" is read here as the single-key or
 otherwise degenerate case, where key concurrency cannot help; if the owner meant something else, this
-is the place to correct it.) That half of the claim is **not true yet**: single-key still measures
-0.69x until the poll-wait fix lands, item 3 of `pr-ks-spike-next-work.md`. Write the explanation now,
-publish the no-cost claim after.
+is the place to correct it.) That half of the claim **now holds**: wake-on-work landed and the
+single-key arm measures 0.99x, so the no-cost claim is publishable rather than pending. Publish it
+with the mechanism, not on its own - the number only means something once a reader knows the poll
+wait was what used to make it 0.69x.
 
 **Also build a realistic-domain benchmark, as devil's-advocate cover for the synthetic one.** The
 head-of-line blocking experiment was designed to expose PC's advantage - one blocker, fast records on

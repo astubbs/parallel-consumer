@@ -26,7 +26,7 @@ consumer poll
 Under PC's KEY ordering, at most one record per key is in flight, so records on distinct keys of the same
 partition run concurrently while per-key order is preserved.
 
-The Kafka side of the change is a **716-line patch across 5 `processor.internals` classes**
+The Kafka side of the change is a **720-line patch across 5 `processor.internals` classes**
 (`StreamTask`, `AbstractProcessorContext`, `ProcessorContextImpl`, `RecordCollectorImpl`, `StreamThread`),
 and it needed **no new Parallel Consumer API**.
 
