@@ -121,6 +121,21 @@ public class PcTaskDispatcher implements Closeable {
      */
     static final Duration RETRIES_DISABLED_DELAY = Duration.ofDays(3650);
 
+    /**
+     * The thread that constructed this dispatcher, and the only one allowed to touch {@link WorkManager}
+     * through it.
+     *
+     * <p>Several methods here already document "StreamThread only" in prose. This turns that comment into
+     * a check, because the cost of getting it wrong is silent: {@code WorkManager} and its partition state
+     * are not thread-safe, so a second thread calling in corrupts offset bookkeeping without throwing, and
+     * the damage surfaces later as a commit that covers work which never completed.
+     *
+     * <p>Worth the guard specifically now that the commit surface exists. {@link #collectCommitData} and
+     * {@link #onCommitSuccess} reach {@code WorkManager} directly and sit exactly where a caller wiring up
+     * its own commit path is most likely to call from a commit or scheduler thread rather than the owner.
+     */
+    private final Thread ownerThread;
+
     private final Set<TopicPartition> inputPartitions;
 
     @Getter
@@ -175,6 +190,7 @@ public class PcTaskDispatcher implements Closeable {
     public PcTaskDispatcher(final String taskName, final Set<TopicPartition> inputPartitions, final int poolSize) {
         this.inputPartitions = new LinkedHashSet<>(inputPartitions);
         this.poolSize = poolSize;
+        this.ownerThread = Thread.currentThread();
 
         ParallelConsumerOptions<byte[], byte[]> options = ParallelConsumerOptions.<byte[], byte[]>builder()
                 .consumer(new MockConsumer<byte[], byte[]>(OffsetResetStrategy.NONE))
@@ -367,6 +383,7 @@ public class PcTaskDispatcher implements Closeable {
      * the same (or newer) data - nothing is stranded.
      */
     public Map<TopicPartition, OffsetAndMetadata> collectCommitData() {
+        assertOwnerThread("collectCommitData");
         drainCompletions();
         return workManager.collectCommitDataForDirtyPartitions();
     }
@@ -376,6 +393,7 @@ public class PcTaskDispatcher implements Closeable {
      * StreamThread only. This is PC's own dirty flag, not a parallel copy of it - see KTD-S7's grain.
      */
     public boolean hasCommitDataOutstanding() {
+        assertOwnerThread("hasCommitDataOutstanding");
         drainCompletions();
         return workManager.isDirty();
     }
@@ -387,7 +405,24 @@ public class PcTaskDispatcher implements Closeable {
      * StreamThread only.
      */
     public void onCommitSuccess(final Map<TopicPartition, OffsetAndMetadata> committed) {
+        assertOwnerThread("onCommitSuccess");
         workManager.onOffsetCommitSuccess(committed);
+    }
+
+    /**
+     * Fails fast when a {@link WorkManager}-touching method is called off the owning thread.
+     *
+     * <p>Deliberately an {@link IllegalStateException} naming both threads rather than an assertion: an
+     * assertion disappears without {@code -ea}, and this is exactly the class of mistake that produces no
+     * symptom at the call site.
+     */
+    private void assertOwnerThread(final String method) {
+        final Thread current = Thread.currentThread();
+        if (current != ownerThread) {
+            throw new IllegalStateException(String.format(
+                    "%s touches WorkManager and is owner-thread-only, but was called from '%s'; the owner is '%s'",
+                    method, current.getName(), ownerThread.getName()));
+        }
     }
 
     /** Whether either close path has run. A closed dispatcher hands out no work and accepts no more. */
