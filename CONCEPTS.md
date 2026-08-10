@@ -71,6 +71,24 @@ only when something is dirty.
 The asymmetry is load-bearing: a partition whose records are all failing is never dirty, so no commit
 is attempted for it, and anything waiting on a commit-time behaviour will wait indefinitely.
 
+**Frontier**
+The highest offset up to which *everything* on a partition is contiguously complete — the boundary
+between settled territory and territory with unfinished work in it. It advances only when the gap
+behind it closes: with 10 and 12 still running, completed 11 and 13 do not move it. The frontier is
+what the project commits as the consumer-group offset, which is why a crash-time commit can never
+cover an in-flight record: loss is impossible by construction, not by care. In the code it is
+`getOffsetHighestSequentialSucceeded() + 1`.
+
+**Frontier semantics** (or **frontier plus holes**)
+The commit design built on the frontier: commit the safe resume point, and encode the exceptions —
+records completed *beyond* the frontier — into the commit's metadata field, so a restart resumes at
+the frontier without losing the in-flight records and without repeating the completed ones. The same
+shape as TCP's cumulative ACK plus SACK blocks. Contrast with a **high-water mark**, a single
+per-partition number that assumes sequential completion and silently loses in-flight records when
+completion is out of order — the defect class the Kafka Streams module's U9 exists to remove, and the
+reason that fix is a deletion rather than a repair: no amount of locking lets one number express
+"12 done, 10 and 11 still running".
+
 ## Test reliability
 
 **Load-tightness flake**
