@@ -5,6 +5,17 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 
 ## Still open
 
+- **Go/no-go on the package rename `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`,
+  and the decision expires when 0.6.0.0 ships.** Nothing is published under the fork's groupId yet,
+  so today the rename costs downstream users nothing; the moment v6 is on Central it costs every
+  adopter a second migration, and there is no third moment. The evidence, the Apache 2.0 analysis and
+  the task inventory are in
+  [`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`](../plans/2026-08-11-001-refactor-package-rename-plan.md);
+  the cross-branch note is [`branch-package-rename.md`](branch-package-rename.md). Two things a
+  release-time reader needs: the README's drop-in claim and the `=== Improvements` changelog entry
+  both assert the packages are unchanged, so a "go" makes them false in published artefacts and they
+  must be corrected in the same pass - and the real work is the copyright-provenance model, not the
+  rename itself.
 - **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
   two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
   fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when

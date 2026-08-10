@@ -57,7 +57,9 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 ====
 This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-It is a *drop-in replacement*: the Java API and package (`io.confluent.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+It is a *drop-in replacement*: the Java API and the Java package names (`io.confluent.parallelconsumer.*`) are unchanged from upstream 0.5.x, so your imports and your code are unaffected.
+The Maven coordinate is the one edit: the `groupId` changes from `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer`.
+See <<upgrading>> for the upgrade steps.
 
 [source,xml]
 ----
@@ -617,6 +619,25 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 
 [[upgrading]]
 == Upgrading
+
+=== From 0.5 to 0.6
+
+0.6.0.0 is the first release of this community fork, and it changes the Maven coordinates.
+Upstream's last release was published as `io.confluent.parallelconsumer`; this fork publishes as `bz.stub.parallelconsumer`.
+
+[source,xml]
+----
+<dependency>
+    <!-- was: <groupId>io.confluent.parallelconsumer</groupId> -->
+    <groupId>bz.stub.parallelconsumer</groupId>
+    <artifactId>parallel-consumer-core</artifactId>
+    <version>0.6.0.0</version>
+</dependency>
+----
+
+That is the only required change.
+The Java package names (`io.confluent.parallelconsumer.*`) and the API are unchanged, so no import or source edit is needed.
+Committed offset metadata is also unchanged, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
 
 === From 0.4 to 0.5
 
