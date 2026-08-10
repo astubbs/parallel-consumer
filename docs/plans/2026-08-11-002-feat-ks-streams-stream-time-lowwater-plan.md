@@ -215,12 +215,26 @@ consumed*. `dispatchAvailable`'s return value is flow control, not a statistic -
 `TaskExecutor`'s batch loop and parks the only dispatching thread for up to `poll.ms`. A new return type
 that made "dropped" indistinguishable from "nothing available" would re-create that stall.
 
-### KTD3. The in-flight timestamp bookkeeping is owner-thread-only, and needs no concurrent structure
+### KTD3. The in-flight timestamp bookkeeping is confined to the dispatching thread, and needs no concurrent structure
 
-Records are added to the bookkeeping in `dispatchAvailable` (owner thread) and removed in
-`drainCompletions` (owner thread). Workers never touch it - they already report through the `completed`
-mailbox, and the drain is what folds an outcome back into PC. So a plain `IdentityHashMap<WorkContainer,
-Long>` is sufficient, and `min` is a linear scan over at most `poolSize` entries (4 by default).
+Records are added in `dispatchAvailable` and removed in `drainCompletions`, which runs inside it.
+Workers never touch it - they already report through the `completed` mailbox, and the drain is what
+folds an outcome back into PC. So a plain `IdentityHashMap<WorkContainer, Long>` is sufficient, and
+`min` is a linear scan over at most `poolSize` entries (4 by default).
+
+**Use the class javadoc's current vocabulary, which is not "owner thread".** Since the cross-thread
+fix, `PcTaskDispatcher` has three surfaces, not two: a guarded owner-thread commit surface
+(`collectCommitData`, `onCommitSuccess`, `updatePartitions`), a genuine any-thread query surface
+(`hasCommitDataOutstanding`, `hasUncommittedWork`), and a third - `registerRecords`,
+`dispatchAvailable`, `pumpUntilQuiescent`, `close`, `abortClose` - which is **StreamThread-only and
+deliberately unguarded** because it is hot-path. This bookkeeping belongs to that third surface, exactly
+like `successesDrained` and `lastDispatchCount`, and the field comment should say so in those words.
+
+**Inherit the exception the javadoc already names.** With Streams' private
+`__processing.threads.enabled__` config on, `DefaultTaskExecutor` calls `task.process` from its own
+thread, which would drive `dispatchAvailable` - and therefore this bookkeeping - off the StreamThread.
+That hazard is pre-existing, out of scope here, and not reachable by default; this unit must not make
+it worse, and must not silently claim confinement the surrounding code does not have.
 
 Rejected: a `TreeMap` multiset keyed by timestamp. It is the "right" data structure for `min` and it is
 the wrong choice here - it adds add/remove/decrement bookkeeping that can drift out of step with the
@@ -237,25 +251,39 @@ same invariant: the hold is registered before the element is released and cleare
 visible. Get it backwards and the mark occasionally runs ahead of live work - silently, intermittently,
 and visible only as spuriously late records under load.
 
-### KTD4. Publication reuses `pcDirty`'s pattern exactly: one volatile, republished at every mutation point
+### KTD4. Publication is one more field on the existing path, not a second path
 
-`volatile long streamTimeLowWaterMark`, written only by the owner thread, only immediately after that
-thread changed the thing it mirrors, and never consulted to decide whether to dispatch - the rule
-`pcDirty` already carries. It joins `getInFlightCount()` and `hasPendingCompletions()` on the
-**read-only surface**, because `TaskExecutor.punctuate()` can run on a task-executor thread rather than
-the StreamThread, and `StreamTaskTest` calls `maybePunctuateStreamTime()` from the test thread.
+`volatile long streamTimeLowWaterMark`, written only by the dispatching thread, only immediately after
+that thread changed the state it summarises, and never consulted to decide whether to dispatch. It joins
+`getInFlightCount()` and `hasPendingCompletions()` on the **query surface**, because
+`TaskExecutor.punctuate()` can run on a task-executor thread rather than the StreamThread, and
+`StreamTaskTest` calls `maybePunctuateStreamTime()` from the test thread.
 
-**The U10 cost is inherited and must be respected:** U10 lost a case
-(`shouldClearCommitStatusesInCloseDirty`) because `close()` revokes partitions *after* the drain that
-published the flag. Every owner-thread path that can change the in-flight set - `dispatchAvailable`,
-`drainCompletions`, `close`, `abortClose` - republishes. This is the trap the previous unit already
-sprang.
+**Republish at every point that can change the in-flight set** - the tail of `dispatchAvailable`, the
+tail of `drainCompletions`, `close` and `abortClose`. U10 lost `shouldClearCommitStatusesInCloseDirty`
+by publishing before the last mutation rather than after it; that is the trap, and it is already sprung
+once in this file.
 
-**No second mechanism.** The sibling U14 work publishes in-flight record counts through the same
-surface. Both are `volatile` fields with a `publishX()` call at each mutation point; neither redesigns
-anything.
+**Timing note, and it is the opposite of the one next to it in the same class.** `successesPublished` is
+counted *at publication into the mailbox*, deliberately, with the comment that "a count taken at drain
+would be thread-safe and wrong" - because for "is a commit outstanding" the unsafe direction is a false
+*no*, and a worker finishing must make the answer true immediately. **This mark releases its hold at the
+drain instead, and that is right for the same reason inverted:** for stream time the unsafe direction is
+a mark that is too *high*, so holding a completed record's timestamp for the extra moment until the
+drain errs toward a lower mark and later punctuation. Two fields in one class, released at different
+points, for opposite-facing safety arguments - say this at the site or someone will helpfully align
+them.
 
-### KTD5. The mark moves only when the owner thread pumps, and the latency bound is stated rather than hidden
+**One publication path, two fields, two memberships - and the memberships are not the same set.** The
+sibling U14 work publishes the dispatcher's *occupancy*: records accepted by PC and not yet handed out,
+which is what Kafka's `RecordQueue.size()` means and what backpressure has to bound. This mark is over
+records **handed to the pool and not yet drained** - the executing set. Computing the mark over U14's
+set would advance stream time past records that are still running, which is silent and produces wrong
+output rather than a stall. So the two quantities may share a publication point and must **not** share a
+traversal. State that at the site; it is exactly the kind of thing a later simplification pass would
+merge.
+
+### KTD5. The mark moves only when the dispatching thread pumps, and the latency bound is stated rather than hidden
 
 A worker finishing does **not** republish. It drops its outcome in the mailbox and signals; the mark
 changes when the StreamThread next drains. That is deliberate: a worker republishing would mean a worker
@@ -305,6 +333,59 @@ field partly on the grounds that Streams without its partition time "re-derives 
 degraded, and self-healing". That is true on the stock path only: under PC dispatch nothing re-derives
 it, because nothing advances stream time at all. U13 is what turns the justification from wrong into
 right. Correct the entry rather than inheriting it.
+
+### KTD8. STREAM_TIME punctuators are not refused, and U13 is why they do not need to be
+
+Independently found on the API-refusal branch and routed here: a punctuator registered with
+`PunctuationType.STREAM_TIME` passes every one of the three refusal layers. It is not a DSL method, so
+`@DoNotCall` and the `KStreamImpl` refusals never see it; it is not a state store or an EOS config, so
+`PcSupportedEnvelope`'s task-construction backstop never sees it. Today it therefore silently never
+fires - precisely the silent-wrong-answer class the refusal work exists to eliminate.
+
+**The decision is to fix it rather than refuse it, and U13 is the fix.** Adding a fourth refusal layer
+for `schedule(..., STREAM_TIME, ...)` would be correct only for as long as this unit takes to land, and
+would then have to be removed - and a refusal that has to be withdrawn teaches users to distrust the
+rest of the list. What survives is a **timing divergence**, not an absence: the punctuator fires, at a
+conservative timestamp, possibly later than stock and not necessarily at the same points across two
+runs. That is documented in the README's known gaps and measured by U13.4, which is the honest treatment
+for a divergence a user can observe and reason about.
+
+**The exposure while U13 is in flight is real and is recorded, not papered over.** Until this lands,
+`STREAM_TIME` punctuators are silently dead on the PC path with no refusal to say so - which is a defect
+of exactly the kind the refusal layers exist to prevent, and it is named here so it is not rediscovered
+as a surprise.
+
+---
+
+## What this subsumes, and what it does not
+
+Written for the sibling U14 unit, whose task-idling gate is blocked on this answer, and stated flatly so
+it can be scoped against rather than guessed at.
+
+**`max.task.idle.ms` and this low-water mark are orthogonal. Neither subsumes the other.**
+
+| | Protects against | Set it reasons over |
+|---|---|---|
+| Task idling (`isProcessable`, `max.task.idle.ms`) | advancing stream time from partition A while partition B has older records **not yet fetched** | data outside the process |
+| This low-water mark | advancing stream time past a record **currently executing** in the worker pool | data inside the pool |
+
+Stock needs the first and not the second, because stock is sequential - there is never a record
+executing that selection could run past. PC needs the second and inherits the need for the first
+unchanged. So a plan that builds only one of them closes only one of two lateness terms.
+
+**What that means for U14's idling gate, as a recommendation rather than a decision this unit can take:
+do not build it yet, and size it against U13.4's number when there is one.** Two reasons. First, idling
+would ensure both partitions have buffered data but would *not* make PC select the older record: PC
+dispatches per KEY shard in offset order, so the cross-partition ordering term that idling exists to
+protect survives idling on this path. Second, U13.4 measures exactly how much extra lateness the seam
+produces (the count of records dispatched behind the mark). Building an idling gate before that number
+exists means guessing at the size of the problem it solves. If the number turns out small, the gate may
+not be worth its cost; if it turns out large, the gate alone will not fix it and the dispatch-ordering
+term is the real work.
+
+**On the shared publication:** one path, two fields, two memberships - see KTD4. U14's occupancy
+excludes executing records; this mark must include them. They may be published from the same points and
+must not be computed in the same walk.
 
 ---
 
@@ -690,7 +771,7 @@ Inferred rather than confirmed, because this run had no interactive user.
 
 | Gate | Command | Bar |
 |---|---|---|
-| Behaviour preservation, seam OFF | module `test` (the pom pins the seam off for that execution) | `StreamTaskTest` 101, `StreamThreadTest` 231 (21 skipped by Kafka's own annotations), `RecordCollectorTest` 59, `ProcessorContextImplTest` 28 - **419, zero failures** |
+| Behaviour preservation, seam OFF | module `test` (the pom pins the seam off for that execution) | `StreamTaskTest` 101, `StreamThreadTest` 231 (21 skipped by Kafka's own annotations), `RecordCollectorTest` 59, `ProcessorContextImplTest` 28 - **419 run, zero failures other than the named flake below** |
 | Punctuation actually works | new module integration test, seam ON, with the seam-OFF control arm | **the real gate.** A `STREAM_TIME` punctuator fires, arguments non-decreasing, never above the highest timestamp fed in |
 | Pile F, seam ON | module `test` with `-Dpc.streams.dispatch.enabled=true -Dincluded.groups=<nonexistent>`, read `target/surefire-reports-kafka-upstream/` | reported with P1-P4, and with the *failing line* for each case - not a bare count |
 | Full seam-ON set | same run, full failing list diffed against this plan's baseline | no case gets worse; **any that does is reported first** |
@@ -704,9 +785,27 @@ Inferred rather than confirmed, because this run had no interactive user.
 - `StreamThreadTest`: 231 run, 16 failures, 25 errors, 21 skipped - 41 distinct failing cases
 - `RecordCollectorTest`: 59 run, 0 failing. `ProcessorContextImplTest`: 28 run, 0 failing.
 
-**Measured twice, and the failing sets are identical case-for-case** (N=2), so a single case moving
-after the change is signal rather than noise. Anyone re-measuring should do the same before reading a
-delta: this suite runs a real worker pool, and one run is not a baseline.
+**Measured three times, and the failing sets are identical case-for-case** - twice before merging the
+base branch forward and once after, on a `clean` build, so neither the 19 commits of base movement nor
+stale compiled classes are in the number. A single case moving after the change is therefore signal
+rather than noise. Anyone re-measuring should do the same before reading a delta: this suite runs a real
+worker pool, one run is not a baseline, and **the counts in this stack are branch-dependent and have
+drifted repeatedly** - the 33 in the master plan, and the 33 and 36 in two briefs, were all wrong for
+this branch. Measure, do not inherit. The sibling U14 unit measured 30 independently, which is the only
+reason this number is quoted with confidence rather than as a single observation.
+
+Note that `StreamThreadTest.shouldLogAndRecordSkippedRecordsForInvalidTimestamps[3]` is inside the
+seam-ON failing set in all three runs. It is also the seam-OFF flake named below; do not read a change
+in that one case, in either direction, as a result.
+
+**The 419-zero-failures gate is not deterministic, and repeating it as an absolute is how a real
+regression gets re-run away.** `StreamThreadTest.shouldLogAndRecordSkippedRecordsForInvalidTimestamps[3]`
+is a pre-existing flake, measured at 2 failures in 5 runs at HEAD with no changes at all: it embeds
+`Thread.currentThread().getName()` in an expected log line while the logging happens on Kafka's own
+processing thread. Diagnosis and options in
+`docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md`. **When that specific case and
+parameterisation fails, confirm it is that one and re-run. Anything else that fails is real**, and no
+other case may be treated this way.
 
 **Proving the upstream suite actually ran is part of the gate.** `-Dtest=...` silently overrides the
 execution's `<includes>`, so the suite does not run and the build goes green having computed nothing.
