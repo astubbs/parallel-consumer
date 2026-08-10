@@ -55,7 +55,7 @@ statement than a version number.
 
 "Living document" fails by default - it is written once and rots, and a stale roadmap is worse than
 none because it is confidently wrong in public. Decide what forces an update: release cuts are the
-obvious trigger, and the feature documentation index (`next-feature-docs-index.md`) is the
+obvious trigger, and the feature documentation index (`next-feature-index.md`) is the
 natural feed for "this shipped, move it".
 
 Markdown in the repo, so the docs site (astubbs#208, MkDocs + Material, versioned with `mike`) can
