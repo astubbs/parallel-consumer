@@ -57,9 +57,9 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 ====
 This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-It is a *drop-in replacement*: the Java API and the Java package names (`io.confluent.parallelconsumer.*`) are unchanged from upstream 0.5.x, so your imports and your code are unaffected.
-The Maven coordinate is the one edit: the `groupId` changes from `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer`.
-See <<upgrading>> for the upgrade steps.
+*Behaviour* is a drop-in replacement for upstream 0.5.x: the API is source-compatible, and the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets.
+Two identifiers do change in 0.6.0.0, and both are mechanical: the Maven `groupId`, and the Java package names, which move from `io.confluent.parallelconsumer.*` to `bz.stub.parallelconsumer.*`.
+See <<upgrading>> for the steps.
 
 [source,xml]
 ----
@@ -723,8 +723,10 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 
 === From 0.5 to 0.6
 
-0.6.0.0 is the first release of this community fork, and it changes the Maven coordinates.
-Upstream's last release was published as `io.confluent.parallelconsumer`; this fork publishes as `bz.stub.parallelconsumer`.
+0.6.0.0 is the first release of this community fork, and it changes two identifiers: the Maven coordinates, and the Java package names.
+Upstream's last release was published as `io.confluent.parallelconsumer`; this fork publishes as `bz.stub.parallelconsumer`, and uses that namespace in its own source.
+
+First, the dependency:
 
 [source,xml]
 ----
@@ -736,9 +738,18 @@ Upstream's last release was published as `io.confluent.parallelconsumer`; this f
 </dependency>
 ----
 
-That is the only required change.
-The Java package names (`io.confluent.parallelconsumer.*`) and the API are unchanged, so no import or source edit is needed.
-Committed offset metadata is also unchanged, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
+Then your imports.
+A find-and-replace of `io.confluent.parallelconsumer` with `bz.stub.parallelconsumer` across your source is sufficient:
+
+[source,java]
+----
+// was: import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.ParallelStreamProcessor;
+----
+
+Nothing else changes.
+The API is source-compatible, so beyond the import lines no source edit is needed, and most codebases reference only a handful of types.
+Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
 
 === From 0.4 to 0.5
 

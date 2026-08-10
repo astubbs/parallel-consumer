@@ -1,9 +1,14 @@
 # Package rename `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`
 
-**Open decision, and it expires when 0.6.0.0 ships.** Nothing has ever been published under the
-fork's `bz.stub.parallelconsumer` groupId, so no downstream code imports our packages yet. Renaming
-now costs users nothing. Renaming after v6 asks everyone who adopted the fork to migrate a second
-time, for a reason that will look cosmetic to them. There is no third moment.
+**Decided: it goes ahead in 0.6.0.0, and it must land before v6 ships.** Nothing has ever been
+published under the fork's `bz.stub.parallelconsumer` groupId, so no downstream code imports our
+packages yet. Renaming now costs users nothing. Renaming after v6 asks everyone who adopted the fork
+to migrate a second time, for a reason that will look cosmetic to them. There is no third moment.
+
+**The README is already written for the new namespace** - its `== Upgrading` section tells users to
+find-and-replace their imports. That makes the docs ahead of the code until the rename lands, so if
+this ever slips out of v6 the README has to be reverted in the same breath rather than left
+describing imports that do not exist.
 
 Full task inventory, evidence and Apache 2.0 analysis:
 [`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`](../plans/2026-08-11-001-refactor-package-rename-plan.md).
