@@ -168,7 +168,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
+      - name: Enforce registry (docs/quarantined-tests.md matches @Quarantined annotations)
         run: bin/check-quarantine-registry.sh
       - name: Verify owner claims (each quarantined test's fix PR exists, is open, and removes the quarantine)
         env:
