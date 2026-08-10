@@ -6,10 +6,20 @@
 #
 # The workflow this exists to make bearable:
 #
-#   1. ./mvnw -pl parallel-consumer-streams generate-sources
-#        -> unpacks pristine Kafka sources into target/kafka-pristine
-#        -> unpacks + patches a working copy into target/kafka-patched
+#   1. ./mvnw -pl .,parallel-consumer-streams process-sources
+#        -> unpacks pristine Kafka sources into target/kafka-pristine   (generate-sources)
+#        -> unpacks + patches a working copy into target/kafka-patched  (process-sources)
 #   2. edit the files under target/kafka-patched/ like normal Java
+#
+#   PHASE MATTERS, AND THIS COMMENT USED TO GET IT WRONG. It said `generate-sources`, which only
+#   UNPACKS - the patch is applied at process-sources, deliberately, so it is ordered after the unpack
+#   by lifecycle phase rather than by plugin declaration order (see the pom's note). Stop at
+#   generate-sources and target/kafka-patched is pristine: your edits then land on unpatched sources,
+#   and regenerating from that tree DELETES every existing hunk. Two agents followed this comment and
+#   hit exactly that. The hunk-count tripwire below is what catches it.
+#
+#   The `.` in `-pl .,parallel-consumer-streams` is also required: selecting the leaf module alone
+#   fails at enforcer:enforce (ReactorModuleConvergence) because the parent is not in the reactor.
 #   3. bin/regen-patch.sh
 #        -> diffs pristine against your edits and rewrites the tracked patch
 #   4. commit the patch. The generated trees are gitignored and never committed.

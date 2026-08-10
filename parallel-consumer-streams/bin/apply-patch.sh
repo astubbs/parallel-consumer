@@ -4,7 +4,10 @@
 #
 # Applies the spike's patch to the Kafka sources unpacked into the generated-sources tree.
 #
-# Called from the pom at generate-sources. Two properties matter:
+# Called from the pom at process-sources - NOT generate-sources, which is where the unpack runs. The
+# split is deliberate: binding both to one phase would order them by plugin declaration order in the
+# effective pom, and the root pom declares exec before dependency, so the patch would run before the
+# sources it patches exist. Two properties matter:
 #   $1  the directory holding the freshly unpacked (pristine) Kafka sources
 #   $2  the patch file to apply
 #

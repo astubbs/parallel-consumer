@@ -33,6 +33,18 @@ is the honest headline limit, and it is bigger than the feature list.
    dirty flag. Not reachable through today's one-dispatcher-per-task wiring; becomes reachable if that
    changes.
 
+7. **The dispatcher's owner-thread guard binds at construction, and task recycling breaks that.**
+   `PcTaskDispatcher` captures `Thread.currentThread()` in its constructor and rejects calls to
+   `collectCommitData`, `hasCommitDataOutstanding` and `onCommitSuccess` from any other thread. That is
+   correct today, because a `StreamTask` is created and driven by one StreamThread - the guard was
+   cherry-picked from the Connect work (astubbs#240) and fires on nothing in the current suite. It stops
+   being correct the moment a task object outlives its thread assignment: a recycled or reassigned task
+   carries a stale owner, and the guard then throws `IllegalStateException` on a **legitimate** call.
+   The fix is to bind explicitly where the task is handed to a thread rather than at construction - the
+   same seam as item 1's recycle leak, so both should be done in one visit. Flagged by the guard's
+   author as the one judgement call worth revisiting, and recorded here rather than there because this
+   is where the assumption gets falsified.
+
 ## What this blocks, and what it does not
 
 **Not the technical preview.** The preview's contract is at-least-once inside a stated envelope, and
