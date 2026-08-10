@@ -33,6 +33,19 @@ recorded in
 Kafka reaches `postCommit` after a **swallowed commit failure** and with **no commit attempted at all**.
 If this case ever goes green, find out why before celebrating.
 
+## Resolved by the base merge, not by this branch
+
+The base's `hasCommitDataOutstanding` rework (counting successes at publication against successes
+committed) **subsumed** this branch's answer to the same problem. U10 had built `hasUncommittedWork` on a
+volatile republished by the owner thread at four mutation points, with load-bearing ordering in
+`drainCompletions` and in the term order itself. All of that existed only to make a `WorkManager` read
+safe from another thread, and the counter is inherently safe - so the whole apparatus is gone and the
+method is now one line over the base's counter plus the in-flight count.
+
+Worth remembering as a pattern: two branches solved the same cross-thread problem independently, and the
+simpler answer won at merge rather than at review. Neither reviewer on either side would have found it,
+because each only saw one design.
+
 ## Open: `bindToCurrentThread()` has no production caller
 
 The owner-thread guard can now follow a task to a new thread, and refuses to bind a closed dispatcher. But
