@@ -36,10 +36,19 @@ final class LatencyScenario implements DemoSection {
     private ArmResult pcResult;
 
     /**
-     * @param claim     what this section asserts, in the reader's terms, printed before the arms run so the
-     *                  numbers are read against a stated prediction rather than rationalised afterwards
-     * @param reading   how to interpret the result, printed after
-     * @param allOneKey put every record on one key, removing the key concurrency PC dispatch depends on
+     * Six of the seven parameters are prose strings and Java has no named arguments, so every one of them is
+     * documented here: the javadoc is the only thing standing between a call site and a silent transposition
+     * of two pieces of explanatory text.
+     *
+     * @param title        the section heading, printed as the demonstration starts
+     * @param summaryTitle the heading this section's result appears under in the closing summary
+     * @param armPrefix    prefix for the arms' topic and application ids, so each arm is isolated
+     * @param claim        what this section asserts, in the reader's terms, printed before the arms run so
+     *                     the numbers are read against a stated prediction rather than rationalised
+     *                     afterwards
+     * @param reading      how to interpret the result, printed after
+     * @param verdict      the one-line result restated in the closing summary
+     * @param allOneKey    put every record on one key, removing the key concurrency PC dispatch depends on
      */
     LatencyScenario(final String title,
                     final String summaryTitle,
@@ -71,15 +80,18 @@ final class LatencyScenario implements DemoSection {
         Console.line("  Keys    : %s", allOneKey
                 ? "every record on the SAME key as the slow one"
                 : "every fast record on its OWN key, all different from the slow one");
-        Console.wrapped("  Measured: ", "ALL 24 fast-record latencies share ONE t=0, the instant the first "
+        Console.wrapped("  Measured: ", "ALL " + ArmRunner.FAST_RECORDS + " fast-record latencies share ONE "
+                + "t=0, the instant the first "
                 + "record entered the topology. So each figure is elapsed-since-start, and what it captures "
                 + "is queue position rather than service time - which is exactly what head-of-line blocking "
                 + "is. Starting the clock at first entry rather than at produce keeps producer batching and "
                 + "topology startup out of the measurement.");
         Console.wrapped("  Claim   : ", claim);
         Console.line("");
-        Console.line("  Varying exactly one term between the arms: PcDispatchSwitch, off then on.");
+        Console.line("  Varying one deliberate term between the arms: PcDispatchSwitch, off then on.");
         Console.line("  Same JVM, same broker, same patched classes, same topology, same record set.");
+        Console.line("  Not controlled: ORDER. Stock runs first, so PC meets a warmer JVM. The control "
+                + "section bounds that.");
 
         Console.subSection("Arm 1 of 2: STOCK Kafka Streams dispatch (PcDispatchSwitch OFF)");
         stockResult = ArmRunner.runArm(broker, armPrefix + "-stock", false, allOneKey);
@@ -108,7 +120,35 @@ final class LatencyScenario implements DemoSection {
         summaryRow("fastest fast record", stock.min(), pc.min());
         summaryRow("median  fast record", stock.p50(), pc.p50());
         summaryRow("whole batch drained", stockResult.totalDrainMillis(), pcResult.totalDrainMillis());
+        // Measured, not asserted: printed here so the per-section evidence is the reading taken in this
+        // run rather than the reading the demo expects to take.
+        Console.line("    %-20s %,9d stock  ->  %,9d PC   (of %d records)", "through PC's pool",
+                stockResult.dispatchedToPool(), pcResult.dispatchedToPool(), ArmRunner.TOTAL_RECORDS);
+
+        // The verdict below is fixed prose describing the expected direction. Printing it over a result
+        // that went the other way would be the demo telling the reader what it wanted to find, so the
+        // measurement is checked against the expectation first.
+        boolean pcWonOnMedian = pc.p50() < stock.p50();
+        if (pcWonOnMedian == allOneKey) {
+            Console.wrapped("    !! ", "UNEXPECTED: this section's median went the other way. The fixed "
+                    + "reading below describes the direction this arm was predicted to take, and this run "
+                    + "did not take it. Trust the numbers above, not the sentence below.");
+        }
         Console.wrapped("    => ", verdict);
+    }
+
+    /**
+     * True only when this section's two arms read exactly as the demo's evidence claim requires: every
+     * record through the pool in the PC arm, none in the stock arm, and nothing dropped by the epoch
+     * filter on the way.
+     */
+    @Override
+    public boolean dispatchEvidenceHolds() {
+        return stockResult != null
+                && pcResult != null
+                && stockResult.dispatchedToPool() == 0
+                && pcResult.dispatchedToPool() == ArmRunner.TOTAL_RECORDS
+                && !pcResult.hasWorkManagerDrop();
     }
 
     private static void summaryRow(final String label, final long stock, final long pc) {

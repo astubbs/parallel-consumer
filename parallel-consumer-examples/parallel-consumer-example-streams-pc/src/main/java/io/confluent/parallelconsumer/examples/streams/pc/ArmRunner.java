@@ -21,15 +21,27 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Runs one arm of a comparison end to end: produce, start the topology, wait, measure, tear down.
  * <p>
- * <b>The two arms differ in exactly one term, and it is this class's job to keep that true.</b> Everything
- * else - the broker, the JVM, the patched classes, the topology, the record set, the warm-up - is held
- * identical, so a difference in the numbers has only one place it could have come from. A comparison
+ * <b>The two arms differ in one deliberate term, and it is this class's job to keep that true.</b>
+ * Everything the runner controls - the broker, the JVM, the patched classes, the topology, the record set
+ * - is held identical, so a difference in the numbers has one place it could have come from. A comparison
  * against a separately-built stock project would vary the JVM and the broker state as well, and nothing
  * measured could then be attributed to the seam.
+ * <p>
+ * <b>One term is not controlled, and is named here rather than claimed away:</b> ORDER. The stock arm
+ * always runs first, so the PC arm meets a warmer JVM and a warmer broker. That bias favours PC, and what
+ * bounds it is the single-key control - the same ordering there produces PC LOSING, which it could not do
+ * if warm-up were carrying the headline result.
  *
  * @author Antony Stubbs
  */
 final class ArmRunner {
+
+    /*
+     * The five constants below are lifted unchanged from HeadOfLineBlockingBenchmarkTest in
+     * parallel-consumer-streams, which chose them deliberately, so the demo and the regression test
+     * measure the same workload. They are duplicated rather than shared because a src/main module cannot
+     * import another module's test classes. Change one set and check the other; nothing else will.
+     */
 
     /**
      * Worker threads per task, and simultaneously PC's max concurrency. Four is enough that the fast records
@@ -63,6 +75,15 @@ final class ArmRunner {
     /** Makes each arm's topics unique without depending on the clock's resolution. */
     private static final AtomicInteger TOPIC_SEQUENCE = new AtomicInteger();
 
+    /**
+     * Makes the topics unique across RUNS as well as across arms.
+     * <p>
+     * The sequence above restarts at zero in every JVM, so two runs against the same broker would ask for
+     * the same topic names, and the second would abort on a topic that already exists. That is reachable
+     * whenever the reader has opted into container reuse - exactly the path the README recommends.
+     */
+    private static final long RUN_ID = System.nanoTime();
+
     private ArmRunner() {
     }
 
@@ -93,21 +114,29 @@ final class ArmRunner {
         PcDispatchCounters.reset();
 
         int sequence = TOPIC_SEQUENCE.incrementAndGet();
-        String inputTopic = armName + "-in-" + sequence;
-        String outputTopic = armName + "-out-" + sequence;
+        String inputTopic = armName + "-in-" + sequence + "-" + RUN_ID;
+        String outputTopic = armName + "-out-" + sequence + "-" + RUN_ID;
         // ONE partition, deliberately: stock Kafka Streams' only concurrency is across partitions, and more
         // than one would hand the control arm the very parallelism this comparison says it lacks.
-        broker.createTopic(inputTopic, 1);
-        broker.createTopic(outputTopic, 1);
+        broker.createTopics(1, inputTopic, outputTopic);
 
         CompletionTimer timer = new CompletionTimer();
         produceRecords(broker, inputTopic, allOneKey);
 
         KafkaStreams streams = startTopology(broker, armName, inputTopic, outputTopic, timer, sequence);
+        boolean closedCleanly;
         try {
             awaitCompletion(timer, armName);
         } finally {
-            streams.close(Duration.ofSeconds(30));
+            closedCleanly = streams.close(Duration.ofSeconds(30));
+        }
+        // The counters this arm is about to read are process-wide, and the NEXT arm resets them. A close
+        // that timed out leaves this arm's StreamThread and dispatcher alive to increment them across that
+        // boundary, so the following arm would attribute this arm's work to itself.
+        if (!closedCleanly) {
+            throw new IllegalStateException("Arm " + armName + " did not shut down within 30s. Its threads "
+                    + "would still be running during the next arm, so the next arm's counters could not be "
+                    + "trusted.");
         }
 
         List<Long> fastLatencies = timer.fastRecordLatencies();
@@ -117,7 +146,7 @@ final class ArmRunner {
                     + ". The distribution would be of something other than what this claims to measure.");
         }
 
-        return new ArmResult(new Latencies(armName, fastLatencies),
+        return new ArmResult(new Latencies(fastLatencies),
                 timer.totalDrainMillis(),
                 PcDispatchCounters.getRecordsOfferedToWorkManager(),
                 PcDispatchCounters.getRecordsAcceptedByWorkManager(),
@@ -184,8 +213,17 @@ final class ArmRunner {
         // the StreamTask constructor, so a client constructed while the switch was off keeps the stock path
         // for its whole life however the switch moves afterwards.
         KafkaStreams streams = new KafkaStreams(builder.build(), props);
-        streams.start();
-        awaitRunning(streams, armName);
+        try {
+            streams.start();
+            awaitRunning(streams, armName);
+        } catch (RuntimeException e) {
+            // Closed before rethrowing, because a KafkaStreams that never reached RUNNING still owns
+            // non-daemon StreamThreads. exec:java joins non-daemon threads before it returns, so leaking
+            // one turns "the arm failed to start" into a build that hangs forever with the reason already
+            // scrolled off screen. The reader has to SEE the failure for the abort to be worth anything.
+            streams.close(Duration.ofSeconds(30));
+            throw e;
+        }
         return streams;
     }
 

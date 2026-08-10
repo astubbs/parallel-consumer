@@ -16,7 +16,7 @@ import java.util.List;
  * Run it with:
  * <pre>
  * ./mvnw -Pdemo -pl parallel-consumer-examples/parallel-consumer-example-streams-pc -am \
- *        -DskipTests -Dcopyright.skip=true process-classes
+ *        -DskipTests process-classes
  * </pre>
  * It starts its own Kafka broker in Docker, so nothing needs to be running first.
  * <p>
@@ -93,11 +93,28 @@ public final class StreamsOnPcDemo {
                 ArmRunner.POOL_SIZE);
         Console.line("  Latencies below share one t=0, the instant the first record entered the topology.");
         Console.line("");
-        Console.line("  Evidence this was really Parallel Consumer driving Kafka Streams:");
-        Console.line("    - the patched StreamTask loaded from parallel-consumer-streams, not the "
-                + "kafka-streams jar");
-        Console.line("    - %d of %d records went through PC's worker pool in each PC arm, and 0 in each "
-                + "stock arm", ArmRunner.TOTAL_RECORDS, ArmRunner.TOTAL_RECORDS);
+
+        // Asked of the sections rather than restated from the constants they were run with. The counter
+        // claim is the demo's core evidence, so the summary must not be able to print it over a run where
+        // an arm above already warned that the counters disagreed.
+        boolean evidenceHolds = true;
+        for (DemoSection section : sections) {
+            evidenceHolds &= section.dispatchEvidenceHolds();
+        }
+
+        if (evidenceHolds) {
+            Console.line("  Evidence this was really Parallel Consumer driving Kafka Streams:");
+            Console.line("    - the patched StreamTask loaded from parallel-consumer-streams, not the "
+                    + "kafka-streams jar, and it carries the dispatch seam");
+            Console.line("    - %d of %d records went through PC's worker pool in each PC arm, and 0 in "
+                    + "each stock arm", ArmRunner.TOTAL_RECORDS, ArmRunner.TOTAL_RECORDS);
+        } else {
+            Console.banner("EVIDENCE FAILED - DO NOT QUOTE THESE NUMBERS");
+            Console.wrapped("  ", "At least one arm above printed a counter WARNING, so this run did NOT "
+                    + "read the dispatch counters the way it needs to. The latencies below are still what "
+                    + "was measured, but nothing here establishes which code path produced them. Read the "
+                    + "per-arm counter lines above before drawing any conclusion.");
+        }
 
         for (DemoSection section : sections) {
             section.printSummary();
@@ -105,8 +122,9 @@ public final class StreamsOnPcDemo {
 
         Console.line("");
         Console.wrapped("  Caveats : ", "the comparison is within ONE partition, and the workload is "
-                + "blocking IO. This is not a claim that PC is faster than Kafka Streams - it is a claim "
-                + "that a partition is no longer a serialisation point.");
+                + "blocking IO, which is the case PC is for - CPU-bound work would not behave this way. "
+                + "This is not a claim that PC is faster than Kafka Streams - it is a claim that a "
+                + "partition is no longer a serialisation point.");
         Console.line("");
         Console.wrapped("            ", "Quote the MEDIAN, not the fastest. The fastest row approaches the "
                 + "workload's own cost ratio by construction, so it demonstrates that the blocking is gone "

@@ -35,4 +35,17 @@ interface DemoSection {
     default void printSummary() {
         // Nothing by default.
     }
+
+    /**
+     * Whether this section's dispatch counters actually read the way the closing summary claims they do.
+     * <p>
+     * <b>The summary is allowed to state the evidence only if the evidence happened.</b> Each section
+     * already warns in place when its counters disagree, but the summary is the block the README tells a
+     * reader to trust on its own - so a section that warned above must be able to stop the summary
+     * repeating the confident claim underneath it. Default is true, for a section that reads no counters
+     * and therefore cannot contradict them.
+     */
+    default boolean dispatchEvidenceHolds() {
+        return true;
+    }
 }

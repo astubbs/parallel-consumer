@@ -12,23 +12,22 @@ import java.util.List;
  * <p>
  * Head-of-line blocking means <em>some</em> records wait for an unrelated record. A mean, or a wall-clock
  * for the run, averages that away and reports a small difference where the real one is enormous.
+ * <p>
+ * <b>Kept deliberately identical to the private {@code Latencies} inside
+ * {@code HeadOfLineBlockingBenchmarkTest}</b> in {@code parallel-consumer-streams}, including the
+ * percentile formula, so the demo and the regression test report the same statistic of the same data. The
+ * two are separate because a {@code src/main} module cannot import another module's test classes. Change
+ * one and check the other, because nothing else will.
  *
  * @author Antony Stubbs
  */
 final class Latencies {
 
-    private final String arm;
-
     private final List<Long> sorted;
 
-    Latencies(final String arm, final List<Long> raw) {
-        this.arm = arm;
+    Latencies(final List<Long> raw) {
         this.sorted = new ArrayList<>(raw);
         Collections.sort(this.sorted);
-    }
-
-    String arm() {
-        return arm;
     }
 
     int count() {

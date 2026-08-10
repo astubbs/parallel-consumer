@@ -22,16 +22,17 @@
 
     <dependencies>
         <!-- MUST BE FIRST, and org.apache.kafka:kafka-streams MUST NOT be declared here at all.
-             This is the whole mechanism. parallel-consumer-streams ships patched copies of six Apache
-             Kafka classes (StreamTask, ProcessorContextImpl, RecordCollectorImpl, ...) in Kafka's OWN
-             package, inside its ordinary jar. They win over the stock kafka-streams jar purely by
-             classpath ORDER, and Maven orders direct dependencies by declaration order in this file.
+             This is the whole mechanism. parallel-consumer-streams ships patched copies of four Apache
+             Kafka classes (StreamTask, ProcessorContextImpl, AbstractProcessorContext,
+             RecordCollectorImpl) in Kafka's OWN package, inside its ordinary jar. They win over the stock
+             kafka-streams jar purely by classpath ORDER, and Maven orders direct dependencies by
+             declaration order in this file.
 
              So: kafka-streams arrives TRANSITIVELY from the dependency below (compile scope), which is
              both how the topology compiles and how the ~1000 classes we did NOT patch are supplied.
              Declaring it directly would put the stock jar ahead of the patched classes and the demo
              would silently measure stock Kafka Streams against itself. Excluding it would break the
-             mechanism outright, because the patched module supplies only six of the classes.
+             mechanism outright, because the patched module supplies only four of the classes.
 
              StreamsOnPcDemo asserts all of this at runtime before measuring anything - see
              ClasspathGuard. Order is a convention, not a guarantee (docs/inflight/next-fork-packaging-docs-and-licensing.md). -->
@@ -87,7 +88,7 @@
          module's pom, so no sibling tries to run it, and it is inert unless -Pdemo is passed.
 
              ./mvnw -Pdemo -pl parallel-consumer-examples/parallel-consumer-example-streams-pc -am \
-                    -DskipTests -Dcopyright.skip=true process-classes
+                    -DskipTests process-classes
 
          process-classes (not package) is deliberate: the reactor then supplies parallel-consumer-streams
          as target/classes, so the demo runs against classes just built from the patch rather than
@@ -115,11 +116,17 @@
                         </executions>
                         <configuration>
                             <mainClass>${demo.mainClass}</mainClass>
-                            <!-- exec:java runs main() in a thread it owns, and by default interrupts any
-                                 non-daemon threads still alive when main returns, reporting the resulting
-                                 InterruptedException as a build failure. Kafka's admin, producer and
-                                 Testcontainers' shutdown threads outlive main() by design, so the demo
-                                 would print a complete, correct report and then fail the build. -->
+                            <!-- exec:java runs main() in a thread it owns. Afterwards it always JOINS any
+                                 surviving non-daemon threads, and this flag governs only what it then does
+                                 to the DAEMON ones: at the default true it interrupts and stops them, and
+                                 reports the resulting InterruptedException as a build failure. Kafka's
+                                 admin and producer threads and Testcontainers' shutdown threads outlive
+                                 main() by design, so the demo would print a complete, correct report and
+                                 then fail the build.
+
+                                 Note what this flag does NOT do: it cannot rescue a leaked non-daemon
+                                 thread, which is joined indefinitely either way. That is why ArmRunner
+                                 closes a KafkaStreams it failed to start rather than letting it leak. -->
                             <cleanupDaemonThreads>false</cleanupDaemonThreads>
                         </configuration>
                     </plugin>

@@ -62,5 +62,5 @@ jobs:
         run: |
           # Examples are sample code, not library artifacts — excluded from the deploy.
           ./mvnw --batch-mode -Pmaven-central -Pci \
-            -pl '!:parallel-consumer-examples,!:parallel-consumer-example-core,!:parallel-consumer-example-metrics,!:parallel-consumer-example-streams,!:parallel-consumer-example-vertx,!:parallel-consumer-example-reactor' \
+            -pl '!:parallel-consumer-examples,!:parallel-consumer-example-core,!:parallel-consumer-example-metrics,!:parallel-consumer-example-streams,!:parallel-consumer-example-streams-pc,!:parallel-consumer-example-vertx,!:parallel-consumer-example-reactor' \
             clean deploy -DskipTests

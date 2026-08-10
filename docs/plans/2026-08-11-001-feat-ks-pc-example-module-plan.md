@@ -39,8 +39,9 @@ That ambiguity is settled here (KTD1).
 Two failure modes make this harder than "write a main()":
 
 - **The interesting failure is silent.** If the patched `StreamTask` loses the classpath race, the demo
-  runs pure stock Kafka Streams, produces beautiful output, and proves nothing. Recorded as practice 7
-  in `docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md`.
+  runs pure stock Kafka Streams, produces beautiful output, and proves nothing. Recorded as practice 1
+  in `docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md`
+  (practice 7 is the separate split-package hazard for downstream consumers).
 - **The flattering number is a lie on its own.** The measured effect is 57x on the minimum, but the
   single-key control is 0.69x - PC is *slower* there. `docs/inflight/next-fork-packaging-docs-and-licensing.md`
   section 1 records a house rule: never print the 57x without the control and its two caveats.

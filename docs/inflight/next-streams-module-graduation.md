@@ -13,18 +13,16 @@ Consumer instance does the slow work concurrently downstream. The new module rem
 hop, and the examples say nothing about it. In the owner's words, "it's a pretty big deal" - so the
 example should demonstrate it.
 
-**Unresolved: what "or invert it" meant.** Two readings, both plausible, and the note does not settle
-which:
+**Settled: what "or invert it" meant.** Two readings were open here - promote the PC-driven topology to
+be the *primary* streams example, or invert the *example itself* so it runs one workload both ways.
+KTD1 in `docs/plans/2026-08-11-001-feat-ks-pc-example-module-plan.md` takes the second, in a new sibling
+module `parallel-consumer-example-streams-pc`, and leaves `parallel-consumer-example-streams` untouched.
+That module has to stay unmodified for a second reason: its
+`StockBaselineFixtureSupport` asserts `PcDispatchSwitch` is absent from its JVM, which is what makes it
+the provably-unpatched baseline for the whole streams module.
 
-- Make the PC-driven topology the **primary** streams example, with the existing hand-off-downstream
-  pattern demoted to the alternative, rather than bolting the new demo on as an addendum.
-- Invert the **example itself**: today Streams hosts the pipeline and hands off to PC downstream; the
-  module inverts that relationship so PC drives the topology from the inside. The example would then
-  run the same workload both ways, making the inversion the thing being demonstrated.
-
-Worth deciding before any code is written, because the two produce quite different examples. Whichever
-wins, this is also the natural home for the realistic-domain workload in
-`next-fork-packaging-docs-and-licensing.md` - check there before building a second one.
+Still open here: the realistic-domain workload in `next-fork-packaging-docs-and-licensing.md` is the
+natural next section of that example, and has not been built - check there before starting a second one.
 
 ## Tag the public surface as evolving
 

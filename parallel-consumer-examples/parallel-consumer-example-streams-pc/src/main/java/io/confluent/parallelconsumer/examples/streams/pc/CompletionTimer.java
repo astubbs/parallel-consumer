@@ -4,7 +4,6 @@ package io.confluent.parallelconsumer.examples.streams.pc;
  */
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -16,6 +15,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * of noise which have nothing to do with the dispatch seam: producer batching, and the gap while the
  * topology starts up and gets its partition assigned. What remains is time spent waiting inside the chain,
  * which is exactly what head-of-line blocking is.
+ * <p>
+ * <b>Kept deliberately in step with the private {@code CompletionTimer} inside
+ * {@code HeadOfLineBlockingBenchmarkTest}</b> in {@code parallel-consumer-streams}, so the demo and the
+ * regression test time the same thing the same way. This one additionally tracks the whole-batch drain.
+ * The two are separate because a {@code src/main} module cannot import another module's test classes.
+ * Change one and check the other, because nothing else will.
  *
  * @author Antony Stubbs
  */
@@ -23,9 +28,14 @@ final class CompletionTimer {
 
     private final AtomicLong firstStartNanos = new AtomicLong();
 
-    private final List<Completion> completions = Collections.synchronizedList(new ArrayList<>());
-
-    private final ConcurrentHashMap<String, Boolean> seen = new ConcurrentHashMap<>();
+    /**
+     * Keyed by record identity, which is what makes the map both the sample set and the de-duplicator.
+     * <p>
+     * A redelivery would otherwise add a second, much later sample for a record that had already been
+     * processed, and quietly fatten the tail. Keying the samples themselves means the guard cannot fall out
+     * of step with the thing it guards.
+     */
+    private final ConcurrentHashMap<String, Completion> completions = new ConcurrentHashMap<>();
 
     void markStarted() {
         firstStartNanos.compareAndSet(0L, System.nanoTime());
@@ -43,12 +53,13 @@ final class CompletionTimer {
 
     void markCompleted(final String key, final String value) {
         long now = System.nanoTime();
-        lastCompletionNanos.accumulateAndGet(now, Math::max);
         long elapsedMillis = (now - firstStartNanos.get()) / 1_000_000L;
-        // Guarded against double counting: a redelivery would otherwise add a second, much later sample for
-        // a record that had already been processed, and quietly fatten the tail.
-        if (seen.putIfAbsent(key + "/" + value, Boolean.TRUE) == null) {
-            completions.add(new Completion(value, elapsedMillis));
+        // The drain clock advances only on a FIRST completion, for the same reason the samples do. A
+        // redelivery of the last record would otherwise push the whole-batch figure later while leaving
+        // the per-record distribution untouched, and the two headline numbers would disagree with each
+        // other with nothing on screen to say why.
+        if (completions.putIfAbsent(key + "/" + value, new Completion(value, elapsedMillis)) == null) {
+            lastCompletionNanos.accumulateAndGet(now, Math::max);
         }
     }
 
@@ -70,11 +81,9 @@ final class CompletionTimer {
      */
     List<Long> fastRecordLatencies() {
         List<Long> out = new ArrayList<>();
-        synchronized (completions) {
-            for (Completion completion : completions) {
-                if (!ArmRunner.BLOCKER_VALUE.equals(completion.value)) {
-                    out.add(completion.elapsedMillis);
-                }
+        for (Completion completion : completions.values()) {
+            if (!ArmRunner.BLOCKER_VALUE.equals(completion.value)) {
+                out.add(completion.elapsedMillis);
             }
         }
         return out;

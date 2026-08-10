@@ -10,9 +10,12 @@ the whole integration, and a static switch (`PcDispatchSwitch`) decides which pa
 The demo puts one 1500ms record at the head of a partition with 24 fast 25ms records behind it, then runs
 that workload under stock dispatch and under PC dispatch and prints both sets of latencies.
 
-Takes 20 to 30 seconds, plus a one-off Docker image pull the first time. Needs Docker; it starts its own
-Kafka. Expect some build noise first (`Jabel: initialized`, `apply-patch: applied 30 hunk(s)`) - that is
-the build generating the patched Kafka classes, which is normal.
+Needs Docker; it starts its own Kafka. On a warm build the whole command below took 44s, of which the
+demo itself reported 23s (6s of that starting the broker). A first run also builds the reactor from
+scratch and pulls the Kafka image, so budget several minutes. About 8s of the demo is deliberate
+sleeping: four arms, each with a 1500ms blocker and 24 records of 25ms. Expect some build noise first
+(`Jabel: initialized`, `apply-patch: applied 30 hunk(s)`) - that is the build generating the patched
+Kafka classes, which is normal.
 
 ## Run it
 
@@ -30,18 +33,21 @@ Scroll to the `SUMMARY` block at the bottom. It stands on its own. Abridged, wit
   Latencies below share one t=0, the instant the first record entered the topology.
 
   Evidence this was really Parallel Consumer driving Kafka Streams:
-    - the patched StreamTask loaded from parallel-consumer-streams, not the kafka-streams jar   (1)
+    - the patched StreamTask loaded from parallel-consumer-streams, not the kafka-streams jar,
+      and it carries the dispatch seam                                                          (1)
     - 25 of 25 records went through PC's worker pool in each PC arm, and 0 in each stock arm    (2)
 
   HEAD-OF-LINE BLOCKING (fast records on their own keys)
-    fastest fast record      1,558ms stock  ->        31ms PC    50.26x                         (3)
-    median  fast record      1,908ms stock  ->       336ms PC     5.68x                         (4)
-    whole batch drained      2,300ms stock  ->     1,714ms PC     1.34x                         (5)
+    fastest fast record      1,555ms stock  ->        28ms PC    55.54x                         (3)
+    median  fast record      1,904ms stock  ->       344ms PC     5.53x                         (4)
+    whole batch drained      2,278ms stock  ->     1,611ms PC     1.41x                         (5)
+    through PC's pool             0 stock  ->        25 PC   (of 25 records)                    (2)
 
   NEGATIVE CONTROL (every record on ONE key, so PC has no concurrency to exploit)
-    fastest fast record      1,543ms stock  ->     1,562ms PC     0.99x                         (6)
-    median  fast record      1,879ms stock  ->     2,688ms PC     0.70x
-    whole batch drained      2,247ms stock  ->     3,909ms PC     0.57x
+    fastest fast record      1,599ms stock  ->     1,662ms PC     0.96x                         (6)
+    median  fast record      1,927ms stock  ->     2,794ms PC     0.69x
+    whole batch drained      2,332ms stock  ->     4,012ms PC     0.58x
+    through PC's pool             0 stock  ->        25 PC   (of 25 records)
 ```
 
 Ratios are stock/PC: above 1.0 means PC won. Every latency is elapsed-since-start on a clock shared by all
@@ -49,20 +55,26 @@ Ratios are stock/PC: above 1.0 means PC won. Every latency is elapsed-since-star
 
 1. **The demo is not lying to you.** These patched Kafka classes only take effect by winning classpath
    order. When they lose, nothing throws, and the demo prints plausible numbers that mean nothing. The run
-   checks this first, prints where each class loaded from, and aborts loudly if the stock jar won.
+   checks this first, prints where each class loaded from, and aborts loudly if the stock jar won. It also
+   asks the loaded `StreamTask` for the `pcDispatcher` field the patch adds, because coming from the right
+   jar and actually carrying the patch are two different questions with the same happy answer.
 2. **Parallel Consumer really did the work.** That counter increments at exactly one place in the codebase
    (`PcDispatchCounters.onDispatchedToPool`, called only from `PcTaskDispatcher`), so it cannot read
-   non-zero unless records went through PC's worker pool.
+   non-zero unless records went through PC's worker pool. Both numbers are read back from the run, not
+   printed from constants: if any arm's counters disagree, the summary replaces this claim with a banner
+   telling you not to quote the numbers.
 3. **The blocking is gone.** Under stock dispatch even the luckiest fast record waited ~1.5s for a record
    it shared nothing with but a partition. Under PC dispatch the quickest cost roughly its own 25ms.
 4. **Quote this one, not row 3.** Row 3 approaches the workload's own 1500/25 cost ratio by construction,
    so it shows the blocking is gone without measuring how much is typically saved. The median does.
 5. **The batch really did finish sooner**, so the fast records were not sped up at the batch's expense.
 6. **The honest part.** With every record on one key there is no concurrency to exploit and PC comes out
-   *slower*, at 0.70x median and 0.57x on the whole batch. It is shown rather than hidden because it is
+   *slower*, at 0.69x median and 0.58x on the whole batch. It is shown rather than hidden because it is
    what proves rows 3 to 5 are key concurrency and not just a generally faster path. The run prints a
    section explaining the cause (Kafka Streams couples polling and processing on one thread) and why it is
-   not tuned away here.
+   not tuned away here. It is also what bounds the one term the runner does not control: the stock arm
+   always runs first, so PC meets a warmer JVM, and a warm-up effect large enough to carry row 4 could not
+   leave PC losing here.
 
 Your numbers will differ; the shape is what matters. Note the "stock" arm is these patched classes with
 the switch off, not the vanilla jar - `parallel-consumer-example-streams` is the separate,
@@ -79,7 +91,8 @@ Edit, then rerun the same command; it recompiles and reapplies the patch cleanly
 - **Add a demonstration:** implement `DemoSection` (title, run, optional summary) and add it to the list
   in `StreamsOnPcDemo.main`.
 - **Skip broker startup on repeat runs:** put `testcontainers.reuse.enable=true` in
-  `~/.testcontainers.properties`. Until you do, the run warns that reuse was requested and unavailable.
+  `~/.testcontainers.properties`. The run says which mode it is in, and leaves the container running at
+  the end only when reuse is genuinely on. Until you opt in, each run starts and discards its own broker.
 
 ## More
 

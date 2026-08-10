@@ -12,8 +12,10 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.utils.AppInfoParser;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.TestcontainersConfiguration;
 
-import java.util.Collections;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -40,9 +42,20 @@ final class DemoBroker implements AutoCloseable {
 
     private final boolean wasAlreadyRunning;
 
+    /**
+     * One client for the whole run, for the same reason there is one container: every arm needs topics, and
+     * standing a fresh admin client up per arm pays connection and metadata setup repeatedly for nothing.
+     * It carries no per-arm state, so sharing it cannot let one arm contaminate the next.
+     */
+    private final AdminClient admin;
+
     private DemoBroker(final KafkaContainer container, final boolean wasAlreadyRunning) {
         this.container = container;
         this.wasAlreadyRunning = wasAlreadyRunning;
+
+        Properties props = new Properties();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, container.getBootstrapServers());
+        this.admin = AdminClient.create(props);
     }
 
     static DemoBroker start() {
@@ -72,10 +85,28 @@ final class DemoBroker implements AutoCloseable {
         }
         long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
 
-        boolean reused = elapsedMillis < 2_000;
+        // Asked of testcontainers rather than guessed from the stopwatch. A duration threshold would call a
+        // fast cold start "reused" and a slow reuse "cold", and the answer is printed to the reader as
+        // fact in the closing summary.
+        boolean reuseActive = reuseIsActive(container);
         Console.line("  Broker up in %,dms at %s%s", elapsedMillis, container.getBootstrapServers(),
-                reused ? " (reused an already-running container)" : "");
-        return new DemoBroker(container, reused);
+                reuseActive ? " (container reuse is ON - it will be left running)" : "");
+        if (!reuseActive) {
+            Console.line("  Reuse is off, so this container is discarded at the end. Put "
+                    + "testcontainers.reuse.enable=true");
+            Console.line("  in ~/.testcontainers.properties to keep it and skip this wait next time.");
+        }
+        return new DemoBroker(container, reuseActive);
+    }
+
+    /**
+     * Whether reuse is genuinely in effect, which needs BOTH the request on the container and the reader's
+     * opt-in in {@code ~/.testcontainers.properties}. Testcontainers honours {@code withReuse(true)} only
+     * when the environment opts in, and says so in a log line the demo turns down.
+     */
+    private static boolean reuseIsActive(final KafkaContainer container) {
+        return container.isShouldBeReused()
+                && TestcontainersConfiguration.getInstance().environmentSupportsReuse();
     }
 
     String bootstrapServers() {
@@ -87,7 +118,7 @@ final class DemoBroker implements AutoCloseable {
     }
 
     /**
-     * Creates a topic and does not return until it exists.
+     * Creates topics and does not return until they exist.
      * <p>
      * Blocking on the create is deliberate. A fire-and-forget create races the producer that immediately
      * follows it, and this repo has already paid for that once - see
@@ -95,19 +126,20 @@ final class DemoBroker implements AutoCloseable {
      *
      * @param partitions always 1 here: stock Kafka Streams' only concurrency is per partition, so giving it
      *                   more would hand the control arm the very parallelism the comparison says it lacks
+     * @param names      created in one request, so an arm waits for one round trip rather than one per topic
      */
-    void createTopic(final String name, final int partitions) {
-        Properties props = new Properties();
-        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
-        try (AdminClient admin = AdminClient.create(props)) {
-            admin.createTopics(Collections.singletonList(new NewTopic(name, partitions, (short) 1)))
-                    .all()
-                    .get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    void createTopics(final int partitions, final String... names) {
+        List<NewTopic> topics = new ArrayList<>();
+        for (String name : names) {
+            topics.add(new NewTopic(name, partitions, (short) 1));
+        }
+        try {
+            admin.createTopics(topics).all().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted creating topic " + name, e);
+            throw new IllegalStateException("Interrupted creating topics " + String.join(", ", names), e);
         } catch (ExecutionException | TimeoutException e) {
-            throw new IllegalStateException("Could not create topic " + name, e);
+            throw new IllegalStateException("Could not create topics " + String.join(", ", names), e);
         }
     }
 
@@ -154,6 +186,15 @@ final class DemoBroker implements AutoCloseable {
 
     @Override
     public void close() {
-        container.stop();
+        admin.close();
+        // Deliberately NOT stopped when reuse is active. Testcontainers' stop() removes the container
+        // unconditionally - it does not exempt a reusable one - so stopping here would delete the very
+        // container the next run is supposed to find, and the README's "skip broker startup on repeat
+        // runs" advice could never once come true.
+        if (reuseIsActive(container)) {
+            Console.line("  Leaving the broker running for reuse by the next run.");
+        } else {
+            container.stop();
+        }
     }
 }
