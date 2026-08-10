@@ -15,8 +15,14 @@
 #
 # ONE JOB, DELIBERATELY. `ossindex-maven-plugin` is bound to `validate`, which every Maven job in
 # this repo runs, so "enabled in CI" would mean six-plus scans per PR from a single account and a
-# burnt rate limit for zero extra signal. It is off by default in the pom
-# (`ossindex.skip`, astubbs/parallel-consumer#259) and switched on only here.
+# burnt rate limit for zero extra signal. This job is the only place it is deliberately switched ON
+# (`-Dossindex.skip=false`, below).
+#
+# Switching it OFF everywhere else needs an `ossindex.skip` property in the pom, which
+# astubbs/parallel-consumer#259 adds and which has NOT merged yet. Until it does, the plugin still
+# runs here on `validate` in every other Maven job - unauthenticated, 401ing, silently green. This
+# job neither causes nor worsens that, and has no ordering dependency on that PR (see the Maven step
+# below); it is simply the one place the scan is real. Drop this paragraph once #259 lands.
 #
 # A GREEN MAVEN RUN IS NOT EVIDENCE THE SCAN HAPPENED. The plugin's `fail` parameter covers
 # "vulnerable components were found", not "the request failed" - with an expired token it prints a

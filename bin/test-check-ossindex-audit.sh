@@ -21,6 +21,8 @@
 #    5. no report exported at all                                -> FAIL (1)   <- leg 1+2
 #    6. log claims 3 modules checked, only 2 reported            -> FAIL (1)   <- leg 3 alone
 #    7. missing log file                                         -> FAIL (1)
+#    8. vulnerable component with NO scored advisories           -> pass (0)   <- renderer crash
+#    9. two advisories carrying no id                            -> pass (0), both counted
 #
 # Cases 4 and 6 are the ones worth keeping. Case 4 is the future failure this guard is really for:
 # if Sonatype ever reworded the warning, leg 1 goes quiet and only the structural leg is left. Case 6
@@ -173,6 +175,50 @@ assert_contains "  ...naming the shortfall" "a module produced nothing" "$LAST_O
 t="$TMP/nolog"; mkdir -p "$t"
 run_guard "$t/does-not-exist.log" "$t"
 assert "missing Maven log fails rather than passing vacuously" 1 "$LAST_EC"
+
+# ── 8. a vulnerable component with nothing scored on it ───────────────────────
+# OSS Index can list a coordinate under `vulnerable` while its `vulnerabilities` array is empty -
+# an advisory it has not scored yet. That leaves the component's advisory map empty, which a bare
+# `max()` in the renderer cannot take: it raises ValueError and, under `set -euo pipefail`, kills
+# the guard with a traceback. A scan that DID run would be reported as an unexplained red - the
+# guard failing in exactly the direction it exists to prevent.
+t="$TMP/unscored"; mkdir -p "$t/core/target"
+cat > "$t/core/target/ossindex-report.json" <<'JSON'
+{
+  "reports": { "org.example:thing:jar:1.0:compile": { "coordinates": "pkg:maven/org.example/thing@1.0" } },
+  "vulnerable": {
+    "org.example:thing:jar:1.0:compile": {
+      "coordinates": "pkg:maven/org.example/thing@1.0",
+      "vulnerabilities": []
+    }
+  }
+}
+JSON
+log=$(write_log "$t" 1)
+run_guard "$log" "$t"
+assert "a vulnerable component with no scored advisories does not crash the guard" 0 "$LAST_EC"
+assert_contains "  ...and still renders that component" "org.example:thing" "$LAST_OUT"
+
+# ── 9. advisories with no id must not collapse onto one key ───────────────────
+# Keyed on `id`, so two unidentified advisories both landed on "?" and the second overwrote the
+# first - the component's advisory count, and the run total, silently under-reported real findings.
+t="$TMP/unidentified"; mkdir -p "$t/core/target"
+cat > "$t/core/target/ossindex-report.json" <<'JSON'
+{
+  "reports": { "org.example:thing:jar:1.0:compile": { "coordinates": "pkg:maven/org.example/thing@1.0" } },
+  "vulnerable": {
+    "org.example:thing:jar:1.0:compile": {
+      "coordinates": "pkg:maven/org.example/thing@1.0",
+      "vulnerabilities": [ { "cvssScore": 4.1 }, { "cvssScore": 7.7 } ]
+    }
+  }
+}
+JSON
+log=$(write_log "$t" 1)
+run_guard "$log" "$t"
+assert "two unidentified advisories are counted separately, not collapsed" 0 "$LAST_EC"
+assert_contains "  ...reporting both of them" "2 advisory(ies)" "$LAST_OUT"
+assert_contains "  ...and keeping the higher score" "7.7" "$LAST_OUT"
 
 echo
 if [ "$failures" -eq 0 ]; then

@@ -54,8 +54,13 @@
 #
 #   bin/check-ossindex-audit.sh <maven-log-file> [tree-root]
 #
-# The Maven run must export reports:
+# The Maven run must export reports. Clear the previous run's first: leg 3 counts every
+# `ossindex-report.json` under the tree with no run-identity check, so a stale one - from an earlier
+# run, or from a wider one when you are now building a subset - is counted as this run's output. It
+# can then either mask a module that genuinely produced nothing, or invent a shortfall that is not
+# real. CI is immune (fresh checkout every time); a local re-run is not.
 #
+#   find . -type f -name ossindex-report.json -delete
 #   ./mvnw --batch-mode test-compile \
 #       -Dossindex.skip=false -Dossindex.fail=false -Dossindex.authId=ossindex \
 #       -Dossindex.reportFile=target/ossindex-report.json | tee audit.log
@@ -109,6 +114,19 @@ components = 0
 # coordinates -> {"advisories": {id: score}, "modules": set()}
 found = {}
 
+
+def top_of(entry):
+    """Highest CVSS on a component, 0.0 when nothing on it carries a score.
+
+    A coordinate can appear under `vulnerable` with an empty (or absent) `vulnerabilities` list -
+    an advisory OSS Index has not scored yet - which leaves `advisories` empty. Bare `max()` on
+    that raises ValueError, and since the caller runs under `set -euo pipefail` that would kill
+    the whole guard with a traceback: a scan that DID run, reported as an unexplained red.
+    """
+    scores = entry["advisories"].values()
+    return max(scores) if scores else 0.0
+
+
 for p in paths:
     try:
         with open(p) as fh:
@@ -127,8 +145,13 @@ for p in paths:
     for coords, report in (doc.get("vulnerable") or {}).items():
         entry = found.setdefault(coords, {"advisories": {}, "modules": set()})
         entry["modules"].add(module)
-        for vuln in report.get("vulnerabilities") or []:
-            entry["advisories"][vuln.get("id", "?")] = vuln.get("cvssScore") or 0.0
+        for i, vuln in enumerate(report.get("vulnerabilities") or []):
+            # Positional fallback rather than a single shared "?": OSS Index does not always carry
+            # an id, and collapsing every unidentified advisory onto one key silently overwrites
+            # scores and under-counts findings. Positional keeps the same advisory de-duplicating
+            # across modules, which is what the shared key was getting right by accident.
+            vuln_id = vuln.get("id") or ("unidentified-%d" % i)
+            entry["advisories"][vuln_id] = vuln.get("cvssScore") or 0.0
 
 advisories = sum(len(e["advisories"]) for e in found.values())
 scores = [s for e in found.values() for s in e["advisories"].values()]
@@ -145,19 +168,33 @@ if found:
     print("| Component | Advisories | Top CVSS | Modules |")
     print("|---|---|---|---|")
     # Worst first, so the thing to act on is the first thing read.
-    for coords, e in sorted(found.items(), key=lambda kv: -max(kv[1]["advisories"].values())):
+    for coords, e in sorted(found.items(), key=lambda kv: -top_of(kv[1])):
         ids = ", ".join("`%s`" % i for i in sorted(e["advisories"]))
         print("| `%s` | %s | %s | %s |" % (
-            coords, ids, max(e["advisories"].values()), ", ".join(sorted(e["modules"]))))
+            coords, ids, top_of(e), ", ".join(sorted(e["modules"]))))
 PY
 )
 
-empty_reports=$(sed -n 's/^empty_reports=//p' <<< "$facts")
-report_files=$(sed -n 's/^report_files=//p' <<< "$facts")
-components=$(sed -n 's/^components=//p' <<< "$facts")
-vulnerable=$(sed -n 's/^vulnerable=//p' <<< "$facts")
-advisories=$(sed -n 's/^advisories=//p' <<< "$facts")
-top_score=$(sed -n 's/^top_score=//p' <<< "$facts")
+# One pass over the `key=value` block rather than one `sed` per fact. The name whitelist keeps the
+# parser's output from assigning arbitrary variables, and the emptiness check below turns a fact
+# renamed above but not here into a loud failure - previously it just became an empty variable, with
+# nothing tying the two halves together.
+empty_reports='' report_files='' components='' vulnerable='' advisories='' top_score=''
+while IFS='=' read -r key value; do
+    case "$key" in
+        ---) break ;;
+        empty_reports|report_files|components|vulnerable|advisories|top_score)
+            printf -v "$key" '%s' "$value" ;;
+    esac
+done <<< "$facts"
+
+for fact in empty_reports report_files components vulnerable advisories top_score; do
+    if [ -z "${!fact}" ]; then
+        echo "FAIL: internal error - the audit parser emitted no '${fact}' fact." >&2
+        exit 1
+    fi
+done
+
 findings_table=$(sed -n '/^---$/,$p' <<< "$facts" | tail -n +2)
 
 problems=()
@@ -189,6 +226,7 @@ if [ "${#problems[@]}" -gt 0 ]; then
     echo
     cat <<'REPRO'
 ```
+find . -type f -name ossindex-report.json -delete   # stale reports are counted as this run's
 ./mvnw --batch-mode test-compile -Dossindex.skip=false -Dossindex.fail=false \
     -Dossindex.authId=ossindex -Dossindex.reportFile=target/ossindex-report.json | tee audit.log
 bin/check-ossindex-audit.sh audit.log
