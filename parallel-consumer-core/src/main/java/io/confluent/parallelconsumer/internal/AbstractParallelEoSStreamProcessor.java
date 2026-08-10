@@ -166,9 +166,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final BrokerPollSystem<K, V> brokerPollSubsystem;
 
     /**
-     * Useful for testing async code
+     * Useful for testing async code.
+     * <p>
+     * Concurrent because {@link #addLoopEndCallBack} is public and callable from any thread, while the control loop
+     * iterates this list every cycle. A plain list breaks its own iteration when a registration lands mid-cycle, and
+     * the resulting {@link java.util.ConcurrentModificationException} escapes the control loop and stops the consumer.
+     * Writes are rare and iteration happens every loop, which is exactly what copy-on-write is for.
      */
-    private final List<Runnable> controlLoopHooks = new ArrayList<>();
+    private final List<Runnable> controlLoopHooks = new CopyOnWriteArrayList<>();
 
     /**
      * Reference to the control thread, used for waking up a blocking poll ({@link BlockingQueue#poll}) against a
@@ -1470,6 +1475,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Plugin a function to run at the end of each main loop.
      * <p>
      * Useful for testing and controlling loop progression.
+     * <p>
+     * Safe to call from any thread, including while the consumer is running. The callback itself, however, runs on the
+     * control thread - so it must not block, and must not call back into this consumer in a way that waits on the
+     * control loop it is currently occupying.
      */
     public void addLoopEndCallBack(Runnable r) {
         this.controlLoopHooks.add(r);

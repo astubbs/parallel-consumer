@@ -49,6 +49,7 @@ import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOr
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
@@ -555,6 +556,58 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertThatThrownBy(() -> {
             parallelConsumer.closeDrainFirst(ofSeconds(10));
         }).hasMessageContainingAll("Error", "poll", "thread", "fake control");
+    }
+
+    /**
+     * Registering a loop-end callback from a thread other than the control thread must not stop the consumer.
+     * <p>
+     * {@link AbstractParallelEoSStreamProcessor#addLoopEndCallBack} is public and documents no threading restriction,
+     * yet the control loop iterates that same list every cycle. A registration landing mid-iteration therefore breaks
+     * the iteration, and the failure escapes the control loop and takes the consumer down with it.
+     * <p>
+     * The latches make the race deterministic rather than hoping to land inside a window a few instructions wide: the
+     * first callback parks the control thread mid-iteration until the off-thread registration has provably completed.
+     * <p>
+     * <b>The assertion is on the observable outcome - the consumer keeps running and closes cleanly - not on the
+     * exception type.</b> What a user reports is "it stopped after a while"; a change that swapped one exception for
+     * another would still be that bug, and this test would still fail, which is the point.
+     *
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/252">#252 - the same defect class in
+     *         PartitionStateManager, where a plain HashMap of partition state was streamed while another thread
+     *         mutated it. Fixed there by making the collection concurrent; this field was missed.</a>
+     */
+    @Test
+    @SneakyThrows
+    void loopEndCallBackCanBeRegisteredFromAnotherThread() {
+        var controlThreadIsIterating = new CountDownLatch(1);
+        var registrationLanded = new CountDownLatch(1);
+        var parkedOnce = new AtomicBoolean(false);
+
+        // runs on the control thread, and holds the iteration open while another thread mutates the hook list
+        parallelConsumer.addLoopEndCallBack(() -> {
+            if (parkedOnce.compareAndSet(false, true)) {
+                controlThreadIsIterating.countDown();
+                awaitLatch(registrationLanded);
+            }
+        });
+
+        var registrar = new Thread(() -> {
+            awaitLatch(controlThreadIsIterating);
+            parallelConsumer.addLoopEndCallBack(() -> log.trace("Hook registered off the control thread"));
+            registrationLanded.countDown();
+        }, "off-control-thread-registrar");
+        registrar.start();
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        registrar.join(SECONDS.toMillis(defaultTimeoutSeconds));
+        assertThat(registrationLanded.getCount()).as("off-thread registration completed").isZero();
+
+        // the outcome that matters: the loop kept turning after the concurrent registration, rather than dying on it
+        awaitForOneLoopCycle();
+        assertThat(parallelConsumer.isClosedOrFailed()).as("consumer still running").isFalse();
+
+        parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds));
     }
 
     @ParameterizedTest()
