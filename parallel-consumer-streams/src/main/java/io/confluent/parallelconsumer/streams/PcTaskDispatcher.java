@@ -220,6 +220,15 @@ public class PcTaskDispatcher implements Closeable {
     private final AtomicReference<Failure> firstFailure = new AtomicReference<>();
 
     /**
+     * Set by the first {@link #recordFailure}, never cleared while this dispatcher is live. See
+     * {@link #hasPendingFailure()} for why this is a separate field from {@link #firstFailure} rather than a
+     * null check on it.
+     * <p>
+     * Volatile: written by whichever worker fails first, read by the owner thread on every pump.
+     */
+    private volatile boolean failureSeen;
+
+    /**
      * PC's dirty state, published by the owner thread for readers that must not touch {@link WorkManager}.
      *
      * <p><b>Not a parallel copy of the run state, and the distinction matters</b> - this repository has a
@@ -281,6 +290,13 @@ public class PcTaskDispatcher implements Closeable {
      * save.
      */
     private volatile Map<TopicPartition, Integer> publishedBufferedCounts = Collections.emptyMap();
+
+    /**
+     * How many times {@link #dispatchAvailable} consumed a record with no buffered count left to decrement.
+     * Owner thread only, and exposed so a test can assert the accounting balanced rather than merely that
+     * nothing crashed. Non-zero is expected after a revocation and suspicious otherwise.
+     */
+    private int bufferedUnderflows;
 
     /**
      * The condition the StreamThread waits on instead of sitting out the rest of {@code poll.ms}. Bound
@@ -440,25 +456,44 @@ public class PcTaskDispatcher implements Closeable {
                     batch.size() - epochTagged.count(), batch.size(), partition);
         }
 
-        final int incompleteBefore = incompleteOffsetCount(partition);
+        final int willBeQueued = countRecordsPcWillQueue(partition, epochTagged);
         workManager.registerWork(epochTagged);
-        final int accepted = incompleteOffsetCount(partition) - incompleteBefore;
-        if (accepted > 0) {
-            bufferedByPartition.merge(partition, accepted, Integer::sum);
+        if (willBeQueued > 0) {
+            bufferedByPartition.merge(partition, willBeQueued, Integer::sum);
             publishBufferedCounts();
         }
     }
 
     /**
-     * PC's own count of records registered for this partition and not yet completed. Owner thread only - it
-     * reads {@link WorkManager}'s partition state.
-     * <p>
-     * Used only as the two ends of a subtraction in {@link #registerRecords}, never as the buffered count
-     * itself. See {@link #bufferedByPartition} for why the count itself may not be derived from it.
+     * How many of {@code batch}'s records PC will turn into work for {@code partition} - those it has not
+     * already completed. Owner thread only: it reads {@link WorkManager}'s partition state.
+     *
+     * <p><b>Counted in records, because the decrement is in records.</b> The obvious implementation - take
+     * the delta in {@code getNumberOfIncompleteOffsets()} across {@code registerWork} - is wrong, and wrong
+     * in the dangerous direction. That map is keyed by <em>offset</em> while
+     * {@link #dispatchAvailable} decrements once per {@code WorkContainer}, and the two are not the same
+     * count: two records sharing an offset produce two containers but one map entry, and the truncation
+     * {@code registerWork} performs can shrink the map while containers are being added. Every such
+     * mismatch leaves the count permanently <em>low</em>, and a count that is too low stops the pause ever
+     * firing again for that partition - the memory bound silently absent, with nothing to say so.
+     *
+     * <p>Asking PC per record instead keeps both sides in the same unit, and asks the same question
+     * {@code registerWork} is about to ask itself.
      */
-    private int incompleteOffsetCount(final TopicPartition partition) {
+    private int countRecordsPcWillQueue(final TopicPartition partition,
+                                        final EpochAndRecordsMap<byte[], byte[]> batch) {
         final PartitionState<byte[], byte[]> state = workManager.getPm().getPartitionState(partition);
-        return state == null ? 0 : state.getNumberOfIncompleteOffsets();
+        final EpochAndRecordsMap<byte[], byte[]>.RecordsAndEpoch entry = batch.records(partition);
+        if (state == null || entry == null) {
+            return 0;
+        }
+        int queued = 0;
+        for (final ConsumerRecord<byte[], byte[]> record : entry.getRecords()) {
+            if (!state.isRecordPreviouslyCompleted(record)) {
+                queued++;
+            }
+        }
+        return queued;
     }
 
     /**
@@ -527,8 +562,23 @@ public class PcTaskDispatcher implements Closeable {
                 // dispatched, dropped during preparation, or failed at preparation. Decremented here, beside
                 // the `consumed` it must always agree with, rather than on each of the three branches below,
                 // because three call sites is how they would silently stop agreeing.
-                bufferedByPartition.computeIfPresent(work.getTopicPartition(),
-                        (partition, held) -> held <= 1 ? null : held - 1);
+                //
+                // computeIfPresent, so the count can never go negative and a container handed out for a
+                // partition that has since been revoked cannot resurrect an entry for it. Underflow is
+                // COUNTED AND LOGGED rather than silently clamped: a count that drifts low stops the pause
+                // ever firing for that partition, which is this unit's whole purpose failing with no
+                // symptom. It is expected exactly once per revoked partition with work still in PC's shards,
+                // so it is a warning to correlate rather than an error on its own.
+                if (bufferedByPartition.computeIfPresent(work.getTopicPartition(),
+                        (partition, held) -> held <= 1 ? null : held - 1) == null
+                        && !bufferedByPartition.containsKey(work.getTopicPartition())) {
+                    if (bufferedUnderflows++ == 0) {
+                        log.warn("PC dispatch consumed a record for {} with no buffered count to decrement - "
+                                        + "expected after that partition is revoked, a backpressure accounting "
+                                        + "drift otherwise. Further occurrences are counted, not logged.",
+                                work.getTopicPartition());
+                    }
+                }
                 Runnable chainExecution;
                 try {
                     chainExecution = preparer.prepare(work.getCr());
@@ -603,6 +653,10 @@ public class PcTaskDispatcher implements Closeable {
         recordsFailed.incrementAndGet();
         PcDispatchCounters.onFailed();
         firstFailure.compareAndSet(null, new Failure(cause, work.getCr()));
+        // Set AFTER firstFailure, so an owner thread that sees the bar closed can always find the failure
+        // behind it. The reverse order leaves a window where dispatch is barred but pollFailure() returns
+        // null, which reads as a dispatcher that has silently stopped working.
+        failureSeen = true;
         completed.add(work);
     }
 
@@ -692,17 +746,30 @@ public class PcTaskDispatcher implements Closeable {
     }
 
     /**
-     * Whether a failure is waiting to be surfaced by the next {@link #pollFailure()}.
+     * Whether this dispatcher has seen a processing failure that has not been made good.
      * <p>
      * {@link #dispatchAvailable} gates on this so that a known failure stops further work being handed out
      * (astubbs#255, U14). Stock Kafka Streams stops processing at the throw; here the throw happens on a
      * worker and reaches the StreamThread a pump later, so without this gate the dispatcher keeps handing
      * out records for a whole poll budget after it already knows the task is going to die.
      * <p>
-     * A question, so it does not mutate - {@link #pollFailure()} is the one that clears.
+     * <b>Sticky, and NOT the same question as "is a failure waiting to be surfaced".</b> That distinction is
+     * the whole point, and getting it wrong reopens the hole this gate exists to close.
+     * {@link #pollFailure()} clears {@link #firstFailure} as it hands the failure over - so a gate that read
+     * only that field would be open again the instant the StreamThread took the exception, and
+     * {@code StreamTask.suspend()}'s {@link #pumpUntilQuiescent} - which runs immediately afterwards, on the
+     * way down - would dispatch the <em>entire remaining backlog</em> of a task that is already dying. The
+     * bound would then be "everything PC holds" rather than "what was already running", which is no bound at
+     * all.
+     * <p>
+     * Cleared only by {@link #close()} or {@link #abortClose()}, because those are the only points at which
+     * this dispatcher stops being the one that failed. A revived task is refused outright by the patched
+     * {@code StreamTask.revive()}, so there is no path that needs it cleared while still live.
+     * <p>
+     * A question, so it does not mutate.
      */
     public boolean hasPendingFailure() {
-        return firstFailure.get() != null;
+        return failureSeen;
     }
 
     /**
@@ -912,6 +979,11 @@ public class PcTaskDispatcher implements Closeable {
             total += held;
         }
         return total;
+    }
+
+    /** Test seam: see {@link #bufferedUnderflows}. Owner thread only. */
+    int getBufferedUnderflowCount() {
+        return bufferedUnderflows;
     }
 
     /**
