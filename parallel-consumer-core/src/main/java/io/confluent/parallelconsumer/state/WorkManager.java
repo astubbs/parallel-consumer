@@ -169,6 +169,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * <p>
      * Safe to call from any thread, including while the consumer is running. The listener itself runs on whichever
      * thread completed the work - controller or poller - so it must not block.
+     * <p>
+     * Registering while a notification is already in flight will not see that notification, because the backing list
+     * is copy-on-write and {@link #onSuccessResult} iterates the snapshot it started with. Every subsequent success is
+     * delivered. That is a deliberate trade: the alternative to the snapshot is the
+     * {@link java.util.ConcurrentModificationException} that used to stop the consumer outright.
      */
     public void addSuccessfulWorkListener(Consumer<WorkContainer<K, V>> listener) {
         successfulWorkListeners.add(listener);
