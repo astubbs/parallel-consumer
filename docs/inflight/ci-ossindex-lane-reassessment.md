@@ -30,9 +30,33 @@ consequence was smaller than first claimed, though - only `lz4-java` had an advi
 graph, zero occurrences of `lz4-java` / `HdrHistogram` / `netty-codec-http`, 6 open Dependabot
 alerts. Automatic submission runs on a push to the default branch, so it had not repopulated yet.
 
+## Blocker: automatic submission is currently failing
+
+**Fix this first, or the trigger below silently never fires.** Since the flip, GitHub's managed
+`Automatic Dependency Submission (Maven)` workflow (`submit-maven`) has failed on every run - the
+same failure on `ci/ossindex-audit-job`, `docs/agents-gh-base-repo` and `build/enforce-plugin-versions`
+alike, so it is repo-wide and not any one PR's doing.
+
+Its `validate-project` step cannot resolve the reactor's own modules:
+
+```
+Failed to execute goal on project parallel-consumer-vertx: Could not resolve dependencies
+  bz.stub.parallelconsumer:parallel-consumer-core:jar:0.6.0.0-SNAPSHOT       -> not in central
+  bz.stub.parallelconsumer:parallel-consumer-core:jar:tests:0.6.0.0-SNAPSHOT -> not in central
+```
+
+This is the failure mode `.github/workflows/dependency-audit.yml` already documents for its own
+Maven step: a bare `validate` on a clean runner has no `parallel-consumer-core` (or its test-jar)
+installed, so the second module dies. That job works around it by running `test-compile`; the
+managed workflow has no such step and cannot be edited in-repo, so it needs configuring (or
+replacing with a repo-owned submission workflow that builds the reactor first).
+
+**Until it succeeds at least once on `master`, the dependency graph will not repopulate**, and the
+re-measurement below would read as "no change" for the wrong reason.
+
 ## The trigger
 
-**After the next push to `master`**, re-run the SBOM query and check two things:
+**After `submit-maven` succeeds on `master`**, re-run the SBOM query and check two things:
 
 1. do `lz4-java`, `HdrHistogram` and `netty-codec-http` now appear in the graph;
 2. does a Dependabot alert fire for `lz4-java` (GHSA-xx22-p4ch-683r exists for it).
