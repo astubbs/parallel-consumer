@@ -404,7 +404,33 @@ failing when inverted.
 
 ## Findings
 
-*Populated by U1 and U2. Empty until the investigation runs - do not pre-fill.*
+### U2 predictions - recorded before U1's trace returned
+
+Written first on purpose, per U2's Execution note and
+`docs/solutions/best-practices/chase-refuted-predictions.md`. Predictions written after the evidence are
+not predictions. Each is marked HELD or REFUTED once U1 and U2 run, and refutations stay in place.
+
+- **C1 (min across lanes): predicted SAFE, and predicted that the plan's own "likely useless" framing is
+  wrong.** The reasoning the candidate was written with - a slow lane pins the frontier - is about *commit
+  lag*, not throughput. Lanes keep processing at full rate regardless of where the committed frontier sits;
+  the only cost of a lagging frontier is more replay after a crash. If that holds, C1 is not the consolation
+  option it was filed as. Its real problem should be sought elsewhere: what a lane that has consumed
+  *nothing* for P contributes to a minimum, and whether the lane set owning P is even stable.
+- **C2 (synthetic offsets): predicted SOUND-CONDITIONAL, rejected in practice.** Mechanically fine,
+  defeated by observability - `SinkRecord.kafkaOffset()` reaches connector output, and Connect's own error
+  reporting and DLQ records carry the offset. PC cannot detect a connector that writes it.
+- **C3 (durability barrier): predicted SOUND, and predicted to be the answer.** Its trick is that it never
+  composes watermarks at all: it converts each lane's watermark into per-record durability facts and lets
+  PC's existing frontier machinery compose them. The interleaving that defeats every watermark scheme -
+  lane A completing offset 50 after lane B completed 100 - is precisely what PC's incomplete-offset
+  encoding already exists to express. Predicted cost: it needs the deferred-completion seam, so it is the
+  candidate that spends the Goal Capsule's carve-out.
+- **C5 (split identity): predicted REFUTED on the return path.** The consumer-group commit must name the
+  real `TopicPartition`, and `SinkRecord.kafkaPartition()` becomes a lie to the connector - which is C2's
+  observability problem wearing a different costume, plus a mapping problem C2 does not have.
+
+**Prediction about the shape of the answer:** sound-conditional, not sound - with the condition being
+connector observability of offsets rather than anything about ordering.
 
 ## Verdict
 
