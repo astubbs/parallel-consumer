@@ -155,6 +155,34 @@ the resulting work is yet safe to commit through a real Connect worker.
 - A claim that all sinks tolerate key sharding. Partition-affine behavior remains the safe default for
   unknown connectors in follow-up design.
 
+### Reconciliation with STRATEGY.md
+
+`STRATEGY.md` landed after this plan was written; reconciling it changes the emphasis, not the direction.
+
+It names this work directly. The target problem includes the level above the consumer - "Kafka Streams
+and Kafka Connect build their own execution model on top of the consumer, and each processes a task's
+records one at a time" - and the approach's second clause is that the same engine runs *underneath*
+another framework, buying key-level concurrency for connectors that never called Parallel Consumer.
+That is the patched-runtime direction, and it retroactively explains why the embed direction was the
+wrong shape: the second persona "arrive with a topology or a sink connector, not with a consumer loop",
+and what they are buying is that **their code does not change**. Embedding asked them to write PC code.
+
+The uncomfortable consequence: **partition-affine mode delivers none of the strategic value.** It is
+correct, it is the safe default for a connector we do not know, and its concurrency ceiling is the
+partition count - the same one `tasks.max` already reaches. No head-of-line blocking is avoided. It is a
+correctness fallback, not a product. The strategic claim lives entirely in the key-affine path, and the
+Streams work has already set the bar it will be measured against: 57x for the record that would otherwise
+be stuck behind a slow one, 8x for the typical one.
+
+So the PoC's falsifiable question is a strategy question, not only a correctness one, and the metrics
+should be the ones `STRATEGY.md` names rather than ad-hoc ones: **head-of-line blocking avoided** (per
+partition, highest completed offset minus highest sequential succeeded) and **achieved fan-out vs
+configured max**. Both are largely derivable from existing gauges.
+
+Track alignment: this is **Performance** (the concurrency claim) and **Flexibility** (running under a
+framework that never asked for us). It is not a Reliability item, though its offset work must not cost
+anything on that track.
+
 ### What "worth showing people" means, and when
 
 The spike's own units stop before anything a person could run. That is right for a feasibility proof and

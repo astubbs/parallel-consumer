@@ -54,6 +54,22 @@ bug in exactly this area (a rebalance-time commit killing the broker-poll thread
 `bin/soak-test.sh 'PartitionStateCommittedOffsetIT#committedOffsetRemoved' 20` at a low
 `SOAK_FREE_CORES`.
 
+**`ParallelEoSStreamProcessorTest`'s shutdown family is unstable locally - three sightings, one session.**
+On 2026-08-10, six full reactor runs on astubbs#240's branch produced three failures, each a different
+test, none reproducing in isolation: `executorThreadsInterruptedOnShutdownTimeout[1]` (detailed below),
+`inFlightMessagesCommittedIfProcessedDuringShutdown[3]` failing through
+`AbstractParallelEoSStreamProcessorTestBase.assertCommits` with `[1 record completed during shutdown]`,
+and `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` once. **Not a rate** - six runs under
+varying background load is not a controlled sample, and none of them was designed as one.
+
+Two of the three are shutdown-commit siblings, which matters because
+[`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) already tracks a third member of that same
+family - `queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`, 3/45 on CI - as a **regression
+of astubbs#101**, surfacing through that same `assertCommits` helper. Independent sessions hitting
+different members of one family is stronger signal than any single sighting, and argues for treating the
+shutdown-commit group as one investigation rather than three flakes. Whoever picks it up should start
+from the astubbs#101 fix and diff against it, per that entry.
+
 **Candidate, unconfirmed - and it looks like the unforceable-trigger class, not tightness.**
 `ParallelEoSStreamProcessorTest.executorThreadsInterruptedOnShutdownTimeout[1]` failed once
 (2026-08-10, astubbs#240's branch) during a reactor run with several concurrent Maven builds competing:

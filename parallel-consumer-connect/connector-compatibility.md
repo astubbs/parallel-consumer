@@ -28,6 +28,14 @@ ownership**, and it produces three groups:
 
 Partition-affine is the safe default for any connector not positively known to be key-affine.
 
+**But note what that default costs.** Per `STRATEGY.md`, the reason to run a connector on Parallel
+Consumer at all is key-level concurrency above the partition count - the Streams work measured 57x for a
+record that would otherwise be stuck behind a slow one, 8x for the typical one. A partition-affine
+connector gets none of that: its ceiling is the partition count, which is what `tasks.max` already
+delivers. So this table is not a compatibility footnote. **It is the list of connectors the strategy's
+claim actually applies to**, and a connector landing in the partition-affine column is one this work
+cannot help, however correctly it runs.
+
 ## Predicted compatibility - UNTESTED
 
 | Connector | Predicted mode | Basis for the prediction | Status |

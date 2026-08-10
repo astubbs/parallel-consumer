@@ -6,12 +6,14 @@ to master when the parent lands).
 
 ## State (2026-08-10)
 
-Active. The spike plan is `docs/plans/2026-08-09-001-feat-connect-on-pc-plan.md`; the superseded
-embed-direction plan (`2026-08-08-001-...`) is kept for its offset analysis. U1 — the
-`parallel-consumer-connect` module and its generated-`WorkerSinkTask` shadowing proof — is on the
-branch; PR astubbs/parallel-consumer#269's CI run is its first execution evidence. U2 (key-to-lane
-dispatch, reconciled against the parent's U9 dispatcher commit surface) is next; the module README and
-boundary write-up land with the plan's U3. Publication of both spike modules is disabled — see
+Active, stacked on `feats/ks-on-pc-spike` (PR astubbs/parallel-consumer#271) because it reuses that
+module's patch scripts and `PcTaskDispatcher` rather than copying them.
+
+The plan is `docs/plans/2026-08-09-001-feat-connect-on-pc-plan.md`; the superseded embed-direction plan
+(`2026-08-08-001-...`) is kept for its offset analysis. U1 — the `parallel-consumer-connect` module and
+its generated-`WorkerSinkTask` shadowing proof — is on the branch and green in CI. U2 (key-to-lane
+dispatch, reconciled against the parent's commit surface) is next; the module README and boundary
+write-up land with the plan's U3. Publication of both experimental modules is disabled — see
 `release-experimental-modules-publication-disabled.md`; do not reverse before merge.
 
 ## The step after U2: frontier-composed commit (designed, not yet planned as units)
