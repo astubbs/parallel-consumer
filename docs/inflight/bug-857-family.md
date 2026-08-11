@@ -15,6 +15,33 @@ with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadloc
 under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is explicitly *not* a
 member). astubbs#29 needs a rebase and a retarget first - see `pr-blockers-and-collisions.md`.
 
+**Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
+fail-fast by `ProgressProbe` with five simultaneous violations, on
+[job 93666671951](https://github.com/astubbs/parallel-consumer/actions/runs/31454939035/job/93666671951):
+
+```
+CLASS2_STALL/LAG_STAGNATION: partition ...-44 lag=2324, committed offset stagnant at 817 for 154s
+(bound 150s) - protocol-invisible stall: group STABLE + heartbeats flowing, yet this partition's
+backlog is going nowhere
+```
+
+Partitions 28/34/38/44/46/57, lags 2041-2757, all stagnant at ~154s. **Replay seed
+`4734674029169027864`**, which is the part no command can recover once the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4734674029169027864
+
+This is a stronger datapoint than the `RebalanceEoSDeadlockTest` sighting above, and worth reading
+before assuming the two landed fixes closed the symptom. The probe's own vacuity caveat does not
+apply - 154s against a 150s bound with thousands of records of lag is a detector that genuinely
+fired, not a `probe clean` with nothing to see. The **cooperative** variant passed in the same run
+(`probe violations=[]`), so whatever remains is eager-protocol-specific, which is where astubbs#29's
+`onPartitionsRevoked` / `commitOffsetsThatAreReady` contention lives. Seen on astubbs#224, a
+docs-and-CI-scripts branch that touches no product code, so the branch is not a suspect; the chaos
+suite randomises its seed per run, so other branches passing the same day only means their seeds
+did not draw this interleaving.
+
 **Gated on astubbs#29: proving thread-parallel integration tests are safe again.** astubbs#68 made the integration
 suite reliable by *forking* per broker (`forkCount=4`), which sidesteps the deadlock rather than
 proving it gone - the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure it was hiding is

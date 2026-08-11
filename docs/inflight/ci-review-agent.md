@@ -61,6 +61,23 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   then: trusted authors only, and note that the code being executed comes from the PR branch, which
   a trusted dispatcher does not necessarily control. (`pull-requests: write` may also be droppable
   back to `read` if the action posts via its own app token.)
+- **`claude.yml` grants nothing, and that is now fine - but know what it means.** The `@claude`
+  mention handler passes no `--allowed-tools` at all, and an absent allowlist is not permissive:
+  Bash is simply not pre-approved and there is no interactive approver in CI, so every script call
+  is refused. Proven in-session on astubbs/parallel-consumer#273 rather than inferred - `git log`,
+  `grep` and `python3 --version` ran unprompted while both `bash bin/test-check-docs-data.sh` and
+  `./bin/check-docs-data.sh` returned "this command requires approval". An earlier review round had
+  concluded the opposite, that no workflow grant could clear it; that reasoning is wrong, do not act
+  on it.
+
+  **The recommendation that came with this finding - mirror the `bin/check-*` grants into
+  `claude.yml` - is retired by astubbs/parallel-consumer#284 rather than outstanding.** It rested
+  on `@claude` being the only way to review a PR that edits `claude-code-review.yml`, which was true
+  only while that file invoked the action. It no longer does: it is a gate, the reviewer is
+  `claude-code-review-dispatch.yml` dispatched `--ref master`, and the grants live there. Mirroring
+  them into `claude.yml` now would widen a trigger that anyone can fire on a public repo, to no
+  benefit. What survives is the caveat: a `@claude` mention produces a free-form answer that cannot
+  run this repo's scripts, so it is not a substitute for a dispatched review.
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap -
   Testcontainers on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than
   a misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.

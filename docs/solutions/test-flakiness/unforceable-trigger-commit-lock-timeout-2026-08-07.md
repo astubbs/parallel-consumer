@@ -13,10 +13,10 @@ symptoms:
 root_cause: awaited_trigger_unreachable_in_some_interleavings
 resolution_type: test_fix_deterministic_trigger_plus_guard
 severity: low
-status: "Test-side fix committed on branch test/commit-timeout-deterministic-trigger; PR astubbs#220 OPEN, pending merge as of 2026-08-07. PC is healthy; no product defect. Which of the two paths CI hit was NOT established (no DEBUG in that job); the fix closes both."
+status: "SOLVED - test-side fix merged to master in astubbs#220 (rebase-merged 2026-08-07, `c429d8b6`). PC is healthy; no product defect. Which of the two paths CI hit was NOT established (no DEBUG in that job); the fix closes both."
 last_updated: 2026-08-07
 related_prs:
-  - "astubbs#220 - this fix, plus the investigation rules and probe correction in AGENTS.md"
+  - "astubbs#220 - this fix, plus the investigation rules and probe correction added to AGENTS.md; astubbs#272 has since moved the probe thresholds to docs/testing.md and the settling method to docs/investigating.md"
   - "astubbs#110 - the SIBLING flake on this same producerTransactionLock (ProducerManagerTest), fixed 2026-08-03; source of the control-arm method"
   - "astubbs#86 - introduced AmbientProbeExtension/ProgressProbe, whose 'probe clean' verdict this work qualified"
   - "astubbs#98 - the backpressure test that only passed by racing its own setup (the sibling rule, opposite direction)"
@@ -85,7 +85,8 @@ This section is the valuable one - five plausible reads, all wrong, and why.
 5. **"The ambient probe says clean, so the fault is in the test."** The verdict was **vacuous**.
    `ProgressProbe` needs `LAG_STAGNATION_MIN_LAG` (50) of lag sustained past `LAG_STAGNATION_BOUND`
    (150s), or `REBALANCE_DWELL_BOUND` (15s). A 15-record test failing in 35s cannot trip either
-   detector. See `AGENTS.md` (Testing) for the standing caveat - **do not duplicate it here**.
+   detector. See [`docs/testing.md`](../../testing.md) for the standing caveat - **do not duplicate
+   it here**.
 
 6. **Searching CI history filtered on `conclusion == "failure"`.** Structurally blind to this failure
    class: a run whose first attempt fails and is retried green reports `success`. The scan has to walk
@@ -290,7 +291,7 @@ an unrelated PR, rather than this test method. Checked and discounted on that ba
 - `docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md` - the only prior investigation
   into this same `producerTransactionLock`. Different defect (the test released the produce lock too
   early, opening a window production never opens), same discipline. Its §11 control-arm method is now
-  promoted into `AGENTS.md`.
+  promoted into [`docs/investigating.md`](../../investigating.md).
 - `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` - **a sibling rule, not the same
   one.** That doc's hazard is an await satisfied *too early* by a vacuously-true condition (a
   false-pass). This one's hazard is an await whose trigger may *never fire* (a false-fail). Same

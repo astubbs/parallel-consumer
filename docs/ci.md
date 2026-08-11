@@ -54,8 +54,12 @@ stack traces (see [`docs/testing.md`](testing.md)).
   **One job per concern**, named `<area>: <check>` to match the master ruleset's context
   convention - a job renamed here silently stops satisfying that ruleset, so treat the names as an
   API. `sigpipe` runs `bin/check-shell-sigpipe.sh`, which fails any `bin/*.sh` piping into
-  `grep -q` under `pipefail` - that construct reports failure exactly when it *matches*, and
-  shellcheck does not detect it. `actions` runs `bin/check-action-versions.sh`, keeping every
+  `grep -q` under `pipefail` - that construct can report failure *because* it matched, once the
+  producer still has more than a pipe buffer left to write when `grep` exits, so it passes every
+  small fixture and surfaces only in production. shellcheck does not detect it, and the full
+  mechanism is in the script's own header and in
+  [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+  `actions` runs `bin/check-action-versions.sh`, keeping every
   GitHub Action pinned to one version across all workflows. Self-tests run first. **Both are
   required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
@@ -174,7 +178,11 @@ it. **Do not disable it to get a green check.**
 
 The gate exists because `claude-code-action` exits 0 in several situations where it reviews
 nothing, so a check wired straight to it certifies nothing while looking identical to "reviewed, no
-findings". That has happened three times here; the full list is in the script's header.
+findings". That is not specific to the reviewer - it is a named class in this repo, with the
+reviewer's workflow-validation skip as one of its recorded instances:
+[`a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md)
+has the full roster and the guard-design rules. The reviewer-specific occurrences are listed in
+`bin/check-review-posted.sh`'s header.
 
 ### Editing the reviewer
 
