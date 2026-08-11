@@ -107,11 +107,23 @@ jobs:
           # says nothing about the branch being reviewed.
           #
           # So the protection the old trigger gave for free is re-established explicitly.
+          #
+          # BE HONEST ABOUT WHAT THIS COSTS A FORK PR. The gate accepts only a `claude[bot]`
+          # comment, and this is the only thing that produces one - so refusing fork heads means a
+          # fork PR has no way to turn `claude-review` green. Reading it carefully by hand is
+          # still the right thing to do, but it does not satisfy the check, and the message below
+          # must not imply that it does. The one path to both a real review and a green check is
+          # to move the commits onto a branch in this repo; otherwise the honest escape is the
+          # same one the gate documents everywhere else - merge with the check red. See
+          # docs/ci.md, "A fork PR cannot turn the gate green".
           head_repo=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.repo.full_name // ""')
           if [ "$head_repo" != "$REPO" ]; then
             echo "::error::PR #$PR has its head in '${head_repo:-<deleted fork>}', not $REPO." \
                  "This job holds the review credential and executes the checked-out code, so it" \
-                 "refuses fork heads. Review a fork PR by hand, or from a branch in this repo."
+                 "refuses fork heads. To get BOTH a review and a green claude-review, push the" \
+                 "same commits to a branch in this repo and open the PR from there. Reading the" \
+                 "fork PR by hand is worth doing but will NOT satisfy the gate - it accepts only" \
+                 "a claude[bot] comment - so the remaining option is to merge with the check red."
             exit 1
           fi
 
@@ -312,9 +324,35 @@ jobs:
             exit 0
           fi
 
-          run_id=$(gh api \
-            "repos/$REPO/actions/workflows/claude-code-review.yml/runs?head_sha=$head_sha&per_page=1" \
-            --jq '.workflow_runs[0].id // empty')
+          # head_sha ALONE DOES NOT IDENTIFY THIS PR'S GATE RUN. One head can back more than one
+          # PR - the same branch opened against `master` and a release branch - and the gate runs
+          # once per PR, so the SHA filter returns both runs. Taking the newest (what `per_page=1`
+          # amounts to) would then re-run the OTHER PR's gate: that PR goes green, this one stays
+          # red, and the log line says the gate was refreshed. `pull_requests[]` carries the
+          # association the SHA filter drops, so select on it.
+          runs=$(gh api \
+            "repos/$REPO/actions/workflows/claude-code-review.yml/runs?head_sha=$head_sha&per_page=100")
+
+          # Newest run naming this PR. The API returns runs newest-first, so the first match is
+          # the current attempt rather than a superseded one.
+          # `--arg` + `tonumber` rather than `--argjson`: the input is only known to be digits
+          # (step one), and `--argjson 0284` is not valid JSON, which would abort the step over a
+          # cosmetically odd but harmless PR number.
+          run_id=$(printf '%s' "$runs" | jq -r --arg pr "$PR" \
+            '($pr | tonumber) as $n
+             | first(.workflow_runs[] | select(any(.pull_requests[]?; .number == $n)) | .id)
+             // empty')
+
+          # `pull_requests` comes back empty on runs GitHub could not associate - classically
+          # fork-head runs, which this job already refused above. Rather than fail closed on an
+          # API quirk, fall back to the previous SHA-only choice and say that is what happened.
+          if [ -z "$run_id" ]; then
+            run_id=$(printf '%s' "$runs" | jq -r '.workflow_runs[0].id // empty')
+            if [ -n "$run_id" ]; then
+              echo "::warning::No claude-review gate run for $head_sha names PR #$PR." \
+                   "Falling back to the newest run for that SHA (run $run_id)."
+            fi
+          fi
 
           if [ -z "$run_id" ]; then
             echo "::warning::No claude-review gate run found for head $head_sha - nothing to re-run." \

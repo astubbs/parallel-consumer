@@ -107,10 +107,25 @@ jobs:
 
           # PREFERRED: when GitHub first raised checks for this SHA, i.e. effectively when it
           # arrived. Server-side, so it closes the window where somebody commits, asks for a
-          # review, and only then pushes. `// empty` because a SHA can legitimately have none
-          # yet; the script falls back to the committer date and says so.
-          first_seen_at=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-suites" \
-            --jq '[.check_suites[].created_at] | min // empty')
+          # review, and only then pushes. Empty when a SHA legitimately has no suites yet; the
+          # script falls back to the committer date and says so.
+          #
+          # PAGINATED, because the endpoint's page ORDER is undocumented. Unpaginated it returns
+          # one page of 30, and a head in this repo already carries 15 suites - close enough that
+          # a few more workflows start truncating it. Today's order happens to be oldest-first,
+          # so even a truncated page still holds the earliest suite and the minimum comes out
+          # right; that is an accident of an unspecified API, not a guarantee. If it ever flips
+          # to newest-first, the minimum jumps forward and the gate starts rejecting valid
+          # reviews of a head that never moved - a red no re-run can clear. One flag removes the
+          # assumption.
+          #
+          # Sorted here rather than with jq's `min` because --paginate applies --jq PER PAGE: a
+          # per-page `min` emits one line per page, and the shell would take the last. So: a flat
+          # list of timestamps, sorted (ISO-8601 UTC sorts chronologically), first line taken with
+          # awk rather than `head -1` so the writer never takes EPIPE.
+          first_seen_at=$(gh api --paginate \
+            "repos/$REPO/commits/$HEAD_SHA/check-suites?per_page=100" \
+            --jq '.check_suites[].created_at' | LC_ALL=C sort | awk 'NR==1')
 
           # One marker line per comment, then that comment's body. Keep this marker in step
           # with bin/check-review-posted.sh and bin/test-check-review-posted.sh.
