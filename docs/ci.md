@@ -124,6 +124,62 @@ silently swap that procedure for an improvised one; the output still looks like 
 nothing tells you. **If you ever edit the reviewer, the `plugins:` input and the
 `/code-review:code-review ... --comment` prompt must survive.**
 
+### What the dispatch trigger costs
+
+`claude-code-action` picks its behaviour from the **event**. On a pull-request event it runs in
+*tag* mode - it opens a tracking comment as `claude[bot]`, installs an MCP server for inline review
+comments, and installs another for reading CI. On anything else it runs in *agent* mode with none
+of them, and `workflow_dispatch` is not a pull-request event.
+
+It also cannot be made into one. Handing the action a synthesised `pull_request` payload via
+`GITHUB_EVENT_NAME` / `GITHUB_EVENT_PATH` looks like it should work and does not: the runner writes
+the `GITHUB_*` context variables into every step's environment *after* the step's own `env:` block,
+so the override is discarded. Measured, not assumed - a step declaring both saw
+`GITHUB_EVENT_NAME as this step sees it: 'workflow_dispatch'`. The payload file's contents are
+writable; the event name is not, and the name alone picks the mode.
+
+So the reviewer runs in agent mode, and three things are paid for explicitly rather than lost
+quietly:
+
+| Lost | Replaced by |
+|---|---|
+| the `claude[bot]` tracking comment the gate reads | a **mandatory** summary comment, required by the reviewer's system prompt as its last action |
+| `mcp__github_inline_comment__create_inline_comment` | **nothing** - see below |
+| the CI-status MCP server | `gh pr checks` / `gh run view` grants plus `additional_permissions: actions: read` |
+
+**The inline-comment loss is real and is not papered over.** An unresolved review thread is the
+only thing that mechanically gates a merge here, and the dispatched reviewer can no longer open
+one. Blocking findings now arrive as a marked section at the top of the summary comment, and the
+reviewer is instructed to say plainly that a human has to act on them. Restoring mechanical
+enforcement needs a different trigger or a different posting route; it is recorded in
+[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
+
+### Editing the reviewer cannot be tested before it merges
+
+`claude-code-action` refuses to run unless the workflow file invoking it is **byte-identical to the
+copy on the default branch**. That guard is what stops a PR rewriting its own reviewer, and it
+applies to a dispatch just as it does to a `pull_request` run: `--ref <a branch that edits this
+workflow>` gets
+
+```
+Skipping action due to workflow validation: The workflow file must exist and have identical
+content to the version on the repository's default branch.
+```
+
+and the action exits. So a change to `claude-code-review-dispatch.yml` can only be exercised for
+real **after** it is on master, dispatched `--ref master`. Plan for that: land the change, dispatch
+once against a live PR, and read the run rather than assuming.
+
+**A PR that edits the reviewer therefore cannot turn `claude-review` green,** for the same reason -
+nothing can review it - and merging it needs an admin bypass. That is the same cost
+`astubbs/parallel-consumer#124` paid, and it applies to the reviewer where it no longer applies to
+the gate.
+
+The action **exits 0** when it refuses like this, so the reviewer job explicitly checks the
+action's own `conclusion` output and fails when it is empty. Without that step the run is green,
+eleven seconds long, and has reviewed nothing - which is
+[the defect this repo keeps meeting](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+
 ### A red `claude-review` is the expected state on an unreviewed PR
 
 It is **not** a fault to diagnose and **not** something to fix by editing the gate. It means what
