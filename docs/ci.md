@@ -23,6 +23,10 @@ stack traces (see [`docs/testing.md`](testing.md)).
 
 ## Workflows
 
+**For a one-line-per-file index, see [`.github/workflows/README.md`](../.github/workflows/README.md)** -
+it sits next to the files, so it is what you find when you are looking at them rather than at this
+document. This section is the detail behind it.
+
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
@@ -64,17 +68,32 @@ stack traces (see [`docs/testing.md`](testing.md)).
   required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
   loud, and they gate precisely so those failures cannot be skimmed past.
+### The three `claude*` workflows, and which is which
+
+Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
+**not** review - so read this before editing any of them. One judges, two review:
+
+| File | Runs when | What it is |
+|---|---|---|
+| `claude-code-review.yml` | every PR push | **the gate.** Judges; never reviews |
+| `claude-code-review-dispatch.yml` | `workflow_dispatch` | **the dispatched reviewer** |
+| `claude.yml` | an `@claude` comment | **the comment reviewer**, and the general mention handler |
+
 - **`claude-code-review.yml`** - the **review gate**, not the reviewer. It runs on every PR push,
-  invokes no Claude and costs nothing, and asserts one thing: that a review exists for the
-  **current head**. It produces the required check `claude-review`, so the job name is an API here
-  as it is in `repo-hygiene.yml`. See "The automated review" below.
-- **`claude-code-review-dispatch.yml`** - the **reviewer**, `workflow_dispatch` only. It carries
-  the packaged review procedure, the tool allowlist and the review instructions, and takes an
-  optional `focus` steer. See "The automated review" below.
-- **`claude.yml`** - the general `@claude` mention handler, and **not** the reviewer. A mention
-  passes whatever was typed straight through as a free-form prompt: it has no `plugins:` line and
-  never invokes the review command, so what it produces is an answer, not a review. **Be aware
-  that the gate cannot tell the difference** - any fresh, finished `claude[bot]` comment
+  invokes no Claude and costs nothing, and asserts one thing: that a **finished review exists on
+  this PR** - any such review, deliberately not one per commit. It produces the required check
+  `claude-review`, so the job name is an API here as it is in `repo-hygiene.yml`. See "The
+  automated review" below.
+- **`claude-code-review-dispatch.yml`** - the **dispatched reviewer**, `workflow_dispatch` only.
+  It carries the packaged review procedure, the tool allowlist and the review instructions, and
+  takes an optional `focus` steer. It cannot open inline review comments. See "The automated
+  review" below.
+- **`claude.yml`** - the `@claude` mention handler, and **also a reviewer**: it holds the same
+  execution allowlist as the dispatched route and is the **only** route that can open inline
+  review threads, so it is the one to use when you want findings that block a merge. What it does
+  not carry is the packaged procedure - a mention passes whatever was typed straight through as a
+  free-form prompt - so `@claude review this` gets you a review, and `@claude why is X slow?` gets
+  you an answer. **The gate cannot tell those two apart**: any finished `claude[bot]` comment
   satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
   the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).

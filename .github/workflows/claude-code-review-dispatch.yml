@@ -10,9 +10,11 @@ name: review (on demand)
 #
 # It used to run on every `pull_request` event, which spent a full review on every push,
 # overwhelmingly on branches that were not ready for one. The cheap always-on half of that
-# job now lives in .github/workflows/claude-code-review.yml, which asserts that a review
-# exists for the current head and costs nothing; this is the expensive half, and it runs when
-# somebody asks for it.
+# job now lives in .github/workflows/claude-code-review.yml, which asserts that a finished
+# review exists on the PR and costs nothing; this is the expensive half, and it runs when
+# somebody asks for it. (There is a third `claude*` workflow, claude.yml - the @claude comment
+# route. It is a reviewer too, and the only one that can open inline review threads. The three
+# are told apart in docs/ci.md, "The three claude* workflows".)
 #
 # WHAT MUST NOT BE LOST FROM THIS FILE
 #
