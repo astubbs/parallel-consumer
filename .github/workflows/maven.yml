@@ -177,6 +177,12 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install the YAML parser the check needs
         run: python3 -m pip install --quiet pyyaml
+      # Self-test first, same as the copyright and sigpipe scanners: this guard has twice shipped
+      # green on a failure it was written to catch, so the cases that pin those gaps have to run
+      # where a regression is visible. It mutates the corpus one way at a time and restores it, so
+      # the guard step below still sees an untouched tree.
+      - name: Self-test the guard (each case is a gap it once had)
+        run: bash bin/test-check-docs-data.sh
       - name: Validate release-documentation data structure
         run: bin/check-docs-data.sh
 
