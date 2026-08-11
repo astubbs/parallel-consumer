@@ -7,7 +7,7 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | Test | Rate | Symptom |
 |------|------|---------|
 | `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed` | 0/20 hunt, ~1/104 on CI | 1-2s produce/commit lock timeouts |
-| `TransactionTimeoutsTest.produceTimeout` | 1/20 + 1 highcpu (2026-07-30); **0 in all three reproducers 2026-08-07** - see below | NOT the trigger; suspect is the phase-2 at-most assertion |
+| `TransactionTimeoutsTest.produceTimeout` | 1/20 + 1 highcpu (2026-07-30); **0 in all three reproducers 2026-08-07** - see below | assertion failure inside the produce-timeout test; which assertion is the open question - see below |
 | `LoadTest` | 1/20 | 60s throughput awaits |
 | `DbTest` | 2/20 | postgres container start under contention |
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |

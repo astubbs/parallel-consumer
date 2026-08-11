@@ -30,6 +30,8 @@ was neither tight nor a stall but a test that could not force its own trigger.
 ## Still open beyond the three
 
 Nothing reads the `Flakes:` markers automatically. With the retry removed, the *gating* lanes now
-surface flakes as failures, but the `highcpu`, quarantine and chaos lanes can still retry or tolerate
-them, so a periodic marker scan keeps its value. Until something automates it, the rates above are one
-scan on one day and will go stale.
+surface flakes as failures, but the `highcpu` lane's **optional** suites and the quarantine lane still
+tolerate them via `continue-on-error`, so a periodic marker scan keeps its value. The Chaos Pain Suite
+is deliberately **not** one of those - it sets `optional: "false"` and gates hard, because a chaos RED
+is a real finding (`bug-857-family.md` records one). Until something automates the scan, the rates
+above are one scan on one day and will go stale.
