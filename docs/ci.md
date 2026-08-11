@@ -145,7 +145,7 @@ quietly:
 |---|---|
 | the `claude[bot]` tracking comment the gate reads | a **mandatory** summary comment, required by the reviewer's system prompt as its last action |
 | `mcp__github_inline_comment__create_inline_comment` | **nothing** - see below |
-| the CI-status MCP server | `gh pr checks` / `gh run view` grants plus `additional_permissions: actions: read` |
+| the CI-status MCP server | `gh run list` / `gh run view` grants plus `additional_permissions: actions: read`. Not `gh pr checks` - reading check runs needs a `checks` scope this token cannot be given |
 
 **The inline-comment loss is real and is not papered over.** An unresolved review thread is the
 only thing that mechanically gates a merge here, and the dispatched reviewer can no longer open
@@ -170,10 +170,19 @@ and the action exits. So a change to `claude-code-review-dispatch.yml` can only 
 real **after** it is on master, dispatched `--ref master`. Plan for that: land the change, dispatch
 once against a live PR, and read the run rather than assuming.
 
-**A PR that edits the reviewer therefore cannot turn `claude-review` green,** for the same reason -
-nothing can review it - and merging it needs an admin bypass. That is the same cost
-`astubbs/parallel-consumer#124` paid, and it applies to the reviewer where it no longer applies to
-the gate.
+**A PR that edits the reviewer can still be reviewed, though - do not reach for a bypass.** The
+refusal is about which workflow file *runs*, not about which code is *read*. A `--ref master`
+dispatch runs master's copy, so validation passes, and the checkout step below fetches
+`refs/pull/<n>/head` - so master's reviewer reads the PR's diff, including its edits to this
+workflow, and posts the summary comment that turns `claude-review` green. What cannot happen before
+the merge is exercising the PR's **new** reviewer behaviour; reviewing the PR is a different thing
+and it works.
+
+The one case where that is not true is a PR fixing a reviewer that is *itself* broken on master -
+this PR being the example, since master's dispatched reviewer refuses every invocation. Then there
+is nothing on master to dispatch and merging does need an admin bypass, the same cost
+`astubbs/parallel-consumer#124` paid. That is a property of the bug being fixed, not of touching the
+file.
 
 The action **exits 0** when it refuses like this, so the reviewer job explicitly checks the
 action's own `conclusion` output and fails when it is empty. Without that step the run is green,

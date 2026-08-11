@@ -12,17 +12,6 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   determined to get a green check can get one. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
-- **SETTLED, and the answer was no: `track_progress` cannot work on a `workflow_dispatch` event.**
-  This was carried as "unverified"; the first dispatched run answered it. The action rejects
-  `track_progress` outright on any event that is not a PR or issue event (run 31464598166), and it
-  cannot be talked round - handing it a synthesised `pull_request` payload via `GITHUB_EVENT_NAME`
-  and `GITHUB_EVENT_PATH` fails because the runner overwrites those variables after the step's own
-  `env:` block (measured, run 31466525816). So there is no tracking comment on a dispatch, and the
-  reviewer posts with `gh pr comment` instead. That still satisfies the gate's identity rule: the
-  action replaces `GH_TOKEN` with its own GitHub App token before Claude runs, so the comment is
-  authored by `claude[bot]`, not `github-actions[bot]`. The summary comment is now mandatory in the
-  reviewer's system prompt rather than something the packaged procedure does only when it finds
-  nothing. See "What the dispatch trigger costs" in [`docs/ci.md`](../ci.md).
 - **The dispatched reviewer cannot open inline review comments, so blocking findings no longer gate
   a merge mechanically.** The action installs the inline-comment MCP server only for a PR or issue
   event, so on a dispatch the tool does not exist; the grant was removed rather than left inert.
@@ -31,20 +20,12 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   has to act. This is the largest single thing the on-demand split gave up. Closing it needs either
   a trigger that carries a PR context (an `issue_comment` command phrase would, and would restore
   tag mode wholesale) or a posting route independent of that MCP server.
-- **A change to the reviewer cannot be tested before it merges.** `claude-code-action` refuses to
-  run unless the invoking workflow file is byte-identical to the default branch's copy, and that
-  applies to a dispatch of a branch as much as to a `pull_request` run - confirmed on run
-  31466885778, "Skipping action due to workflow validation". So the dispatch route did **not**
-  break the chicken-and-egg it appeared to: `--ref <branch>` is refused and `--ref master` runs the
-  old copy. Every change here lands unverified and must be exercised immediately afterwards with a
-  `--ref master` dispatch against a live PR. It also means a PR editing the reviewer cannot turn
-  `claude-review` green and needs an admin bypass, exactly as astubbs/parallel-consumer#124 did for
-  the gate.
-- **The action exits 0 on several paths that review nothing, and one of them is now routine.** The
-  validation refusal above reported success for every step of an eleven-second run, and
-  `refresh-gate` re-ran the gate on the strength of it. The reviewer job now fails when the
-  action's own `conclusion` output is empty, which covers that path - a guard against the class,
-  not the case, so re-check it if the action's outputs change.
+- **Inherited constraint for whoever edits the reviewer next: your change lands unverified.**
+  `claude-code-action` refuses to run unless the invoking workflow file is byte-identical to the
+  default branch's copy, so `--ref <your branch>` is refused and `--ref master` runs the old copy -
+  the dispatch route did **not** break that chicken-and-egg. Exercise the change with a `--ref
+  master` dispatch immediately after merging, and read the run. Reviewing your PR is a separate
+  thing and does work; the mechanism is in [`docs/ci.md`](../ci.md).
 - **The gate is still timestamp-based, and a check run against the head SHA would be better.** If
   the identity or freshness rules ever need reopening, the fix is not to loosen who may satisfy the
   gate (that lets any bot report through) but to have the reviewer raise a check run on the reviewed
