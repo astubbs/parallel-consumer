@@ -18,11 +18,9 @@
 # burnt rate limit for zero extra signal. This job is the only place it is deliberately switched ON
 # (`-Dossindex.skip=false`, below).
 #
-# Switching it OFF everywhere else needs an `ossindex.skip` property in the pom, which
-# astubbs/parallel-consumer#259 adds and which has NOT merged yet. Until it does, the plugin still
-# runs here on `validate` in every other Maven job - unauthenticated, 401ing, silently green. This
-# job neither causes nor worsens that, and has no ordering dependency on that PR (see the Maven step
-# below); it is simply the one place the scan is real. Drop this paragraph once that PR lands.
+# Everywhere else it is switched OFF by the `ossindex.skip` property in the pom
+# (astubbs/parallel-consumer#259, merged), so "exactly one job scans" is now unconditional rather
+# than aspirational: this is the only workflow that passes `-Dossindex.skip=false`.
 #
 # A GREEN MAVEN RUN IS NOT EVIDENCE THE SCAN HAPPENED. The plugin's `fail` parameter covers
 # "vulnerable components were found", not "the request failed" - with an expired token it prints a
