@@ -80,8 +80,12 @@ jobs:
     steps:
       # `pr` reaches a git ref and a prompt, so it is checked before either. A dispatch
       # already requires write access, so this is input hygiene rather than a trust boundary.
-      - name: Validate inputs
+      # `pr` reaches a git ref and a prompt, and decides whose code runs next to the review
+      # credential, so both are checked before anything is fetched.
+      - name: Validate inputs and refuse fork heads
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
         run: |
           case "$PR" in
@@ -90,7 +94,28 @@ jobs:
               exit 1
               ;;
           esac
-          echo "Reviewing PR #$PR"
+
+          # THE FORK GUARD IS NOT OPTIONAL, AND IT IS NEW WORK RATHER THAN A CARRIED-OVER RULE.
+          #
+          # The old reviewer ran on `pull_request`, where GitHub itself withheld secrets from
+          # fork PRs - the job simply failed instead of running untrusted code beside the
+          # credential. `workflow_dispatch` has no such protection: this job always holds
+          # CLAUDE_CODE_OAUTH_TOKEN, and the step below checks out whatever `refs/pull/<pr>/head`
+          # points at and lets the reviewer execute the repo's build and test scripts from it.
+          # A maintainer dispatching a review of an external fork PR would therefore run that
+          # fork's code next to the token. Dispatch permission says the DISPATCHER is trusted; it
+          # says nothing about the branch being reviewed.
+          #
+          # So the protection the old trigger gave for free is re-established explicitly.
+          head_repo=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.repo.full_name // ""')
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::error::PR #$PR has its head in '${head_repo:-<deleted fork>}', not $REPO." \
+                 "This job holds the review credential and executes the checked-out code, so it" \
+                 "refuses fork heads. Review a fork PR by hand, or from a branch in this repo."
+            exit 1
+          fi
+
+          echo "Reviewing PR #$PR (head in $head_repo)"
 
       - name: Checkout the PR under review
         uses: actions/checkout@v6
@@ -101,6 +126,12 @@ jobs:
           # Full history: the reviewer compares against the PR base, which a depth-1 clone
           # can't reach.
           fetch-depth: 0
+
+      # Recorded immediately after checkout, so the final step can tell whether the PR moved
+      # underneath this review.
+      - name: Record the reviewed SHA
+        id: reviewed-sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # The reviewer is allowed to run the unit/integration suites itself (see --allowedTools
       # below), so the job needs a JDK and a warm Maven cache - otherwise every invocation
@@ -231,17 +262,44 @@ jobs:
       # dispatch- or comment-triggered run would attach its check to the default branch instead
       # and never satisfy the PR's required check.
       #
-      # `always()`, so a failed or timed-out review still refreshes the gate rather than leaving
-      # a stale verdict behind. Never fails the job: not finding a gate run to re-run is a
-      # reason to say so, not to fail a review that already happened.
+      # ONLY AFTER A REVIEW THAT ACTUALLY SUCCEEDED. An earlier revision used `always()`, with
+      # the rationale that a failed review should still refresh the gate rather than leave a
+      # stale verdict. That rationale was wrong, and backwards: the gate accepts any fresh,
+      # finished-looking `claude[bot]` comment, and a failed run can still leave its tracking or
+      # error comment behind. Refreshing the gate toward SUCCESS after a review that failed is
+      # exactly how an error message turns a required check green. A failed review leaving the
+      # check red is the correct outcome, not a stale one.
+      #
+      # Never fails the job: not finding a gate run to re-run is a reason to say so, not to fail
+      # a review that already happened.
       - name: Re-run the review gate so it sees this review
-        if: always()
+        if: steps.claude-review.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
+          # The SHA this run actually checked out and reviewed.
+          REVIEWED_SHA: ${{ steps.reviewed-sha.outputs.sha }}
         run: |
           head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+
+          # Refuse to refresh the gate for a head this review did not look at. The reviewer
+          # checked out REVIEWED_SHA minutes ago; if the PR has moved since, the review covers
+          # the old commit, and re-running the gate now would let a comment timestamped after
+          # the new head arrived certify code the reviewer never saw. Leaving the check red
+          # asks for a fresh review of the new head, which is the honest answer.
+          #
+          # This narrows the window rather than closing it: the gate still compares timestamps
+          # rather than SHAs, so a later gate run can still accept this review for the newer
+          # head. Closing it properly means recording the reviewed SHA itself - see
+          # docs/inflight/ci-review-agent.md.
+          if [ "$head_sha" != "$REVIEWED_SHA" ]; then
+            echo "::warning::PR head moved from $REVIEWED_SHA to $head_sha while this review ran," \
+                 "so the review covers the older commit. Not refreshing the gate - dispatch a" \
+                 "fresh review for $head_sha."
+            exit 0
+          fi
+
           run_id=$(gh api \
             "repos/$REPO/actions/workflows/claude-code-review.yml/runs?head_sha=$head_sha&per_page=1" \
             --jq '.workflow_runs[0].id // empty')

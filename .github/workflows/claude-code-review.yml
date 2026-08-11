@@ -86,18 +86,29 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          # Segments the comment stream, and stops a comment that quotes the marker - this
-          # repo's own docs do - from opening a comment of its own in it. Per-run, not secret.
-          MARKER_TOKEN: ${{ github.run_id }}
         run: |
-          # When the commit was made, by the author's clock. Set at commit time, which can be
-          # well before the push.
+          # Segments the comment stream. A comment body carrying this marker would otherwise
+          # open a comment of its own choosing in the stream, with an author and timestamp of
+          # its own choosing - so the token must be UNGUESSABLE, not merely per-run.
+          #
+          # It used to be ${{ github.run_id }}, which is neither: the run id is public the
+          # moment the run starts, so anyone able to comment on the PR could paste a marker
+          # bearing it and have their own comment counted as a finished `claude[bot]` review.
+          # Generated here rather than in the step's `env:` block on purpose - GitHub prints
+          # that block into the public run log, which would hand the token straight back out.
+          MARKER_TOKEN=$(openssl rand -hex 16)
+          export MARKER_TOKEN
+
+          # FALLBACK ONLY: when the commit was made, by the contributor's own clock. Set at
+          # commit time, which can be well before the push - and, being contributor-controlled,
+          # it can also be in the future, which is why the script prefers the server-side value
+          # below rather than taking the later of the two.
           committed_at=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.committer.date')
 
-          # When GitHub first raised checks for this SHA, i.e. effectively when it arrived.
-          # Server-side, so it closes the window where somebody commits, asks for a review,
-          # and only then pushes. `// empty` because a SHA can legitimately have none yet;
-          # the script falls back to the committer date and says so.
+          # PREFERRED: when GitHub first raised checks for this SHA, i.e. effectively when it
+          # arrived. Server-side, so it closes the window where somebody commits, asks for a
+          # review, and only then pushes. `// empty` because a SHA can legitimately have none
+          # yet; the script falls back to the committer date and says so.
           first_seen_at=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-suites" \
             --jq '[.check_suites[].created_at] | min // empty')
 
