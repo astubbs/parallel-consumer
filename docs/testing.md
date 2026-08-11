@@ -53,7 +53,7 @@ step carries `continue-on-error: true`, so a quarantined test going red cannot b
 registry and owner-claim steps have no such escape and do fail the job: the lane gates on the
 registry staying honest, never on the test outcomes.
 
-The live registry and task list is [`docs/QUARANTINED_TESTS.md`](QUARANTINED_TESTS.md), enforced by
+The live registry and task list is [`docs/quarantined-tests.md`](quarantined-tests.md), enforced by
 `bin/check-quarantine-registry.sh` to match the annotations in both directions so it cannot drift;
 `bin/check-quarantine-owners.sh` additionally verifies each entry's owner claim (the owning PR
 exists, is open, and eventually removes the quarantine).
@@ -83,9 +83,10 @@ Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.
   `-Dchaos.seed=<seed>`.
 - **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
   Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via `chaos-pain.yml`, e.g.
-  `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. Unlike the
-  local recipe above, CI runs **exclude** `@Quarantined` chaos scenarios (the Quarantine Lane owns
-  those), so they can select zero tests - the job summary flags that loudly.
+  `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer -f seed=42 -f reps=3`. Both call
+  `bin/chaos-test.sh`. Unlike the local recipe above, CI runs **exclude** `@Quarantined` chaos
+  scenarios (the Quarantine Lane owns those), so they can select zero tests - the job summary flags
+  that loudly.
 - **Probe a fix PR** (the suite's primary purpose): on the fix PR's branch (merge master in first
   if the branch predates the suite landing there), run the suite at a commit before the fix - expect
   RED, and the violation names the mechanism - and again at the fix, expecting GREEN. The local

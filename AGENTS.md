@@ -75,7 +75,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/copyright.md`](docs/copyright.md) | Adding, renaming or extracting a file: which header it gets and why |
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
-| [`docs/SELF_HOSTED_RUNNER.md`](docs/SELF_HOSTED_RUNNER.md) | Setting up or operating the self-hosted highcpu runner |
+| [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 
 **Where work and knowledge are recorded:**
@@ -86,8 +86,8 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`STRATEGY.md`** (repo root) | What the product is and why: target problem, the client-side guiding choice, who it is for, success metrics, tracks under investment | A roadmap or feature list. It is a *claims* document nothing tests - work that falsifies a claim must update it; the branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
 | **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
-| **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
-| **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
+| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
@@ -97,6 +97,35 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
+## `gh` defaults to the WRONG repo here - fix it before your first command
+
+This fork has two remotes - `origin` → `astubbs/parallel-consumer` (**where the work happens**) and
+`upstream` → `confluentinc/parallel-consumer` - and `gh` prefers `upstream` when nothing says
+otherwise, so a bare `gh pr list`, `gh pr view 259`, `gh run view` or `gh pr create` addresses
+**confluentinc**. **Run this once per clone**; it writes `remote.origin.gh-resolved` into the shared
+git config, so one run covers every worktree:
+
+```bash
+gh repo set-default astubbs/parallel-consumer
+```
+
+Verify with `gh repo view --json nameWithOwner -q .nameWithOwner`, which must print exactly
+`astubbs/parallel-consumer`. Keep that one *unqualified* - it tests what the bare default resolves
+to, so `-R` would defeat the check.
+
+**The failure is usually silent, which is what keeps this rule here.** The damaging case is not the
+command that errors but the one that *succeeds* against the wrong repository - above all the
+merged-PR prior-art search below, which returns upstream's history and reads as "no prior art".
+Worked incident, and the rest of the false-negative class:
+[`docs/solutions/workflow-issues/compound-tooling-breaks-in-worktrees-and-forks-2026-08-07.md`](docs/solutions/workflow-issues/compound-tooling-breaks-in-worktrees-and-forks-2026-08-07.md).
+
+The config is local and uncommitted, so CI runners, other machines and fresh agent sandboxes all
+start without it. Two habits survive that: **qualify `gh` in anything you write down** - docs,
+scripts, a handoff prompt - and **when you genuinely mean upstream, name it**,
+`-R confluentinc/parallel-consumer`. Reading an upstream issue is normal here; what must never be
+accidental is *which* repo answered. The same ambiguity bites a bare `#NNN` in prose -
+[Issue references](#issue-references).
 
 ## Before you investigate anything
 
@@ -109,8 +138,8 @@ and the traps that voided earlier experiments.
 | Prior investigations | `ls docs/plans/`, then grep them |
 | Solved problems | `grep -rl <mechanism> docs/solutions/` |
 | In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` |
-| Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> --name-only` |
-| **Merged** PRs, by file | `gh pr list --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
+| Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
+| **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
 
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
@@ -318,10 +347,10 @@ Nothing lints commit messages, so all of this is on you.
   wrong specifics, scope outgrowing the title. Do not churn the description for cosmetic wording.
 - **Open PRs from the template and complete its checklist honestly.**
   `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively
-  (e.g. `gh pr create --body-file`), so base the body on it and resolve every box: check it `[x]`,
-  or mark it `N/A - <reason>`. The `PR Checklist` gate fails a human-authored PR when the checklist
-  is missing entirely *or* any box is left unchecked without an `N/A`, so dropping the template is
-  not a bypass. Only real bot authors are exempt.
+  (e.g. `gh pr create -R astubbs/parallel-consumer --body-file`), so base the body on it and resolve
+  every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` gate fails a
+  human-authored PR when the checklist is missing entirely *or* any box is left unchecked without an
+  `N/A`, so dropping the template is not a bypass. Only real bot authors are exempt.
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the
   specific review comment, NOT as a separate top-level PR comment - a summary comment leaves the
   original conversation unresolved and can block merge on "unresolved conversations". When a finding

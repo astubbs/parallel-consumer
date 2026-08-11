@@ -6,13 +6,14 @@ agent regardless of CI live in AGENTS.md; this is the reference behind them.
 
 ## Reading a failed job's log
 
-`gh run view --log` refuses while *any* job in the run is still going ("logs will be available when
-it is complete"), and `--log-failed` is often empty for a Maven job, because the failure text is
-ordinary stdout rather than an `::error::` annotation. Neither means the log is unavailable. Fetch
-the job directly - this works as soon as **that job** finishes, regardless of the rest of the run:
+The `--log` flag on `gh run view` refuses while *any* job in the run is still going ("logs will be
+available when it is complete"), and `--log-failed` is often empty for a Maven job, because the
+failure text is ordinary stdout rather than an `::error::` annotation. Neither means the log is
+unavailable. Fetch the job directly - this works as soon as **that job** finishes, regardless of the
+rest of the run:
 
 ```bash
-jid=$(gh run view <run-id> --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
+jid=$(gh run view <run-id> -R astubbs/parallel-consumer --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
 gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
 ```
 
@@ -79,7 +80,7 @@ stack traces (see [`docs/testing.md`](testing.md)).
 
 ## Self-hosted lanes
 
-Setup and operation: [`docs/SELF_HOSTED_RUNNER.md`](SELF_HOSTED_RUNNER.md). None of these gate
+Setup and operation: [`docs/self-hosted-runner.md`](self-hosted-runner.md). None of these gate
 merging - they exist for speed and for work too heavy for a 2-core hosted runner. All are
 **skipped for PRs from forks** (`head.repo.full_name == github.repository`), because a fork PR must
 never run on our own hardware.

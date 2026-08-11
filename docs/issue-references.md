@@ -69,9 +69,9 @@ The gate reads PR bodies, so the other two spellings now fail it rather than fai
 
 **`Fixes #NNN` only closes on PRs targeting the default branch.** Discovered on astubbs#29, which
 targeted `master-confluent`: the keyword was in the body and GitHub ignored it entirely. Check with
-`gh pr view N --json closingIssuesReferences` rather than assuming. And never use `Fixes` for a
-*partial* fix - see the mirrors for confluentinc#233, confluentinc#326 and confluentinc#857, none of
-which their linked PRs actually resolve.
+`gh pr view N -R astubbs/parallel-consumer --json closingIssuesReferences` rather than assuming. And
+never use `Fixes` for a *partial* fix - see the mirrors for confluentinc#233, confluentinc#326 and
+confluentinc#857, none of which their linked PRs actually resolve.
 
 ## Choosing the right number
 

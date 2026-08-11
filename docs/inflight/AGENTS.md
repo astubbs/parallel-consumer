@@ -45,7 +45,7 @@ is the grouping.
   what no command knows: why something is parked, what blocks it, which decision is pending, what
   collides.
 - **No committed index.** An index file would be edited by every PR, which is the problem this
-  directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/TODO_INDEX.md` is
+  directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/todo-index.md` is
   the cautionary case: committed, generated, and stale until a reviewer caught it on astubbs#110.)
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
@@ -65,7 +65,7 @@ a number in a branch name is `confluentinc#NNN`, never a fork issue.
 `CHANGELOG.adoc` (what shipped) · PR bodies and commit messages (history) ·
 [`docs/solutions/`](../solutions/) (lessons from solved problems) ·
 [`docs/refactoring.md`](../refactoring.md) (deferred internal work - deliberately still one file, it
-is touched by 2 commits in 30) · [`docs/QUARANTINED_TESTS.md`](../QUARANTINED_TESTS.md) (quarantine
-registry) · [`docs/TODO_INDEX.md`](../TODO_INDEX.md) (code markers) ·
+is touched by 2 commits in 30) · [`docs/quarantined-tests.md`](../quarantined-tests.md) (quarantine
+registry) · [`docs/todo-index.md`](../todo-index.md) (code markers) ·
 [`src/docs/development/upstream-map.yaml`](../../src/docs/development/upstream-map.yaml) (the source
 of truth for fork↔upstream mapping - record mappings there, not here).
