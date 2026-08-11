@@ -22,6 +22,7 @@
 #     8. review lands between the commit's own date and the push GitHub saw -> FAIL (1)
 #     9. ... and with no check-suite time known, the same stream passes     -> pass (0)
 #    9b. a FUTURE-dated committer clock does not hold a real review stale   -> pass (0)
+#    9c. ... but with no check-suite time, a pre-commit review is STILL stale -> FAIL (1)
 #
 #   COMPLETION
 #    10. fresh review, but with an unticked task-list box                   -> FAIL (1)
@@ -46,7 +47,9 @@
 # resolves it as stale rather than risk a false green. Cases 8, 9 and 9b pin the timestamp
 # choice - the server-side check-suite time is PREFERRED and the committer date is only a
 # fallback - and 9b is why it is a preference rather than a max(): under max(), a commit
-# dated in the future would hold the check red forever with no review able to clear it.
+# dated in the future would hold the check red forever with no review able to clear it. 9c is
+# 9's negative control: without it, a fallback that stopped comparing timestamps at all would
+# still satisfy 9.
 # Case 13 catches a naive whole-stream scan - the finished boxes belong to a review of older
 # code, and the fresh comment is a tracker. Case 13b is the self-referential
 # hazard: a review DISCUSSING this rule shows an unticked box, and a posted comment never
@@ -163,6 +166,14 @@ assert "review between the commit's own date and the push GitHub saw" \
 
 assert "the same review passes when no check-suite time is known" \
     0 "$(run_checker "$(comment "$BETWEEN" "$REVIEWER" "$FINISHED_BODY")" "$COMMITTED_AT" "")"
+
+# NEGATIVE CONTROL for the case above, which on its own only proves the empty-first-seen path
+# accepts something. It would still pass if that path stopped comparing timestamps altogether and
+# waved every review through - this repo's named failure class, a check reporting success without
+# having run. So: same empty first-seen, a review OLDER than the committer date, must be stale.
+# The fallback has to be a different clock, not the absence of one.
+assert "with no check-suite time, a review older than the commit is still stale" \
+    1 "$(run_checker "$(comment "$BEFORE_COMMIT" "$REVIEWER" "$FINISHED_BODY")" "$COMMITTED_AT" "")"
 
 # The committer date is written by the contributor's own clock, so a skewed or deliberately
 # future-dated commit would, under a max() of the two timestamps, outrank every real review and
