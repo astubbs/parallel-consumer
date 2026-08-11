@@ -74,8 +74,8 @@ MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
 # leading "<lineno>:" prefix - anchoring on ^[[:space:]] alone silently never matches.
 #   references TO a marker elsewhere, e.g. "the run-length optimisation TODO on {@link X}"
 #   compound names    todo-index.sh, todo-index.md   (a filename, not a marker - this one is live:
-#                                                     .github/workflows/claude-code-review.yml names
-#                                                     the script in a comment)
+#                                                     the review workflows name the script in a
+#                                                     comment)
 NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO|[Tt][Oo][Dd][Oo][-_][A-Za-z])'
 
 emit_body() {
