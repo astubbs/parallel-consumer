@@ -2,7 +2,7 @@
 #
 # Merging or closing a PR does NOT stop its in-flight runs - GitHub leaves them to finish. That is
 # mostly harmless on hosted runners, but this repo's heavy suites run on a small self-hosted pool
-# (see docs/SELF_HOSTED_RUNNER.md), where an abandoned run holds an executor that a live PR needs.
+# (see docs/self-hosted-runner.md), where an abandoned run holds an executor that a live PR needs.
 #
 # The existing per-suite `concurrency` in pr-highcpu-fast-feedback.yml only supersedes THE SAME SUITE
 # ON THE SAME BRANCH, so it cannot help here: nothing about a merge looks like a new push. Observed

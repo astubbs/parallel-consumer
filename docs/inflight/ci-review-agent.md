@@ -11,15 +11,15 @@
   question. Needs confirmation from the action's docs or maintainers about token scrubbing before it
   spawns Bash subprocesses. Until then: trusted authors only. (`pull-requests: write` may also be
   droppable back to `read` if the action posts via its own app token.)
-- **Three grants still missing:** `actionlint`, so the reviewer cannot lint workflow PRs - it said so
-  itself on astubbs#102, and it ships on `ubuntu-latest` with `.github/actionlint.yaml` already present;
-  and `bin/check-ossindex-audit.sh` + `bin/test-check-ossindex-audit.sh`, which arrived with the OSS
-  Index audit lane and were left ungranted for the same reason - editing `claude-code-review.yml` in
-  the PR that adds a script forfeits that PR's own review. Land all three in a **non-workflow** PR, or
-  the validation skip above means they are never exercised. Grant **both spellings** of each script
-  path (`bin/x.sh:*` and `./bin/x.sh:*`), per `bin/AGENTS.md`. (`bin/todo-index.sh` was listed here as
-  a fourth until astubbs#279 - both spellings are in fact already granted, added in `bd021cb2`.
-  Recorded so it is not re-added.)
+- **The grants landed, but this PR's own review is the price.** `actionlint`,
+  `bin/check-ossindex-audit.sh` and `bin/test-check-ossindex-audit.sh` are now in the allowlist
+  (both spellings each, per `bin/AGENTS.md`). They were parked on a catch-22 - editing
+  `claude-code-review.yml` makes it differ from the default-branch copy, so the action skips and
+  **reports that skip as success**, forfeiting the review of whichever PR adds them. They landed in
+  astubbs/parallel-consumer#279 deliberately, *after* its review had completed and its threads were
+  closed, so the forfeited review was one nobody needed. **Consequence to remember: any further
+  review on astubbs/parallel-consumer#279 is a no-op, and its green review tick must not be read as
+  reviewed.** The grants themselves are unexercised until the first PR after this one merges.
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap - Testcontainers
   on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than a
   misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.

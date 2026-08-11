@@ -15,7 +15,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * Behavioural self-test of {@code bin/check-quarantine-registry.sh} - the enforcement that keeps
- * {@code docs/QUARANTINED_TESTS.md} and the {@code @Quarantined} annotations from drifting apart. Runs
+ * {@code docs/quarantined-tests.md} and the {@code @Quarantined} annotations from drifting apart. Runs
  * the real script against temp fixtures (via its {@code QUARANTINE_CHECK_ROOT} override) and asserts
  * exit codes + messages for the consistent, missing-entry, and stale-entry cases, so a refactor of the
  * script (or of the registry's machine-parsed format) that breaks detection fails the gating unit suite.
