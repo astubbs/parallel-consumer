@@ -1,0 +1,46 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Slow record warning threshold
+category: observability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.0.0
+  evidence:
+    tag: 0.5.0.0
+    path: CHANGELOG.adoc
+    basis: >-
+      This release made the threshold configurable. A hard-coded ten-second threshold and its rate-limited
+      warning already existed before it, so what is new here is the option rather than the warning.
+  milestones:
+    - release: 0.5.2.6
+      basis: The Micrometer metrics feature added the pc.slow.records counter driven by the same threshold.
+readme_anchor: metrics
+summary: Warn, and count per partition, when records wait in the processing queue longer than a configured threshold.
+use_this_when:
+  - You need an early signal that records are queueing rather than being processed, before consumer lag alerts fire.
+  - The default threshold is wrong for the workload - long user functions make it noisy, latency-sensitive ones make it late.
+setup:
+  option: ParallelConsumerOptions.thresholdForTimeSpendInQueueWarning
+  values:
+    - Default is Duration.ofSeconds(10).
+  emits:
+    - Counter pc.slow.records, tagged subsystem=workmanager plus topic and partition, from PCMetricsDef.SLOW_RECORDS.
+    - A rate-limited WARN log naming the count of waiting records and the affected topics.
+opt_in:
+  mechanism: The threshold and the warning are always active; set the option to change the threshold.
+  isolated_from_stable_modules: false
+boundaries:
+  - The counter only reaches a metrics backend if a MeterRegistry is supplied; see micrometer-metrics.yaml.
+  - Counters are registered per assigned partition and removed on revocation, so a partition moving away stops its series.
+  - The measure runs from when a record was taken as work, so it covers both the executor queue and the user function's own runtime. It does not cover the shard-queue wait before the record was selected.
+references:
+  - label: Meter definition
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/metrics/PCMetricsDef.java
+  - label: Threshold evaluation and warning
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ProcessingShard.java
+  - label: Metrics
+    path: README.adoc#mertics
