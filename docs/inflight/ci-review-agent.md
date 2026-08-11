@@ -35,6 +35,28 @@
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap - Testcontainers
   on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than a
   misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
+- **Writing about the trigger fires the trigger.** `claude.yml` matches with
+  `contains(github.event.comment.body, '@claude')` - a plain substring test with no awareness of
+  backticks, code fences or quotation. Any comment *discussing* the mechanism starts a job.
+
+  Observed, not theorised: while replying to review feedback on astubbs#286, two of the replies
+  explained the trust model and quoted the trigger string in backticks. Exactly two `Claude Code`
+  runs fired on `pull_request_review_comment` and ran to completion - a one-to-one match with the two
+  replies that contained it. Nothing asked for a review; prose about the feature invoked the feature.
+
+  Harmless while the fallback can run nothing. It stops being harmless once astubbs#286 grants script
+  execution, for the same reason the fork refusal belongs there: the cost of this job starting when
+  nobody asked for it goes up.
+
+  A fix is cheap - `startsWith` on the trimmed body, so the trigger must open the comment the way a
+  slash-command does - but it changes user-facing trigger semantics (no more "hey @claude, could
+  you..."), so it is the repository owner's call rather than a silent tightening.
+
+  **Related trap worth knowing while testing any of this:** comment-triggered workflows always run
+  the copy of the file on the **default branch**, never the PR's. So neither the grant nor the fork
+  refusal in astubbs#286 takes effect until it merges, and a run observed on that PR is exercising
+  `master`'s claude.yml. Do not read a passing run there as evidence the new wiring works.
+
 - **Unknown: which tree `claude.yml` actually runs its scripts against.** Now that the fallback
   reviewer can execute the gates, this decides whether the result means anything. `claude.yml`'s
   checkout names no `ref` and uses `fetch-depth: 1`, which for a comment trigger is the **default
