@@ -1,38 +1,98 @@
 # Automated PR reviewer - gaps that affect what you can trust
 
-- **A green `review` check can mean the reviewer never ran.** `claude-code-action` refuses to run when
-  the workflow file differs from the default-branch copy, and reports that skip as **success**. So any
-  PR editing `claude-code-review.yml` - or a workflow it validates - gets a green review check that
-  verified nothing. Correct behaviour on the action's part, invisible unless you read the job log.
-  **Do not read a green `review` check as "reviewed" on a workflow-touching PR.**
-- **Credential exposure is unresolved, not cleared.** The review job runs PR-authored Maven/test code
-  in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`, with `pull-requests: write`. Bounded by
-  fork PRs not receiving secrets (same-repo, push-access only), which is not an answer to the actual
-  question. Needs confirmation from the action's docs or maintainers about token scrubbing before it
-  spawns Bash subprocesses. Until then: trusted authors only. (`pull-requests: write` may also be
-  droppable back to `read` if the action posts via its own app token.)
-- **Two grants still missing:** `actionlint`, so the reviewer cannot lint workflow PRs - it said so
-  itself on astubbs#102, and it ships on `ubuntu-latest` with `.github/actionlint.yaml` already present; and
-  `bin/todo-index.sh`, whose script merged with astubbs#103 while the grant did not follow. Land both in a
-  **non-workflow** PR, or the validation skip above means they are never exercised.
-- **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap - Testcontainers
-  on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than a
-  misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
-- **`claude.yml` grants nothing, so the manual fallback reviews blind.** `.github/workflows/claude.yml`
-  is what runs an `@claude` request in a comment, and it is the *only* way to get a real review of a
-  PR that edits `claude-code-review.yml` (see the validation skip above). Its `claude_args` block is
-  entirely commented out, so it passes no `--allowed-tools` at all - which does **not** mean
-  permissive. An absent allowlist means Bash is not pre-approved, and there is no interactive
-  approver in CI, so every script call is refused.
+How the reviewer and its gate work, and the contract for asking for a review, are in
+[`docs/ci.md`](../ci.md). This file is only the open gaps.
 
-  Proven in-session on astubbs#273 rather than inferred: `git log`, `grep` and `python3 --version`
-  ran unprompted while both `bash bin/test-check-docs-data.sh` and `./bin/check-docs-data.sh`
-  returned "this command requires approval". An earlier review round had concluded the opposite -
-  that the absent restriction meant the block came from elsewhere and no workflow grant could clear
-  it - and that reasoning is wrong; do not act on it.
+- **A review is only requested, never automatic - so "no review" is now a normal state.** The
+  reviewer moved to a `workflow_dispatch` in `claude-code-review-dispatch.yml`, with
+  `claude-code-review.yml` reduced to a cheap gate that reds the PR until a review exists for the
+  current head. The risk this trades into
+  is social rather than technical: the gate can be *satisfied* by any finished comment the reviewer
+  bot posts on the PR, including its answer to some other `@claude` question, so an author
+  determined to get a green check can get one. That is the same boundary the previous gate drew -
+  it guards against the action failing quietly, not against the author - but it is worth re-reading
+  if the review ever stops feeling load-bearing.
+- **UNVERIFIED: `track_progress` on a `workflow_dispatch` event.** The gate accepts a review only
+  from `claude[bot]`, and that identity comes from the action's own sticky tracking comment. On the
+  old `pull_request` trigger the event payload named the PR; a dispatch does not, and it is not
+  confirmed that the action can still attach and author that comment. If it cannot, the review may
+  land as a `github-actions[bot]` comment via `gh pr comment`, which the gate will not accept - so
+  the check could never go green. **Verify on the first dispatched run**, by checking the author of
+  the resulting comment. If it does not hold, the fix is not to loosen the identity rule (that
+  would let any bot report satisfy the gate) but to have the reviewer create a check run on the PR
+  head SHA and gate on that instead - which is strictly better, being SHA-exact rather than
+  timestamp-based, and would retire the freshness machinery below.
+- **The gate runs from the PR's own checkout.** A `pull_request` job checks out the PR, so both
+  the gate script and the workflow file come from the tree they are policing. Pre-existing and
+  repo-wide rather than anything the on-demand split introduced: `copyright`, `shell: sigpipe`,
+  the issue-reference gate and the quarantine audit all execute PR-authored code the same way,
+  and on a `pull_request` trigger the workflow file is inherently PR-supplied, so no change
+  confined to one workflow closes it. Checking the gate script out from the base ref would close
+  the script-tampering half and leave the workflow-file half open - a half-measure worth doing
+  only as part of a repo-wide move to default-branch-controlled checks. The standing bound is the
+  threat model: trusted authors, and fork PRs that receive no secrets and cannot merge. Raised on
+  astubbs/parallel-consumer#284.
+- **Freshness is inferred from timestamps, not from a signature over the diff.** Nothing the
+  reviewer posts names the SHA it reviewed, and a comment-triggered run raises no check run against
+  the PR head, so the gate compares the review's creation time against when the head appeared. That
+  moment is the earliest check suite GitHub raised for the SHA, with the commit's committer date used
+  **only as a fallback when no suite exists** - a preference, deliberately *not* the later of the
+  two. (An earlier revision of the gate did take the later, and this note still described that after
+  the code changed; the two disagree exactly where it matters, on a future-dated commit, which under
+  max() holds the check red with no review able to clear it.) If the reviewer ever
+  starts stamping the reviewed SHA into its comment, replace the timestamp comparison with it - that
+  is strictly better, and the timestamp version can be retired the same day. Two known holes make
+  that worth doing rather than merely tidy, both raised on astubbs/parallel-consumer#284: the
+  check-suite timestamp is global to the SHA, so force-pushing onto a commit that already ran
+  checks elsewhere lets a review of an earlier head postdate it; and the gate cannot tell a review
+  from any other `claude[bot]` answer on the PR, so replying to a `@claude` question greens it.
+  Both dissolve once the reviewed SHA is recorded.
+- **The OSS Index audit grants must be carried across at merge.** `bin/check-ossindex-audit.sh` and
+  `bin/test-check-ossindex-audit.sh` are granted on astubbs/parallel-consumer#279, in
+  `claude-code-review.yml` - the file the reviewer no longer lives in. **Whichever of
+  astubbs/parallel-consumer#279 and the on-demand split merges second must carry those two grants
+  into `claude-code-review-dispatch.yml`**, or they are silently dropped and the reviewer will
+  report, as it already did once, that it could not run the scripts. They cannot be added ahead of
+  astubbs/parallel-consumer#279: a grant for a script that does not exist on master is inert, which
+  is worse than no grant (see `bin/AGENTS.md`). `actionlint` was the third of that set and is now
+  granted on the reviewer, since it ships with the runner and can never be inert.
+- **Credential exposure is unresolved, not cleared.** The reviewer runs PR-authored Maven/test code
+  in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`, with `pull-requests: write`. The
+  move to `workflow_dispatch` bounds *who can start it* - dispatching requires write access to the
+  repository - but an earlier revision of this entry concluded from that that no new restriction
+  was needed, which was wrong: dispatch permission says the DISPATCHER is trusted and says nothing
+  about the branch. `pull_request` withheld secrets from fork PRs for free; `workflow_dispatch` does
+  not. So the reviewer now **refuses fork heads explicitly** (its "Validate inputs and refuse fork
+  heads" step), which re-establishes the old boundary. What remains open is the narrower question:
+  whether the token is scrubbed before the action spawns Bash subprocesses, which needs confirmation
+  from the action's docs or maintainers. Until then, in-repo heads only - and note that even an
+  in-repo PR branch is code a trusted dispatcher does not necessarily control.
+  (`pull-requests: write` may also be droppable back to `read` if the action posts via its own app
+  token.)
+- **Fork PRs have no green path, and a secretless reviewer is the only real fix.** Refusing fork
+  heads means the gate - which accepts only a `claude[bot]` comment - can never go green on a fork
+  PR, so those merge with `claude-review` red unless the commits are moved to a branch in this repo.
+  Raised on astubbs/parallel-consumer#284 and documented as a known limit in `docs/ci.md`. The fix
+  is a review job that runs the untrusted checkout WITHOUT the credential; letting a maintainer
+  assert the PR was reviewed was rejected, being the same self-asserted escape the gate refuses
+  everywhere else.
+- **`claude.yml` grants nothing, and that is now fine - but know what it means.** The `@claude`
+  mention handler passes no `--allowed-tools` at all, and an absent allowlist is not permissive:
+  Bash is simply not pre-approved and there is no interactive approver in CI, so every script call
+  is refused. Proven in-session on astubbs/parallel-consumer#273 rather than inferred - `git log`,
+  `grep` and `python3 --version` ran unprompted while both `bash bin/test-check-docs-data.sh` and
+  `./bin/check-docs-data.sh` returned "this command requires approval". An earlier review round had
+  concluded the opposite, that no workflow grant could clear it; that reasoning is wrong, do not act
+  on it.
 
-  So the fallback path is exactly the one that most needs to run scripts and is least able to. Mirror
-  the `bin/check-*.sh` / `bin/test-check-*.sh` entries from `claude-code-review.yml`'s `--allowedTools`
-  into `claude.yml`'s `claude_args`. It cannot ride in a PR that also edits `claude-code-review.yml`:
-  editing `claude.yml` there would break the manual review *on that same PR*, which is the only
-  review it can get.
+  **The recommendation that came with this finding - mirror the `bin/check-*` grants into
+  `claude.yml` - is retired by astubbs/parallel-consumer#284 rather than outstanding.** It rested
+  on `@claude` being the only way to review a PR that edits `claude-code-review.yml`, which was true
+  only while that file invoked the action. It no longer does: it is a gate, the reviewer is
+  `claude-code-review-dispatch.yml` dispatched `--ref master`, and the grants live there. Mirroring
+  them into `claude.yml` now would widen a trigger that anyone can fire on a public repo, to no
+  benefit. What survives is the caveat: a `@claude` mention produces a free-form answer that cannot
+  run this repo's scripts, so it is not a substitute for a dispatched review.
+- **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap -
+  Testcontainers on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than
+  a misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
