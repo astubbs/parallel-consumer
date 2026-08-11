@@ -249,7 +249,7 @@ latest_review_at=$(awk \
             }
             if (created > latest) latest = created
         }
-        open = 0; unticked = 0; fenced = 0; created = ""; login = ""
+        open = 0; unticked = 0; fenced = 0; fence_ch = ""; fence_len = 0; created = ""; login = ""
     }
     # A marker line, and only a marker line, starts a new comment. The token check is what
     # stops a comment that quotes the marker from opening one - see "HOW THE STREAM IS
@@ -258,8 +258,23 @@ latest_review_at=$(awk \
         settle(); open = 1; created = $4; login = $5; next
     }
     # Track fenced code blocks, so nothing inside one is read as reviewer state.
-    # A fence is ``` or ~~~ at the start of a line, optionally indented.
-    open && /^[ \t]*(```|~~~)/ { fenced = !fenced; next }
+    #
+    # A closing fence must use the SAME character as its opener and be at least as long
+    # (CommonMark). Toggling on any fence line instead looks equivalent and is not: a review
+    # showing a Markdown example wraps it in a four-backtick fence so the three-backtick block
+    # inside survives, and a naive toggle treats that inner opener as the close - putting the
+    # example back in scope and counting a box it was only DISPLAYING. That produces the exact
+    # permanent red this fence handling exists to prevent, on the exact comment shape most
+    # likely to discuss it.
+    open && match($0, /^[ \t]*(`{3,}|~{3,})/) {
+        fence = substr($0, RSTART, RLENGTH)
+        sub(/^[ \t]+/, "", fence)
+        ch = substr(fence, 1, 1)
+        len = length(fence)
+        if (!fenced) { fenced = 1; fence_ch = ch; fence_len = len }
+        else if (ch == fence_ch && len >= fence_len) { fenced = 0 }
+        next
+    }
     # A GitHub task list is `- [ ]` / `* [ ]` / `+ [ ]`, optionally indented. A ticked box
     # holds an x, so only a whitespace-filled box means "not done".
     #

@@ -29,6 +29,7 @@
 #    12. an unticked box in somebody ELSE's comment                         -> pass (0)
 #    13. a stale finished review plus a fresh unticked tracker              -> FAIL (1)
 #   13b. an unticked box inside a fenced code block                         -> pass (0)
+#   13c. ... inside a 3-backtick example nested in a 4-backtick fence       -> pass (0)
 #
 #   SEGMENTATION
 #    14. a comment body forging a marker line with the wrong token          -> FAIL (1)
@@ -205,6 +206,28 @@ That is the behaviour under discussion.'
 
 assert "an unticked box inside a fenced code block is displayed, not a tracker" \
     0 "$(run_checker "$(comment "$AFTER_BOTH" "$REVIEWER" "$FENCED_BODY")")"
+
+# A closing fence must match its opener's character and length. A review showing a Markdown
+# example wraps it in a FOUR-backtick fence precisely so the three-backtick block inside
+# survives; a parser that toggles on any fence reads that inner opener as the close, puts the
+# example back in scope, and counts the box it was only displaying. That is a permanent red on
+# the very comment shape most likely to discuss this rule.
+NESTED_FENCE_BODY='**Claude finished @astubbs'"'"'s task in 1m 52s** —— [View job](https://github.com/astubbs/parallel-consumer/actions/runs/31453513070)
+
+- [x] Reviewed the completion rule
+
+Example of a body the gate must NOT read as unfinished:
+
+````markdown
+```markdown
+- [ ] Run the review
+```
+````
+
+Done.'
+
+assert "an unticked box in a 3-backtick example nested inside a 4-backtick fence" \
+    0 "$(run_checker "$(comment "$AFTER_BOTH" "$REVIEWER" "$NESTED_FENCE_BODY")")"
 
 # --- segmentation -----------------------------------------------------------------------
 
