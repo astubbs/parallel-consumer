@@ -30,6 +30,34 @@ consequence was smaller than first claimed, though - only `lz4-java` had an advi
 graph, zero occurrences of `lz4-java` / `HdrHistogram` / `netty-codec-http`, 6 open Dependabot
 alerts. Automatic submission runs on a push to the default branch, so it had not repopulated yet.
 
+## What dependency submission actually is
+
+Worth stating, because the name suggests more than it does and the question came up twice.
+
+The dependency graph normally builds itself by **statically parsing `pom.xml`** - so it holds what
+you *declare*, not what Maven *resolves*. That is the whole reason the transitive components are
+missing from it, and therefore why Dependabot never alerted on `lz4-java` despite
+`GHSA-xx22-p4ch-683r` existing: **Dependabot alerts read from the graph**, and the graph never had
+the package.
+
+Dependency submission closes that by running Maven and POSTing the *resolved* dependency list -
+coordinates and versions - to the repository's own graph via GitHub's Dependency Submission API. It
+does **not** send source anywhere and involves no code scanning; the payload is a list of library
+coordinates the poms already imply, just resolved rather than declared.
+
+Two ways to drive it, and they submit to the **same API and the same graph** - the only difference
+is who runs Maven:
+
+| | Managed (the repo setting) | Repo-owned workflow |
+|---|---|---|
+| Maven invocation | GitHub's fixed bare `mvn validate` probe | ours |
+| Editable | no - the workflow is not in `.github/workflows` | yes |
+| Submits to | Dependency Submission API | the same API |
+
+So a repo-owned workflow buys exactly one thing: the ability to insert a build step before
+submitting. The action is not smarter - **the same `validate`-builds-nothing trap bites it too** if
+it is pointed at the repo root without building the reactor first.
+
 ## Blocker: automatic submission is currently failing
 
 **Fix this first, or the trigger below silently never fires.** Since the flip, GitHub's managed
@@ -54,9 +82,40 @@ replacing with a repo-owned submission workflow that builds the reactor first).
 **Until it succeeds at least once on `master`, the dependency graph will not repopulate**, and the
 re-measurement below would read as "no change" for the wrong reason.
 
+### Turned back OFF on 2026-08-11 - re-enable after the v6 release
+
+Rather than leave a permanently red check on every PR, the *Automatic dependency submission* setting
+was switched off again. **Re-enable it after 0.6.0.0 ships**, then re-run the trigger below.
+
+Root cause, and it is neither "we have never published" nor anything about repositories: **GitHub's
+managed submission workflow probes with a bare `mvn validate` at the repo root.** `validate` builds
+no artifacts, so any reactor module depending on a sibling's **jar** cannot resolve it - from the
+reactor (nothing built) or remotely. It is a design limitation of the managed workflow for
+multi-module projects, not a misconfiguration here, and the job's own log points at the escape
+hatch: "for submitting Maven dependencies from your own workflow, refer to the submission action".
+
+Snapshots are a red herring, recorded so nobody re-runs this reasoning. We *do* publish them -
+`parallel-consumer-core:0.6.0.0-SNAPSHOT` is served with HTTP 200 from
+`central.sonatype.com/repository/maven-snapshots` - and the root pom does not declare that
+repository. **Do not fix it by declaring one.** That would change the whole project's dependency
+resolution to satisfy one auxiliary probe, let a partial build (`-pl` without `-am`) silently
+resolve a stale published snapshot instead of failing loudly, and still require every future
+`-SNAPSHOT` to be published *and* declared in perpetuity. Waiting for the v6 release does not fix it
+either, for the same reason.
+
+**Current decision: leave the managed submission OFF.** The two real options, if it is ever wanted:
+
+1. A repo-owned workflow running `advanced-security/maven-dependency-submission-action`, where the
+   Maven invocation is ours and can build the reactor first (`mvn install -DskipTests`, or
+   `test-compile` as `dependency-audit.yml` does for exactly this reason).
+2. Nothing - because the coverage gap it was meant to close is the transitive one, and the OSS Index
+   lane in astubbs/parallel-consumer#279 already covers transitive components. That is the argument
+   *for* keeping the lane, and it is stronger now than when this note was written: the obvious
+   managed alternative does not work on a project of this shape.
+
 ## The trigger
 
-**After `submit-maven` succeeds on `master`**, re-run the SBOM query and check two things:
+**If a repo-owned submission workflow is ever added and succeeds on `master`**, re-run the SBOM query and check two things:
 
 1. do `lz4-java`, `HdrHistogram` and `netty-codec-http` now appear in the graph;
 2. does a Dependabot alert fire for `lz4-java` (GHSA-xx22-p4ch-683r exists for it).
