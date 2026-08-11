@@ -249,50 +249,63 @@ eleven seconds long, and has reviewed nothing - which is
 ### A red `claude-review` is the expected state on an unreviewed PR
 
 It is **not** a fault to diagnose and **not** something to fix by editing the gate. It means what
-it says: nothing has reviewed this head yet. The fix is to dispatch a review once the work is
-actually ready. Three distinct reds, each saying which it is:
+it says: nobody has asked for a review yet. The fix is to ask for one when the work is ready. Two
+distinct reds, each saying which it is:
 
-- **never reviewed** - nobody has asked. Normal for a new or in-progress PR.
-- **reviewed, but not since `<time>`** - there is a review, but you have pushed since. See below.
+- **never reviewed** - `claude[bot]` has not commented. Normal for a new or in-progress PR.
 - **the reviewer left unticked boxes** - it started and did not finish, so ask again.
 
-### Strict on purpose: a review of commit N does not vouch for commit N+1
+(A third red is possible and says so plainly: the PR's head is in a fork. See "A fork PR cannot
+turn the gate green" below.)
 
-The gate requires a review **newer than the current head**, so a push after a review turns it red
-again and wants a fresh one. The lenient alternative - any review on the PR, ever, satisfies the
-gate - was rejected because it reports success for code nothing has looked at, which is exactly the
-class named in
-[`docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
-A gate whose whole job is to stand in for a missing always-on reviewer must not itself be
-satisfiable by a review of code that no longer exists.
+### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
+
+**Any finished `claude[bot]` review on the PR satisfies it**, whenever it was posted. A review of
+the first commit therefore vouches for the twentieth, and that is a deliberate reversal of the
+rule this repo shipped first.
+
+It is a real trade, so it is worth knowing why it was made rather than discovering the cost by
+surprise. Strict is the stronger guarantee - a review of commit N genuinely does not vouch for
+commit N+1 - and it was abandoned not because it was wrong but because of **what enforcing it
+cost**, and because the per-commit coverage it protected already arrives from elsewhere: a
+separate auto-reviewer reads every push. Enforcing freshness here needed a contested timestamp
+comparison and, worse, a job holding `actions: write` on every review route so the check could be
+re-run after a review landed.
+
+**The assumption that makes this safe is that the auto-review keeps happening.** If it ever stops,
+per-commit coverage stops coming from anywhere and nothing announces it - the gate keeps passing,
+because "a review exists on this PR" is still true. That trigger, and the archived strict
+implementation, are recorded in
+[`docs/inflight/parked-strict-review-gate-freshness.md`](inflight/parked-strict-review-gate-freshness.md).
+Read it before re-proposing strictness; it is a considered trade, not an oversight.
 
 **There is deliberately no skip word, label or "trivial change" escape**, because any such escape
 is asserted by the same person who wants to use it - which makes it exactly as strong as not having
 the gate. The honest escape already exists and is loud: merge with the required check red, which
-leaves a permanent record that somebody chose to merge unreviewed. Re-requesting a review after a
-one-line fix costs one command and a couple of minutes, so an escape would save little and cost the
-guarantee.
+leaves a permanent record that somebody chose to merge unreviewed.
 
 ### A fork PR cannot turn the gate green
 
 This is the one case where merging with the check red is the *expected* route rather than a last
 resort, so it is written down rather than left to be discovered.
 
-Both review routes have to hold this line, and they hold it differently. The dispatched reviewer
-refuses a fork head outright and never runs. The `@claude` comment route **does** answer on a fork
-PR - that is useful, and it executes nothing - but it refuses to refresh `claude-review` afterwards.
-Without that refusal a maintainer merely *asking* a question on a fork PR would turn its required
-check green, since the gate cannot tell a review from any other finished `claude[bot]` reply. That
-is the self-asserted escape rejected at the end of this section, arriving by accident instead of on
+**The gate itself refuses a fork head**, before it looks at any comment. That is the primary
+guard and it is stated first because it became load-bearing when the freshness rule went: the
+gate now asks only whether a finished `claude[bot]` comment exists on the PR, and the `@claude`
+route answers on fork PRs quite happily - so without the refusal, a maintainer merely *asking a
+question* on a fork PR would satisfy the required check on the next push. That is the
+self-asserted escape rejected at the end of this section, arriving by accident rather than on
 purpose.
 
-The reviewer refuses any PR whose head is not in this repo, on purpose: `workflow_dispatch` hands
-the job `CLAUDE_CODE_OAUTH_TOKEN`, and it then checks out `refs/pull/<pr>/head` and runs the repo's
-build and test scripts from it - so reviewing a fork would execute untrusted code beside the
-credential. The old `pull_request` trigger prevented that for free by withholding secrets from fork
-PRs; on a dispatch the guard has to be explicit. Meanwhile the gate accepts only a `claude[bot]`
-comment, so no amount of careful human reading satisfies it. The two facts together mean a fork PR
-stays red.
+Two further facts hold the same line from the other side. The **dispatched reviewer** refuses any
+PR whose head is not in this repo: `workflow_dispatch` hands the job `CLAUDE_CODE_OAUTH_TOKEN`, and
+it then checks out `refs/pull/<pr>/head` and runs the repo's build and test scripts from it - so
+reviewing a fork would execute untrusted code beside the credential. The old `pull_request` trigger
+prevented that for free by withholding secrets from fork PRs; on a dispatch the guard has to be
+explicit. The **comment route** does answer on a fork PR - useful, and harmless once its execution
+allowlist is withheld - but produces nothing the gate will accept.
+
+So a fork PR stays red, from three directions.
 
 Two honest options, in order:
 
@@ -328,24 +341,24 @@ the same thing as a token that can fire a release. **Do not merge the two jobs b
 ### What the gate proves, and what it does not
 
 `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first)
-takes the PR's comments and requires **one** comment that is all three of: authored by the reviewer
-bot per the GitHub API, created strictly after the head appeared, and free of unticked task-list
-boxes. Four limits are worth knowing before reading a green tick as a review:
+takes the PR's comments and requires **one** comment that is both: authored by the reviewer bot
+per the GitHub API, and free of unticked task-list boxes. Three limits are worth knowing before
+reading a green tick as a review:
 
 1. **It does not read the review, and never will** - a check that judges review quality is a
    check nobody can keep honest.
 2. **It cannot tell a review from any other answer the bot gave.** Asking `@claude` a question on
-   the PR produces a comment satisfying all three rules, which turns the check green. A known
-   limit, not a distinction the gate makes.
-3. **The head's arrival time is the SHA's, not this PR's.** Force-pushing onto a commit that
-   already ran checks elsewhere carries that older timestamp, so a review of a previous head can
-   postdate it.
-4. **It runs from the PR's own checkout**, like every other `pull_request` check here, so it
+   the PR produces a comment satisfying both rules, which turns the check green. A known limit,
+   not a distinction the gate makes - and a larger one now that age is not a rule, since any such
+   answer counts for the life of the PR. This is why fork PRs are refused outright rather than
+   left to the comment rules.
+3. **It runs from the PR's own checkout**, like every other `pull_request` check here, so it
    polices a tree that can edit it.
 
-The remedy for 2 and 3 is one change, recorded in
-[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md): have the reviewer record the
-exact SHA it reviewed as a check run on that head, and gate on that rather than on a timestamp.
+The remedy for 2 is one change, recorded in
+[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md): have the reviewer raise a check
+run on the exact SHA it reviewed, and gate on that rather than on comment metadata. That would
+also retire the `refresh-gate` jobs and the last `actions: write` in the review system.
 
 It is a guard against the action failing quietly, not against somebody who wants to get around
 it. **Do not disable it to get a green check.**

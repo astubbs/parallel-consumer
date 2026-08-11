@@ -53,7 +53,6 @@ jobs:
       # Empty when the trigger was an issue rather than a PR, which is what stops `refresh-gate`
       # trying to clear a gate that does not exist.
       pr_number: ${{ steps.pr-context.outputs.pr }}
-      reviewed_sha: ${{ steps.pr-context.outputs.sha }}
     env:
       # Defined here so the two carve-outs in `pr-context` - fork head, untrusted commenter -
       # switch one value rather than editing a list in several places.
@@ -286,6 +285,23 @@ jobs:
           # whatever the human actually typed with a fixed instruction, which is the entire point
           # of this route.
 
+  # WHY THIS SURVIVED THE FRESHNESS DELETION, when almost everything around it did not.
+  #
+  # Removing the strict rule was expected to retire this job too, on the reasoning that a push
+  # creates a fresh gate run which now greens immediately. That is true OF A PUSH, and it is not
+  # the case this job exists for. The gate triggers on `pull_request` only, so the terminal flow
+  # - push, then ask for a review, then merge - produces no event after the review lands, and a
+  # check run keeps its last conclusion until something re-runs it. The check would sit red at
+  # the value it recorded BEFORE the review existed, and the only ways out would be a dummy push
+  # or a hand-run re-run, on every PR.
+  #
+  # That is not theory: traced live on astubbs/parallel-consumer#288, where a review posted at
+  # 08:29 for the current head left `claude-review` red until a hand-run `gh run rerun --failed`
+  # at 08:37. Leniency does not touch that mechanism - it changes what the gate ASKS, not when
+  # it is asked.
+  #
+  # What leniency DID delete from here: the reviewed-SHA job output and the head-moved refusal,
+  # which only mattered while the answer depended on which commit was reviewed.
   # Holds this workflow's only write grant, in a job that checks NOTHING out. The dispatch
   # workflow splits its jobs for the same reason and explains it at length in its header; the
   # short version is that a token which can dispatch any workflow in the repo (release.yml among
@@ -341,9 +357,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ needs.claude.outputs.pr_number }}
-          # The head this review covered, captured before Claude ran and carried across the job
-          # boundary so this job never has to fetch the PR to learn it.
-          REVIEWED_SHA: ${{ needs.claude.outputs.reviewed_sha }}
         run: |
           pr_json=$(gh api "repos/$REPO/pulls/$PR")
           head_sha=$(printf '%s' "$pr_json" | jq -r '.head.sha')
@@ -362,16 +375,10 @@ jobs:
             exit 1
           fi
 
-          # Refuse to refresh the gate for a head this review did not look at. If the PR moved
-          # while the review ran, the review covers the old commit, and re-running the gate now
-          # would let a comment timestamped after the new head arrived certify code the reviewer
-          # never saw. Leaving the check red asks for a fresh review, which is the honest answer.
-          if [ "$head_sha" != "$REVIEWED_SHA" ]; then
-            echo "::warning::PR head moved from $REVIEWED_SHA to $head_sha while this review ran," \
-                 "so the review covers the older commit. Not refreshing the gate - ask for a" \
-                 "fresh review of $head_sha."
-            exit 0
-          fi
+          # No head-moved comparison any more, and none is needed: the gate asks only whether a
+          # finished review exists on this PR, so a head that moved mid-review does not change
+          # the answer. It went with the freshness rule - see
+          # docs/inflight/parked-strict-review-gate-freshness.md.
 
           # head_sha ALONE DOES NOT IDENTIFY THIS PR'S GATE RUN. One head can back more than one
           # PR - the same branch opened against `master` and a release branch - and the gate runs

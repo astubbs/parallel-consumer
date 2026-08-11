@@ -133,7 +133,6 @@ jobs:
     # Consumed by `refresh-gate`, which needs both of these but must NOT check out PR code to
     # get them.
     outputs:
-      reviewed_sha: ${{ steps.reviewed-sha.outputs.sha }}
       # The ACTION's own verdict, not the step's. `steps.claude-review.outcome` is the step's,
       # and the step reports success in at least one case where the action reviewed nothing at
       # all - see "Refuse to report success for a review that did not run" below.
@@ -226,12 +225,6 @@ jobs:
           # persisted credential buys nothing and only widens what a modified `bin/` script
           # could reach.
           persist-credentials: false
-
-      # Recorded immediately after checkout, so the final step can tell whether the PR moved
-      # underneath this review.
-      - name: Record the reviewed SHA
-        id: reviewed-sha
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # The reviewer is allowed to run the unit/integration suites itself (see --allowedTools
       # below), so the job needs a JDK and a warm Maven cache - otherwise every invocation
@@ -444,6 +437,23 @@ jobs:
                "review rather than letting the gate be refreshed toward green."
           exit 1
 
+  # WHY THIS SURVIVED THE FRESHNESS DELETION, when almost everything around it did not.
+  #
+  # Removing the strict rule was expected to retire this job too, on the reasoning that a push
+  # creates a fresh gate run which now greens immediately. That is true OF A PUSH, and it is not
+  # the case this job exists for. The gate triggers on `pull_request` only, so the terminal flow
+  # - push, then ask for a review, then merge - produces no event after the review lands, and a
+  # check run keeps its last conclusion until something re-runs it. The check would sit red at
+  # the value it recorded BEFORE the review existed, and the only ways out would be a dummy push
+  # or a hand-run re-run, on every PR.
+  #
+  # That is not theory: traced live on astubbs/parallel-consumer#288, where a review posted at
+  # 08:29 for the current head left `claude-review` red until a hand-run `gh run rerun --failed`
+  # at 08:37. Leniency does not touch that mechanism - it changes what the gate ASKS, not when
+  # it is asked.
+  #
+  # What leniency DID delete from here: the reviewed-SHA job output and the head-moved refusal,
+  # which only mattered while the answer depended on which commit was reviewed.
   # Holds the contract's only write grant, in a job that checks NOTHING out. See "WHY THIS IS TWO
   # JOBS" in the header before changing anything here - in particular, do not add a checkout.
   refresh-gate:
@@ -493,28 +503,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
-          # The SHA the review job actually checked out and reviewed, carried across the job
-          # boundary so this job never has to fetch the PR to learn it.
-          REVIEWED_SHA: ${{ needs.review.outputs.reviewed_sha }}
         run: |
           head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
 
-          # Refuse to refresh the gate for a head this review did not look at. The reviewer
-          # checked out REVIEWED_SHA minutes ago; if the PR has moved since, the review covers
-          # the old commit, and re-running the gate now would let a comment timestamped after
-          # the new head arrived certify code the reviewer never saw. Leaving the check red
-          # asks for a fresh review of the new head, which is the honest answer.
-          #
-          # This narrows the window rather than closing it: the gate still compares timestamps
-          # rather than SHAs, so a later gate run can still accept this review for the newer
-          # head. Closing it properly means recording the reviewed SHA itself - see
-          # docs/inflight/ci-review-agent.md.
-          if [ "$head_sha" != "$REVIEWED_SHA" ]; then
-            echo "::warning::PR head moved from $REVIEWED_SHA to $head_sha while this review ran," \
-                 "so the review covers the older commit. Not refreshing the gate - dispatch a" \
-                 "fresh review for $head_sha."
-            exit 0
-          fi
+          # No head-moved comparison any more, and none is needed. The gate no longer asks
+          # whether the review covered this head - only whether a finished review exists on the
+          # PR - so a head that moved mid-review does not change the answer, and the reviewed
+          # SHA no longer has to be carried across the job boundary. It went with the freshness
+          # rule; see docs/inflight/parked-strict-review-gate-freshness.md.
 
           # head_sha ALONE DOES NOT IDENTIFY THIS PR'S GATE RUN. One head can back more than one
           # PR - the same branch opened against `master` and a release branch - and the gate runs

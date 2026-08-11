@@ -54,11 +54,15 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   the script, and a no-checkout job is precisely what both of them are - the write grant must not
   share a filesystem with code the workflow just ran. So the duplication is deliberate and the
   coupling is manual: fix one, check the other.
-- **The gate is still timestamp-based, and a check run against the head SHA would be better.** If
-  the identity or freshness rules ever need reopening, the fix is not to loosen who may satisfy the
-  gate (that lets any bot report through) but to have the reviewer raise a check run on the reviewed
-  SHA and gate on that: SHA-exact rather than timestamp-based, and it retires the freshness
-  machinery described below.
+- **A check run raised on the reviewed SHA would retire the last write scope in the review
+  system.** The gate is produced by a `pull_request` workflow, so a review posted after the last
+  push cannot clear it without something re-running it - which is why a `refresh-gate` job holding
+  `actions: write` still exists on both routes. If the reviewer instead raised a check run on the
+  SHA it reviewed, that job, its token and its fork guards all go, and the check becomes SHA-exact
+  rather than a judgement about comment metadata. This is now the single highest-value change left
+  in this area. Do not confuse it with restoring head-freshness as a *rule* - that is a separate,
+  deliberately parked decision in
+  [`parked-strict-review-gate-freshness.md`](parked-strict-review-gate-freshness.md).
 - **The gate runs from the PR's own checkout.** A `pull_request` job checks out the PR, so both
   the gate script and the workflow file come from the tree they are policing. Pre-existing and
   repo-wide rather than anything the on-demand split introduced: `copyright`, `shell: sigpipe`,
@@ -69,21 +73,12 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   only as part of a repo-wide move to default-branch-controlled checks. The standing bound is the
   threat model: trusted authors, and fork PRs that receive no secrets and cannot merge. Raised on
   astubbs/parallel-consumer#284.
-- **Freshness is inferred from timestamps, not from a signature over the diff.** Nothing the
-  reviewer posts names the SHA it reviewed, and a comment-triggered run raises no check run against
-  the PR head, so the gate compares the review's creation time against when the head appeared. That
-  moment is the earliest check suite GitHub raised for the SHA, with the commit's committer date used
-  **only as a fallback when no suite exists** - a preference, deliberately *not* the later of the
-  two. (An earlier revision of the gate did take the later, and this note still described that after
-  the code changed; the two disagree exactly where it matters, on a future-dated commit, which under
-  max() holds the check red with no review able to clear it.) If the reviewer ever
-  starts stamping the reviewed SHA into its comment, replace the timestamp comparison with it - that
-  is strictly better, and the timestamp version can be retired the same day. Two known holes make
-  that worth doing rather than merely tidy, both raised on astubbs/parallel-consumer#284: the
-  check-suite timestamp is global to the SHA, so force-pushing onto a commit that already ran
-  checks elsewhere lets a review of an earlier head postdate it; and the gate cannot tell a review
-  from any other `claude[bot]` answer on the PR, so replying to a `@claude` question greens it.
-  Both dissolve once the reviewed SHA is recorded.
+- **Nothing the reviewer posts names the SHA it reviewed.** The gate judges comment metadata -
+  who wrote it, and whether it left unticked boxes - so it cannot tell a review from any other
+  `claude[bot]` answer on the PR. Replying to an `@claude` question satisfies it, and now does so
+  for the life of the PR rather than only until the next push. That is why fork heads are refused
+  by the gate outright rather than left to the comment rules. It dissolves if the reviewer ever
+  stamps the reviewed SHA into a check run; see the entry above.
 - **The OSS Index audit grants must be carried across at merge.** `bin/check-ossindex-audit.sh` and
   `bin/test-check-ossindex-audit.sh` are granted on astubbs/parallel-consumer#279, in
   `claude-code-review.yml` - the file the reviewer no longer lives in. **Whichever of
