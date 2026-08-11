@@ -97,3 +97,7 @@ release.properties
 /.idea/inspectionProfiles/Project_Default.xml
 /.idea/uiDesigner.xml
 /.idea/vcs.xml
+
+# Scratch file the issue first-response workflow writes (claude-issue-response.yml); only ever
+# exists in a CI workspace, but a local reproduction of that lane would otherwise leave it staged.
+draft-reply.md
