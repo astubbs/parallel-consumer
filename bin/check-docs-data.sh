@@ -78,6 +78,20 @@ else:
     problems.append(f"{TEMPLATE_PATH}: missing, so README anchors cannot be checked")
 
 
+def is_empty(value):
+    """Missing, or present but carrying nothing.
+
+    `title: ""`, `boundaries: []` and `evidence: {}` all satisfy a naive `is None` test while saying
+    nothing, so a required field could be emptied out by a bad edit and still be reported valid. A
+    boolean or a number is never empty: `blocks_1_0: false` is an answer, not an absence.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (bool, int, float)):
+        return False
+    return hasattr(value, "__len__") and len(value) == 0
+
+
 def require_fields(container, required, path, where):
     """Report each declared-required field that is missing. Wrong type is a finding, not a skip."""
     if not required:
@@ -86,8 +100,26 @@ def require_fields(container, required, path, where):
         problems.append(f"{path}: {where} should be a mapping, found {type(container).__name__}")
         return
     for field in required:
-        if container.get(field) is None:
+        if is_empty(container.get(field)):
             problems.append(f"{path}: {where} requires '{field}', which is missing or empty")
+
+
+def check_declared_fields(container, required, optional, path, where, escape_hatch):
+    """Close a field set against what the schema declares, but only where it declares an optional list.
+
+    Declaring an `optional` list is how a level opts in to a closed set: it is the schema saying
+    "these are the extras that may appear". Without enforcement that list is documentation nobody can
+    trust, which is the same defect as a per-item contract governing no collection. A level that
+    declares no optional list is making no such claim, so nothing is closed there.
+    """
+    if optional is None or not isinstance(container, dict):
+        return
+    declared = set(required or []) | set(optional)
+    for field in sorted(set(container) - declared):
+        problems.append(
+            f"{path}: {where} carries undeclared field '{field}' - "
+            f"add it to {escape_hatch} in {SCHEMA_PATH} or remove it"
+        )
 
 
 def check_closed_sets(container, spec, path, where):
@@ -137,6 +169,12 @@ def check_refs(node, path, where):
         if resolved is None:
             problems.append(f"{path}: {where} points at '{target}', which does not exist")
             continue
+        # A fragment is only checkable where anchors are declarable, which here means the README and
+        # its template. Records also cite Java-source anchors such as
+        # ParallelConsumerOptions.java#transactionalJavadoc; the file is verified, the fragment after
+        # it deliberately is not, because Java declares no such anchor for anything to check against.
+        # Read this as a stated boundary, not an oversight: a stale fragment on a non-README target
+        # will not be caught.
         if fragment and resolved in README_TARGETS and anchors and fragment not in anchors:
             problems.append(
                 f"{path}: {where} points at '{target}#{fragment}', "
@@ -167,6 +205,24 @@ for path in sorted(glob.glob("docs/features/*.yaml") + glob.glob("docs/data/*.ya
 
     require_fields(doc, spec.get("required"), path, "kind '%s'" % kind)
     check_closed_sets(doc, spec, path, "")
+    # schema_version and kind identify the record rather than describing it, so they never need
+    # declaring; some kinds list them under required and some do not.
+    check_declared_fields(
+        doc,
+        set(spec.get("required") or []) | {"schema_version", "kind"},
+        spec.get("optional"),
+        path, f"kind '{kind}'", f"'{kind}.optional'",
+    )
+
+    # An optional list with no required partner governs nothing, the mirror of the item_contracts
+    # check below. Both are the same failure: a declaration everyone reads as enforced that is not.
+    for optional_key in [k for k in spec if k.endswith("_optional")]:
+        partner = optional_key[: -len("_optional")] + "_required"
+        if partner not in spec:
+            problems.append(
+                f"{SCHEMA_PATH}: '{kind}.{optional_key}' has no '{kind}.{partner}' to extend, so it "
+                f"closes nothing"
+            )
 
     # Nested per-item contracts. The schema declares which collection each one governs, so a
     # contract it declares can never sit unenforced without this loop failing loudly.
@@ -187,8 +243,11 @@ for path in sorted(glob.glob("docs/features/*.yaml") + glob.glob("docs/data/*.ya
             continue
         for index, item in enumerate(items):
             label = f"{collection_key}[{index}]"
+            optional_key = required_key[: -len("_required")] + "_optional"
             require_fields(item, spec.get(required_key), path, label)
             check_closed_sets(item, spec, path, f"{label}.")
+            check_declared_fields(item, spec.get(required_key), spec.get(optional_key),
+                                  path, label, f"'{kind}.{optional_key}'")
 
     availability = doc.get("availability")
     av_spec = spec.get("availability")
@@ -212,17 +271,18 @@ for path in sorted(glob.glob("docs/features/*.yaml") + glob.glob("docs/data/*.ya
             else:
                 require_fields(availability, status_spec.get("required"), path,
                                f"availability status '{status}'")
+                check_declared_fields(availability, status_spec.get("required"),
+                                      status_spec.get("optional"), path,
+                                      f"availability status '{status}'",
+                                      f"'{kind}.availability.{status}.optional'")
                 ev_required = status_spec.get("evidence_required") or []
                 if ev_required:
                     evidence = availability.get("evidence")
                     require_fields(evidence, ev_required, path, "availability.evidence")
-                    if isinstance(evidence, dict):
-                        declared = set(ev_required) | set(status_spec.get("evidence_optional") or [])
-                        for field in sorted(set(evidence) - declared):
-                            problems.append(
-                                f"{path}: availability.evidence carries undeclared field '{field}' - "
-                                f"add it to evidence_optional in {SCHEMA_PATH} or remove it"
-                            )
+                    check_declared_fields(evidence, ev_required,
+                                          status_spec.get("evidence_optional"), path,
+                                          "availability.evidence",
+                                          f"'{kind}.availability.{status}.evidence_optional'")
                 milestones = availability.get("milestones")
                 if milestones is not None and not isinstance(milestones, list):
                     problems.append(f"{path}: availability.milestones should be a list")

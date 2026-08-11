@@ -14,6 +14,9 @@
 #    5. a README anchor FRAGMENT that does not exist                    -> FAIL (1)
 #    6. an undeclared field inside availability.evidence                -> FAIL (1)
 #    7. a schema contract that governs no collection                    -> FAIL (1)
+#    8. a required field EMPTIED rather than removed                    -> FAIL (1)
+#    9. a field the kind never declared, where it declares an optional  -> FAIL (1)
+#   10. an optional list with no required partner to extend             -> FAIL (1)
 #
 # Case 2 is the one worth keeping. The guard's first cross-reference check only resolved a string
 # that was ENTIRELY a path, so it caught `path: foo.yaml` and missed `... see foo.yaml.` - which is
@@ -23,6 +26,11 @@
 # Case 7 guards the guard's own completeness: a schema that declares a per-item contract the checker
 # cannot locate must fail loudly, because the alternative is a contract everybody believes is
 # enforced and nothing enforces. Six were in that state when this was written.
+#
+# Cases 9 and 10 are the same class caught a second time, in the optional lists. Those were pure
+# documentation: nothing checked that a record's fields came from required plus optional, so the
+# lists could say anything. Declaring an optional list is now what closes a field set, and case 10
+# is the self-consistency half - an optional list with nothing to extend closes nothing.
 #
 # Run: bin/test-check-docs-data.sh   (CI runs it before the guard it protects)
 
@@ -50,14 +58,19 @@ restore() {
 trap restore EXIT
 
 # expect <expected-exit> <label> -- runs the guard and reports
+#
+# A failing case prints what the guard actually said. The first version sent the guard's output to
+# /dev/null, so a red case in CI reported an exit code and nothing else - undiagnosable from the log,
+# and it had to be reproduced by hand before anyone could see which record was at fault.
 expect() {
-  local want=$1 label=$2 got
-  "$GUARD" >/dev/null 2>&1
+  local want=$1 label=$2 got output
+  output=$("$GUARD" 2>&1)
   got=$?
   if [ "$got" -eq "$want" ]; then
     printf 'ok:   %s (exit %s)\n' "$label" "$got"
   else
-    printf 'FAIL: %s - expected exit %s, got %s\n' "$label" "$want" "$got"
+    printf 'FAIL: %s - expected exit %s, got %s. The guard said:\n' "$label" "$want" "$got"
+    printf '%s\n' "$output" | sed 's/^/      | /'
     failures=$((failures + 1))
   fi
 }
@@ -115,6 +128,19 @@ restore
 mutate docs/data/schema.yaml \
   't.replace("    item_contracts:\n      entry_required: entries\n", "    item_contracts: {}\n", 1)'
 expect 1 "a schema contract governing no collection is caught"
+restore
+
+mutate docs/features/commit-modes.yaml 're.sub(r"^summary: .*$", "summary: \"\"", t, count=1, flags=re.M)'
+expect 1 "a required field emptied rather than removed is caught"
+restore
+
+mutate docs/features/commit-modes.yaml 't.replace("kind: feature\n", "kind: feature\nundeclared_field: x\n", 1)'
+expect 1 "a field the kind never declared is caught"
+restore
+
+mutate docs/data/schema.yaml \
+  't.replace("  roadmap:\n    required:\n", "  roadmap:\n    stray_optional:\n      - x\n    required:\n", 1)'
+expect 1 "an optional list with no required partner is caught"
 restore
 
 expect 0 "restored: the corpus is valid again"
