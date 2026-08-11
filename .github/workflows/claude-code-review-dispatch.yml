@@ -330,6 +330,7 @@ jobs:
           # amounts to) would then re-run the OTHER PR's gate: that PR goes green, this one stays
           # red, and the log line says the gate was refreshed. `pull_requests[]` carries the
           # association the SHA filter drops, so select on it.
+          #
           # Not --paginate, unlike the gate's check-suite read, and the difference is deliberate:
           # this list is bounded by construction. One gate run per PR per head, and a re-run
           # reuses its run rather than adding an entry, so `per_page=100` is orders of magnitude
