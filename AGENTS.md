@@ -307,9 +307,13 @@ stack traces (see Testing).
 - **`.github/workflows/shell-hygiene.yml`** — static checks on the repo's own shell scripts, one job per concern (`shell: sigpipe` today). `bin/check-shell-sigpipe.sh` fails any `bin/*.sh` that pipes into `grep -q` under `pipefail`, which reports failure exactly when it *matches* once >64 KiB follows; `shellcheck` does not detect this. Its self-test runs first. Kept out of `copyright.yml` so neither workflow's name outlives its contents.
 - **`.github/workflows/claude-code-review.yml`** — Automated PR review. The job ends with a gate,
   `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first),
-  asserting that a review from *this* run actually landed on the PR. Without it the check reports
+  asserting that a review from *this* run actually landed on the PR **and that the comment carrying
+  it has no unticked task-list box left in it** - the reviewer's own account of whether it finished,
+  rather than our inference about it. Without the gate the check reports
   success when the action reviews nothing, which is indistinguishable from "reviewed, no findings" -
-  it has happened twice here. **The gate fails on any PR that edits `claude-code-review.yml` itself**:
+  it has happened three times here, most recently a reviewer that announced a background review, said
+  it had finished in the same breath, and never posted one.
+  **The gate fails on any PR that edits `claude-code-review.yml` itself**:
   the action refuses to run unless that file matches the default branch, so a PR cannot rewrite its
   own reviewer. That is the guard working. Get a real review with a `@claude review this` PR comment
   (which runs from `claude.yml`, unmodified, so it validates), or split the workflow edit into its
