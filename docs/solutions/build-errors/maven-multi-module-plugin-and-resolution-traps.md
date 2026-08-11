@@ -179,7 +179,7 @@ Maven reports the first as a warning, the second as somebody else's error, and t
 - **A version-predicated suppression needs a guard against that version moving.** A CVE excluded from
   the audit *because* a module resolves a version outside the affected range is only correct while
   that stays true - an automated bump into the range makes the finding real while the exclusion
-  silently hides it. Pin the assumption where the bump would come from. Concretely (open in
+  silently hides it. Pin the assumption where the bump would come from. Concretely (merged in
   astubbs/parallel-consumer#281): the exclusion holds only because `parallel-consumer-example-streams`
   imports `jackson-bom` 2.18.9, so a `dependabot.yml` ignore is keyed to
   `com.fasterxml.jackson:jackson-bom`. The pre-existing ignore was keyed to
@@ -193,7 +193,7 @@ Maven reports the first as a warning, the second as somebody else's error, and t
 - astubbs/parallel-consumer#279 (open) - the audit job that runs `test-compile` for the reason in
   trap 2; `docs/inflight/ci-ossindex-lane-reassessment.md` on branch `ci/ossindex-audit-job` records
   the dependency-submission analysis in full.
-- astubbs/parallel-consumer#281 (open) - the CVE triage and the `jackson-bom` dependabot ignore.
+- astubbs/parallel-consumer#281 (merged) - the CVE triage and the `jackson-bom` dependabot ignore.
 - [`../workflow-issues/a-check-that-reports-success-without-having-run.md`](../workflow-issues/a-check-that-reports-success-without-having-run.md)
   - traps 1 and 3 are also instances of that class: Maven's warning and the unnoticed failing
   workflow both reported nothing wrong while something was.

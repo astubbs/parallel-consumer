@@ -115,9 +115,9 @@ What the scanner reported (all ids are `CVE-2026-NNNNN`):
 | `at.yawk.lz4:lz4-java:1.10.1` | runtime | 59949 (6.5) | no |
 | `org.hdrhistogram:HdrHistogram:2.2.2` | runtime | 14683 (2.0), 14686 (2.0) | no |
 
-The per-CVE triage is being written up separately as `docs/inflight/deps-cve-backlog.md`, in flight
-on branch `security/cve-backlog-triage` - **not merged, and not pushed yet**, so that is a pointer to
-work in progress rather than something you can follow today. What follows is only what the *scanner
+The per-CVE triage is written up separately as `docs/inflight/deps-cve-backlog.md`, which landed with
+astubbs/parallel-consumer#281 - so it is something you can read today rather than a pointer to work in
+progress. What follows is only what the *scanner
 comparison* turned out to be worth, because the first reading of it was wrong.
 
 ### Correction: the Dependabot gap is one component, not three
