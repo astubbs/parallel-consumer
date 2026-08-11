@@ -42,7 +42,7 @@ actionable pointers.
 **Reference convention**: below `#1000`, name the repo - `astubbs#NNN` for this fork,
 `confluentinc#NNN` for the original. A bare number is a coin flip, because the fork's
 numbering sits entirely inside upstream's range. See
-[AGENTS.md, "Issue references"](../AGENTS.md#issue-references) for the full rule and the
+[`docs/issue-references.md`](issue-references.md) for the full rule and the
 threshold's expiry condition; `.github/scripts/issue-ref-gate.js` enforces it on added lines.
 Note that fork **branch names encode the upstream number** (`bugs/857-...`,
 `fix/909-...`), so a number seen in a branch name is the *upstream* issue, not a
