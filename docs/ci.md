@@ -81,8 +81,9 @@ stack traces (see [`docs/testing.md`](testing.md)).
   vulnerabilities` only reviews dependencies a PR *changes*, so nothing else notices an unchanged
   tree acquiring a new advisory. (The one deliberate exception to "there is no scheduled build"
   below; it re-runs no suite the gate already covers.) **Findings do not fail it** - they go to the
-  job summary - because the tree carries a standing backlog and a job red on every PR is ignored
-  within a week. It goes red only when `bin/check-ossindex-audit.sh` cannot prove the scan happened,
+  job summary. That was originally because the tree carried a standing backlog; since
+  astubbs/parallel-consumer#281 triaged it the audit reports zero findings, so this is now a
+  conservative default rather than a necessity, and the case for gating is getting stronger. It goes red only when `bin/check-ossindex-audit.sh` cannot prove the scan happened,
   and that guard is not optional: the plugin has **no setting that makes an unreachable scanner
   fatal**, so against an expired token it prints a WARNING and reports `BUILD SUCCESS` - the exact
   silent-green defect this repo has already shipped once. `bin/test-check-ossindex-audit.sh` runs

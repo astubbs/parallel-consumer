@@ -31,10 +31,15 @@
 #   scan ran, found nothing   -> exit 0
 #   scan ran, found problems  -> exit 0, findings rendered  (reporting only, deliberately)
 #
-# Findings are not fatal today because the tree carries a standing backlog of them: a job that goes
-# red on every PR for known debt is ignored inside a week, which costs more than it buys. Red is
-# reserved for "this check stopped working", which is rare and therefore still means something.
-# Making findings fatal is a one-line change here, once the backlog is triaged - not before.
+# Findings are not fatal today. The original reason was a standing backlog - a job that goes red on
+# every PR for known debt is ignored inside a week - but astubbs/parallel-consumer#281 triaged it, so
+# the audit now reports zero findings and gating would NOT be permanently red. What remains is a
+# weaker, deliberate caution: the exclusions carrying that backlog are only as good as their stated
+# retirement conditions, and this lane has not yet run clean over time. Red stays reserved for "this
+# check stopped working", which is rare and therefore still means something. Flipping findings to
+# fatal is a one-line change here, and the argument for it is now stronger than the argument against
+# - a NEW finding, on a tree whose known debt is already excluded with reasons, is by construction
+# something nobody has looked at.
 #
 # HOW "DID IT ACTUALLY SCAN" IS DECIDED
 #

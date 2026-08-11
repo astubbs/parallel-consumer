@@ -29,8 +29,10 @@
 # anything here, and note its self-test runs FIRST, per the house pattern in repo-hygiene.yml.
 #
 # RED MEANS "THE CHECK BROKE", NOT "WE HAVE CVEs". Findings are written to the job summary and do
-# not fail the job. The tree has a standing backlog of them; a job red on every PR for known debt is
-# ignored within a week. See bin/check-ossindex-audit.sh for the full reasoning.
+# not fail the job. That is now a conservative default rather than a necessity: since
+# astubbs/parallel-consumer#281 triaged the backlog, the audit reports zero findings, so gating would
+# not be permanently red. Left reporting-only until the clean run has held for a while - flipping it
+# is one line. See bin/check-ossindex-audit.sh for the full reasoning.
 #
 # Required repo secrets: OSSINDEX_USERNAME (the account email), OSSINDEX_TOKEN (API token from
 # ossindex.sonatype.org -> account settings). Both already exist.
