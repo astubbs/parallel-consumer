@@ -47,7 +47,7 @@ live.
 
 **Expect removing the retry to cost you red builds**, at roughly the rate the tests were already
 flaking. That is the trade being made deliberately: visibility over green. When a red build blocks
-something urgent, the lever is `@Quarantined` with a diagnosis (`docs/QUARANTINED_TESTS.md` requires
+something urgent, the lever is `@Quarantined` with a diagnosis (`docs/quarantined-tests.md` requires
 one), which keeps the test running in the non-gating lane. Restoring the retry destroys the signal
 instead of relocating it.
 
