@@ -14,7 +14,7 @@
     </parent>
 
     <artifactId>parallel-consumer-example-metrics</artifactId>
-    <name>Kafka Parallel Consumer Example - Metrics</name>
+    <name>Parallel Consumer - Examples - Metrics</name>
 
     <dependencies>
         <!-- tag::exampleDep[] -->

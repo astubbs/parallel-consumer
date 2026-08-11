@@ -22,7 +22,7 @@ TIP:: Editing template file
 endif::[]
 
 
-= Kafka Parallel Consumer
+= Parallel Consumer for Apache Kafka
 :icons:
 :toc: macro
 :toclevels: 3
@@ -74,6 +74,15 @@ TIP: If you like this project, please ⭐ Star it in GitHub to show your appreci
 NOTE: This is a community-maintained project with no commercial support.
 See the <<Support and Issues>> section for more information.
 
+[[trademarks]]
+[NOTE]
+.Trademarks
+====
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
+
+See <<Attribution>> for the other Apache marks referenced in this document.
+====
+
 [[when-to-use]]
 == When to use this library (vs KIP-932 Share Groups)
 
@@ -85,11 +94,49 @@ The Kafka landscape has shifted since this library's 2021 stable release. *KIP-9
 
 The two are not strict alternatives -- they solve different problems.
 
+=== How they differ
+
+[cols="1,2,2", options="header"]
+|===
+| | Share Groups | Parallel Consumer
+
+| Ordering
+| None guaranteed. Records in a share-partition "can be delivered out of order to a consumer, in particular when redeliveries occur", and only offsets *within a single batch* ascend -- there are "no guarantees about the ordering of offsets between different batches"
+| Per key, per partition, or unordered -- your choice. See <<ordering-guarantees,Ordering Guarantees>>
+
+| Exactly-once
+| Not supported. There is no transactional read-process-write for share consumers
+| Supported. Produced records and their source offsets commit as one atomic transaction -- see <<transaction-system,the EoS transaction model>>
+
+| Slow processing
+| Each record carries an acquisition lock (`share.record.lock.duration.ms`, default 30s). Overrun it and the record is redelivered to another consumer while you are still processing it
+| A record stays in flight until your function returns. There is no clock
+
+| Poison messages
+| Broker-side: after `group.share.delivery.attempt.limit` attempts (default 5) the record is Archived and never redelivered
+| In your code: a configurable retry delay function, record skipping, or a circuit breaker
+
+| Broker cost
+| Per-record state is persisted to the internal `__share_group_state` topic through a share coordinator, plus acknowledgement RPCs -- but that topic is theirs alone, so the state is isolated
+| None beyond an ordinary consumer group: no coordinator, no per-record RPCs. The trade is isolation rather than load -- the state rides in the commit metadata field, which is free-form and shared with anything else that has ever owned the group, so foreign bytes there have to be survived rather than prevented -- see <<offset_map,the offset map>>
+
+| Requires
+| KRaft, and Apache Kafka 4.2 / Confluent Platform 8.2. The 4.0 release was early access and explicitly not for production clusters
+| Nothing. The broker does not know you are using it
+
+| Scaling axis
+| *Out.* Several consumers may share one partition, so throughput can scale past the partition count across machines
+| *Up.* One instance processes its whole assignment concurrently; add instances for availability as usual
+|===
+
 [TIP]
 ====
-* If you want unordered queue semantics on Kafka 4.2+, reach for *Share Groups*. The "partitions are fixed, I need more consumers" motivation is now solved at the broker.
-* If you need *key-level ordering with concurrency beyond partition count*, reach for *Parallel Consumer*. Nothing else does that cleanly today.
+* *Both* solve "partitions are fixed, I need more consumers" -- so the choice between them is about *ordering*, not about concurrency. Reach for *Share Groups* on Kafka 4.2+ when ordering genuinely does not matter to you: that condition is the whole trade, not a footnote to it. You get consumers decoupled from partition count at the broker, in exchange for delivery that may be out of order, and for redelivery of a record another consumer may still be working on.
+* Reach for *Parallel Consumer* when you need *key-level ordering with concurrency beyond partition count* -- nothing else does that cleanly today. Also when you need exactly-once together with parallelism, when a processing step can outlive a 30 second lock, or when you are simply not on Kafka 4.2 yet, which includes every cluster still running 3.x.
+* Spreading a *single* partition's throughput across several machines is genuinely theirs alone. Worth putting in perspective, though: that requirement is largely inherited from an era when adding consumers was the only way to add concurrency at all. Parallel Consumer already drives one partition at high concurrency inside a single instance, so what actually remains is throughput beyond what one instance can carry, or a deliberate want for machine-level isolation.
 ====
+
+NOTE: For the reasoning behind the project as a whole -- the problem it exists to solve, why it is solved in the client rather than the broker, and where effort is currently going -- see link:STRATEGY.md[STRATEGY.md].
 
 [[intro]]
 This library lets you process messages in parallel via a single Kafka Consumer meaning you can increase consumer parallelism without increasing the number of partitions in the topic you intend to process.
@@ -1370,6 +1417,8 @@ So it's very efficient.
 (Reference: https://github.com/confluentinc/parallel-consumer/issues/415#issuecomment-1256022394[#415])
 
 == Attribution
+
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
 
 http://www.apache.org/[Apache®], http://kafka.apache.org/[Apache Kafka], and http://kafka.apache.org/[Kafka®] are either registered trademarks or trademarks of the http://www.apache.org/[Apache Software Foundation] in the United States and/or other countries.
 

@@ -13,20 +13,60 @@ owned that content all along.)
 | Document | Owns | Explicitly NOT for |
 |---|---|---|
 | **`AGENTS.md`** (this file) | Conventions, build/test commands, and the rules agents must follow | Work items of any kind |
+| **`STRATEGY.md`** (repo root) | What the product is and why: the target problem, the guiding choice to solve it client-side, who it is for, the metrics that would show the approach working, and the tracks under investment | A roadmap, a schedule, or a feature list. It is a *claims* document that nothing tests, so work which falsifies one of its claims has to update it - the open branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
 | **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and **never** a committed index file, which every PR would edit |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** in their own release-gated section, and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
-| **`docs/TODO_INDEX.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
-| **`docs/QUARANTINED_TESTS.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - it is deliberately unsorted; triage goes in `refactoring.md` |
+| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary: entities, named processes and status concepts whose meaning here is project-specific (the produce/commit lock pair, *dirty*, shard, in-flight work). Each entry stands alone - no file paths, class names or current config values. Relevant when orienting to the codebase or writing about it | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with frontmatter for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for a specific piece of work | Durable reference - a plan goes stale once its work lands |
-| **`docs/SELF_HOSTED_RUNNER.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
+| **`docs/self-hosted-runner.md`** | Setup and operation of the self-hosted highcpu runner | CI policy, which lives in the workflows |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status | Editorial opinion (that is the `.adoc` beside it), and **upstream issues** - those live in the fork mirrors, `upstream-mirror` label |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when they disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes. Sections for **shipped** releases are frozen; the section for the release being cut - **`== 0.6.0.0` included** - is regenerated at release time from the commit log, so what is under it today is working text, not the notes v6 will publish. `README.adoc` links to it and no longer embeds it | Anything invisible to users or operators - and **not** a per-PR chore: a PR never *adds* an entry. Correcting a factual error in an existing one is the only edit it may make |
 
 Rule of thumb: **is it happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
+## `gh` defaults to the WRONG repo here - fix it before your first command
+
+This is a fork with two remotes: `origin` → `astubbs/parallel-consumer` (**where the work happens**)
+and `upstream` → `confluentinc/parallel-consumer`. When both exist and nothing says otherwise, `gh`
+prefers the `upstream` one. So a bare `gh pr list`, `gh pr view 259`, `gh run view` or `gh pr create`
+silently addresses **confluentinc**, not this fork.
+
+**Run this once per clone** (it writes `remote.origin.gh-resolved` into the shared git config, so it
+covers every worktree at once):
+
+```bash
+gh repo set-default astubbs/parallel-consumer
+```
+
+Verify with `gh repo view --json nameWithOwner -q .nameWithOwner` - it must print exactly
+`astubbs/parallel-consumer`. (Keep this one *unqualified*: it is testing what the bare default
+resolves to, so adding `-R` would defeat the check.)
+
+**Why this earns a section rather than a footnote: the failure is usually silent.** `gh pr view 259`
+fails loudly ("Could not resolve to a PullRequest") only because upstream happens to have no such PR.
+The dangerous case is the one that *succeeds*: the merged-PR prior-art search below returns
+**upstream's** history, finds nothing relevant, and reads as "no prior art" - the exact false
+confidence [Before you investigate anything](#before-you-investigate-anything) exists to prevent. That
+very command sat unqualified in the table below until this section was written, so every agent that
+ran it searched the wrong repository and had no way to tell.
+
+**Two habits that survive a fresh clone**, since the config above is local and uncommitted - CI
+runners, other machines and fresh agent sandboxes all start without it:
+
+- **Qualify `gh` commands in anything you write down** - docs, scripts, a handoff prompt. `-R
+  astubbs/parallel-consumer` costs nothing and is correct with or without the config.
+- **When you genuinely mean upstream, say so**: `-R confluentinc/parallel-consumer`. Reading an
+  upstream issue is normal here; what must never be accidental is *which* repo answered.
+
+Sanity check for any `gh` result that surprises you: if the output mentions `confluentinc` when you
+meant the fork, or a number resolves to something unrecognisable, check the repo before you build a
+hypothesis on it. See also [Issue references](#issue-references) - the same fork/upstream ambiguity
+bites a bare `#NNN`.
 
 ## Before you investigate anything
 
@@ -39,8 +79,8 @@ settled the last question of this shape, and the traps that voided someone's ear
 | Prior investigations | `ls docs/plans/`, then grep them | The same question already answered, and how it was proved |
 | Solved problems | `grep -rl <mechanism> docs/solutions/` | A documented root cause with a signature you can rule in or out |
 | In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` | A known-open defect you are about to rediscover |
-| Open PRs | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> --name-only` | A fix already in flight, and files your change would collide with |
-| **Merged** PRs, by file | `gh pr list --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` | The PR that last fixed something in this exact file - the richest prior art there is, and invisible to a search on the *open* list |
+| Open PRs | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` | A fix already in flight, and files your change would collide with |
+| **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` | The PR that last fixed something in this exact file - the richest prior art there is, and invisible to a search on the *open* list |
 | Existing issues | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` and filter by title - fork issues *and* the `upstream-mirror` ones | An upstream bug already triaged; read the upstream issue itself, not the mirror's summary |
 
 **Grep the mechanism, not the symptom.** The name of the failing test is the weakest search term
@@ -185,7 +225,7 @@ bin/performance-test.sh
   demand) in the non-gating "Quarantine Lane / tests" CI job, whose summary carries pass/fail + the audit of every
   quarantined test and its owner; the seconds-fast "Quarantine Audit" job enforces the rules on every
   PR (registry drift / broken owner claims fail fast - no tests are run there). The live registry
-  / task list is `docs/QUARANTINED_TESTS.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
+  / task list is `docs/quarantined-tests.md` - CI-enforced (`bin/check-quarantine-registry.sh`) to match
   the annotations in both directions, so it can't drift; `bin/check-quarantine-owners.sh` additionally
   verifies each entry's owner claim (owning PR exists + is open + eventually removes the quarantine). Rules: **(1) no
   quarantine without diagnosis** — undiagnosed red stays red and blocks, on purpose; **(2) quarantine is
@@ -210,7 +250,7 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 - **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
   Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via
   `.github/workflows/chaos-pain.yml` (`workflow_dispatch`, inputs `seed`/`reps`), e.g.
-  `gh workflow run chaos-pain.yml -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. NB unlike the
+  `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer -f seed=42 -f reps=3`. Both call `bin/chaos-test.sh`. NB unlike the
   local recipe above, CI runs EXCLUDE `@Quarantined` chaos scenarios (the Quarantine Lane owns those) -
   while `ChaosChurnStormIT` is quarantined under PR astubbs#80 they therefore select zero tests, and the job
   summary flags that loudly.
@@ -253,14 +293,14 @@ stagnation (Class 2, W4's prey), drain overruns, and record loss/duplication. Ta
 
 ## CI
 
-**Reading a failed job's log.** `gh run view --log` refuses while *any* job in the run is still going
+**Reading a failed job's log.** The `--log` flag on `gh run view` refuses while *any* job in the run is still going
 ("logs will be available when it is complete"), and `--log-failed` is often empty for a Maven job,
 because the failure text is ordinary stdout rather than an `::error::` annotation. Neither means the
 log is unavailable. Fetch the job directly - this works as soon as **that job** finishes, regardless
 of the rest of the run:
 
 ```bash
-jid=$(gh run view <run-id> --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
+jid=$(gh run view <run-id> -R astubbs/parallel-consumer --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
 gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
 ```
 
@@ -283,9 +323,9 @@ stack traces (see Testing).
   (which runs from `claude.yml`, unmodified, so it validates), or split the workflow edit into its
   own PR. Do not disable the gate to get a green check.
 - **`.github/workflows/repo-hygiene.yml`** — "Repo Hygiene", on every push/PR plus dispatch. Two independent jobs. `sigpipe` runs `bin/check-shell-sigpipe.sh` (its own self-test first) to catch a `bin/*.sh` piping into `grep -q` under `pipefail`, which silently inverts the script's answer. `actions` runs `bin/check-action-versions.sh`, keeping every GitHub Action pinned to a single version across all workflows. Neither gates the build - they exist because the failures they catch are invisible rather than loud.
-- **`.github/workflows/check-dependencies.yml`** — "PR Dependency Check". Reads `depends on #N` lines from the PR body and blocks the child until every parent has merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out of order. See [PR Discipline](#pr-discipline) for the syntax.
+- **`.github/workflows/check-dependencies.yml`** — "PR Dependency Check". Reads `depends on astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out of order. See [PR Discipline](#pr-discipline) for the syntax.
 - **`.github/workflows/cancel-closed-pr-runs.yml`** — Cancels a PR's in-flight runs when it closes, so a withdrawn PR stops occupying runners. Housekeeping only; gates nothing.
-- **Self-hosted lanes** (see [`docs/SELF_HOSTED_RUNNER.md`](docs/SELF_HOSTED_RUNNER.md)). None of these gate merging - they are for speed and for work too heavy for a 2-core hosted runner. All are **skipped for PRs from forks** (`head.repo.full_name == github.repository`), because a fork PR must never run on our own hardware.
+- **Self-hosted lanes** (see [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md)). None of these gate merging - they are for speed and for work too heavy for a 2-core hosted runner. All are **skipped for PRs from forks** (`head.repo.full_name == github.repository`), because a fork PR must never run on our own hardware.
   **`highcpu` is the only self-hosted label** - six runners, all online. Declare labels in [`.github/actionlint.yaml`](.github/actionlint.yaml) or actionlint flags them.
 
   - `pr-highcpu-fast-feedback.yml` ("highcpu") — on every in-repo PR plus dispatch. The lane that earns the hardware.
@@ -443,7 +483,9 @@ is posted in.
 `Fixes #167` or `Fixes astubbs/parallel-consumer#167` - the `owner#NN` short form this section
 otherwise prefers is **not** cross-reference syntax, so `Fixes astubbs#167` renders as plain text and
 closes nothing. A bare number is what the convention above forbids, so in a PR body write the fully
-qualified form: `Fixes astubbs/parallel-consumer#167`.
+qualified form: `Fixes astubbs/parallel-consumer#167` - the one form that closes the issue, names the
+repo and auto-links. The gate reads PR bodies, so the other two spellings now fail it rather than
+failing silently.
 
 At or above #1000 a bare number is unambiguous, because only this fork can have one.
 
@@ -454,11 +496,11 @@ fix. The script applies the same rule as the gate, because it calls the same
 from CI. It judges the working tree, like `bin/check-copyright-headers.sh`, so uncommitted edits are
 caught too. Only lines you *add* are scanned; pre-existing bare refs in a file you touch are fine.
 
-The *inputs* can differ in one narrow case, and only in the safe direction: CI reads patches from
-GitHub's `pulls.listFiles`, which omits `patch` for a very large diff, and the gate skips a file it
-cannot see - while the local script builds its own patch with `git diff` and still checks it. So a
-green local run is not a promise that CI has looked at every file, but a red one is always real. It
-can flag something CI would silently pass; it cannot pass something CI would flag.
+The *inputs* differ in two narrow ways. CI reads patches from GitHub's `pulls.listFiles`, which omits
+`patch` for a very large diff, and the gate skips a file it cannot see - while the local script
+builds its own patch with `git diff` and still checks it. And CI additionally scans the **PR body**,
+which does not exist when you run the script. So a green local run promises neither that CI looked at
+every file nor that the description passes; a red one is always real.
 That holds only while confluentinc's numbering stays below 1000 - it is dormant rather than
 archived, so it still creeps. Measure the headroom rather than trusting a figure written here:
 `gh api 'repos/confluentinc/parallel-consumer/issues?state=all&per_page=1&sort=created&direction=desc' --jq '.[0].number'` -
@@ -499,14 +541,27 @@ amiss.
 What it checks is that a reference *names* a repo, not that it names the right one: `astubbs#857`
 passes the gate and is still wrong. Resolve the number in both repos before you write it.
 
+**The PR body is in scope too, and it is the one place the fully qualified form is mandatory.** The
+body is the surface people actually read on GitHub, and a bare `#200` renders there as a *working*
+link to the wrong issue - the exact failure the gate exists to prevent, on its most visible page. So
+write `astubbs/parallel-consumer#NN` or `confluentinc/parallel-consumer#NN` in a description: the
+short `astubbs#NN` satisfies the gate but is not cross-reference syntax, so GitHub renders it as
+plain text and the body loses the link it would otherwise have had. Same for closing keywords -
+`Fixes astubbs#167` closes nothing. This is not a second rule: the body is fed to the same
+`suspectRefs` as a synthetic entry (`prBodyEntry`), attributed as `<PR body>` in the failure. Fenced
+code blocks in the body are skipped, because GitHub does not auto-link inside one either, so a
+pasted log or a quoted gate failure is not a violation. Editing the body re-runs the job, so a fix
+there needs no push.
+
 The files listed in `EXEMPT_PATHS` are exempt, because a bare number legitimately means upstream in them: `CHANGELOG.adoc`,
 `upstream-map.yaml`, `upstream-pr-analysis.adoc`, and the gate's own test fixtures. If a flagged
-reference really is fork-local, put `issue-refs: N/A - <reason>` on its own line in the PR body.
+reference really is fork-local, put `issue-refs: N/A - <reason>` on its own line in the PR body -
+which skips the body's own references along with everything else.
 Logic and tests live in `.github/scripts/issue-ref-gate.js` and `issue-ref-gate.test.js`.
 
 **`Fixes #NNN` only closes on PRs targeting the default branch.** Discovered on astubbs#29, which targeted
 `master-confluent`: the keyword was in the body and GitHub ignored it entirely. Check
-`gh pr view N --json closingIssuesReferences` rather than assuming. And never use `Fixes` for a
+`gh pr view N -R astubbs/parallel-consumer --json closingIssuesReferences` rather than assuming. And never use `Fixes` for a
 *partial* fix - see the mirrors for confluentinc#233, confluentinc#326 and confluentinc#857, none of which their linked PRs
 actually resolve.
 
@@ -578,10 +633,10 @@ Keep the existing subject convention for *upstream* references (`... (#893)`, `c
   astubbs#57 - the PR in question - never mentioned its predecessor at all, so the earlier round of
   review was invisible from the work that carried it.
 - **Keep the PR title and body in sync with what the PR actually covers.** As a PR grows, its description drifts - re-check it before requesting review and before merge. Update it only on *material* drift: whole changes/workstreams missing, wrong specifics (core counts, flags, forkCounts, file/label names), or scope that has outgrown the title. Do NOT churn the description for cosmetic wording - if it still accurately reflects the content, leave it.
-- **Open PRs from the template and complete its checklist honestly.** `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively (e.g. `gh pr create --body-file`), so base the PR body on it and resolve every box: check it `[x]`, or mark it `N/A - <reason>`. For human-authored PRs the `PR Checklist` CI gate (`.github/workflows/pr-checklist.yml`) fails when the checklist is missing entirely *or* when any box is left unchecked without an `N/A` - so dropping the template is not a bypass. Only real bot authors (GitHub user type `Bot`, e.g. Dependabot/Renovate) are exempt.
+- **Open PRs from the template and complete its checklist honestly.** `.github/PULL_REQUEST_TEMPLATE.md` is NOT auto-applied when a PR is created non-interactively (e.g. `gh pr create -R astubbs/parallel-consumer --body-file`), so base the PR body on it and resolve every box: check it `[x]`, or mark it `N/A - <reason>`. For human-authored PRs the `PR Checklist` CI gate (`.github/workflows/pr-checklist.yml`) fails when the checklist is missing entirely *or* when any box is left unchecked without an `N/A` - so dropping the template is not a bypass. Only real bot authors (GitHub user type `Bot`, e.g. Dependabot/Renovate) are exempt.
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the specific review comment (its own thread), NOT as a separate top-level PR comment - a summary comment leaves the original conversation unresolved and blocks merge on "unresolved conversations." When a finding is fixed, reply in-thread with the fix + commit SHA and mark the thread resolved (`gh api graphql ... resolveReviewThread`). Leave a thread open only when it genuinely needs the author's decision, and say so in the reply.
 - **After opening a PR, follow up on the duplication reports.** The duplicate-code and file-similarity checks post comments flagging new clones/similarity. Read them, remove duplication introduced by *this* PR before it merges; ignore clones that already existed on the base branch (out of scope for this PR).
-- **Stacked PRs: put `depends on #N` in the description** (one line per parent). The PR-dependency gate blocks the child from merging until the parent does; keep the list current if the chain changes.
+- **Stacked PRs: put `depends on astubbs/parallel-consumer#N` in the description** (one line per parent). The PR-dependency gate blocks the child from merging until the parent does; keep the list current if the chain changes. Write the **owner/repo** form, not the bare `depends on #N` the action also accepts: the issue-reference gate reads the body too, and a bare number below the threshold fails it. Both forms are equally understood by `dependencies-action` (`partialLinkRegex`), so nothing is lost.
 
 ## Releasing
 
@@ -639,7 +694,7 @@ Multiple agents/sessions often work in parallel git worktrees (kept under `.clau
 
 ## Refactoring backlog
 
-Deferred internal refactors (too big/risky to fold into the change at hand) live in [`docs/refactoring.md`](docs/refactoring.md) - a versioned markdown list, grouped by file, **not** GitHub issues (overkill for a solo maintainer). When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot (`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry to the doc. **`docs/refactoring.md` also owns the triage of plain `TODO`/`FIXME`/`XXX` markers** - there are ~90 of those versus a handful using the `TODO(refactor):` convention, and they are inventoried in the generated [`docs/TODO_INDEX.md`](docs/TODO_INDEX.md) (`bin/todo-index.sh`, `--check` fails when stale). It already covers the breaking-change queue, static-state removal, offset-encoder cleanups and per-file backlogs - so write triage up here, and **do not start a parallel list** (see *Where things live* at the top). Promote an item to a branch/PR only when you actually start it; if it maps to an upstream issue, link it rather than duplicate. The doc also tracks **breaking changes queued for the next major version** in a separate, release-gated section, kept apart from the non-breaking internal refactors (those are batched for a major bump, not folded in ad hoc). This is distinct from `docs/inflight/` (in-flight), `upstream-map.yaml` (fork↔upstream), and PR review feedback (raise on the PR).
+Deferred internal refactors (too big/risky to fold into the change at hand) live in [`docs/refactoring.md`](docs/refactoring.md) - a versioned markdown list, grouped by file, **not** GitHub issues (overkill for a solo maintainer). When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot (`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry to the doc. **`docs/refactoring.md` also owns the triage of plain `TODO`/`FIXME`/`XXX` markers** - there are ~90 of those versus a handful using the `TODO(refactor):` convention, and they are inventoried in the generated [`docs/todo-index.md`](docs/todo-index.md) (`bin/todo-index.sh`, `--check` fails when stale). It already covers the breaking-change queue, static-state removal, offset-encoder cleanups and per-file backlogs - so write triage up here, and **do not start a parallel list** (see *Where things live* at the top). Promote an item to a branch/PR only when you actually start it; if it maps to an upstream issue, link it rather than duplicate. The doc also tracks **breaking changes queued for the next major version** in a separate, release-gated section, kept apart from the non-breaking internal refactors (those are batched for a major bump, not folded in ad hoc). This is distinct from `docs/inflight/` (in-flight), `upstream-map.yaml` (fork↔upstream), and PR review feedback (raise on the PR).
 
 ## Upstream tracking
 
