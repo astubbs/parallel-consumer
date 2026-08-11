@@ -90,10 +90,11 @@ live in a profile *and* the consumer to be a child module.
 
 ### 2. `validate` builds nothing, so a mojo needing a sibling's jar must go to the network
 
-`ossindex-maven-plugin`'s audit mojo declares `requiresDependencyResolution=test`. Several modules
+`ossindex-maven-plugin`'s audit mojo declares `requiresDependencyResolution=test`. Eight modules
 depend on a sibling's jar, including `parallel-consumer-core:jar:tests` - `parallel-consumer-vertx`
-(second in the reactor, and so the first to fail), `parallel-consumer-mutiny`, and four example
-modules. A phase that compiles nothing has produced no such jar in the reactor, so Maven falls back
+(second in the reactor, and so the first to fail), `parallel-consumer-mutiny`,
+`parallel-consumer-reactor`, and all five example modules (core, metrics, reactor, streams, vertx).
+A phase that compiles nothing has produced no such jar in the reactor, so Maven falls back
 to the remote repositories, and **the repository that has it is not declared for reading** - see trap
 4. Note the failure is not test-jar-specific: the log fails on plain `parallel-consumer-core:jar` too.
 

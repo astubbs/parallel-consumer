@@ -34,12 +34,20 @@ tags:
 ## Context
 
 Seven checks in this repository are on record as having gone unread while the thing they were meant to
-catch went unchecked. Six reported **success** in states where they had not actually run; the seventh
-reported failure on every run and nobody looked. Several were recognised as the same thing within a
-single day, which is what turned a recurring annoyance into a named class.
+catch went unchecked. Six reported **success**; the seventh reported failure on every run and nobody
+looked. Several were recognised as the same thing within a single day, which is what turned a
+recurring annoyance into a named class.
 
-None of the six was lying about its result. Each faithfully reported "I did not find a problem", having
-never looked. That is what makes the failure mode expensive: a check that goes red when broken gets
+They come in two shapes, and keeping them apart matters because it changes the question you have to
+ask. Most **never looked** - the scanner 401ed, the review action refused to start, the copyright
+script could not resolve a fork point. Two **looked and then declined to enforce what they found**:
+Maven spotted the missing plugin version and degraded it to a `[WARNING]`, and the review action
+completed a review it never posted. So the diagnostic is not "did it run", which clears both of those,
+but **did its verdict reach anything that acts on it**.
+
+None of them was lying about its result. Each faithfully reported "I did not find a problem" - some
+having never looked, some having looked and let it go. That is what makes the failure mode expensive:
+a check that goes red when broken gets
 fixed, and a check that goes green when broken is worse than no check at all, because it also removes
 the prompt to add a working one.
 
@@ -66,8 +74,8 @@ different route: **a check nobody gates on is a check nobody reads.**
 > confirm it fails deterministically. An assertion nobody has seen fail is decoration.
 
 [`docs/ci.md`](../../ci.md) states it again for the review job, and
-[`docs/issue-references.md`](../../issue-references.md) states it a third time for the changelog gate
-(*"do not read a green gate as compliance with the rule above"*). This doc exists because those are
+[`docs/releasing.md`](../../releasing.md) states it a third time for the `PR Checklist` changelog gate
+(*"Do not read a green gate as compliance with the no-entries rule"*). This doc exists because those are
 three separate statements of one class, and the class is worth naming so the next instance is
 recognised before it costs anything.
 
