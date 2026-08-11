@@ -1463,17 +1463,6 @@ critical-defect gate.
 | Changes with the APIs it demonstrates
 | You want runnable examples before choosing an integration module.
 
-| `parallel-consumer-streams-spike`
-| Alpha / experimental
-| Module-specific evidence only; does not inherit stable confidence
-| Volatile while the experiment is evaluated
-| You want to evaluate the Kafka Streams integration and can tolerate changing behaviour and APIs.
-
-| `parallel-consumer-connect`
-| Alpha / experimental
-| Module-specific evidence only; does not inherit stable confidence
-| Volatile while the experiment is evaluated
-| You want to evaluate running supported Kafka Connect sink tasks in-process.
 |===
 
 The experimental artifacts are not listed above because they are not in this release's build yet. When one lands it

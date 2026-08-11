@@ -284,11 +284,19 @@ for path in sorted(glob.glob("docs/features/*.yaml") + glob.glob("docs/data/*.ya
                                           "availability.evidence",
                                           f"'{kind}.availability.{status}.evidence_optional'")
                 milestones = availability.get("milestones")
-                if milestones is not None and not isinstance(milestones, list):
-                    problems.append(f"{path}: availability.milestones should be a list")
-                for milestone in milestones or []:
-                    require_fields(milestone, status_spec.get("milestone_required"), path,
-                                   "a milestone")
+                if milestones is None:
+                    pass
+                elif not isinstance(milestones, list):
+                    # Report and stop. Falling through iterates a string character by character and
+                    # emits one problem per character, burying the real finding in noise.
+                    problems.append(
+                        f"{path}: availability.milestones should be a list, "
+                        f"found {type(milestones).__name__}"
+                    )
+                else:
+                    for milestone in milestones:
+                        require_fields(milestone, status_spec.get("milestone_required"), path,
+                                       "a milestone")
 
     anchor = doc.get("readme_anchor")
     if anchor and anchors and anchor not in anchors:

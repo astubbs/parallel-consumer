@@ -14,9 +14,10 @@
 #    5. a README anchor FRAGMENT that does not exist                    -> FAIL (1)
 #    6. an undeclared field inside availability.evidence                -> FAIL (1)
 #    7. a schema contract that governs no collection                    -> FAIL (1)
-#    8. a required field EMPTIED rather than removed                    -> FAIL (1)
-#    9. a field the kind never declared, where it declares an optional  -> FAIL (1)
-#   10. an optional list with no required partner to extend             -> FAIL (1)
+#    8. availability.milestones as a SCALAR instead of a list           -> FAIL (1)
+#    9. a required field EMPTIED rather than removed                    -> FAIL (1)
+#   10. a field the kind never declared, where it declares an optional  -> FAIL (1)
+#   11. an optional list with no required partner to extend             -> FAIL (1)
 #
 # Case 2 is the one worth keeping. The guard's first cross-reference check only resolved a string
 # that was ENTIRELY a path, so it caught `path: foo.yaml` and missed `... see foo.yaml.` - which is
@@ -27,9 +28,9 @@
 # cannot locate must fail loudly, because the alternative is a contract everybody believes is
 # enforced and nothing enforces. Six were in that state when this was written.
 #
-# Cases 9 and 10 are the same class caught a second time, in the optional lists. Those were pure
+# Cases 10 and 11 are the same class caught a second time, in the optional lists. Those were pure
 # documentation: nothing checked that a record's fields came from required plus optional, so the
-# lists could say anything. Declaring an optional list is now what closes a field set, and case 10
+# lists could say anything. Declaring an optional list is now what closes a field set, and case 11
 # is the self-consistency half - an optional list with nothing to extend closes nothing.
 #
 # Run: bin/test-check-docs-data.sh   (CI runs it before the guard it protects)
@@ -128,6 +129,11 @@ restore
 mutate docs/data/schema.yaml \
   't.replace("    item_contracts:\n      entry_required: entries\n", "    item_contracts: {}\n", 1)'
 expect 1 "a schema contract governing no collection is caught"
+restore
+
+mutate docs/features/ordering-modes.yaml \
+  't.replace("  milestones:\n", "  milestones: not-a-list\n", 1)'
+expect 1 "milestones as a scalar reports once, not once per character"
 restore
 
 mutate docs/features/commit-modes.yaml 're.sub(r"^summary: .*$", "summary: \"\"", t, count=1, flags=re.M)'
