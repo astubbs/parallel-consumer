@@ -16,6 +16,36 @@
     <artifactId>parallel-consumer-example-streams</artifactId>
     <name>Parallel Consumer - Examples - Streams</name>
 
+    <dependencyManagement>
+        <dependencies>
+            <!-- kafka-streams 3.9.2 drags in Jackson 2.16.2, which is vulnerable to CVE-2026-54512,
+                 -54513, -54514, -54515 and -59888. 2.18.9 is past every one of them, and is the
+                 *minimum* safe version in the 2.18 line: CVE-2026-59889 was introduced in 2.18.0 and
+                 only fixed in 2.18.9, so 2.18.0-2.18.8 would trade one vulnerability for another.
+
+                 Module-local on purpose, exactly like the test-scope pin in example-metrics:
+                 jackson-databind is also transitive to WireMock (parallel-consumer-vertx), and
+                 pinning it in root dependencyManagement forces WireMock onto an incompatible Jackson
+                 and breaks VertxTest with HTTP 500. This module is never published
+                 (maven.deploy.skip / maven.install.skip / skipPublishing in the examples parent), so
+                 no consumer of the library inherits it.
+
+                 The BOM rather than a bare jackson-databind pin, because databind 2.18 needs
+                 jackson-core and jackson-annotations on the same line - pinning databind alone would
+                 leave it running against 2.16.2 core.
+
+                 Retire this when kafka-streams can be bumped to a release that ships Jackson 2.18.9
+                 or newer; 3.9.2 is the last 3.9.x, and 4.x is behind the Java 11 baseline move. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.18.9</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>

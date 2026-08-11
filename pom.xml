@@ -436,6 +436,17 @@
                 <artifactId>micrometer-core</artifactId>
                 <version>${micrometer-core.version}</version>
             </dependency>
+            <!-- Pin lz4-java ahead of what kafka-clients 3.9.2 ships (1.10.1), which is vulnerable to
+                 CVE-2026-59949 (out-of-bounds read in the JNI XXHash entry points, fixed in 1.11.1).
+                 Note the coordinate: Kafka moved to the at.yawk maintained fork, not org.lz4. Nothing
+                 here calls the LZ4 API directly, so this is hygiene rather than exposure, but it is a
+                 leaf transitive with Java 7 bytecode and no API surface we touch, so the bump is free.
+                 Drop this once the Kafka client we depend on ships 1.11.1 or newer itself. -->
+            <dependency>
+                <groupId>at.yawk.lz4</groupId>
+                <artifactId>lz4-java</artifactId>
+                <version>1.11.2</version>
+            </dependency>
             <!-- External -->
             <dependency>
                 <groupId>org.testcontainers</groupId>
@@ -598,6 +609,58 @@
                     <authId>ossindex</authId>
                     <skip>${ossindex.skip}</skip>
                     <fail>${ossindex.fail}</fail>
+                    <!-- Greenlit findings. Every entry here is one we have read and cannot act on -
+                         either no fixed release exists, or the finding does not apply to the version
+                         we resolve. Nothing is excluded because it was inconvenient. Without these
+                         the audit can never be moved to fail=true, because there is no version of the
+                         reactor that satisfies them. Full reasoning:
+                         docs/inflight/deps-cve-backlog.md.
+
+                         Each entry says what would retire it. Re-check them whenever this list is
+                         touched: an exclusion that has quietly become fixable is the failure mode. -->
+                    <excludeVulnerabilityIds>
+                        <!-- org.hdrhistogram:HdrHistogram (via micrometer-core). Both are
+                             VulDB-assigned, local-access-only, and carry isDisputed: true in the CVE
+                             record itself - "still unclear if this vulnerability genuinely exists".
+                             GHSA has accepted neither, which is why Dependabot is silent. 2.2.2 is
+                             the newest release on Central, so there is nothing to upgrade to, and it
+                             is transitive so it is not independently upgradable either.
+                             RETIRE WHEN: HdrHistogram publishes a fixed release, or the records are
+                             rejected/withdrawn. -->
+                        <excludeVulnerabilityId>CVE-2026-14683</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-14686</excludeVulnerabilityId>
+
+                        <!-- io.netty:netty-codec-http (via vertx-core). No public record exists: not
+                             in OSV, not in GHSA, and cveawg.mitre.org returns CVE_RECORD_DNE. The
+                             neighbouring ids are the real Netty August 2026 batch (-59898, -59899,
+                             -59901), all fixed in 4.1.136.Final, which is what we already resolve. So
+                             this is either a reserved id or a misattribution, and it cannot be acted
+                             on because there is nothing to read.
+                             RETIRE WHEN: the record is published and can be assessed - re-check when
+                             Vert.x 5 lands (docs/inflight/deps-deferred-majors.md). -->
+                        <excludeVulnerabilityId>CVE-2026-59903</excludeVulnerabilityId>
+
+                        <!-- io.micrometer:micrometer-core. Real, but there is no publicly available
+                             fix: the advisory's 1.13.x/1.14.x patches ship only in the commercial
+                             repository, and Central stops at 1.13.15 / 1.14.14, both affected. The
+                             minimum public fix is 1.15.12. Not reachable here either - the advisory
+                             scopes it to HTTP *server* instrumentation, and this project uses only
+                             Counter/Gauge/Timer/DistributionSummary/KafkaClientMetrics, with
+                             example-metrics serving over the JDK's own com.sun.net.httpserver.
+                             RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
+                             rename is migrated, which is what unblocks 1.15.x. -->
+                        <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
+
+                        <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
+                             positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
+                             the module resolves 2.18.9. The vulnerable code is in unwrapped-creator
+                             handling that the 2.18 line does not have. OSS Index's version range is
+                             over-broad; Dependabot does not report it.
+                             RETIRE WHEN: OSS Index corrects the range, or the module moves onto a
+                             2.21.x that is genuinely in scope (then it needs >= 2.21.5, not an
+                             exclusion). -->
+                        <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
+                    </excludeVulnerabilityIds>
                 </configuration>
                 <executions>
                     <execution>
