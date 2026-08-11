@@ -9,7 +9,7 @@ NOTE:: Routine/automated dependency bumps (e.g. Dependabot) are not listed here.
 
 NOTE:: *Reference convention (this is a fork).* Links and bare `#NN` / commit hashes refer to this fork, https://github.com/astubbs/parallel-consumer[astubbs/parallel-consumer]. Upstream references are written explicitly as `upstream #NN` and link to https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer]. Entries below `0.6.0.0` predate the fork and their `#NN` refer to upstream.
 
-NOTE:: *How this file is maintained.* A section is frozen once its release has **shipped** - `0.5.x` and below are hand-written legacy from before the fork, and are finished. The section for the release currently being cut is **generated at release time from the commit log**, replacing whatever text is under it, and is frozen in turn once that release ships. **That includes `0.6.0.0` below**: it has not shipped, so what you are reading there is working text and not the notes that release will publish. Consequently a PR never adds an entry here and never opens an `== Unreleased` section; the only edit a PR may make is correcting a factual error in text that is already present. The judgement applied when generating (what earns an entry, and how long it may be) is in `AGENTS.md` -> Changelog.
+NOTE:: *How this file is maintained.* A section is frozen once its release has **shipped** - `0.5.x` and below are hand-written legacy from before the fork, and are finished. The section for the release currently being cut is **generated at release time from the commit log**, replacing whatever text is under it, and is frozen in turn once that release ships. **That includes `0.6.0.0` below**: it has not shipped, so what you are reading there is working text and not the notes that release will publish. Consequently a PR never adds an entry here and never opens an `== Unreleased` section; the only edit a PR may make is correcting a factual error in text that is already present. The judgement applied when generating (what earns an entry, and how long it may be) is in `docs/releasing.md`.
 
 // git log --pretty="* %s" 0.3.0.2..HEAD
 
@@ -28,7 +28,7 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 
 === Improvements
 
-* The project is renamed to *Kafka Parallel Consumer* (README and branding). Java package names (`io.confluent.parallelconsumer.*`) are unchanged, so imports are unaffected — only the Maven groupId changed (see Breaking).
+* The project is renamed to *Parallel Consumer for Apache Kafka* — the README title, and the `<name>` of the parent and every module.
 * feature: new `parallel-consumer-mutiny` module — SmallRye Mutiny (Quarkus) integration (upstream https://github.com/confluentinc/parallel-consumer/pull/891[#891]).
 * Commit-failure error logging now includes the offsets being committed, to aid diagnosis of failed commits (upstream https://github.com/confluentinc/parallel-consumer/pull/850[#850]).
 * Modernized CI (parallel unit/integration/performance suites, SpotBugs, PIT mutation testing, dependency scanning) and automated Maven Central publishing (https://github.com/astubbs/parallel-consumer/commit/b810e873[b810e873], https://github.com/astubbs/parallel-consumer/commit/2bcc74d9[2bcc74d9]).
@@ -57,7 +57,7 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 ** *Chaos Pain Suite* - seeded, replayable scenarios that drive consumer fleets through rebalance storms under no-loss, bounded-duplicate and progress SLOs, built to catch the upstream https://github.com/confluentinc/parallel-consumer/issues/857[#857]-family silent stalls. Two of the fixes above were found or confirmed this way.
 ** *No silently-uncollected tests* - an ArchUnit rule fails the build when a class holding tests is named something surefire never runs; three dormant test classes were found this way and re-enabled. A second rule keeps Docker-dependent tests out of the fast unit suite.
 ** *Mutation testing* per PR on the classes a PR changes, plus forked-per-broker integration tests that removed a long-standing flake class.
-** *Self-hosted high-CPU lane* - the full suites, including chaos and performance, run per PR on real hardware. Advisory only; the required merge gate stays on GitHub-hosted runners. See link:docs/SELF_HOSTED_RUNNER.md[docs/SELF_HOSTED_RUNNER.md].
+** *Self-hosted high-CPU lane* - the full suites, including chaos and performance, run per PR on real hardware. Advisory only; the required merge gate stays on GitHub-hosted runners. See link:docs/self-hosted-runner.md[docs/self-hosted-runner.md].
 +
 The detail behind each of these is in the commit log and `docs/solutions/`.
 

@@ -22,7 +22,7 @@ TIP:: Editing template file
 endif::[]
 
 
-= Kafka Parallel Consumer
+= Parallel Consumer for Apache Kafka
 :icons:
 :toc: macro
 :toclevels: 3
@@ -73,6 +73,15 @@ TIP: If you like this project, please ⭐ Star it in GitHub to show your appreci
 
 NOTE: This is a community-maintained project with no commercial support.
 See the <<Support and Issues>> section for more information.
+
+[[trademarks]]
+[NOTE]
+.Trademarks
+====
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
+
+See <<Attribution>> for the other Apache marks referenced in this document.
+====
 
 [[when-to-use]]
 == When to use this library (vs KIP-932 Share Groups)
@@ -1408,6 +1417,8 @@ So it's very efficient.
 (Reference: https://github.com/confluentinc/parallel-consumer/issues/415#issuecomment-1256022394[#415])
 
 == Attribution
+
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
 
 http://www.apache.org/[Apache®], http://kafka.apache.org/[Apache Kafka], and http://kafka.apache.org/[Kafka®] are either registered trademarks or trademarks of the http://www.apache.org/[Apache Software Foundation] in the United States and/or other countries.
 
