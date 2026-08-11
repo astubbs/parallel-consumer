@@ -4,7 +4,7 @@
 #
 
 # Verify each quarantined test's OWNER CLAIM against reality (needs `gh` + network).
-# For every registry entry with an `Owner: PR #NN` marker:
+# For every registry entry with an `Owner: PR #NN` / `Owner: PR astubbs#NN` marker:
 #
 #   ERROR (exit 1 - the closed loop is broken, fix the registry):
 #     - the owning PR does not exist (confirmed not-found, NOT a transient gh failure)
@@ -58,7 +58,12 @@ entries=$(registry_entries)
 for t in $entries; do
     cls=${t%%.*}
     block=$(registry_entry_block "$t")
-    pr=$(echo "$block" | grep -oE 'Owner: PR #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+    # Accepts `Owner: PR #NN`, `Owner: PR astubbs#NN` and the fully qualified
+    # `Owner: PR astubbs/parallel-consumer#NN`. The qualified forms exist because
+    # bin/check-issue-refs.sh rejects a bare `#NN` below its threshold - the fork's numbers sit
+    # inside confluentinc's range - so the registry could not satisfy both gates at once. Extract
+    # from the `#NN` tail, never from the whole match, or a digit in the qualifier would win.
+    pr=$(echo "$block" | grep -oE 'Owner: PR (astubbs/parallel-consumer|astubbs)?#[0-9]+' | grep -oE '#[0-9]+' | tr -d '#' | head -1 || true)
 
     if [ -z "$pr" ]; then
         echo "ADVISORY: $t has no owning PR - diagnosed-but-unowned, find it an owner."
