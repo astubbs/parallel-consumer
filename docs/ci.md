@@ -179,6 +179,22 @@ having one. The real fix is a reviewer that can run without the credential, whic
 piece of work and is recorded in
 [`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
 
+### The reviewer runs PR code, so it holds no write grant
+
+The fork refusal answers *whose* code runs beside the credential. The second boundary answers *what
+that code could reach*, and it is why the reviewer is **two jobs**.
+
+The `review` job checks out the PR and executes its scripts - that is the point of letting the
+reviewer run tests - so on a PR branch those scripts are whatever the PR says they are. It therefore
+runs at `actions: read`, and its checkout sets `persist-credentials: false` so the job's token is
+not written into `.git/config` beside the code it is about to run.
+
+The one write grant the contract needs, `actions: write` to re-run the gate, lives in a second job,
+`refresh-gate`, which **checks nothing out**. Held in `review` instead, that token could dispatch,
+cancel or re-run any workflow in the repo - `release.yml` among them - from a filesystem a PR author
+controls. A same-repository PR does mean a write-access author, but write access to a branch is not
+the same thing as a token that can fire a release. **Do not merge the two jobs back together.**
+
 ### What the gate proves, and what it does not
 
 `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first)

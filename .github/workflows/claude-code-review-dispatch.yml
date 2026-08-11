@@ -37,6 +37,23 @@ name: review (on demand)
 #
 # Dispatching `--ref <the PR branch>` would defeat that and reintroduce the old trap, so do
 # not: it runs the PR's copy of this file, which is the case the guard exists to refuse.
+#
+# WHY THIS IS TWO JOBS
+#
+# `review` checks out the PR and RUNS ITS CODE - the reviewer is allowed to execute this repo's
+# test and check scripts, and on a PR branch those scripts are whatever the PR says they are.
+# So `review` holds no write grant it does not need, and its checkout sets
+# `persist-credentials: false` so the job's token is not left in .git/config next to that code.
+#
+# `refresh-gate` exists solely to hold the one write grant the contract does need - `actions:
+# write`, to re-run the gate - in a job that checks NOTHING out. Keeping it in `review` would
+# put a token that can dispatch, cancel and re-run any workflow in the repo (release.yml among
+# them) in the same filesystem as PR-authored scripts.
+#
+# This is the fork-head refusal's question asked one level in. That guard asks "whose code is
+# this?"; the split asks "what could that code reach if it turned out to be hostile?". A
+# same-repository PR does mean a write-access author, but write access to a branch is not the
+# same thing as a token that can fire a release. Do not merge these jobs back together.
 
 on:
   workflow_dispatch:
@@ -61,6 +78,11 @@ jobs:
     # must not hold a runner indefinitely. Generous enough for a unit run on a 2-core hosted
     # box.
     timeout-minutes: 30
+    # Consumed by `refresh-gate`, which needs both of these but must NOT check out PR code to
+    # get them.
+    outputs:
+      reviewed_sha: ${{ steps.reviewed-sha.outputs.sha }}
+      review_outcome: ${{ steps.claude-review.outcome }}
     permissions:
       contents: read
       # write, not read: the reviewer creates INLINE review comments for blocking findings
@@ -71,11 +93,15 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-      # read: lets the reviewer read the PR's CI results - worth more here than on the old push
-      # trigger, since a review is requested when the branch is ready, by which time the test
-      # jobs have usually finished. write: for the final step, which re-runs the review gate so
-      # the required check re-evaluates once this review has posted.
-      actions: write
+      # READ, never write. This job checks out the PR's own code and deliberately EXECUTES it
+      # (see --allowedTools: the reviewer runs this repo's test and check scripts), so every
+      # permission here is a permission handed to whatever those scripts have been changed to
+      # do. `actions: write` would be enough to dispatch, cancel or re-run any workflow in the
+      # repo - including release.yml's `workflow_dispatch` path - so it lives in the separate
+      # `refresh-gate` job below, which checks nothing out. Read alone lets the reviewer read
+      # the PR's CI results, which is worth more here than on the old push trigger: a review is
+      # requested when the branch is ready, by which time the test jobs have usually finished.
+      actions: read
 
     steps:
       # `pr` reaches a git ref and a prompt, so it is checked before either. A dispatch
@@ -138,6 +164,12 @@ jobs:
           # Full history: the reviewer compares against the PR base, which a depth-1 clone
           # can't reach.
           fetch-depth: 0
+          # Do NOT leave the job's token in .git/config. checkout defaults this to true, which
+          # writes an authenticated header into the working copy - the same working copy whose
+          # scripts this job then executes. Nothing after this step pushes or fetches, so the
+          # persisted credential buys nothing and only widens what a modified `bin/` script
+          # could reach.
+          persist-credentials: false
 
       # Recorded immediately after checkout, so the final step can tell whether the PR moved
       # underneath this review.
@@ -272,6 +304,28 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
+  # Holds the contract's only write grant, in a job that checks NOTHING out. See "WHY THIS IS TWO
+  # JOBS" in the header before changing anything here - in particular, do not add a checkout.
+  refresh-gate:
+    runs-on: ubuntu-latest
+    needs: review
+    # ONLY AFTER A REVIEW THAT ACTUALLY SUCCEEDED. An earlier revision used `always()`, with the
+    # rationale that a failed review should still refresh the gate rather than leave a stale
+    # verdict. That rationale was wrong, and backwards: the gate accepts any fresh,
+    # finished-looking `claude[bot]` comment, and a failed run can still leave its tracking or
+    # error comment behind. Refreshing the gate toward SUCCESS after a review that failed is
+    # exactly how an error message turns a required check green. A failed review leaving the
+    # check red is the correct outcome, not a stale one.
+    #
+    # `needs:` alone would already skip this job on a failed review; the explicit outcome test
+    # keeps that true if anyone ever adds `continue-on-error` to the review step.
+    if: needs.review.outputs.review_outcome == 'success'
+    permissions:
+      # The whole reason this job exists.
+      actions: write
+      # To read the PR's current head SHA, and nothing else.
+      pull-requests: read
+    steps:
       # WITHOUT THIS STEP THE GATE STAYS RED FOREVER AFTER A SUCCESSFUL REVIEW.
       #
       # `claude-review` is produced by .github/workflows/claude-code-review.yml, which triggers
@@ -286,24 +340,16 @@ jobs:
       # dispatch- or comment-triggered run would attach its check to the default branch instead
       # and never satisfy the PR's required check.
       #
-      # ONLY AFTER A REVIEW THAT ACTUALLY SUCCEEDED. An earlier revision used `always()`, with
-      # the rationale that a failed review should still refresh the gate rather than leave a
-      # stale verdict. That rationale was wrong, and backwards: the gate accepts any fresh,
-      # finished-looking `claude[bot]` comment, and a failed run can still leave its tracking or
-      # error comment behind. Refreshing the gate toward SUCCESS after a review that failed is
-      # exactly how an error message turns a required check green. A failed review leaving the
-      # check red is the correct outcome, not a stale one.
-      #
       # Never fails the job: not finding a gate run to re-run is a reason to say so, not to fail
       # a review that already happened.
       - name: Re-run the review gate so it sees this review
-        if: steps.claude-review.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
-          # The SHA this run actually checked out and reviewed.
-          REVIEWED_SHA: ${{ steps.reviewed-sha.outputs.sha }}
+          # The SHA the review job actually checked out and reviewed, carried across the job
+          # boundary so this job never has to fetch the PR to learn it.
+          REVIEWED_SHA: ${{ needs.review.outputs.reviewed_sha }}
         run: |
           head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
 
