@@ -176,9 +176,11 @@ jobs:
           # self-asserted escape docs/ci.md rejects by name: the person who wants the merge would
           # also be the person certifying the review.
           #
-          # So Claude still answers on fork PRs - it is useful, and with no execution tools it is
-          # harmless - but the gate is not refreshed, because emitting no PR number is what
-          # `refresh-gate` skips on.
+          # So Claude still answers on fork PRs - useful, and with no execution tools harmless -
+          # but the gate is not refreshed, because emitting no PR number is what `refresh-gate`
+          # skips on. "Answers" means answers a MAINTAINER: the action's own collaborator check
+          # rejects anyone without write access before Claude starts, so a fork AUTHOR commenting
+          # `@claude` gets nothing regardless of what this workflow does.
           #
           # `fork_pr` ALSO withholds the tool allowlist. See "WHAT THIS ROUTE MAY EXECUTE" below:
           # granting `./mvnw` and the `bin/` scripts on a fork head would put PR-controlled
@@ -239,8 +241,10 @@ jobs:
           # the combination the dispatched reviewer refuses fork heads to avoid: a fork can
           # replace an allowlisted script and wait to be asked to run the checks. The dispatch
           # route answers it by refusing the whole review; this route answers by still replying -
-          # a fork PR author asking a question is a legitimate thing - but with NO execution
-          # tools, so there is nothing for replaced code to be executed by.
+          # a maintainer asking a question on a fork PR is a legitimate thing - but with NO
+          # execution tools, so there is nothing for replaced code to be executed by. (Only a
+          # maintainer: the action rejects actors without write access before Claude runs, so a
+          # fork AUTHOR gets no reply either way.)
           #
           # `--allowedTools` here ADDS to tag mode's base tools rather than replacing them - the
           # action documents exactly that ("The base GitHub tools are always included. Use

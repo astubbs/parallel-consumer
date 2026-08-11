@@ -141,12 +141,20 @@ is that the list is curated to this repo's own scripts, that the job holding it 
 and that it is withheld on fork heads. So the lists are the same, deliberately, and
 [`.github/workflows/claude.yml`](../.github/workflows/claude.yml) says to keep them that way.
 
-**On a fork PR this route answers but does not run anything.** Granting `./mvnw` and the `bin/`
-scripts against a fork's checkout would put PR-controlled executables beside
-`CLAUDE_CODE_OAUTH_TOKEN` - a fork could replace an allowlisted script and wait to be asked to run
-the checks. That is the hazard the dispatched reviewer avoids by refusing fork heads outright; here
-the reply still happens, with no execution tools, because a fork author asking a question is
-legitimate. The job is also capped at 30 minutes, since a comment can start a test suite.
+**On a fork PR this route answers but does not run anything** - and "answers" needs one
+qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put
+PR-controlled executables beside `CLAUDE_CODE_OAUTH_TOKEN`: a fork could replace an allowlisted
+script and wait to be asked to run the checks. That is the hazard the dispatched reviewer avoids by
+refusing fork heads outright; here the *reply* still happens, with no execution tools.
+
+The qualification: **only a maintainer gets that reply.** `claude-code-action` runs its own
+collaborator-permission check and exits before Claude starts, so a fork author - or anyone else
+without write access - commenting `@claude` gets nothing at all, on any PR. That is the action's
+behaviour rather than something this workflow chooses, and it is why the trusted-commenter
+carve-out is defence in depth rather than the only guard. The useful case on a fork PR is a
+*maintainer* asking a question and getting a read-only answer.
+
+The job is also capped at 30 minutes, since a comment can start a test suite.
 
 **This route can open real inline review threads, and the dispatched one cannot.** The action
 installs its inline-comment server only for an *entity* event; `issue_comment` is one and

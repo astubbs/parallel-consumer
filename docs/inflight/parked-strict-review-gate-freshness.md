@@ -4,9 +4,19 @@ The `claude-review` gate used to require a `claude[bot]` review **newer than the
 so a push after a review turned it red. It now asks only whether a finished review exists on the
 PR. The current contract is in [`docs/ci.md`](../ci.md) - read it there, not here.
 
-**Archived at the tag `archive/review-gate-strict-head-freshness`.** `git show` it, or
-`git tag -n99 -l archive/review-gate-strict-head-freshness` for what it contains. That is the
-complete strict implementation, reviewed and signed off.
+**Archived at the tag `archive/review-gate-strict-head-freshness`, which points at commit
+`38ccf88057428daefcdddd9dd05d1b217da58509`.** That is the complete strict implementation, reviewed
+and signed off.
+
+```bash
+git fetch origin --tags                                          # shallow clones have no tags
+git tag -n99 -l archive/review-gate-strict-head-freshness        # why it was archived
+git show archive/review-gate-strict-head-freshness               # or the SHA above
+```
+
+The `git fetch --tags` is not boilerplate: a CI checkout is usually shallow and tagless, so the tag
+name alone resolves to nothing there and the archive looks lost. The commit SHA is written out
+above so it can be found either way.
 
 ## Why it was parked
 
