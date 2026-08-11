@@ -28,7 +28,7 @@ First release of the community fork of https://github.com/confluentinc/parallel-
 
 === Improvements
 
-* The project is renamed to *Kafka Parallel Consumer* (README and branding). Java package names (`io.confluent.parallelconsumer.*`) are unchanged, so imports are unaffected — only the Maven groupId changed (see Breaking).
+* The project is renamed to *Parallel Consumer for Apache Kafka* — the README title, and the `<name>` of the parent and every module.
 * feature: new `parallel-consumer-mutiny` module — SmallRye Mutiny (Quarkus) integration (upstream https://github.com/confluentinc/parallel-consumer/pull/891[#891]).
 * Commit-failure error logging now includes the offsets being committed, to aid diagnosis of failed commits (upstream https://github.com/confluentinc/parallel-consumer/pull/850[#850]).
 * Modernized CI (parallel unit/integration/performance suites, SpotBugs, PIT mutation testing, dependency scanning) and automated Maven Central publishing (https://github.com/astubbs/parallel-consumer/commit/b810e873[b810e873], https://github.com/astubbs/parallel-consumer/commit/2bcc74d9[2bcc74d9]).
