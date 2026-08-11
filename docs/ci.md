@@ -54,10 +54,14 @@ stack traces (see [`docs/testing.md`](testing.md)).
   **One job per concern**, named `<area>: <check>` to match the master ruleset's context
   convention - a job renamed here silently stops satisfying that ruleset, so treat the names as an
   API. `sigpipe` runs `bin/check-shell-sigpipe.sh`, which fails any `bin/*.sh` piping into
-  `grep -q` under `pipefail` - that construct reports failure exactly when it *matches*, and
-  shellcheck does not detect it. `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows. Self-tests run first. **Both are
-  required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
+  `grep -q` under `pipefail` - that construct can report failure *because* it matched, once the
+  producer still has more than a pipe buffer left to write when `grep` exits, so it passes every
+  small fixture and surfaces only in production. shellcheck does not detect it, and the full
+  mechanism is in the script's own header and in
+  [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+  `actions` runs `bin/check-action-versions.sh`, keeping every
+  GitHub Action pinned to one version across all workflows. Self-tests run first. **Two of the
+  three are required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
   loud, and they gate precisely so those failures cannot be skimmed past.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
@@ -69,7 +73,10 @@ stack traces (see [`docs/testing.md`](testing.md)).
     observed patch cadence (median gap ~65 days), since the upstream patch line, not our own
     release cycle, is what actually retires these entries. Undated, unparseable and future-dated
     markers **fail** rather than reading as "not expired yet", and so does an id with no rationale
-    comment, because an unclassified entry silently means standing-forever. **Exit 3**, deliberately
+    comment, because an unclassified entry silently means standing-forever - the rule from
+    [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md),
+    applied to the audit's own escape hatch: ask what the check does when it cannot decide, and make
+    that state distinguishable from pass. **Exit 3**, deliberately
     not 1 or 2: those belong to `bin/check-ossindex-audit.sh` (broken lane / real finding) and this
     is neither - the scan and the tree are fine, the bookkeeping has rotted. The red is always
     clearable in one reviewable line: retire the entry if the fix shipped, or re-date / reclassify

@@ -1,0 +1,31 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Project Reactor integration
+category: integration
+module: parallel-consumer-reactor
+maturity: production-use
+availability:
+  status: published
+  since: 0.4.0.0
+  evidence:
+    tag: 0.4.0.0
+    path: CHANGELOG.adoc
+    basis: Listed as content of this release - the Project Reactor non-blocking threading adapter module.
+readme_anchor: project-reactor
+summary: Process records with Reactor publishers while Parallel Consumer coordinates ordering and commits.
+use_this_when:
+  - Your handler already uses Mono, Flux or another Reactor API.
+  - You need Reactor-based asynchronous processing with Parallel Consumer's ordering model.
+setup:
+  maven:
+    group_id: bz.stub.parallelconsumer
+    artifact_id: parallel-consumer-reactor
+  example: parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/ReactorApp.java
+opt_in:
+  mechanism: Add the Reactor module and use its processor API.
+  isolated_from_stable_modules: false
+boundaries:
+  - Publisher completion defines processing completion; make error signals part of the application retry policy.
+  - Ordering and commit behavior still follows the configured Parallel Consumer ordering mode.
