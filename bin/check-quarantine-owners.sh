@@ -72,7 +72,7 @@ for t in $entries; do
         # wrong one: a diagnosed entry needs an owner found for its fix, while a recorded rule-1
         # exception is UNDIAGNOSED and needs the diagnosis itself completed - telling a maintainer
         # to "find an owner" for a failure nobody understands points them at the wrong task.
-        if echo "$block" | grep -qi 'rule-1 exception'; then
+        if grep -qi 'rule-1 exception' <<<"$block"; then
             echo "ADVISORY: $t has no owning PR - UNDIAGNOSED (recorded rule-1 exception); completing the diagnosis is the open task."
         else
             echo "ADVISORY: $t has no owning PR - diagnosed-but-unowned, find it an owner."
