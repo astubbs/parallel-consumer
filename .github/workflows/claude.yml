@@ -2,14 +2,23 @@ name: Claude Code
 
 # The COMMENT route: `@claude ...` on a PR, a review, or an issue.
 #
-# For reviews specifically this is the FALLBACK to
+# For reviews specifically this is the counterpart to
 # .github/workflows/claude-code-review-dispatch.yml, and until that dispatch route works it is
-# the only route there is. Two things follow from that, and both are load-bearing:
+# the only route there is. Three things follow, and all are load-bearing:
 #
 #   1. It has to be able to clear `claude-review`, which is what `refresh-gate` below does. A
 #      review that posts and leaves the required check red is indistinguishable from no review.
-#   2. It reviews with FEWER TOOLS than the dispatch route - see "THIS ROUTE IS A DEGRADED
-#      REVIEWER" below. Do not read its "no issues found" as carrying the same weight.
+#   2. It runs the SAME curated execution allowlist as the dispatch route, so it is not a weaker
+#      reviewer - see "WHAT THIS ROUTE MAY EXECUTE". What differs is the procedure: a dispatch
+#      runs the packaged `/code-review:code-review` and accepts a `-f focus` steer, while this
+#      one answers whatever the comment actually said.
+#   3. It is the ONLY route that can open inline review comments, because the action installs
+#      that server for entity events and `workflow_dispatch` is not one. Since unresolved review
+#      threads are what mechanically gate a merge here, findings raised by comment can block and
+#      findings raised by dispatch cannot.
+#
+# Because it can execute, the allowlist is withheld in two cases - a fork head, and an untrusted
+# commenter - both decided in `pr-context` and both leaving the reply itself intact.
 
 on:
   issue_comment:
@@ -46,7 +55,8 @@ jobs:
       pr_number: ${{ steps.pr-context.outputs.pr }}
       reviewed_sha: ${{ steps.pr-context.outputs.sha }}
     env:
-      # Defined here so the fork carve-out below can switch it on and off in one place.
+      # Defined here so the two carve-outs in `pr-context` - fork head, untrusted commenter -
+      # switch one value rather than editing a list in several places.
       # KEEP IN SYNC with `--allowedTools` in claude-code-review-dispatch.yml.
       REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
     permissions:
@@ -79,8 +89,47 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_IS_PR: ${{ github.event.issue.pull_request.url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Whoever wrote the thing that triggered this run. Exactly one of these is non-empty
+          # per event, so the `??` chain collapses to the right one.
+          TRIGGER_ASSOCIATION: >-
+            ${{ github.event.comment.author_association
+            || github.event.review.author_association
+            || github.event.issue.author_association }}
         run: |
           set -euo pipefail
+
+          # WHO MAY MAKE THIS ROUTE EXECUTE THINGS.
+          #
+          # The allowlist below can run `./mvnw` with arbitrary goals and this repo's scripts, in
+          # a job holding CLAUDE_CODE_OAUTH_TOKEN. The workflow trigger itself is only "a comment
+          # containing @claude", which anyone who can comment can write.
+          #
+          # `claude-code-action` already refuses actors without write access
+          # (src/github/validation/permissions.ts, getCollaboratorPermissionLevel), and
+          # `allowed_non_write_users` cannot loosen that here because it is only consulted when
+          # the `github_token` input is supplied, which this workflow does not do. So this check
+          # is defence in depth, not the only guard - and it is worth having precisely because
+          # "the action checks it" is the kind of assumption this PR has been burned by twice.
+          #
+          # It withholds the ALLOWLIST rather than refusing the run, so the failure mode if this
+          # list of associations is ever wrong is a trusted user getting a read-only reviewer -
+          # visible and annoying - rather than `@claude` silently doing nothing for them.
+          trusted_author=false
+          case "$TRIGGER_ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR) trusted_author=true ;;
+            *) echo "::notice::Trigger author association is" \
+                    "'${TRIGGER_ASSOCIATION:-<none>}', not OWNER/MEMBER/COLLABORATOR." \
+                    "Answering without execution tools." ;;
+          esac
+
+          # The allowlist, or nothing if the author is not trusted. The fork head case is handled
+          # separately below and emits an empty value directly - the two carve-outs are
+          # independent, and either one alone withholds execution.
+          tools_for_trusted_author() {
+            if [ "$trusted_author" = "true" ]; then
+              printf '%s' "--allowedTools \"$REVIEW_TOOL_ALLOWLIST\""
+            fi
+          }
 
           pr=""
           case "$EVENT_NAME" in
@@ -106,7 +155,7 @@ jobs:
               echo "pr="
               echo "sha="
               echo "fork_pr=false"
-              echo "claude_args=--allowedTools \"$REVIEW_TOOL_ALLOWLIST\""
+              echo "claude_args=$(tools_for_trusted_author)"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -157,7 +206,7 @@ jobs:
             echo "pr=$pr"
             echo "sha=$sha"
             echo "fork_pr=false"
-            echo "claude_args=--allowedTools \"$REVIEW_TOOL_ALLOWLIST\""
+            echo "claude_args=$(tools_for_trusted_author)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code
