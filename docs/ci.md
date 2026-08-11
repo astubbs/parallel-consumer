@@ -132,12 +132,21 @@ rather than reading and guessing.
 
 It was briefly granted nothing, and the gap showed: on `astubbs/parallel-consumer#288` the reviewer
 said so itself - "tool permissions blocked Bash execution ... Everything above is from static
-reading" - on a PR whose entire diff was check scripts and their tests. The argument for leaving it
-that way was that comment text is attacker-influencable where a dispatch is not. That is true and it
-is not the operative difference: **both** routes run PR-authored code, and the protection was never
-that the trigger is trusted - it is that the list is curated to this repo's own scripts and that the
-job holding it has no write grant. So the lists are the same, deliberately, and
+reading" - on a PR whose entire diff was check scripts and their tests. (An absent allowlist is not
+permissive: Bash is simply not pre-approved, and CI has no interactive approver, so every script
+call is refused.) The argument for leaving it that way was that comment text is
+attacker-influencable where a dispatch is not. That is true and it is not the operative difference:
+**both** routes run PR-authored code, and the protection was never that the trigger is trusted - it
+is that the list is curated to this repo's own scripts, that the job holding it has no write grant,
+and that it is withheld on fork heads. So the lists are the same, deliberately, and
 [`.github/workflows/claude.yml`](../.github/workflows/claude.yml) says to keep them that way.
+
+**On a fork PR this route answers but does not run anything.** Granting `./mvnw` and the `bin/`
+scripts against a fork's checkout would put PR-controlled executables beside
+`CLAUDE_CODE_OAUTH_TOKEN` - a fork could replace an allowlisted script and wait to be asked to run
+the checks. That is the hazard the dispatched reviewer avoids by refusing fork heads outright; here
+the reply still happens, with no execution tools, because a fork author asking a question is
+legitimate. The job is also capped at 30 minutes, since a comment can start a test suite.
 
 **This route can open real inline review threads, and the dispatched one cannot.** The action
 installs its inline-comment server only for an *entity* event; `issue_comment` is one and

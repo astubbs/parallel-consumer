@@ -29,6 +29,11 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    # Bounded for the same reason the dispatch reviewer is: the allowlist below lets this job run
+    # the unit and integration suites and arbitrary `./mvnw` goals, and a wedged suite - or a
+    # Docker/broker call that never returns - would otherwise hold a hosted runner until GitHub's
+    # multi-hour default. `@claude` is comment-triggered, so several can be started in a row.
+    timeout-minutes: 30
     # Consumed by `refresh-gate`, which needs all three and must NOT check anything out to get
     # them. Same split, and the same reasoning, as the dispatch workflow's two jobs.
     outputs:
@@ -40,6 +45,10 @@ jobs:
       # trying to clear a gate that does not exist.
       pr_number: ${{ steps.pr-context.outputs.pr }}
       reviewed_sha: ${{ steps.pr-context.outputs.sha }}
+    env:
+      # Defined here so the fork carve-out below can switch it on and off in one place.
+      # KEEP IN SYNC with `--allowedTools` in claude-code-review-dispatch.yml.
+      REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
     permissions:
       contents: read
       pull-requests: read
@@ -90,9 +99,14 @@ jobs:
           esac
 
           if [ -z "$pr" ]; then
+            # Not a PR at all (an issue). No gate to refresh, and no PR-authored checkout
+            # either - the working tree is the default branch - so the allowlist is safe here.
             echo "Not a pull-request trigger ($EVENT_NAME) - the review gate does not apply."
-            echo "pr=" >> "$GITHUB_OUTPUT"
-            echo "sha=" >> "$GITHUB_OUTPUT"
+            {
+              echo "pr="
+              echo "sha="
+              echo "fork_pr=false"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -113,20 +127,34 @@ jobs:
           # self-asserted escape docs/ci.md rejects by name: the person who wants the merge would
           # also be the person certifying the review.
           #
-          # So Claude still answers on fork PRs - that is useful and harmless - but the gate is
-          # not refreshed, because emitting no PR number is what `refresh-gate` skips on.
+          # So Claude still answers on fork PRs - it is useful, and with no execution tools it is
+          # harmless - but the gate is not refreshed, because emitting no PR number is what
+          # `refresh-gate` skips on.
+          #
+          # `fork_pr` ALSO withholds the tool allowlist. See "WHAT THIS ROUTE MAY EXECUTE" below:
+          # granting `./mvnw` and the `bin/` scripts on a fork head would put PR-controlled
+          # executables next to CLAUDE_CODE_OAUTH_TOKEN, which is the exact hazard the dispatched
+          # reviewer refuses fork heads to avoid. A fork could replace one of the allowlisted
+          # scripts and wait for the reviewer to be asked to run the checks.
           if [ "$head_repo" != "$REPO" ]; then
             echo "::notice::PR #$pr has its head in '${head_repo:-<deleted fork>}', not $REPO." \
-                 "Answering the comment, but NOT refreshing claude-review: a fork PR cannot turn" \
-                 "the gate green (docs/ci.md, 'A fork PR cannot turn the gate green')."
-            echo "pr=" >> "$GITHUB_OUTPUT"
-            echo "sha=" >> "$GITHUB_OUTPUT"
+                 "Answering the comment WITHOUT execution tools, and NOT refreshing" \
+                 "claude-review: a fork PR cannot turn the gate green (docs/ci.md, 'A fork PR" \
+                 "cannot turn the gate green')."
+            {
+              echo "pr="
+              echo "sha="
+              echo "fork_pr=true"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "PR #$pr, head $sha at the time this review started."
-          echo "pr=$pr" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "pr=$pr"
+            echo "sha=$sha"
+            echo "fork_pr=false"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code
         id: claude
@@ -151,9 +179,16 @@ jobs:
           # `workflow_dispatch` is not. That is true and it is not the operative difference: BOTH
           # routes run PR-authored code, and this is an allowlist of this repo's own scripts, not
           # a shell. The protection was never "the trigger is trusted" - it is that the list is
-          # curated and that the job holding it has no write grant (see `refresh-gate`, and the
-          # `persist-credentials: false` above). Granting less here bought no safety and cost the
-          # only working reviewer the ability to check its own subject matter.
+          # curated, that the job holding it has no write grant (see `refresh-gate`, and the
+          # `persist-credentials: false` above), and that it is WITHHELD ON FORK HEADS.
+          #
+          # That last one is not decoration. "This route runs PR-authored code" plus "it may run
+          # ./mvnw and the bin/ scripts" plus "the job holds CLAUDE_CODE_OAUTH_TOKEN" is exactly
+          # the combination the dispatched reviewer refuses fork heads to avoid: a fork can
+          # replace an allowlisted script and wait to be asked to run the checks. The dispatch
+          # route answers it by refusing the whole review; this route answers by still replying -
+          # a fork PR author asking a question is a legitimate thing - but with NO execution
+          # tools, so there is nothing for replaced code to be executed by.
           #
           # `--allowedTools` here ADDS to tag mode's base tools rather than replacing them - the
           # action documents exactly that ("The base GitHub tools are always included. Use
@@ -174,8 +209,12 @@ jobs:
           # route can open real review threads. That matters more than it looks - unresolved
           # review threads are what mechanically gate a merge here, so a blocking finding from
           # this route actually blocks, where the dispatch route's can only ask a human nicely.
-          claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)"
+          # Withheld entirely on a fork head - see the fork paragraph above and `fork_pr` in
+          # `pr-context`. An empty `claude_args` leaves tag mode's own read-only base tools,
+          # which is the degraded-but-safe reviewer a fork PR gets.
+          claude_args: >-
+            ${{ steps.pr-context.outputs.fork_pr == 'true' && ''
+            || format('--allowedTools "{0}"', env.REVIEW_TOOL_ALLOWLIST) }}
 
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'

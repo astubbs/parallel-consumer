@@ -41,17 +41,6 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   `refresh-gate` added there are unverified in exactly the same way. After the merge, exercise
   both: a `--ref master` dispatch, and an `@claude review this` comment on a live PR - checking
   that the comment route really does open an inline thread, and that `claude-review` clears itself.
-- **DECIDED: the comment route holds the same curated allowlist as the dispatch route.** It ran
-  with no grants at first and reviewed by reading, which showed up on
-  astubbs/parallel-consumer#288 ("tool permissions blocked Bash execution") on a PR whose whole
-  diff was check scripts. The objection was that comment text is attacker-influencable where a
-  dispatch is not - `claude.yml` matches `@claude` by plain substring with no awareness of quoting
-  (astubbs/parallel-consumer#286: prose *about* the trigger fired it twice). Rejected as the
-  operative difference, because **both** routes execute PR-authored code, and what protects them
-  is not a trusted trigger but a curated list of this repo's own scripts plus a job with no write
-  grant. A narrower subset was considered and dropped: the whole value is running the checks the
-  PR changed. Blanket `Bash(*)` was never on the table. Revisit if the trigger ever widens beyond
-  a substring match on a comment.
 - **NOT ENFORCED YET: the two tool allowlists can drift apart.** `claude.yml` and
   `claude-code-review-dispatch.yml` now carry byte-identical `--allowedTools` lists (the comment
   route adds the inline-comment tool), and nothing checks that. A grant added to one and missed on
@@ -99,8 +88,10 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   `bin/test-check-ossindex-audit.sh` are granted on astubbs/parallel-consumer#279, in
   `claude-code-review.yml` - the file the reviewer no longer lives in. **Whichever of
   astubbs/parallel-consumer#279 and the on-demand split merges second must carry those two grants
-  into `claude-code-review-dispatch.yml`**, or they are silently dropped and the reviewer will
-  report, as it already did once, that it could not run the scripts. They cannot be added ahead of
+  into BOTH `claude-code-review-dispatch.yml` and `claude.yml`** - there are two allowlists now,
+  and this entry is the first live instance of the drift the entry above warns about - or they are
+  silently dropped and the reviewer will report, as it already did once, that it could not run the
+  scripts. They cannot be added ahead of
   astubbs/parallel-consumer#279: a grant for a script that does not exist on master is inert, which
   is worse than no grant (see `bin/AGENTS.md`). `actionlint` was the third of that set and is now
   granted on the reviewer, since it ships with the runner and can never be inert.
@@ -117,30 +108,15 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   in-repo PR branch is code a trusted dispatcher does not necessarily control.
   (`pull-requests: write` may also be droppable back to `read` if the action posts via its own app
   token.)
-- **Fork PRs have no green path, and a secretless reviewer is the only real fix.** Refusing fork
-  heads means the gate - which accepts only a `claude[bot]` comment - can never go green on a fork
-  PR, so those merge with `claude-review` red unless the commits are moved to a branch in this repo.
-  Raised on astubbs/parallel-consumer#284 and documented as a known limit in `docs/ci.md`. The fix
-  is a review job that runs the untrusted checkout WITHOUT the credential; letting a maintainer
-  assert the PR was reviewed was rejected, being the same self-asserted escape the gate refuses
-  everywhere else.
-- **`claude.yml` grants nothing, and that is now fine - but know what it means.** The `@claude`
-  mention handler passes no `--allowed-tools` at all, and an absent allowlist is not permissive:
-  Bash is simply not pre-approved and there is no interactive approver in CI, so every script call
-  is refused. Proven in-session on astubbs/parallel-consumer#273 rather than inferred - `git log`,
-  `grep` and `python3 --version` ran unprompted while both `bash bin/test-check-docs-data.sh` and
-  `./bin/check-docs-data.sh` returned "this command requires approval". An earlier review round had
-  concluded the opposite, that no workflow grant could clear it; that reasoning is wrong, do not act
-  on it.
-
-  **The recommendation that came with this finding - mirror the `bin/check-*` grants into
-  `claude.yml` - is retired by astubbs/parallel-consumer#284 rather than outstanding.** It rested
-  on `@claude` being the only way to review a PR that edits `claude-code-review.yml`, which was true
-  only while that file invoked the action. It no longer does: it is a gate, the reviewer is
-  `claude-code-review-dispatch.yml` dispatched `--ref master`, and the grants live there. Mirroring
-  them into `claude.yml` now would widen a trigger that anyone can fire on a public repo, to no
-  benefit. What survives is the caveat: a `@claude` mention produces a free-form answer that cannot
-  run this repo's scripts, so it is not a substitute for a dispatched review.
+- **Fork PRs have no green path and no runnable reviewer; a secretless reviewer is the only real
+  fix.** Refusing fork heads means the gate - which accepts only a `claude[bot]` comment - can
+  never go green on a fork PR, so those merge with `claude-review` red unless the commits are moved
+  to a branch in this repo. The comment route also withholds its tool allowlist on a fork head, so
+  a fork gets a reader rather than a runner: granting `./mvnw` and the `bin/` scripts there would
+  put fork-controlled executables beside `CLAUDE_CODE_OAUTH_TOKEN`. Both are the same missing
+  capability - a review job that runs an untrusted checkout WITHOUT the credential. Letting a
+  maintainer assert the PR was reviewed was rejected, being the same self-asserted escape the gate
+  refuses everywhere else. Raised on astubbs/parallel-consumer#284; the limit is in `docs/ci.md`.
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap -
   Testcontainers on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than
   a misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
