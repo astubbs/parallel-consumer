@@ -115,9 +115,8 @@ What the scanner reported (all ids are `CVE-2026-NNNNN`):
 | `at.yawk.lz4:lz4-java:1.10.1` | runtime | 59949 (6.5) | no |
 | `org.hdrhistogram:HdrHistogram:2.2.2` | runtime | 14683 (2.0), 14686 (2.0) | no |
 
-The per-CVE triage is written up separately as `docs/inflight/deps-cve-backlog.md`, which landed with
-astubbs/parallel-consumer#281 - so it is something you can read today rather than a pointer to work in
-progress. What follows is only what the *scanner
+The per-CVE triage - which finding is real, which is a false positive, and what each one is blocked
+on - lives in `docs/inflight/deps-cve-backlog.md`. What follows here is only what the *scanner
 comparison* turned out to be worth, because the first reading of it was wrong.
 
 ### Correction: the Dependabot gap is one component, not three
@@ -171,14 +170,6 @@ adding a *global* `dependencyManagement` entry, but it is not why the flagged 2.
 does - that one is simply an unpinned transitive runtime dependency of an example module that nobody
 has ever set. So triaging it is a different job from unblocking a parked pin, and WireMock is a
 reason not to fix it with a global pin rather than a reason it cannot be fixed.
-
-### Why the audit still cannot simply be switched to `fail=true`
-
-HdrHistogram 2.2.2 is the newest release, and **no fixed version exists** for either of its disputed
-CVEs. Turning the audit on as a gate therefore leaves the build permanently red on a disputed,
-local-only, severity-2.0 finding with no remedy available - unless an exclusion is configured first
-(`excludeVulnerabilityIds`). That is the practical blocker for the CI job described above, and it is
-not visible from the plugin docs.
 
 ## What is genuinely covered meanwhile
 
