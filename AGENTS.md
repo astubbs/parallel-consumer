@@ -242,7 +242,7 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 ## Testing
 
 Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are in
-[`docs/testing.md`](docs/testing.md). Three rules bind regardless:
+[`docs/testing.md`](docs/testing.md). Four rules bind regardless:
 
 - **⚠️ Be EXTREMELY careful modifying tests to make them pass, especially under
   parallelism/stress.** A test failing under concurrent load may be exposing a **real main-code bug
@@ -254,6 +254,15 @@ Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are 
   hides exactly the bugs this library exists to prevent. **When a broker integration test fails,
   read its `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing by hand** - and check the
   probe's thresholds before believing a clean one.
+- **A flake fails the build - there is no retry, deliberately.** The CI scripts no longer pass
+  `-Dsurefire.rerunFailingTestsCount=2`: it retried failures into green runs and hid three flakes no
+  ledger knew about, one of them a regression of an already-fixed one. **Do not restore it to get a
+  build green** - the lever is `@Quarantined` with a diagnosis
+  ([`docs/testing.md`](docs/testing.md)), which relocates the signal where a retry destroys it, and
+  nothing enforces this. Background:
+  [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md);
+  the flakes it uncovered are open in
+  [`docs/inflight/test-untracked-ci-flakes.md`](docs/inflight/test-untracked-ci-flakes.md).
 - **Reuse test utilities - search before you add.** Extend the shared helpers rather than writing a
   parallel one; a drifted copy of topic-creation logic once became a flaky-CI source. Where they
   live and what they cover: [`docs/testing.md`](docs/testing.md). Check `docs/solutions/` before

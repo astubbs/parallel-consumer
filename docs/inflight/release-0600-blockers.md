@@ -5,6 +5,23 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 
 ## Still open
 
+- **Recheck the documentation data before the tag, and again after the critical fixes land.** The
+  published claim is now "every known **critical** defect resolved and evidenced", not "all known
+  defects" - the earlier wording was a promise the project cannot keep. Nothing verifies that claim
+  automatically; `bin/check-docs-data.sh` checks structure only, on purpose. So at release:
+  - Confirm no known critical defect is open in scope. The `confluentinc#857` deadlock is the live
+    one, and a module cannot honestly be described as fit for production use while a known defect can
+    lock up a consumer. If it is still open, amend the claim rather than the standard.
+  - Move the staged content up as its modules land: the Streams and Connect rows in
+    `docs/data/staging/module-maturity-rows.yaml`, and the record in `docs/features/staging/`. Each
+    move belongs to the PR that lands the thing, not to a later sweep - astubbs#271 for Streams,
+    astubbs#269 for Connect, both open and neither touching the data yet.
+  - **A third module has no row at all.** astubbs#268 adds `parallel-consumer-dashboard`, which is
+    also the 1.0 gate the roadmap calls a running-instance view. It needs a staged row and a feature
+    record before it lands, or it ships undocumented.
+  - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
+    replacement, `production-use`, is only as good as the critical-defect gate holding.
+
 - **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
   two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
   fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when

@@ -1,0 +1,40 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Transactional commit and produce lock controls
+category: delivery
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.2.3
+  evidence:
+    tag: 0.5.2.3
+    path: CHANGELOG.adoc
+    basis: The transactional commit mode rework introduced the lock acquisition timeouts and the eager-processing option.
+readme_anchor: transaction-system
+summary: Tune how long the transactional commit mode waits for the commit and produce locks, and whether processing may continue up to the send step during a commit.
+use_this_when:
+  - A long-running user function makes the controller struggle to acquire the commit lock in time.
+  - Transaction commits are slow enough that records are being failed on produce-lock acquisition.
+  - Produce throughput during the commit phase matters more than avoiding replayed side effects.
+setup:
+  options:
+    - ParallelConsumerOptions.commitLockAcquisitionTimeout defaults to 5 minutes.
+    - ParallelConsumerOptions.produceLockAcquisitionTimeout defaults to 1 minute.
+    - ParallelConsumerOptions.allowEagerProcessingDuringTransactionCommit defaults to false.
+opt_in:
+  mechanism: Set the relevant option on ParallelConsumerOptions; all three apply only under CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER.
+  isolated_from_stable_modules: false
+boundaries:
+  - validate() throws IllegalArgumentException if allowEagerProcessingDuringTransactionCommit is set while commitMode is not PERIODIC_TRANSACTIONAL_PRODUCER.
+  - Failing to acquire the commit lock shuts the system down (fail fast) after one further commit attempt; failing to acquire the produce lock only returns that record for retry.
+  - Eager processing is off by default because it can replay user-function side effects on retry.
+validation:
+  - See ParallelConsumerOptions.transactionsValidation for the transactional-mode rejection rules.
+references:
+  - label: Lock behaviour and failure modes, in the CommitMode Javadoc
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java#transactionalJavadoc
+  - label: Transaction system
+    path: README.adoc#transaction-system
