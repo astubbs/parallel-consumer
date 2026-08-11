@@ -1,5 +1,16 @@
 name: Claude Code
 
+# The COMMENT route: `@claude ...` on a PR, a review, or an issue.
+#
+# For reviews specifically this is the FALLBACK to
+# .github/workflows/claude-code-review-dispatch.yml, and until that dispatch route works it is
+# the only route there is. Two things follow from that, and both are load-bearing:
+#
+#   1. It has to be able to clear `claude-review`, which is what `refresh-gate` below does. A
+#      review that posts and leaves the required check red is indistinguishable from no review.
+#   2. It reviews with FEWER TOOLS than the dispatch route - see "THIS ROUTE IS A DEGRADED
+#      REVIEWER" below. Do not read its "no issues found" as carrying the same weight.
+
 on:
   issue_comment:
     types: [created]
@@ -18,6 +29,17 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    # Consumed by `refresh-gate`, which needs all three and must NOT check anything out to get
+    # them. Same split, and the same reasoning, as the dispatch workflow's two jobs.
+    outputs:
+      # The ACTION's own verdict, not the step's. `steps.claude.outcome` is the step's, and the
+      # step reports success on at least one path where the action ran nothing at all - measured
+      # on run 31466885778. `conclusion` is empty on every such path.
+      review_conclusion: ${{ steps.claude.outputs.conclusion }}
+      # Empty when the trigger was an issue rather than a PR, which is what stops `refresh-gate`
+      # trying to clear a gate that does not exist.
+      pr_number: ${{ steps.pr-context.outputs.pr }}
+      reviewed_sha: ${{ steps.pr-context.outputs.sha }}
     permissions:
       contents: read
       pull-requests: read
@@ -29,6 +51,55 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
+          # This job holds no write grant, but the token still has no business being left in
+          # .git/config. `refresh-gate` is where the write grant lives, and it checks out nothing.
+          persist-credentials: false
+
+      # Resolves which PR (if any) this trigger is about, and the head it pointed at BEFORE
+      # Claude ran. Captured here rather than in `refresh-gate` for the same reason the dispatch
+      # workflow captures it in `review`: the refresh job must not have to fetch anything to
+      # learn what was reviewed, and the SHA has to be the one the review actually covered.
+      - name: Resolve the PR this trigger is on, and the head it pointed at
+        id: pr-context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          # `issue.pull_request` is present only when the issue IS a pull request; an
+          # `issue_comment` on a plain issue has an issue number and no PR behind it.
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_IS_PR: ${{ github.event.issue.pull_request.url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          pr=""
+          case "$EVENT_NAME" in
+            issue_comment)
+              if [ -n "$ISSUE_IS_PR" ]; then pr="$ISSUE_NUMBER"; fi
+              ;;
+            pull_request_review|pull_request_review_comment)
+              pr="$PR_NUMBER"
+              ;;
+          esac
+
+          # Digits only. Everything downstream interpolates this into an API path and a jq
+          # `tonumber`, and neither should ever see anything else.
+          case "$pr" in
+            ''|*[!0-9]*) pr="" ;;
+          esac
+
+          if [ -z "$pr" ]; then
+            echo "Not a pull-request trigger ($EVENT_NAME) - the review gate does not apply."
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sha=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
+          echo "PR #$pr, head $sha at the time this review started."
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code
         id: claude
@@ -40,6 +111,27 @@ jobs:
           additional_permissions: |
             actions: read
 
+          # THIS ROUTE IS A DEGRADED REVIEWER, DELIBERATELY AND FOR NOW.
+          #
+          # No `--allowed-tools` is passed, so a review triggered here cannot execute this repo's
+          # check scripts or its test suites - it reads. Observed live on
+          # astubbs/parallel-consumer#288, where the reviewer said so itself: "tool permissions
+          # blocked Bash execution ... Everything above is from static reading." The PR under
+          # review was one whose entire diff was those scripts and their tests, so it got a
+          # reader instead of a runner.
+          #
+          # The dispatch workflow solves this with a CURATED ALLOWLIST of specific scripts. Not
+          # copied here, because the two routes have different threat models and the difference
+          # is the whole point: a dispatch is fired by someone with write access naming a PR,
+          # whereas THIS workflow is triggered by comment text, which anyone who can comment can
+          # influence. Widening what that can execute is a security decision, not a convenience
+          # one, and it is recorded as an open question in docs/inflight/ci-review-agent.md
+          # rather than settled quietly here.
+          #
+          # Until it is settled: a review from this route is worth less than one from the
+          # dispatch route, and `docs/ci.md` says so. Do not read "no issues found" here as
+          # equivalent.
+          #
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
 
@@ -48,3 +140,113 @@ jobs:
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr:*)'
 
+  # Holds this workflow's only write grant, in a job that checks NOTHING out. The dispatch
+  # workflow splits its jobs for the same reason and explains it at length in its header; the
+  # short version is that a token which can dispatch any workflow in the repo (release.yml among
+  # them) must not share a filesystem with code this workflow just ran. Do not add a checkout
+  # here, and do not merge this back into `claude`.
+  #
+  # The body below is deliberately a near-copy of `refresh-gate` in
+  # claude-code-review-dispatch.yml. Sharing it would mean either checking out the script (which
+  # is the one thing this job must not do) or a composite action (same problem), so the
+  # duplication is the price of the no-checkout invariant. Fix one, check the other; that
+  # coupling is recorded in docs/inflight/ci-review-agent.md.
+  refresh-gate:
+    runs-on: ubuntu-latest
+    needs: claude
+    # ONLY AFTER A REVIEW THAT ACTUALLY SUCCEEDED, AND ONLY ON A PR. Refreshing unconditionally
+    # is the failure mode the dispatch route already rejected: the gate accepts any fresh,
+    # finished-looking `claude[bot]` comment, so refreshing after a run that failed is how an
+    # error comment turns a required check green.
+    #
+    # Worth stating plainly, because this job makes a documented looseness reachable that
+    # previously was not: the gate cannot tell a review from any other `@claude` answer, so a
+    # successful non-review reply on a PR will now also refresh the gate, where before it sat
+    # red until the next push. That boundary is recorded in docs/inflight/ci-review-agent.md as
+    # a social rather than technical one - the gate guards against the action failing quietly,
+    # not against a determined author. The alternative is worse: leaving the only working review
+    # route unable to clear the check it exists to clear.
+    if: needs.claude.outputs.review_conclusion == 'success' && needs.claude.outputs.pr_number != ''
+    permissions:
+      # The whole reason this job exists.
+      actions: write
+      # To read the PR's current head SHA, and nothing else.
+      pull-requests: read
+    steps:
+      # WITHOUT THIS STEP THE GATE STAYS RED FOREVER AFTER A SUCCESSFUL REVIEW ON THIS ROUTE.
+      #
+      # `claude-review` is produced by .github/workflows/claude-code-review.yml, which triggers
+      # only on `pull_request` events. An `@claude` comment fires no such event, and a check run
+      # keeps its last conclusion until something re-runs it - so the review posts, satisfies the
+      # gate's rules, and the required check still shows the red it recorded before the review
+      # existed. Traced live on astubbs/parallel-consumer#288: review posted at 08:29 for the
+      # current head, check still red, and a hand-run `gh run rerun ... --failed` at 08:37 was
+      # the entire fix.
+      #
+      # Re-running the gate's existing run is what keeps the check attached to the same head
+      # SHA: a re-run reports into the same check suite on that commit, whereas a fresh
+      # comment-triggered run would attach its check to the default branch instead and never
+      # satisfy the PR's required check.
+      #
+      # Never fails the job: not finding a gate run to re-run is a reason to say so, not to fail
+      # a review that already happened.
+      - name: Re-run the review gate so it sees this review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.claude.outputs.pr_number }}
+          # The head this review covered, captured before Claude ran and carried across the job
+          # boundary so this job never has to fetch the PR to learn it.
+          REVIEWED_SHA: ${{ needs.claude.outputs.reviewed_sha }}
+        run: |
+          head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+
+          # Refuse to refresh the gate for a head this review did not look at. If the PR moved
+          # while the review ran, the review covers the old commit, and re-running the gate now
+          # would let a comment timestamped after the new head arrived certify code the reviewer
+          # never saw. Leaving the check red asks for a fresh review, which is the honest answer.
+          if [ "$head_sha" != "$REVIEWED_SHA" ]; then
+            echo "::warning::PR head moved from $REVIEWED_SHA to $head_sha while this review ran," \
+                 "so the review covers the older commit. Not refreshing the gate - ask for a" \
+                 "fresh review of $head_sha."
+            exit 0
+          fi
+
+          # head_sha ALONE DOES NOT IDENTIFY THIS PR'S GATE RUN. One head can back more than one
+          # PR - the same branch opened against `master` and a release branch - and the gate runs
+          # once per PR, so the SHA filter returns both runs. Taking the newest would then re-run
+          # the OTHER PR's gate: that PR goes green, this one stays red, and the log line says
+          # the gate was refreshed. `pull_requests[]` carries the association the SHA filter
+          # drops, so select on it.
+          runs=$(gh api \
+            "repos/$REPO/actions/workflows/claude-code-review.yml/runs?head_sha=$head_sha&per_page=100")
+
+          # The newest run naming this PR, chosen by `run_number` rather than by taking the first
+          # element: the list is near-certainly newest-first, but that ordering is not documented,
+          # and picking a superseded attempt would re-run a run the gate's `cancel-in-progress`
+          # concurrency already cancelled.
+          run_id=$(printf '%s' "$runs" | jq -r --arg pr "$PR" \
+            '($pr | tonumber) as $n
+             | ([.workflow_runs[] | select(any(.pull_requests[]?; .number == $n))]
+                | max_by(.run_number) | .id) // empty')
+
+          # `pull_requests` comes back empty on runs GitHub could not associate - classically
+          # fork-head runs. Rather than fail closed on an API quirk, fall back to the newest run
+          # for the SHA and say that is what happened.
+          if [ -z "$run_id" ]; then
+            run_id=$(printf '%s' "$runs" | jq -r '(.workflow_runs | max_by(.run_number) | .id) // empty')
+            if [ -n "$run_id" ]; then
+              echo "::warning::No claude-review gate run for $head_sha names PR #$PR." \
+                   "Falling back to the newest run for that SHA (run $run_id)."
+            fi
+          fi
+
+          if [ -z "$run_id" ]; then
+            echo "::warning::No claude-review gate run found for head $head_sha - nothing to re-run." \
+                 "The gate will re-evaluate on the next push to this PR."
+            exit 0
+          fi
+
+          echo "Re-running the review gate (run $run_id) for head $head_sha."
+          gh run rerun "$run_id" -R "$REPO" || \
+            echo "::warning::Could not re-run gate run $run_id; re-run it by hand to clear claude-review."

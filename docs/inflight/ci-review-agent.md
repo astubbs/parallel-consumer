@@ -31,6 +31,24 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   constraint is inherited by whoever edits the reviewer next - your change will land unverified
   too. Reviewing a PR that edits this workflow is a separate thing and does work; the mechanism is
   in [`docs/ci.md`](../ci.md).
+- **DECISION NEEDED: does the `@claude` comment route get the dispatch route's tool allowlist?**
+  A review triggered by comment runs with no `--allowed-tools`, so it cannot execute the repo's
+  check scripts or a test suite - it reads. Measured on astubbs/parallel-consumer#288, where the
+  reviewer reported "tool permissions blocked Bash execution", on a PR whose whole diff was those
+  scripts. The dispatch route solves this with a curated allowlist of specific scripts, and the
+  denied grants are one-for-one already on it. **Copying it across is not obviously safe**, and
+  that is why this is parked rather than done: a dispatch is fired by someone with write access
+  naming a PR, whereas `claude.yml` is triggered by comment *text*, which anyone who can comment
+  can influence - and it matches `@claude` by plain substring, with no awareness of quoting
+  (astubbs/parallel-consumer#286: prose *about* the trigger fired it twice). The options are
+  (a) the same curated allowlist, arguing that an allowlist of read-only repo scripts is safe even
+  under influenced input, (b) a narrower read-only subset, or (c) leave it degraded. Until someone
+  decides, (c) holds and `docs/ci.md` says so out loud. Blanket `Bash(*)` is not an option.
+- **The two `refresh-gate` jobs are near-duplicates and must be changed together.** One is in
+  `claude-code-review-dispatch.yml`, one in `claude.yml`. Sharing the body would mean checking out
+  the script, and a no-checkout job is precisely what both of them are - the write grant must not
+  share a filesystem with code the workflow just ran. So the duplication is deliberate and the
+  coupling is manual: fix one, check the other.
 - **The gate is still timestamp-based, and a check run against the head SHA would be better.** If
   the identity or freshness rules ever need reopening, the fix is not to loosen who may satisfy the
   gate (that lets any bot report through) but to have the reviewer raise a check run on the reviewed

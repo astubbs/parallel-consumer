@@ -124,6 +124,37 @@ silently swap that procedure for an improvised one; the output still looks like 
 nothing tells you. **If you ever edit the reviewer, the `plugins:` input and the
 `/code-review:code-review ... --comment` prompt must survive.**
 
+### The `@claude review this` comment route is a fallback, and a weaker one
+
+Commenting `@claude review this` on a PR runs `claude.yml` and does produce a review. Prefer the
+dispatch above when you have the choice, because **the comment route reviews with no tool grants**:
+it cannot execute this repo's check scripts or run a test suite, so everything it tells you comes
+from reading. Seen plainly on `astubbs/parallel-consumer#288`, where the reviewer said so itself -
+"tool permissions blocked Bash execution ... Everything above is from static reading" - on a PR
+whose entire diff was check scripts and their tests.
+
+That matters most for exactly the claims worth checking: whether a new test is actually collected
+and actually fails without its fix. A static read cannot tell you, and
+[`docs/solutions/…/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md)
+is the local history of trusting one that could not. **Do not read "no issues found" from this route
+as equivalent to the dispatched reviewer's.** Whether to give it the dispatch route's curated
+allowlist is an open security question - comment text is attacker-influencable in a way a dispatch
+is not - and it is recorded in [`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
+
+Both routes now clear the gate themselves. Each has a `refresh-gate` job that re-runs
+`claude-review` after a review that actually succeeded, because the gate only ever triggers on
+`pull_request` and a check run keeps its last conclusion until something re-runs it.
+
+**Escape hatch, if a review posts and `claude-review` stays red anyway:** re-run the gate's existing
+run by hand. Re-running the *existing* run is what matters - it reports back into the same check
+suite on the same commit, where a fresh run would attach its check to the default branch and never
+satisfy the PR's required check.
+
+```bash
+gh run list -R astubbs/parallel-consumer --workflow claude-code-review.yml -c <the PR head SHA>
+gh run rerun <run-id> --failed -R astubbs/parallel-consumer
+```
+
 ### What the dispatch trigger costs
 
 `claude-code-action` picks its behaviour from the **event**. On a pull-request event it runs in
