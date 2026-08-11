@@ -56,9 +56,10 @@ PR astubbs#85 → astubbs#83; PR body carries `depends on #85`). New worktree `.
 
 - `ManagedPCInstance.java` (grep `useCooperativeAssignor`) - it wires `CooperativeStickyAssignor`
   into consumer props; zero current users. (Point-in-time, and this plan is what changed it: the
-  variant proposed below landed in `192d32bc`, so the grep now returns its callers. For the state
-  described here, read the file before that commit -
-  `git log -S'useCooperativeAssignor' -- parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/ManagedPCInstance.java`.)
+  variant proposed below landed in `192d32bc`, so a grep at HEAD now returns its callers in
+  `AbstractRevokeUnderWorkScenario`, `ChaosRevokeUnderWorkIT` and `ChaosRevokeUnderWorkCooperativeIT`.
+  For the tree this claim describes, search before that commit - `git grep useCooperativeAssignor
+  192d32bc^` - which finds only the flag's declaration and wiring, and no callers.)
 - `ChaosRevokeUnderWorkIT` (PR astubbs#85) - the two-phase driver to extract: storm (60s, no-drain weights
   `ChaosConductor.defaultW4Weights()`, sync commits, heavy 1-in-2000 @ 20s non-interruptible, ticks
   300-1000ms, fleet 10-14, 250k backlog, `max.poll.interval.ms=30s` via `extraConsumerProps`) then
