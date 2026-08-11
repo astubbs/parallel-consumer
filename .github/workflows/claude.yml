@@ -106,6 +106,7 @@ jobs:
               echo "pr="
               echo "sha="
               echo "fork_pr=false"
+              echo "claude_args=--allowedTools \"$REVIEW_TOOL_ALLOWLIST\""
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -145,6 +146,8 @@ jobs:
               echo "pr="
               echo "sha="
               echo "fork_pr=true"
+              # The whole point: no allowlist, so no execution tools on a fork head.
+              echo "claude_args="
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -154,6 +157,7 @@ jobs:
             echo "pr=$pr"
             echo "sha=$sha"
             echo "fork_pr=false"
+            echo "claude_args=--allowedTools \"$REVIEW_TOOL_ALLOWLIST\""
           } >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code
@@ -209,12 +213,20 @@ jobs:
           # route can open real review threads. That matters more than it looks - unresolved
           # review threads are what mechanically gate a merge here, so a blocking finding from
           # this route actually blocks, where the dispatch route's can only ask a human nicely.
-          # Withheld entirely on a fork head - see the fork paragraph above and `fork_pr` in
-          # `pr-context`. An empty `claude_args` leaves tag mode's own read-only base tools,
-          # which is the degraded-but-safe reviewer a fork PR gets.
-          claude_args: >-
-            ${{ steps.pr-context.outputs.fork_pr == 'true' && ''
-            || format('--allowedTools "{0}"', env.REVIEW_TOOL_ALLOWLIST) }}
+          # Withheld entirely on a fork head - see the fork paragraph above and `pr-context`,
+          # which builds this string. Empty leaves tag mode's own read-only base tools, which is
+          # the degraded-but-safe reviewer a fork PR gets.
+          #
+          # BUILT IN SHELL, NOT IN AN EXPRESSION, AND THAT IS NOT A STYLE CHOICE. The obvious
+          # `${{ fork && '' || format(...) }}` ternary is BROKEN for this case and silently so:
+          # GitHub's `a && b || c` idiom relies on `b` being truthy, and the empty string is
+          # falsy, so the fork branch fell straight through to the `||` and handed a fork head
+          # the full allowlist - the exact thing the guard exists to prevent, with a log line
+          # saying it had been withheld. Caught in review on this PR, not by a runner, because
+          # (like everything else here) it cannot be exercised before it merges. If you need a
+          # conditional value that can be empty, build it in `run:` where the semantics are
+          # ordinary shell.
+          claude_args: ${{ steps.pr-context.outputs.claude_args }}
 
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
