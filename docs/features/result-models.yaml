@@ -5,7 +5,7 @@ kind: feature
 title: Result models for void, produce and streaming flows
 category: processing
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.1.0

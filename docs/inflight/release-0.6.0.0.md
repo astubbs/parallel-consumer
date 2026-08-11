@@ -72,8 +72,10 @@ the reader that data is written for.
 known defects, and improving the machinery that finds and proves them, is a first-class outcome here
 rather than background maintenance behind a feature release.
 
-**Release condition.** 0.6.0.0 is cut only when every known defect in scope is resolved and each
-resolution has a named guard that passes. Unknown defects remain possible and must not be denied.
+**Release condition.** 0.6.0.0 is cut only when every known **critical** defect in scope is resolved
+and each resolution has a named guard that passes. Critical is the line, deliberately: claiming "all
+known defects" would be a promise this project cannot keep, and non-critical defects are not claimed
+to be fixed. Unknown defects remain possible and must not be denied.
 Evidence is in `docs/data/testing-evidence.yaml`; the checks to run are in
 `docs/data/module-maturity.yaml` under `release_validation`. If a check fails, amend the claim rather
 than waive the item.

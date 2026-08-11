@@ -5,7 +5,7 @@ kind: feature
 title: Global pause and resume
 category: operability
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.5.1.0

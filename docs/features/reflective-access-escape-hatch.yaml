@@ -5,7 +5,7 @@ kind: feature
 title: Reflective auto-commit check escape hatch
 category: compatibility
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.5.3.0

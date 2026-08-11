@@ -5,7 +5,7 @@ kind: feature
 title: Producer-send and synchronous-commit timeouts
 category: operability
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.4.0.1

@@ -44,12 +44,14 @@ horizons:
 
 entries:
   - id: known-defects-cleared
-    title: Every known defect resolved, each with a guard that would catch its return
+    title: Every known critical defect resolved, each with a guard that would catch its return
     serves: [reliability]
     horizon: "0.6.0.0"
     blocks_1_0: false
     why_now: The release claim rests on it, and the evidence has to be inspectable rather than asserted.
-    done_when: No known defect open in release scope, and each resolution has a named guard that passes.
+    done_when: >-
+      No known critical defect open in release scope, and each resolution has a named guard that
+      passes. Critical is the line: non-critical defects are not claimed to be fixed.
     unblocks: [api-settlement]
     evidence: testing-evidence.yaml
 
@@ -96,7 +98,7 @@ entries:
       the measures of the whole proposition, and concedes the central ones are not emitted. Until they
       are, no performance claim is checkable, including by this project.
     done_when: Head-of-line blocking avoided, end-to-end record latency and per-shard queue depth are published meters.
-    unblocks: [throughput-claim-substantiated, running-instance-visibility]
+    unblocks: [running-instance-visibility]
     tracking: astubbs#222
     evidence: ../features/micrometer-metrics.yaml
 
@@ -132,18 +134,6 @@ entries:
     done_when: The library builds and runs on the current Java LTS and against Kafka 4.x.
     tracking: astubbs#181
     related: astubbs#193
-
-  - id: throughput-claim-substantiated
-    title: Answer the report that the library is far slower than a plain consumer
-    serves: [performance]
-    horizon: next-0x
-    blocks_1_0: false
-    why_now: >-
-      A library whose proposition is throughput needs a position on a public claim that it is slower,
-      whatever the answer turns out to be. Reproduce it, explain it, or fix it.
-    done_when: The scenario is reproduced, and either explained as a misconfiguration or fixed.
-    blocked_by: [delivered-value-metrics]
-    tracking: astubbs#187
 
   - id: health-check-surface
     title: A health-check surface on the consumer interface
@@ -182,8 +172,8 @@ entries:
     done_when: A record that exhausts its retries can be diverted rather than blocking or being dropped silently.
     tracking: astubbs#149
 
-  - id: generated-documentation
-    title: Publish documentation generated from the feature data, not one enormous README
+  - id: docs-site
+    title: A documentation site, rendered from the feature data rather than one enormous README
     serves: [usability]
     horizon: next-0x
     blocks_1_0: false
@@ -231,8 +221,10 @@ backlog:
     - subject: Shared-nothing architecture refactor
       status: Up for debate. The thread complexity it was raised for has largely been fixed since.
       tracking: astubbs#142
-    - subject: Removing the streaming interfaces entirely
-      status: Someday. Their deprecation is proposed separately.
+    - subject: Removing the JStream API entirely
+      status: >-
+        Someday, and its deprecation is proposed separately. Nothing to do with Kafka Streams: these
+        are the JStream processors that hand back a JDK Stream of produce results.
       tracking: astubbs#116
     - subject: Dynamic concurrency control using flow-control theory
       status: Undecided. Architectural rather than incremental.

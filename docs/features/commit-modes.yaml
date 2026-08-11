@@ -5,7 +5,7 @@ kind: feature
 title: Commit mode selection
 category: delivery
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.2.0.0

@@ -5,7 +5,7 @@ kind: feature
 title: Compacted-topic and offset-reset recovery
 category: delivery
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.5.2.4

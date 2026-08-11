@@ -1,0 +1,38 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# STAGED. These rows describe modules that are not in the reactor yet, so they are held here rather
+# than asserting in module-maturity.yaml something the tree contradicts.
+#
+# Whichever PR lands each module moves its row into module-maturity.yaml in the same change, and
+# re-checks the wording against what actually shipped. Streams is tracked by astubbs#255 and Connect
+# by astubbs#240. Neither has a PR yet, so there is nothing to annotate until one opens - when one
+# does, say on it that merging must move the row.
+#
+# Deliberately outside bin/check-docs-data.sh: staged content references things that do not exist,
+# so gating it would either fail permanently or force the references to be faked.
+
+schema_version: 1
+kind: module-maturity-staged
+staged_rows:
+  - artifact: parallel-consumer-streams-spike
+    maturity: alpha
+    minimum_java: 8
+    reliability_confidence: Experimental; module-specific evidence is required and does not inherit stable confidence.
+    api_expectation: Volatile while the experiment is evaluated.
+    support_posture: Evaluation and field feedback only; retain a stock Kafka Streams path.
+    opt_in: artifact dependency
+    isolated_from_stable_modules: true
+    evidence_id: streams-alpha
+    tracking: astubbs#255
+    use_this_if: You want to evaluate the Kafka Streams integration and can tolerate changing behavior and APIs.
+  - artifact: parallel-consumer-connect
+    maturity: alpha
+    minimum_java: 8
+    reliability_confidence: Experimental; module-specific evidence is required and does not inherit stable confidence.
+    api_expectation: Volatile while the experiment is evaluated.
+    support_posture: Evaluation and field feedback only; retain the conventional Connect deployment path.
+    opt_in: artifact dependency
+    isolated_from_stable_modules: true
+    evidence_id: connect-alpha
+    tracking: astubbs#240
+    use_this_if: You want to evaluate running supported Kafka Connect sink tasks in-process.

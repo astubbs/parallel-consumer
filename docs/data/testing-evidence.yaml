@@ -8,7 +8,9 @@ reader_contract:
   presentation_rule: A renderer should keep the inspection path, claim boundary and limitation beside every claim.
   argument: Show how the suite can be wrong and how the project notices, rather than using test counts as a proxy for quality.
 release_claim:
-  condition: 0.6.0.0 ships only when every known defect in its release scope has a landed resolution and a reproducible guard.
+  condition: >-
+    0.6.0.0 ships only when every known CRITICAL defect in its release scope has a landed resolution
+    and a reproducible guard. Critical is the line; non-critical defects are not claimed to be fixed.
   status_until_cut: Release gate; not a claim about an uncut source tree.
   known_defect_scope: Diagnosed product defects recorded in the release ledger, solution corpus and selected v6 fix queue.
   does_not_claim: Unknown defects cannot exist, every desired capability ships, or an alpha module inherits stable-module confidence.
@@ -17,7 +19,7 @@ v6_stability_exception:
   positioning: ../inflight/release-0.6.0.0.md
   release_gate: >-
     Before cutting 0.6.0.0, reconcile the known-defect scope against the final merged queue, verify each resolution's
-    recurrence guard, and leave no known defect open. Amend the claim rather than cut the release if this fails.
+    recurrence guard, and leave no known critical defect open. Amend the claim rather than cut the release if this fails.
   # No snapshot of the open queue lives here. roadmap.yaml's update_policy states the rule this data
   # follows: do not copy individual issue state into a document, link readers to the tracker instead.
   # A snapshot of open pull requests is stale the day after it is written and nothing updates it.

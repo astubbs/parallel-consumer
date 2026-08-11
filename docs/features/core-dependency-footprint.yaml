@@ -5,7 +5,7 @@ kind: feature
 title: Core dependency footprint
 category: compatibility
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.1.0

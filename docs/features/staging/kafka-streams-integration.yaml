@@ -5,7 +5,7 @@ kind: feature
 title: Using Parallel Consumer with Kafka Streams
 category: integration
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.1.0

@@ -5,7 +5,7 @@ kind: feature
 title: Vert.x asynchronous integration
 category: integration
 module: parallel-consumer-vertx
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.1.0

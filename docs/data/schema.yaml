@@ -128,8 +128,16 @@ kinds:
       observability: Metrics, diagnostics and warnings.
       integration: Adapter modules and other frameworks.
       compatibility: Platform, runtime and dependency constraints.
+    # "stable" was the wrong word and was withdrawn. A module cannot be called stable while a known
+    # defect can lock up a consumer in production, and the honest claim is narrower: it works well,
+    # it is run in production, and every known CRITICAL defect has a resolution ready to land. Note
+    # the qualifier - the claim is about critical defects, never about all defects.
     maturity_values:
-      stable: Supported, and covered by the stable-module reliability claim.
+      production-use: >-
+        Run in production and maintained for it. Every known critical defect has a resolution ready to
+        land before a release ships. Not a claim that no defects exist, that non-critical defects are
+        all fixed, or that behaviour is frozen.
+      reference-example: Runnable illustration of a supported use. Not a compatibility surface.
       alpha: Experimental. No reliability or API expectation.
       deprecated: Still present and still works, but a replacement exists and this will be removed.
     availability:

@@ -1407,11 +1407,6 @@ Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny 
 | `parallel-consumer-mutiny`
 | 17
 
-| `parallel-consumer-streams-spike`
-| 8
-
-| `parallel-consumer-connect`
-| 8
 |===
 
 WARNING: Adding `parallel-consumer-mutiny` to a Java 8 or Java 11 application will build without complaint and then fail at runtime with an `UnsupportedClassVersionError`, because its SmallRye Mutiny dependency is compiled for Java 17.
@@ -1420,38 +1415,45 @@ The other modules are unaffected, and using them does not pull Mutiny in.
 
 === Module maturity
 
-Maturity belongs to a module, not to one project-wide version number. Reliability and API stability are separate:
-0.6.0.0 ships only once every known defect in the stable-module release scope is resolved and evidenced, while their public APIs remain pre-1.0. An
-alpha artifact is a separate, explicit opt-in and cannot change an application that does not depend on it.
+Reliability and API stability are separate questions, and the version number answers neither.
 
-This makes v6 a special stability release. Virtual threads, micro-batching and a dead-letter queue are intentionally
-deferred capabilities, not exceptions to the known-defect gate. The claim does not deny that unknown defects can exist;
-it says the known defect ledger is cleared before the release is cut.
+On reliability: 0.6.0.0 ships only once every known *critical* defect in its scope is resolved and evidenced.
+Critical is the line, deliberately. Claiming that all known defects are fixed would be a promise this project cannot
+keep, and non-critical defects are not claimed to be fixed. The claim also does not deny that unknown defects exist.
+
+On API stability: the published modules remain pre-1.0, so a compatible change is preferred but not guaranteed.
+
+The published modules share one answer to both. They all depend on `parallel-consumer-core` and run the same engine, so
+there is no per-module reliability gradient to publish. What does differ is the experimental artifacts, which are a
+separate and explicit opt-in and cannot change an application that does not depend on one.
+
+Virtual threads, micro-batching and a dead-letter queue are intentionally deferred capabilities, not exceptions to the
+critical-defect gate.
 
 |===
 | Module | Status | Reliability confidence | API expectation | Use this if
 
 | `parallel-consumer-core`
-| Stable
-| Release-gated for all known defects
+| Production use
+| Release-gated on known critical defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | You need ordered concurrent Kafka consumption in a standard Java application.
 
 | `parallel-consumer-vertx`
-| Stable
-| Release-gated for all known defects
+| Production use
+| Release-gated on known critical defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | Your processing uses Vert.x asynchronous APIs.
 
 | `parallel-consumer-reactor`
-| Stable
-| Release-gated for all known defects
+| Production use
+| Release-gated on known critical defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | Your processing uses Project Reactor.
 
 | `parallel-consumer-mutiny`
-| Stable (Java 17)
-| Release-gated for all known defects
+| Production use (Java 17)
+| Release-gated on known critical defects
 | Pre-1.0; compatible change is preferred, not guaranteed
 | Your processing uses SmallRye Mutiny.
 
@@ -1474,10 +1476,9 @@ it says the known defect ledger is cleared before the release is cut.
 | You want to evaluate running supported Kafka Connect sink tasks in-process.
 |===
 
-The experimental artifacts are opt-in leaves. Their rows in link:docs/data/module-maturity.yaml[the
-module-maturity data] carry what is and is not claimed for each, and should be read before depending on
-either one. For the reliability evidence and release-time limits behind the stable
-module claim, see link:docs/data/testing-evidence.yaml[the testing evidence data] and
+The experimental artifacts are not listed above because they are not in this release's build yet. When one lands it
+brings its own row, and depending on that artifact is the entire opt-in. For the reliability evidence and the
+release-time limits behind the claim, see link:docs/data/testing-evidence.yaml[the testing evidence data] and
 link:docs/data/module-maturity.yaml[the module-maturity data].
 
 == Development Information

@@ -5,7 +5,7 @@ kind: feature
 title: Micrometer metrics
 category: observability
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.5.2.6

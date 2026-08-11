@@ -5,7 +5,7 @@ kind: feature
 title: Backpressure and broker liveness management
 category: operability
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.1.0

@@ -5,7 +5,7 @@ kind: feature
 title: Managed executor service integration
 category: integration
 module: parallel-consumer-core
-maturity: stable
+maturity: production-use
 availability:
   status: published
   since: 0.3.2.0

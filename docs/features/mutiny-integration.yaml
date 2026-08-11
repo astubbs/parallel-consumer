@@ -5,7 +5,7 @@ kind: feature
 title: SmallRye Mutiny integration
 category: integration
 module: parallel-consumer-mutiny
-maturity: stable
+maturity: production-use
 availability:
   status: planned
   target_release: 0.6.0.0

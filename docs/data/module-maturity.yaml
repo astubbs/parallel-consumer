@@ -8,18 +8,26 @@ reader_contract:
   answer_shape: Reliability confidence and API stability are independent fields; project version alone answers neither.
 axes:
   reliability:
-    claim: Stable modules do not ship until every known defect in the v6 release scope is resolved and evidenced.
-    scope: Stable modules only; an alpha module never borrows this claim.
+    claim: >-
+      A release does not ship until every known CRITICAL defect in its scope is resolved and
+      evidenced. Critical is the line. Non-critical defects are not claimed to be fixed, and "all
+      known defects" would be a claim this project cannot support.
+    scope: >-
+      One claim, uniform across the published modules. All of them depend on parallel-consumer-core
+      and run the same engine, so a reliability statement about core is a statement about all of
+      them and there is no per-module gradient to publish. An experimental module never borrows it.
     evidence: testing-evidence.yaml
-    does_not_claim: That no unknown defect exists, or that a future feature is required to call the stable modules reliable.
+    does_not_claim: >-
+      That no unknown defect exists, that every non-critical defect is fixed, or that a future
+      feature is needed before the published modules can be relied on.
   api_stability:
     claim: Stable-module APIs remain pre-1.0 and can change before 1.0.
     does_not_mean: The stable modules are unreliable or experimental.
 release_validation:
   known_defect_gate:
     condition: >-
-      Reconcile the release ledger, solution corpus and v6 stability queue; every known defect must have a merged resolution
-      and its named recurrence guard must pass before 0.6.0.0 is cut.
+      Reconcile the release ledger, solution corpus and v6 stability queue; every known CRITICAL defect must have a
+      merged resolution and its named recurrence guard must pass before 0.6.0.0 is cut.
     evidence: testing-evidence.yaml#v6_stability_exception
     explicit_non_defect_deferrals:
       - Virtual threads
@@ -29,70 +37,48 @@ release_validation:
     - Release workflow verifies the current master CI run succeeded.
     - Release workflow blocks when any @Quarantined annotation is present in the source; a dry run warns instead.
   manual:
-    - Confirm that no known defect remains in the v6 release scope; amend the release claim rather than waive an open item.
+    - Confirm that no known critical defect remains in the v6 release scope; amend the release claim rather than waive an open item.
     - Verify the confluentinc#857 deadlock resolution with RebalanceEoSDeadlockTest and the post-fix parallel-integration proof.
     - Verify each alpha module's artifact boundary and user-facing setup against the built release artifact.
   on_failure: Do not cut the release; amend this data and the README to match the actual release posture.
 modules:
   - artifact: parallel-consumer-core
-    maturity: stable
+    maturity: production-use
     minimum_java: 8
-    reliability_confidence: release-gated stable module
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
     api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
     support_posture: Maintained for production use when the release validation passes.
     evidence_id: core
     use_this_if: You need ordered concurrent Kafka consumption in a standard Java application.
   - artifact: parallel-consumer-vertx
-    maturity: stable
+    maturity: production-use
     minimum_java: 8
-    reliability_confidence: release-gated stable module
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
     api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
     support_posture: Maintained for production use when the release validation passes.
     evidence_id: vertx
     use_this_if: Your processing uses Vert.x asynchronous APIs.
   - artifact: parallel-consumer-reactor
-    maturity: stable
+    maturity: production-use
     minimum_java: 8
-    reliability_confidence: release-gated stable module
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
     api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
     support_posture: Maintained for production use when the release validation passes.
     evidence_id: reactor
     use_this_if: Your processing uses Project Reactor.
   - artifact: parallel-consumer-mutiny
-    maturity: stable
+    maturity: production-use
     minimum_java: 17
-    reliability_confidence: release-gated stable module
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
     api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
     support_posture: Maintained for production use when the release validation passes.
     evidence_id: mutiny
     feature: ../features/mutiny-integration.yaml
     use_this_if: Your processing uses SmallRye Mutiny.
   - artifact: parallel-consumer-examples
-    maturity: reference examples
+    maturity: reference-example
     reliability_confidence: Exercises supported module use cases; it is not a runtime library dependency.
     api_expectation: Examples change with the APIs they demonstrate.
     support_posture: Use as starting points, not as a compatibility surface.
     evidence_id: examples
     use_this_if: You want runnable examples before choosing a stable integration module.
-  - artifact: parallel-consumer-streams-spike
-    maturity: alpha
-    minimum_java: 8
-    reliability_confidence: Experimental; module-specific evidence is required and does not inherit stable confidence.
-    api_expectation: Volatile while the experiment is evaluated.
-    support_posture: Evaluation and field feedback only; retain a stock Kafka Streams path.
-    opt_in: artifact dependency
-    isolated_from_stable_modules: true
-    evidence_id: streams-alpha
-    tracking: astubbs#255
-    use_this_if: You want to evaluate the Kafka Streams integration and can tolerate changing behavior and APIs.
-  - artifact: parallel-consumer-connect
-    maturity: alpha
-    minimum_java: 8
-    reliability_confidence: Experimental; module-specific evidence is required and does not inherit stable confidence.
-    api_expectation: Volatile while the experiment is evaluated.
-    support_posture: Evaluation and field feedback only; retain the conventional Connect deployment path.
-    opt_in: artifact dependency
-    isolated_from_stable_modules: true
-    evidence_id: connect-alpha
-    tracking: astubbs#240
-    use_this_if: You want to evaluate running supported Kafka Connect sink tasks in-process.
