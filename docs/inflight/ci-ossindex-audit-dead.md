@@ -24,8 +24,11 @@ reasoning rather than the code:
   enabling it globally means six-plus scans per PR from one account and a burnt rate limit for no
   extra signal.
 - **The job needs its own did-it-actually-scan check**, or it recreates the original bug somewhere
-  more expensive: a green check that scanned nothing. Failing the step when
-  `Failed to fetch component-reports` appears is enough.
+  more expensive: a green check that scanned nothing. Failing the step on the
+  `Failed to fetch component-reports` log line is *a* leg, never the only one - a log-string guard
+  dies silently the day the vendor rewords its message, which is the same failure it exists to catch.
+  Pair it with structural evidence from the exported report, per
+  [`../solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](../solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
 - **Give it a `schedule:` too.** That is what closes the whole-tree gap below, and is nearly free
   once the job exists.
 - Credentials reach Maven via `setup-java` (`server-id: ossindex`, `server-username`,

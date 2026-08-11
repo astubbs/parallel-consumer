@@ -37,14 +37,21 @@ right, whether the fix explains the symptom. A **negative** result gets acted on
 it is a stopping condition: no findings means move on, no prior art means start fresh, no diff means
 nothing to review.
 
-That asymmetry is the whole problem. Three negatives here, which looked unrelated, were all artefacts
-of the instrument rather than facts about the world:
+That asymmetry is the whole problem. Three conclusions here, which looked unrelated, were all
+artefacts of the instrument rather than facts about the world:
 
-| The negative | What was actually true |
+| The conclusion drawn | What was actually true |
 |---|---|
-| "The scanner is reachable and the token is valid" | A warm on-disk cache was answering; the endpoint was bogus and the token expired |
-| "This branch rewrote `README.adoc` and deleted `STRATEGY.md`" | The branch touched neither - the diff was rendering *master's* newer commits as the branch's deletions |
+| "Nothing wrong here - the scanner is reachable and the token is valid" | A warm on-disk cache was answering; the endpoint was bogus and the token expired |
 | "No prior art" | The search ran against `confluentinc`, not the fork |
+| "This branch rewrote `README.adoc` and deleted `STRATEGY.md`" | The branch touched neither - the diff was rendering *master's* newer commits as the branch's deletions |
+
+The first two are negatives - a control that failed to fail, and a search that found nothing - which
+is the dangerous majority case and what this doc is named for. **The third is the mirror image: the
+same defect producing a false *positive*.** It is kept here deliberately, because the defect is one
+thing (an instrument answering a question nobody asked) and the cure is one thing (make it prove it
+could have given the other answer); splitting them by which direction the wrong answer pointed would
+hide that.
 
 Each is cheap to catch and expensive to miss, and none of them announces itself.
 
@@ -124,8 +131,8 @@ otherwise. Cheap ways to show it could:
 | Check returning nothing | Show it could have said yes |
 |---|---|
 | `grep -rl <mechanism> docs/solutions/` | Grep a term you *know* is in there; if that also returns nothing, your path or flags are wrong |
-| `gh pr list --state merged ...` | `gh repo view --json nameWithOwner` prints `astubbs/parallel-consumer`, and the unfiltered list is non-empty |
-| `gh issue list --state all` | The result set contains `upstream-mirror` issues - if it does not, you are on the wrong repo |
+| `gh pr list -R astubbs/parallel-consumer --state merged ...` | `gh repo view --json nameWithOwner` prints `astubbs/parallel-consumer`, and the unfiltered list is non-empty |
+| `gh issue list -R astubbs/parallel-consumer --state all` | `gh issue list -R astubbs/parallel-consumer --label upstream-mirror --limit 1 --state all` returns a row. Do not read absence out of the *unfiltered* list: `--limit` defaults to 30, so a correct fork result can page every mirror off the end |
 | A branch or PR diff | Diff a file you know the branch touched and confirm it appears |
 | A scanner or audit | The run reports how many components it examined, not just how many were bad |
 

@@ -111,8 +111,11 @@ Two things that look like they should help and do not:
   pom to run a scan.
 
 The execution stays **bound to `validate`**, deliberately: the binding is where the mojo should fire,
-and it is only the *invocation* that has to reach `test-compile` so the reactor has built the jars by
-the time it does. Moving the binding would not fix anything and would change when the audit runs.
+and it is only the *invocation* that has to reach `test-compile`. Note what `test-compile` does and
+does not do: it builds no jar - both jar goals run in `package` - but it does compile every earlier
+module, and Maven's reactor then answers a sibling dependency from that module's compiled output
+directory instead of going to the network. That is all the mojo's resolution needs. Moving the binding
+would not fix anything and would change when the audit runs.
 
 ### 3. The same trap breaks a tool that then blames your project
 
@@ -156,7 +159,7 @@ things, and both Maven and the tools around it assume they are the same.**
 | Declared | Resolvable at the moment of asking |
 |---|---|
 | A plugin version, inside a profile | Only when that profile is active - a child module consuming it version-less gets nothing |
-| A module, in the reactor | Only once a phase has actually *built* its artifact; `validate` builds nothing |
+| A module, in the reactor | Only once a phase has actually *compiled* it, so the reactor can answer from its output directory; `validate` compiles nothing |
 | An artifact, published to a repository | Only if that repository is also declared for *reading* |
 
 Maven reports the first as a warning, the second as somebody else's error, and the third not at all.

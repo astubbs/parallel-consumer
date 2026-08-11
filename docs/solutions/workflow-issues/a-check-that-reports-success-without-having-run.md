@@ -33,11 +33,12 @@ tags:
 
 ## Context
 
-Seven checks in this repository are on record as having reported **success** in states where they had
-not actually run. Several were recognised as the same thing within a single day, which is what turned
-a recurring annoyance into a named class.
+Seven checks in this repository are on record as having gone unread while the thing they were meant to
+catch went unchecked. Six reported **success** in states where they had not actually run; the seventh
+reported failure on every run and nobody looked. Several were recognised as the same thing within a
+single day, which is what turned a recurring annoyance into a named class.
 
-None of them was lying about its result. Each faithfully reported "I did not find a problem", having
+None of the six was lying about its result. Each faithfully reported "I did not find a problem", having
 never looked. That is what makes the failure mode expensive: a check that goes red when broken gets
 fixed, and a check that goes green when broken is worse than no check at all, because it also removes
 the prompt to add a working one.
@@ -98,8 +99,9 @@ itself, evidence that it ran.
 
 ### 2. When the tool cannot fail, put the decision outside the tool
 
-Both shipped guards here are the same move: a small script, run after the tool, that answers *did this
-actually happen* using evidence the tool leaves behind.
+Both guards here are the same move - one merged and running, one written and reviewed on a branch that
+has not landed yet: a small script, run after the tool, that answers *did this actually happen* using
+evidence the tool leaves behind.
 
 - `bin/check-review-posted.sh` matches **this run's** id in a posted comment's `[View job]` link, so a
   comment citing this run is proof this run posted something. It states its own limit: it proves a
@@ -124,13 +126,18 @@ That was **rejected as the sole leg during implementation**, because a log-strin
 the day the vendor rewords its message - the exact class of rot the guard exists to catch. A guard
 built out of the failure mode it is guarding against is not a guard.
 
-What shipped leans on the artifact instead. On a 401 the plugin still *writes* `ossindex-report.json`
+What was built leans on the artifact instead. On a 401 the plugin still *writes* `ossindex-report.json`
 - it writes `{ }`. So "the file exists" proves nothing and "the file has a non-empty `reports` map"
-proves the scan happened. Three independent, fail-closed legs:
+proves the scan happened. Three fail-closed legs, independent of one another:
 
 1. **negative, on the log** - the failure marker anywhere means it did not scan;
 2. **positive, structural** - every exported report must carry a non-empty `reports` map;
 3. **positive, coverage** - one exported report per module the log says it checked.
+
+**Legs 2 and 3 are only fail-closed on a cold client cache.** A warm cache serves full,
+correct-looking reports without the run ever contacting the service, so a non-empty `reports` map is
+proof *this run* scanned only if the job never restores or caches the OSS Index report directory. That
+precondition is part of the guard, not a footnote to it; the trap in full is in section 5.
 
 Leg 1 is cheap and catches today's common case, so it is kept. **Leg 2 is the one that survives a
 wording change upstream**, and it is the leg a token expiry trips. The rule is not "never match a log
@@ -195,8 +202,11 @@ Two near neighbours are worth knowing, because they produce the same green tick 
 mechanism - the check runs and returns the wrong answer, rather than not running at all, and the
 observable is identical:
 
-- `bin/check-shell-sigpipe.sh` exists because a `bin/*.sh` piping into `grep -q` under `pipefail`
-  reports failure exactly when it *matches*, silently inverting the script's answer.
+- `bin/check-shell-sigpipe.sh` exists because a `bin/*.sh` piping into `grep -q` under `pipefail` can
+  report failure *because* it matched, silently inverting the script's answer. The producer has to
+  still have more than a pipe buffer left to write when `grep -q` exits, so small inputs pass forever
+  and the inversion surfaces only once real data grows past the threshold - which is what makes a
+  quick reproducer look like a refutation.
 - The mirror image, one line away in a workflow: `mvn ... | tee log` **without** `set -o pipefail`
   takes `tee`'s exit status, so a Maven `BUILD FAILURE` leaves the step green. Piping a build's
   output anywhere is enough to lose its verdict.
