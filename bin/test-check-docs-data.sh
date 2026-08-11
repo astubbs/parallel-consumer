@@ -76,6 +76,37 @@ expect() {
   fi
 }
 
+# expect_problems <expected-total> <pattern> <label> -- asserts HOW MANY problems, and about what
+#
+# `expect` compares the exit code, which is 1 for any number of problems from one upward. That makes
+# it blind to a whole class of regression: a guard that floods the log with one problem per character
+# exits 1, and so does the fixed guard that reports once. Case 8 exists to pin that difference, so it
+# cannot be written with `expect`.
+#
+# It asserts the guard's OWN total, taken from its summary line, plus a pattern. Both are needed, and
+# both were got wrong on the way here:
+#   - Counting only lines matching the pattern passes against the bug. The per-character problems say
+#     "should be a mapping, found str" and never name the field, so the pattern matched exactly one
+#     line before the fix and one after.
+#   - Asserting a total without a pattern passes for the wrong reason. The first version of case 8
+#     wrote a scalar over a key whose list items followed it, which is not valid YAML; the guard
+#     stopped at the parse error and reported exactly one problem, having never reached the code
+#     under test.
+expect_problems() {
+  local want=$1 pattern=$2 label=$3 output total
+  output=$("$GUARD" 2>&1)
+  total=$(printf '%s\n' "$output" | sed -n 's/^check-docs-data: \([0-9]*\) structural problem(s).*/\1/p')
+  total=${total:-0}
+  if [ "$total" -eq "$want" ] && printf '%s\n' "$output" | grep -q "$pattern"; then
+    printf 'ok:   %s (%s problem(s) total, mentioning %s)\n' "$label" "$total" "$pattern"
+  else
+    printf 'FAIL: %s - expected exactly %s problem(s) mentioning %s, got %s. The guard said:\n' \
+      "$label" "$want" "$pattern" "$total"
+    printf '%s\n' "$output" | sed 's/^/      | /'
+    failures=$((failures + 1))
+  fi
+}
+
 # mutate <file> <python-expression-on-t> - edits in place, remembering how to put it back
 mutate() {
   restore_path=$1
@@ -131,9 +162,13 @@ mutate docs/data/schema.yaml \
 expect 1 "a schema contract governing no collection is caught"
 restore
 
+# Replaces the key AND its list items, so the result is valid YAML and the guard actually reaches
+# the milestones check. `not-a-list` is 10 characters: the pre-fix per-character loop reported 11
+# problems here (one per character, plus the type error), and exited 1 - same verdict as the fix.
 mutate docs/features/ordering-modes.yaml \
-  't.replace("  milestones:\n", "  milestones: not-a-list\n", 1)'
-expect 1 "milestones as a scalar reports once, not once per character"
+  're.sub(r"  milestones:\n(?:    [^\n]*\n)+", "  milestones: not-a-list\n", t, count=1)'
+expect_problems 1 "availability.milestones" \
+  "milestones as a scalar reports once, not once per character"
 restore
 
 mutate docs/features/commit-modes.yaml 're.sub(r"^summary: .*$", "summary: \"\"", t, count=1, flags=re.M)'
