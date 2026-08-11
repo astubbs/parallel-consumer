@@ -14,9 +14,20 @@
 
   **That bound does not hold for `claude.yml`**, and the difference is easy to miss: a comment
   trigger receives secrets even on a **fork's** PR, where `pull_request` withholds them. So the
-  "same-repo only" reasoning above never applied to the fallback reviewer. Its job is now gated on
-  `author_association` being `OWNER`/`MEMBER`/`COLLABORATOR`, which enforces the "trusted authors
-  only" posture this entry already assumed rather than leaving it as an assumption.
+  "same-repo only" reasoning above never applied to the fallback reviewer.
+
+  Two gates now stand in for it, and the second exists because the first is not enough. The job runs
+  only when `author_association` is `OWNER`/`MEMBER`/`COLLABORATOR`, which encodes the "trusted
+  authors only" posture this entry already assumed. But that authenticates **the commenter, not the
+  author of the code**: a maintainer typing `@claude` on an outside contributor's fork PR is a
+  trusted trigger over untrusted content, and the fork author would choose what the allowlisted
+  `bin/*.sh` contains. So a pre-checkout step refuses any pull request where `isCrossRepository` is
+  not `false`. Caught in review of astubbs#286 as a P1, not by the author.
+
+  Consequence worth knowing: **fork PRs cannot get an `@claude` review at all.** They already could
+  not get a useful automatic one - `pull_request` withholds the token from forks, so the action has
+  no credential - so this makes an existing gap explicit rather than creating one. Revisit only with
+  a design that separates the trusted reviewer from the untrusted tree.
 - **`actionlint` is still not granted**, so the reviewer cannot lint workflow PRs - it said so itself
   on astubbs#102, and it ships on `ubuntu-latest` with `.github/actionlint.yaml` already present.
   Land it in a **non-workflow** PR, or the validation skip above means it is never exercised.
