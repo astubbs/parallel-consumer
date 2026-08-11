@@ -12,11 +12,26 @@ on:
 
 jobs:
   claude:
+    # Two conditions, and the second one is load-bearing now that this job can run scripts.
+    #
+    # Comment-triggered workflows receive repository secrets even when the comment is on a FORK's
+    # pull request - unlike `pull_request`, which withholds them from forks. That difference is the
+    # whole reason claude-code-review.yml can grant script execution relatively safely and this file
+    # cannot: here, `secrets.CLAUDE_CODE_OAUTH_TOKEN` is present in a job any commenter could start.
+    #
+    # docs/inflight/ci-review-agent.md already states the posture this encodes - "until then: trusted
+    # authors only" - it just had nothing enforcing it. Association is read from whichever surface
+    # produced the triggering text; exactly one is non-null per event, so the `||` chain selects it.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      ) && contains(
+        fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
+        github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,8 +58,34 @@ jobs:
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
 
-          # Optional: Add claude_args to customize behavior and configuration
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr:*)'
+          #
+          # WHY THIS EXISTS
+          #
+          # This file is the ONLY reviewer available to a PR that edits claude-code-review.yml: the
+          # action refuses to run when its own workflow differs from the default branch, so the
+          # automatic reviewer skips itself there (see docs/inflight/ci-review-agent.md). Until now
+          # that fallback passed no allow-list at all - which is not permissive. An absent list means
+          # Bash is not pre-approved, and a CI run has nobody to answer the approval prompt, so every
+          # script call was refused outright.
+          #
+          # So the one reviewer that most needs to check a claim by running it was the one least able
+          # to. On astubbs#273 it verified a self-test's negative control by hand-tracing Python
+          # instead of executing a one-second script, and reported the block itself: "both
+          # `bash bin/test-check-docs-data.sh` and `./bin/check-docs-data.sh` returned 'this command
+          # requires approval'" while `git log`, `grep` and `python3 --version` ran unprompted.
+          #
+          # WHAT IS GRANTED, AND WHY ONLY THIS
+          #
+          # Read-only gates that let the reviewer CHECK a claim rather than infer it, per the rule in
+          # bin/AGENTS.md, plus read-only `gh` queries. Deliberately NOT the Maven suites that
+          # claude-code-review.yml grants: those need a JDK and a warm cache this job does not set up,
+          # and a comment-triggered job holding secrets is the wrong place to run a build.
+          #
+          # bin/check-review-posted.sh is absent on purpose - it reads comment bodies from stdin and
+          # belongs to the review job's own gate, not to an ad-hoc reviewer.
+          claude_args: >-
+            --allowed-tools
+            "Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/check-issue-refs.sh:*),Bash(./bin/check-issue-refs.sh:*),Bash(bin/check-action-versions.sh:*),Bash(./bin/check-action-versions.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
 
