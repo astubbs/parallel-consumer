@@ -12,14 +12,17 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   determined to get a green check can get one. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
-- **The dispatched reviewer cannot open inline review comments, so blocking findings no longer gate
-  a merge mechanically.** The action installs the inline-comment MCP server only for a PR or issue
-  event, so on a dispatch the tool does not exist; the grant was removed rather than left inert.
-  Findings that should block now arrive as a marked section at the top of the summary comment and
-  the reviewer says so - but `required_review_thread_resolution` has nothing to resolve, so a human
-  has to act. This is the largest single thing the on-demand split gave up. Closing it needs either
-  a trigger that carries a PR context (an `issue_comment` command phrase would, and would restore
-  tag mode wholesale) or a posting route independent of that MCP server.
+- **The DISPATCHED reviewer cannot open inline review comments; the comment route can.** The
+  action installs the inline-comment MCP server only for an *entity* event. `workflow_dispatch` is
+  not one, so on a dispatch the tool does not exist and the grant was removed rather than left
+  inert - blocking findings arrive as a marked section in the summary comment, and
+  `required_review_thread_resolution` has nothing to resolve. `issue_comment` **is** an entity
+  event, so `claude.yml` grants the tool and gets real review threads. The practical answer is
+  therefore routing, not a fix: ask by comment when you want findings that mechanically block.
+  What stays open is the dispatch route itself, which would need a trigger carrying a PR context
+  (an `issue_comment` command phrase would, and would restore tag mode wholesale). Weigh that
+  against what the dispatch route uniquely gives - `-f focus` and the packaged procedure - before
+  assuming it should be replaced.
 - **OPEN, and it is the first thing to do after this lands: the dispatched reviewer has never
   completed an end-to-end review.** Nothing has yet observed it read a PR, post a summary comment
   as `claude[bot]`, and turn `claude-review` green in one run - only the individual mechanisms were
@@ -31,19 +34,32 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   constraint is inherited by whoever edits the reviewer next - your change will land unverified
   too. Reviewing a PR that edits this workflow is a separate thing and does work; the mechanism is
   in [`docs/ci.md`](../ci.md).
-- **DECISION NEEDED: does the `@claude` comment route get the dispatch route's tool allowlist?**
-  A review triggered by comment runs with no `--allowed-tools`, so it cannot execute the repo's
-  check scripts or a test suite - it reads. Measured on astubbs/parallel-consumer#288, where the
-  reviewer reported "tool permissions blocked Bash execution", on a PR whose whole diff was those
-  scripts. The dispatch route solves this with a curated allowlist of specific scripts, and the
-  denied grants are one-for-one already on it. **Copying it across is not obviously safe**, and
-  that is why this is parked rather than done: a dispatch is fired by someone with write access
-  naming a PR, whereas `claude.yml` is triggered by comment *text*, which anyone who can comment
-  can influence - and it matches `@claude` by plain substring, with no awareness of quoting
-  (astubbs/parallel-consumer#286: prose *about* the trigger fired it twice). The options are
-  (a) the same curated allowlist, arguing that an allowlist of read-only repo scripts is safe even
-  under influenced input, (b) a narrower read-only subset, or (c) leave it degraded. Until someone
-  decides, (c) holds and `docs/ci.md` says so out loud. Blanket `Bash(*)` is not an option.
+
+  **The comment route is no better off, for a different reason.** It looks testable - just comment
+  on a PR - but `issue_comment` workflows always run the **default branch's** copy, so a comment
+  exercises master's `claude.yml`, never the one on your branch. The tool grants and the
+  `refresh-gate` added there are unverified in exactly the same way. After the merge, exercise
+  both: a `--ref master` dispatch, and an `@claude review this` comment on a live PR - checking
+  that the comment route really does open an inline thread, and that `claude-review` clears itself.
+- **DECIDED: the comment route holds the same curated allowlist as the dispatch route.** It ran
+  with no grants at first and reviewed by reading, which showed up on
+  astubbs/parallel-consumer#288 ("tool permissions blocked Bash execution") on a PR whose whole
+  diff was check scripts. The objection was that comment text is attacker-influencable where a
+  dispatch is not - `claude.yml` matches `@claude` by plain substring with no awareness of quoting
+  (astubbs/parallel-consumer#286: prose *about* the trigger fired it twice). Rejected as the
+  operative difference, because **both** routes execute PR-authored code, and what protects them
+  is not a trusted trigger but a curated list of this repo's own scripts plus a job with no write
+  grant. A narrower subset was considered and dropped: the whole value is running the checks the
+  PR changed. Blanket `Bash(*)` was never on the table. Revisit if the trigger ever widens beyond
+  a substring match on a comment.
+- **NOT ENFORCED YET: the two tool allowlists can drift apart.** `claude.yml` and
+  `claude-code-review-dispatch.yml` now carry byte-identical `--allowedTools` lists (the comment
+  route adds the inline-comment tool), and nothing checks that. A grant added to one and missed on
+  the other produces a reviewer that silently cannot run the check it was asked about - the same
+  class of near-miss as astubbs/parallel-consumer#273's grants nearly vanishing in a merge. The
+  fix is a small `bin/check-review-tool-grants.sh` that extracts both lists and diffs them, with
+  the usual `bin/test-*` self-test, wired into the hygiene job. Cross-reference comments in both
+  workflows are the stopgap.
 - **The two `refresh-gate` jobs are near-duplicates and must be changed together.** One is in
   `claude-code-review-dispatch.yml`, one in `claude.yml`. Sharing the body would mean checking out
   the script, and a no-checkout job is precisely what both of them are - the write grant must not

@@ -138,34 +138,53 @@ jobs:
           additional_permissions: |
             actions: read
 
-          # THIS ROUTE IS A DEGRADED REVIEWER, DELIBERATELY AND FOR NOW.
+          # WHAT THIS ROUTE MAY EXECUTE, AND WHY IT IS THE SAME LIST AS THE DISPATCH ROUTE.
           #
-          # No `--allowed-tools` is passed, so a review triggered here cannot execute this repo's
-          # check scripts or its test suites - it reads. Observed live on
-          # astubbs/parallel-consumer#288, where the reviewer said so itself: "tool permissions
-          # blocked Bash execution ... Everything above is from static reading." The PR under
-          # review was one whose entire diff was those scripts and their tests, so it got a
-          # reader instead of a runner.
+          # This is the dispatch reviewer's curated allowlist, copied verbatim, plus the inline
+          # comment tool. It was NOT granted here originally, and the gap was visible in the
+          # output: on astubbs/parallel-consumer#288 the reviewer reported "tool permissions
+          # blocked Bash execution ... Everything above is from static reading", on a PR whose
+          # entire diff was check scripts and their tests. A reader where the change needed a
+          # runner.
           #
-          # The dispatch workflow solves this with a CURATED ALLOWLIST of specific scripts. Not
-          # copied here, because the two routes have different threat models and the difference
-          # is the whole point: a dispatch is fired by someone with write access naming a PR,
-          # whereas THIS workflow is triggered by comment text, which anyone who can comment can
-          # influence. Widening what that can execute is a security decision, not a convenience
-          # one, and it is recorded as an open question in docs/inflight/ci-review-agent.md
-          # rather than settled quietly here.
+          # The objection to copying it was that comment text is attacker-influencable in a way a
+          # `workflow_dispatch` is not. That is true and it is not the operative difference: BOTH
+          # routes run PR-authored code, and this is an allowlist of this repo's own scripts, not
+          # a shell. The protection was never "the trigger is trusted" - it is that the list is
+          # curated and that the job holding it has no write grant (see `refresh-gate`, and the
+          # `persist-credentials: false` above). Granting less here bought no safety and cost the
+          # only working reviewer the ability to check its own subject matter.
           #
-          # Until it is settled: a review from this route is worth less than one from the
-          # dispatch route, and `docs/ci.md` says so. Do not read "no issues found" here as
-          # equivalent.
+          # `--allowedTools` here ADDS to tag mode's base tools rather than replacing them - the
+          # action documents exactly that ("The base GitHub tools are always included. Use
+          # --allowedTools to add additional tools", docs/configuration.md) - so the tracking
+          # comment, the `mcp__github_ci__*` readers and the git tools all survive this line.
           #
+          # ==> KEEP IN SYNC WITH `--allowedTools` IN claude-code-review-dispatch.yml. <==
+          # The two lists are byte-identical apart from the inline-comment tool, and nothing
+          # mechanical enforces that yet. A grant added to one route and missed on the other is
+          # the drift that nearly lost astubbs/parallel-consumer#273's grants in a merge, and it
+          # shows up as a reviewer that silently cannot run the check it was asked about. A CI
+          # check that diffs the two lists is the fix and is recorded in
+          # docs/inflight/ci-review-agent.md.
+          #
+          # `mcp__github_inline_comment__create_inline_comment` is granted here and is NOT on the
+          # dispatch route's list, because it cannot be: the action installs that server only for
+          # an entity event, and a `workflow_dispatch` is not one. An `issue_comment` IS, so THIS
+          # route can open real review threads. That matters more than it looks - unresolved
+          # review threads are what mechanically gate a merge here, so a blocking finding from
+          # this route actually blocks, where the dispatch route's can only ask a human nicely.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)"
+
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr:*)'
+          #
+          # Leave `prompt` UNSET. It is what keeps this route in tag mode: the action picks agent
+          # mode the moment a prompt is present (src/modes/detector.ts), and agent mode on a
+          # comment loses the tracking comment and the automatic CI reader - and would replace
+          # whatever the human actually typed with a fixed instruction, which is the entire point
+          # of this route.
 
   # Holds this workflow's only write grant, in a job that checks NOTHING out. The dispatch
   # workflow splits its jobs for the same reason and explains it at length in its header; the

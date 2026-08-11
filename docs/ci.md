@@ -124,22 +124,29 @@ silently swap that procedure for an improvised one; the output still looks like 
 nothing tells you. **If you ever edit the reviewer, the `plugins:` input and the
 `/code-review:code-review ... --comment` prompt must survive.**
 
-### The `@claude review this` comment route is a fallback, and a weaker one
+### The `@claude review this` comment route, and the one thing it does better
 
-Commenting `@claude review this` on a PR runs `claude.yml` and does produce a review. Prefer the
-dispatch above when you have the choice, because **the comment route reviews with no tool grants**:
-it cannot execute this repo's check scripts or run a test suite, so everything it tells you comes
-from reading. Seen plainly on `astubbs/parallel-consumer#288`, where the reviewer said so itself -
-"tool permissions blocked Bash execution ... Everything above is from static reading" - on a PR
-whose entire diff was check scripts and their tests.
+Commenting `@claude review this` on a PR runs `claude.yml`. It holds **the same curated tool
+allowlist as the dispatched reviewer**, so it can run this repo's check scripts and its test suites
+rather than reading and guessing.
 
-That matters most for exactly the claims worth checking: whether a new test is actually collected
-and actually fails without its fix. A static read cannot tell you, and
-[`docs/solutions/…/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md)
-is the local history of trusting one that could not. **Do not read "no issues found" from this route
-as equivalent to the dispatched reviewer's.** Whether to give it the dispatch route's curated
-allowlist is an open security question - comment text is attacker-influencable in a way a dispatch
-is not - and it is recorded in [`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
+It was briefly granted nothing, and the gap showed: on `astubbs/parallel-consumer#288` the reviewer
+said so itself - "tool permissions blocked Bash execution ... Everything above is from static
+reading" - on a PR whose entire diff was check scripts and their tests. The argument for leaving it
+that way was that comment text is attacker-influencable where a dispatch is not. That is true and it
+is not the operative difference: **both** routes run PR-authored code, and the protection was never
+that the trigger is trusted - it is that the list is curated to this repo's own scripts and that the
+job holding it has no write grant. So the lists are the same, deliberately, and
+[`.github/workflows/claude.yml`](../.github/workflows/claude.yml) says to keep them that way.
+
+**This route can open real inline review threads, and the dispatched one cannot.** The action
+installs its inline-comment server only for an *entity* event; `issue_comment` is one and
+`workflow_dispatch` is not. Since unresolved review threads are what mechanically gate a merge here,
+a blocking finding from this route actually blocks, where the dispatch route's can only ask a human
+to act. **If you want findings that hold the merge, ask for the review by comment.**
+
+The dispatch route keeps two advantages: `-f focus` for a steer, and the packaged
+`/code-review:code-review` procedure rather than whatever the comment said.
 
 Both routes now clear the gate themselves. Each has a `refresh-gate` job that re-runs
 `claude-review` after a review that actually succeeded, because the gate only ever triggers on
@@ -178,14 +185,21 @@ quietly:
 | Lost | Replaced by |
 |---|---|
 | the `claude[bot]` tracking comment the gate reads | a **mandatory** summary comment, required by the reviewer's system prompt as its last action |
-| `mcp__github_inline_comment__create_inline_comment` | **nothing** - see below |
+| `mcp__github_inline_comment__create_inline_comment` | **nothing on this route** - ask by comment instead, see below |
 | the CI-status MCP server | `gh run list` / `gh run view` grants plus `additional_permissions: actions: read`. Not `gh pr checks` - reading check runs needs a `checks` scope this token cannot be given |
 
-**The inline-comment loss is real and is not papered over.** An unresolved review thread is the
-only thing that mechanically gates a merge here, and the dispatched reviewer can no longer open
-one. Blocking findings now arrive as a marked section at the top of the summary comment, and the
-reviewer is instructed to say plainly that a human has to act on them. Restoring mechanical
-enforcement needs a different trigger or a different posting route; it is recorded in
+**The inline-comment loss is real, and it is confined to this route.** An unresolved review thread
+is the only thing that mechanically gates a merge here, and the *dispatched* reviewer can no longer
+open one: the action installs its inline-comment server only for an entity event, and a
+`workflow_dispatch` is not one. On a dispatch, blocking findings arrive as a marked section at the
+top of the summary comment, with the reviewer instructed to say plainly that a human has to act on
+them.
+
+**The comment route does not have this problem** - `issue_comment` *is* an entity event, so
+`claude.yml` grants the tool and gets real review threads. So the honest guidance is not "we lost
+inline comments", it is **"ask by comment when you want findings that block, and by dispatch when
+you want the packaged procedure or a `-f focus` steer"**. Closing the gap on the dispatch route
+itself would need a trigger that carries a PR context; it is recorded in
 [`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
 
 ### Editing the reviewer cannot be tested before it merges
