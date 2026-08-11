@@ -97,7 +97,12 @@ expect_problems() {
   output=$("$GUARD" 2>&1)
   total=$(printf '%s\n' "$output" | sed -n 's/^check-docs-data: \([0-9]*\) structural problem(s).*/\1/p')
   total=${total:-0}
-  if [ "$total" -eq "$want" ] && printf '%s\n' "$output" | grep -q "$pattern"; then
+  # Herestring, not `printf | grep -q`, for the reason set out at the `grep -qE` call in
+  # check-review-posted.sh: grep -q exits on its first match, printf takes EPIPE, and `pipefail`
+  # promotes 141 to the pipeline's status - so finding the pattern would FAIL the case. Written
+  # here as a pipe on the first pass, in a file that documents the trap, and caught by
+  # bin/check-shell-sigpipe.sh rather than by review.
+  if [ "$total" -eq "$want" ] && grep -q "$pattern" <<<"$output"; then
     printf 'ok:   %s (%s problem(s) total, mentioning %s)\n' "$label" "$total" "$pattern"
   else
     printf 'FAIL: %s - expected exactly %s problem(s) mentioning %s, got %s. The guard said:\n' \
