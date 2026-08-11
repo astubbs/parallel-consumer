@@ -32,12 +32,12 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   curated changelog never reaches the release page.
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release.
-- **Three `3.9.1` references survive this PR - one is wrong, two are not.** The genuine defect is
-  `AGENTS.md:183`, which tells contributors PRs run "split suites on default Kafka 3.9.1" when CI's
-  default is whatever `pom.xml` says - now `3.9.2`. It is a one-word fix, left alone only to keep this
-  PR scoped to what 0.6.0.0 publishes: `AGENTS.md` is contributor documentation, not a release
-  artefact. The other two are `bin/ci-build.sh 3.9.1` command examples - `AGENTS.md:58`, and
-  `src/docs/README_TEMPLATE.adoc:1133`, which does reach the published `README.adoc:1382`. Being
+- **Three `3.9.1` references - one was wrong, two are not.** The genuine defect was the CI
+  description telling contributors PRs run "split suites on default Kafka 3.9.1" when CI's default
+  is whatever `pom.xml` says - now `3.9.2`. **Fixed in astubbs#272**, which moved that text into
+  `docs/ci.md` and dropped the version entirely, so it names no number that can go stale again.
+  The other two are `bin/ci-build.sh 3.9.1` command examples - one in `AGENTS.md` under *How to
+  Build*, and `src/docs/README_TEMPLATE.adoc:1133`, which does reach the published `README.adoc`. Being
   inside a published artefact does not make that one an error: it demonstrates that the script *takes*
   a version argument and asserts nothing about which version CI defaults to, so it stays correct
   whatever the pom says. Do not "fix" either of them.

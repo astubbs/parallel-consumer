@@ -5,7 +5,7 @@
 
 # Copyright header conformance check for the fork.
 #
-# Policy (AGENTS.md, "Copyright rules for this fork"):
+# Policy (docs/copyright.md):
 #   - Upstream-derived files UNMODIFIED since the fork point keep the Confluent header as-is.
 #   - Upstream-derived files MODIFIED since the fork point (including fork-side renames with
 #     changes, and extractions of upstream code) must ALSO carry the modifications line:

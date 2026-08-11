@@ -31,6 +31,20 @@ updates:
       # Managed by hand in the curated versions-maven-plugin sweep instead.
       # See parallel-consumer-example-metrics/pom.xml.
       - dependency-name: "com.fasterxml.jackson.core:jackson-databind"
+      # The second Jackson pin: the jackson-bom import in
+      # parallel-consumer-example-streams, which holds that module at 2.18.9. It needs
+      # the same hand management as the databind pin above, and it is a *different*
+      # coordinate, so the rule above does not cover it.
+      #
+      # This one is not just hygiene. Jackson's fixed-version ranges are per-line, and
+      # an automated bump can move you INTO a vulnerability: CVE-2026-59889 was
+      # introduced in 2.18.0 and fixed only in 2.18.9, and CVE-2026-54518 applies to
+      # 2.21.0-2.21.3 only. The root pom greenlights CVE-2026-54518 as a false positive
+      # *because this module resolves 2.18.9*; a bump into 2.21.0-2.21.3 would make that
+      # finding real while the exclusion silently hid it. Bump this by hand, and
+      # re-check the exclusion list when you do.
+      # See docs/inflight/deps-cve-backlog.md.
+      - dependency-name: "com.fasterxml.jackson:jackson-bom"
       # Frozen workaround pin, NOT a dep to track upward: byte-buddy is held at
       # mockito's version because wiremock-jre8 2.35.2 drags in an ancient byte-buddy
       # that breaks mockito (MockitoInitializationException). A bump buys nothing and
