@@ -60,16 +60,14 @@ stack traces (see [`docs/testing.md`](testing.md)).
   required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
   loud, and they gate precisely so those failures cannot be skimmed past.
-- **`claude-code-review.yml`** - automated PR review. The job ends with a gate,
-  `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs
-  first), asserting that a review from *this* run actually landed on the PR. Without it the check
-  reports success when the action reviews nothing, which is indistinguishable from "reviewed, no
-  findings" - it has happened twice here. **The gate fails on any PR that edits
-  `claude-code-review.yml` itself**: the action refuses to run unless that file matches the default
-  branch, so a PR cannot rewrite its own reviewer. That is the guard working. Get a real review
-  with a `@claude review this` PR comment (which runs from `claude.yml`, unmodified, so it
-  validates), or split the workflow edit into its own PR. **Do not disable the gate to get a green
-  check.**
+- **`claude-code-review.yml`** - the **review gate**, not the reviewer. It runs on every PR push,
+  invokes no Claude and costs nothing, and asserts one thing: that a review exists for the
+  **current head**. It produces the required check `claude-review`, so the job name is an API here
+  as it is in `repo-hygiene.yml`. See "The automated review" below.
+- **`claude.yml`** - the **reviewer**, and the general `@claude` handler. Triggered on demand by a
+  comment. It carries the reviewer's tool allowlist and review instructions, and is restricted to
+  commenters who already have write access, because it holds the Claude credential and can execute
+  the repo's test wrappers.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
   See [`docs/testing.md`](testing.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
@@ -77,6 +75,75 @@ stack traces (see [`docs/testing.md`](testing.md)).
 - **`release.yml`** - the dispatch-triggered release. See [`docs/releasing.md`](releasing.md).
 - **`.semaphore/`** - legacy Confluent internal CI/release pipelines, retained but inactive on the
   fork.
+
+## The automated review
+
+**The review does not run on push. Ask for it with a `@claude review this` PR comment when the PR
+is ready for review** - not on every push, and not on work in progress.
+
+It used to fire on every `pull_request` event, which spent a full review on every push,
+overwhelmingly on branches that were not ready for one. That coupled "get CI feedback" to "spend a
+review" tightly enough that people batched pushes to avoid it. The two are now split:
+
+| | Runs | Cost | Produces |
+|---|---|---|---|
+| **Gate** (`claude-code-review.yml`) | every PR push | none - no Claude, no JDK, no build | the required check `claude-review` |
+| **Reviewer** (`claude.yml`) | on a `@claude review this` comment | a full review | the review itself |
+
+### A red `claude-review` is the expected state on an unreviewed PR
+
+It is **not** a fault to diagnose and **not** something to fix by editing the gate. It means what
+it says: nothing has reviewed this head yet. The fix is to comment `@claude review this` once the
+work is actually ready. Three distinct reds, each saying which it is:
+
+- **never reviewed** - nobody has asked. Normal for a new or in-progress PR.
+- **reviewed, but not since `<time>`** - there is a review, but you have pushed since. See below.
+- **the reviewer left unticked boxes** - it started and did not finish, so ask again.
+
+### Strict on purpose: a review of commit N does not vouch for commit N+1
+
+The gate requires a review **newer than the current head**, so a push after a review turns it red
+again and wants a fresh one. The lenient alternative - any review on the PR, ever, satisfies the
+gate - was rejected because it reports success for code nothing has looked at, which is exactly the
+class named in
+[`docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+A gate whose whole job is to stand in for a missing always-on reviewer must not itself be
+satisfiable by a review of code that no longer exists.
+
+**There is deliberately no skip word, label or "trivial change" escape**, because any such escape
+is asserted by the same person who wants to use it - which makes it exactly as strong as not having
+the gate. The honest escape already exists and is loud: merge with the required check red, which
+leaves a permanent record that somebody chose to merge unreviewed. Re-requesting a review after a
+one-line fix costs one comment and a couple of minutes, so an escape would save little and cost the
+guarantee.
+
+### What the gate proves, and what it does not
+
+`bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first)
+takes the PR's comments and requires **one** comment that is all three of: authored by the reviewer
+bot per the GitHub API, created at or after the head appeared, and free of unticked task-list boxes.
+It does not read the review, and it never will - a check that judges review quality is a check
+nobody can keep honest. It is a guard against the action failing quietly, not against somebody who
+wants to get around it. **Do not disable it to get a green check.**
+
+The gate exists because `claude-code-action` exits 0 in several situations where it reviews
+nothing, so a check wired straight to it certifies nothing while looking identical to "reviewed, no
+findings". That has happened three times here; the full list is in the script's header.
+
+### Editing the reviewer
+
+`claude-code-action` refuses to run when **the workflow file that invokes it** differs from the
+default branch's copy, so a PR cannot rewrite its own reviewer. Two consequences:
+
+- **`claude-code-review.yml` is no longer affected**, because it no longer invokes the action.
+  Editing the gate used to make its own `claude-review` check unfixably red - re-running cannot
+  help, since the input is the workflow diff itself - and that meant an admin ruleset bypass to
+  merge. It does not any more.
+- **`claude.yml` is affected only after merge.** `issue_comment` events always execute the
+  *default branch's* copy of a workflow, so `@claude review this` on a PR that edits `claude.yml`
+  runs master's version and validates fine. The flip side: changes to the reviewer's grants or
+  instructions do not take effect until they merge, so the PR that makes them is reviewed by the
+  old configuration.
 
 ## Self-hosted lanes
 

@@ -351,6 +351,15 @@ Nothing lints commit messages, so all of this is on you.
   every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` gate fails a
   human-authored PR when the checklist is missing entirely *or* any box is left unchecked without an
   `N/A`, so dropping the template is not a bypass. Only real bot authors are exempt.
+- **Ask for the automated review when the PR is ready - it does not run on push.** Comment
+  `@claude review this` on the PR. Do **not** ask on every push, and do not ask for work in
+  progress: a review costs real budget and reviewing an unfinished branch spends it on code that is
+  about to change. Push as often as you like for CI feedback; ask once the branch is what you want
+  reviewed. The `claude-review` check goes red until a review exists for the **current head**, so
+  **a red `claude-review` on a PR nobody has reviewed yet is the expected state, not a fault** -
+  the fix is to request a review when the work is actually ready, never to edit the gate. Pushing
+  after a review reds it again, deliberately. Details and the reasoning:
+  [`docs/ci.md`](docs/ci.md).
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the
   specific review comment, NOT as a separate top-level PR comment - a summary comment leaves the
   original conversation unresolved and can block merge on "unresolved conversations". When a finding
