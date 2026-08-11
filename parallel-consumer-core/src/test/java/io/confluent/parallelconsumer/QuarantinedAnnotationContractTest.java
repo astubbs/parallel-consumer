@@ -143,7 +143,7 @@ class QuarantinedAnnotationContractTest {
 
     @Test
     void registryFileExistsWhereTheCheckScriptsExpectIt() {
-        assertThat(Files.exists(REPO_ROOT.resolve("docs/QUARANTINED_TESTS.md"))).isTrue();
+        assertThat(Files.exists(REPO_ROOT.resolve("docs/quarantined-tests.md"))).isTrue();
     }
 
     /**

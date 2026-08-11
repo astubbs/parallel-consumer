@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Enforce that docs/QUARANTINED_TESTS.md (the live registry / task list) matches the @Quarantined
+# Enforce that docs/quarantined-tests.md (the live registry / task list) matches the @Quarantined
 # annotations in the code, at METHOD granularity, in BOTH directions:
 #   - every annotated class must have registry entries matching its annotation COUNT (a second
 #     undiagnosed quarantine cannot ride along on the first entry)

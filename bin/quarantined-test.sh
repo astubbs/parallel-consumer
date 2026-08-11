@@ -23,7 +23,7 @@ source bin/lib/quarantine-common.sh
 # separate fail-fast gating steps - re-running them inside a continue-on-error step would swallow
 # their failures; ce-review finding).
 if [ "${QUARANTINE_SKIP_CHECKS:-0}" != "1" ]; then
-  echo "=== Quarantine registry check (docs/QUARANTINED_TESTS.md must match the annotations) ==="
+  echo "=== Quarantine registry check (docs/quarantined-tests.md must match the annotations) ==="
   bin/check-quarantine-registry.sh
   echo "=== Quarantine owner-claim check (needs gh; skipped when unavailable) ==="
   if gh auth status >/dev/null 2>&1; then
