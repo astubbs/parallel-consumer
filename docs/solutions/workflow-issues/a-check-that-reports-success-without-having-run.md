@@ -51,7 +51,7 @@ the prompt to add a working one.
 | `claude-code-action` workflow-validation skip | Refuses to run when the workflow file differs from the default-branch copy; logged *"Exiting due to workflow validation skip"*, exited 0, PR sat mergeable with a green check and no review (astubbs/parallel-consumer#124) | Same gate - and it deliberately fails such PRs |
 | `bin/check-copyright-headers.sh` | Exits 0 with a warning when there is no fork point (shallow clone) | `COPYRIGHT_CHECK_REQUIRE_FORK_POINT: "1"` in CI |
 | Maven's own model validation | Degrades a plugin declared without a version to a `[WARNING]` that scrolls past in a long log | `requirePluginVersions` enforcer rule (astubbs/parallel-consumer#259) |
-| GitHub's managed *Automatic Dependency Submission (Maven)* | Failed on every branch it ran on - repo-wide, not any one PR's doing - and went unnoticed because it is not a required check | Turned back off, with the re-enable trigger written down |
+| GitHub's managed *Automatic Dependency Submission (Maven)* | Failed on every run it ever made, `master` included - repo-wide, not any one PR's doing - and went unnoticed because it is not a required check | Turned back off, with the re-enable trigger written down |
 
 The first six fail open. The last fails closed and was ignored anyway, which is the same outcome by a
 different route: **a check nobody gates on is a check nobody reads.**

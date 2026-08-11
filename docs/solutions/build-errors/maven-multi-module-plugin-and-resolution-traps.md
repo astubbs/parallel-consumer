@@ -37,9 +37,11 @@ it.** Three of the four announce themselves only as a warning or as somebody els
   threaten the stability of your build"*.
 - A bare `mvn validate` on a machine without the project's snapshots installed dies at the second
   module with `Could not resolve dependencies ... parallel-consumer-core:jar:tests`.
-- GitHub's managed *Automatic Dependency Submission (Maven)* failed on every branch it ran on - the
-  same resolution error on three unrelated branches, so repo-wide and not any one PR's doing - and
-  reported it as a problem with this project.
+- GitHub's managed *Automatic Dependency Submission (Maven)* failed on every run it ever made - the
+  same resolution error on `master` and on every branch, so repo-wide and not any one PR's doing - and
+  reported it as a problem with this project. The whole history is one query, and worth running before
+  believing any claim about which branches a managed workflow broke on:
+  `gh api "repos/astubbs/parallel-consumer/actions/workflows/261174653/runs?per_page=100" --jq '.workflow_runs[] | "\(.head_branch) | \(.conclusion)"'`
 - `parallel-consumer-core:0.6.0.0-SNAPSHOT` is served with HTTP 200 from
   `central.sonatype.com/repository/maven-snapshots`, and Maven still will not resolve it.
 
