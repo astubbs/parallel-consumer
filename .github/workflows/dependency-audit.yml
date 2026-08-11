@@ -9,7 +9,7 @@
 # is what the `schedule:` trigger below is for: an unchanged tree acquires new advisories, and
 # nothing else in this repo would ever notice.
 #
-# This is the one exception to AGENTS.md's "there is no scheduled build, deliberately". That rule
+# This is the one exception to docs/ci.md's "there is no scheduled build, deliberately". That rule
 # rejects cron lanes that RE-RUN suites the PR gate already covers. This lane covers something the
 # gate cannot: the passage of time.
 #
