@@ -85,7 +85,8 @@ This section is the valuable one - five plausible reads, all wrong, and why.
 5. **"The ambient probe says clean, so the fault is in the test."** The verdict was **vacuous**.
    `ProgressProbe` needs `LAG_STAGNATION_MIN_LAG` (50) of lag sustained past `LAG_STAGNATION_BOUND`
    (150s), or `REBALANCE_DWELL_BOUND` (15s). A 15-record test failing in 35s cannot trip either
-   detector. See `AGENTS.md` (Testing) for the standing caveat - **do not duplicate it here**.
+   detector. See [`docs/testing.md`](../../testing.md) for the standing caveat - **do not duplicate
+   it here**.
 
 6. **Searching CI history filtered on `conclusion == "failure"`.** Structurally blind to this failure
    class: a run whose first attempt fails and is retried green reports `success`. The scan has to walk
