@@ -303,9 +303,18 @@ It is a real trade, so it is worth knowing why it was made rather than discoveri
 surprise. Strict is the stronger guarantee - a review of commit N genuinely does not vouch for
 commit N+1 - and it was abandoned not because it was wrong but because of **what enforcing it
 cost**, and because the per-commit coverage it protected already arrives from elsewhere: a
-separate auto-reviewer reads every push. Enforcing freshness here needed a contested timestamp
-comparison and, worse, a job holding `actions: write` on every review route so the check could be
-re-run after a review landed.
+separate auto-reviewer reads every push. What freshness cost was the **timestamp machinery**: a
+contested comparison between the contributor-controlled committer date and the server-side
+check-suite time, same-second ties, an endpoint with undocumented ordering, and the reviewed-SHA
+plumbing crossing job boundaries. All of that is gone.
+
+**What it did not cost, despite an earlier draft here saying so, is the `actions: write` scope.**
+Both `refresh-gate` jobs still hold it, because the gate is produced by a `pull_request` workflow
+and a review landing after the last push raises no event to re-evaluate it - true under either
+rule. That scope is a cost of *how the check is produced*, not of what it asks, so leniency could
+never have paid it off; retiring it needs the reviewer to raise a check run on the reviewed SHA.
+The distinction matters to anyone weighing a return to strictness: restoring it buys back the
+guarantee at the price of the timestamp machinery alone, not of a new privilege escalation.
 
 **The assumption that makes this safe is that the auto-review keeps happening.** If it ever stops,
 per-commit coverage stops coming from anywhere and nothing announces it - the gate keeps passing,

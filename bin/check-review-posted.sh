@@ -59,20 +59,21 @@
 #
 #   * PER-PUSH COVERAGE ALREADY EXISTS. A separate reviewer auto-reviews every push. Strictness
 #     here was buying a guarantee that was already being provided, at a price paid on every PR.
-#   * IT NEEDED A WRITE TOKEN NEXT TO THE REVIEWER. The check is produced by a `pull_request`
-#     workflow, so a review posted after the last push could not clear it without something
-#     re-running the gate - which meant a job holding `actions: write`, on both review routes.
-#     That token can dispatch any workflow in the repo, `release.yml` included. Strictness was
-#     the only thing that made the freshness comparison worth having, and the freshness
-#     comparison was a large part of what those jobs existed to serve.
 #   * IT NEEDED CONTESTABLE TIMESTAMPS. Deciding "newer than the head" meant choosing between
 #     the contributor-controlled committer date and the server-side check-suite time, handling
 #     same-second ties, and paginating an endpoint with undocumented ordering - three rounds of
 #     review findings, all of them about the comparison rather than about reviewing.
 #
-# So the trade was: a guarantee already covered elsewhere, against a standing privilege
-# escalation surface and a page of timestamp plumbing. The gate now means "somebody deliberately
-# asked for a review of this PR and it finished", which is the thing it was actually needed for.
+# So the trade was: a guarantee already covered elsewhere, against a page of timestamp plumbing.
+# The gate now means "somebody deliberately asked for a review of this PR and it finished", which
+# is the thing it was actually needed for.
+#
+# NOT part of that trade, though an earlier draft of this header claimed it was: the `actions:
+# write` scope on the two `refresh-gate` jobs. The check is produced by a `pull_request` workflow,
+# so a review landing after the last push raises no event to re-evaluate it - under EITHER rule -
+# and something has to re-run the gate. That scope is a cost of how the check is produced, not of
+# what it asks, and it survives here unchanged. Retiring it needs the reviewer to raise a check run
+# on the reviewed SHA; see docs/inflight/ci-review-agent.md.
 #
 # What did NOT change: there is still no skip word, label, or "trivial change" escape. Any such
 # escape is asserted by the same person who wants to use it, which makes it exactly as strong as

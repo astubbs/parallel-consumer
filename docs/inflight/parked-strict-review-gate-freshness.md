@@ -28,9 +28,15 @@ against a guarantee that turned out to be arriving from somewhere else anyway:
   meant preferring the server-side check-suite time over the committer date, handling
   same-second ties, and paginating an endpoint whose ordering is undocumented. Three rounds of
   review findings, none of them about reviewing.
-- Worse, it needed the gate to be **re-runnable after a review**, which put an `actions: write`
-  token inside the review system - a token that can dispatch any workflow in the repo,
-  `release.yml` included. Containing it safely is most of what the surrounding design does.
+- It also needed the **reviewed SHA carried across job boundaries**, so the head-moved refusal
+  could compare against the commit the reviewer actually checked out rather than one re-derived
+  later.
+
+That is the whole bill, and it is smaller than it first looked. An earlier draft of this entry
+also charged freshness for the `actions: write` scope on the `refresh-gate` jobs. That was wrong -
+see the correction below - and it matters here, because it inflates the apparent cost of going
+back: restoring strictness buys the guarantee for the price of the timestamp machinery alone, not
+for a new privilege-escalation surface.
 
 ## The assumption this rests on - and the trigger to restore
 

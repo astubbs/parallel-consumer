@@ -211,7 +211,7 @@ quality_system:
     posture: >-
       Split in two: the review is requested on demand, and a cheap always-on gate requires that a finished
       review already exists on the PR. Deliberately not per-commit - that coverage comes from an auto-reviewer
-      on every push, and enforcing it here cost a write-scoped job on every review route; the trade and the
+      on every push, and enforcing it here cost a contested timestamp comparison and the reviewed-SHA plumbing;
       trigger to restore it are parked in docs/inflight/parked-strict-review-gate-freshness.md. There is no
       skip word, and a fork head is refused outright, so a red gate on an unreviewed PR is the expected state,
       not a fault. Comment metadata only; it cannot judge whether the review was any good, nor tell a review
