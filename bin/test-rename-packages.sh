@@ -50,6 +50,9 @@
 #   22. CONTROL ARM: two commits keep every pairing exact on near-identical sibling files
 #   23. EXPERIMENT ARM: --single-commit mis-pairs them, and the verification CATCHES it - the
 #                                                       measurement behind the default, kept runnable
+#   24. every prose guard still MATCHES its sentence in the real tree - a guard whose prose was
+#                                                       reworded or corrected matches nothing and
+#                                                       reports "none found", which reads as a pass
 #
 # Cases 17-19 are the ones worth keeping honest about. A checker nobody has seen fail is decoration,
 # and these three are the shapes that fail GREEN in production: the mutation lane exits 0 when its
@@ -519,6 +522,50 @@ else
     echo "FAIL: the refusal did not explain itself"
     failures=$((failures + 1))
 fi
+
+# --------------------------------------------------------------------------------------------------
+# 24. Every prose guard still matches its sentence IN THE REAL TREE
+# --------------------------------------------------------------------------------------------------
+#
+# The only case here that reads the working checkout, and the only one that can: a guard's whole job
+# is to recognise one sentence in one real file, so a fixture cannot tell you whether it still does.
+# Nothing else notices when it stops - `check_prose_guards` prints "none found" and exits 0, which is
+# indistinguishable from a tree with no false claims left in it.
+#
+# Not hypothetical. astubbs/parallel-consumer#280 merged master's aa61238a, which rewrote the
+# changelog entry the second guard was aimed at and deleted its wording; the guard survived the merge
+# without a conflict, matching nothing.
+#
+# When this fails, the guard is spent one way or the other: the sentence was REWORDED (re-point the
+# pattern) or it was CORRECTED (retire the guard). Both are edits to PROSE_GUARDS - neither is a
+# reason to relax this test.
+
+repo_root="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+guards="$(awk '
+    /^PROSE_GUARDS="/ { f = 1; next }
+    f { line = $0; sub(/"$/, "", line); print line; if ($0 ~ /"$/) exit }
+' "$SCRIPT")"
+
+if [ -z "$guards" ]; then
+    echo "FAIL: could not read PROSE_GUARDS out of $SCRIPT - the parser above has drifted from it"
+    failures=$((failures + 1))
+fi
+
+while IFS='|' read -r gpath gere _; do
+    [ -n "$gpath" ] || continue
+    if [ ! -f "$repo_root/$gpath" ]; then
+        echo "FAIL: prose guard names $gpath, which does not exist"
+        failures=$((failures + 1))
+    elif grep -qE "$gere" "$repo_root/$gpath"; then
+        echo "ok:   prose guard still matches its sentence in $gpath"
+    else
+        echo "FAIL: prose guard matches NOTHING in $gpath (pattern: $gere) - the sentence was either"
+        echo "      reworded (re-point the pattern) or corrected (retire the guard)"
+        failures=$((failures + 1))
+    fi
+done <<EOF
+$guards
+EOF
 
 # --------------------------------------------------------------------------------------------------
 
