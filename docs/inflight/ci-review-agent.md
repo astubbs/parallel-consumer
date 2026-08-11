@@ -4,12 +4,13 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
 [`docs/ci.md`](../ci.md). This file is only the open gaps.
 
 - **A review is only requested, never automatic - so "no review" is now a normal state.** The
-  reviewer moved to a `workflow_dispatch` in `claude-code-review-dispatch.yml`, with
-  `claude-code-review.yml` reduced to a cheap gate that reds the PR until a review exists for the
-  current head. The risk this trades into
+  reviewer is asked for - by dispatch, or by an `@claude` comment - with
+  `claude-code-review.yml` reduced to a cheap gate that reds the PR until a **finished
+  `claude[bot]` review exists on it**. The risk this trades into
   is social rather than technical: the gate can be *satisfied* by any finished comment the reviewer
   bot posts on the PR, including its answer to some other `@claude` question, so an author
-  determined to get a green check can get one. That is the same boundary the previous gate drew -
+  determined to get a green check can get one - and since the gate no longer asks about the head,
+  one such comment now counts for the life of the PR. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
 - **The DISPATCHED reviewer cannot open inline review comments; the comment route can.** The
