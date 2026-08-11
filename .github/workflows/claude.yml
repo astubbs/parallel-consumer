@@ -117,20 +117,38 @@ jobs:
           # claude-code-review.yml grants: those need a JDK and a warm cache this job does not set up,
           # and a comment-triggered job holding secrets is the wrong place to run a build.
           #
-          # ONE OF THESE WRITES, and it is a considered exception rather than an oversight - the same
-          # one claude-code-review.yml documents at its own grant. bin/test-check-docs-data.sh mutates
-          # a corpus file, asks the guard for a verdict, and copies it back, one case at a time. It
-          # touches only the ephemeral runner workspace and restores through a trap on any exit, and
-          # the claim it lets a reviewer test is the one this repo has most often got wrong: whether
-          # a guard actually catches what it says it catches. Every other grant here is read-only.
+          # WHAT WRITES, PRECISELY - because "read-only gates" was claimed here once and was not true.
+          #
+          # bin/test-check-docs-data.sh mutates files IN THE REPO TREE: it edits a corpus file, asks the
+          # guard for a verdict, and copies it back, one case at a time. That is the considered
+          # exception claude-code-review.yml documents at its own grant - it restores through a trap on
+          # any exit, and the claim it lets a reviewer test is the one this repo has most often got
+          # wrong: whether a guard catches what it says it catches.
+          #
+          # bin/test-check-shell-sigpipe.sh also writes, but only inside a `mktemp -d` it removes on
+          # exit. It never touches the tree under review.
+          #
+          # bin/todo-index.sh CAN rewrite docs/todo-index.md, which is why it is granted only as
+          # `--check`; the rewriting form is not reachable through this allowlist.
+          #
+          # Everything else granted here reads and reports. Re-audit this list when adding to it: the
+          # first version of this comment called the whole set read-only, which was wrong twice over.
           #
           # bin/todo-index.sh is granted ONLY with --check. Bare, it REGENERATES docs/todo-index.md
           # (see its own usage block), which would leave the reviewer inspecting a tree it had itself
           # modified - and make any diff it then reports untrustworthy. --check is the verify mode.
           #
+          # bin/check-quarantine-owners.sh is absent for a stronger reason: it is not read-only. It runs
+          # `git fetch --depth=1 origin <base>` and `git fetch --depth=1 origin pull/<n>/merge`, then
+          # reads FETCH_HEAD. So it reaches the network outside `gh` AND moves the checkout's fetch
+          # state under the reviewer - which would make anything it inspected afterwards untrustworthy,
+          # the same defect as granting bare `bin/todo-index.sh`. Its owner-claim verification is CI's
+          # job (the Quarantine Audit lane), not an ad-hoc reviewer's.
+          # bin/check-quarantine-registry.sh stays: it only reads the tree.
+          #
           # bin/check-review-posted.sh is absent on purpose - it reads comment bodies from stdin and
           # belongs to the review job's own gate, not to an ad-hoc reviewer.
           claude_args: >-
             --allowed-tools
-            "Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/check-issue-refs.sh:*),Bash(./bin/check-issue-refs.sh:*),Bash(bin/check-action-versions.sh:*),Bash(./bin/check-action-versions.sh:*),Bash(bin/todo-index.sh --check:*),Bash(./bin/todo-index.sh --check:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
+            "Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-issue-refs.sh:*),Bash(./bin/check-issue-refs.sh:*),Bash(bin/check-action-versions.sh:*),Bash(./bin/check-action-versions.sh:*),Bash(bin/todo-index.sh --check:*),Bash(./bin/todo-index.sh --check:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
 
