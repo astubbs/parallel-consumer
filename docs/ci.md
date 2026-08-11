@@ -80,10 +80,10 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
 | `claude.yml` | an `@claude` comment | **the comment reviewer**, and the general mention handler |
 
 - **`claude-code-review.yml`** - the **review gate**, not the reviewer. It runs on every PR push,
-  invokes no Claude and costs nothing, and asserts one thing: that a **finished review exists on
-  this PR** - any such review, deliberately not one per commit. It produces the required check
-  `claude-review`, so the job name is an API here as it is in `repo-hygiene.yml`. See "The
-  automated review" below.
+  invokes no Claude and costs nothing, and asserts exactly one thing - stated once, under
+  ["The gate asks..."](#the-gate-asks-has-this-pr-been-reviewed-not-was-every-commit-reviewed)
+  below, and deliberately not repeated here. It produces the required check `claude-review`, so
+  the job name is an API here as it is in `repo-hygiene.yml`.
 - **`claude-code-review-dispatch.yml`** - the **dispatched reviewer**, `workflow_dispatch` only.
   It carries the packaged review procedure, the tool allowlist and the review instructions, and
   takes an optional `focus` steer. It cannot open inline review comments. See "The automated
@@ -287,9 +287,17 @@ turn the gate green" below.)
 
 ### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
 
+<!-- CANONICAL: the gate contract. Nowhere else states what satisfies the gate - everything else
+     links here. If you change this paragraph, run bin/check-review-gate-contract.sh. -->
+
 **Any finished `claude[bot]` review on the PR satisfies it**, whenever it was posted. A review of
 the first commit therefore vouches for the twentieth, and that is a deliberate reversal of the
 rule this repo shipped first.
+
+**This paragraph is the only statement of that contract.** It was restated in nine files at one
+point, in nine slightly different sentences, and four of them were still describing the *previous*
+contract weeks after it changed - caught one at a time by four separate review rounds. Every other
+mention now links here instead of paraphrasing.
 
 It is a real trade, so it is worth knowing why it was made rather than discovering the cost by
 surprise. Strict is the stronger guarantee - a review of commit N genuinely does not vouch for

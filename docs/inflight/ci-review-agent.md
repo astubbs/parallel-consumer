@@ -5,12 +5,12 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
 
 - **A review is only requested, never automatic - so "no review" is now a normal state.** The
   reviewer is asked for - by dispatch, or by an `@claude` comment - with
-  `claude-code-review.yml` reduced to a cheap gate that reds the PR until a **finished
-  `claude[bot]` review exists on it**. The risk this trades into
+  `claude-code-review.yml` reduced to a cheap gate (its contract is in
+  [`docs/ci.md`](../ci.md), stated once there). The risk that trades into
   is social rather than technical: the gate can be *satisfied* by any finished comment the reviewer
   bot posts on the PR, including its answer to some other `@claude` question, so an author
-  determined to get a green check can get one - and since the gate no longer asks about the head,
-  one such comment now counts for the life of the PR. That is the same boundary the previous gate drew -
+  determined to get a green check can get one - and one such comment counts for the life of the
+  PR. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
 - **The DISPATCHED reviewer cannot open inline review comments; the comment route can.** The
@@ -42,6 +42,16 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   `refresh-gate` added there are unverified in exactly the same way. After the merge, exercise
   both: a `--ref master` dispatch, and an `@claude review this` comment on a live PR - checking
   that the comment route really does open an inline thread, and that `claude-review` clears itself.
+- **The duplication scanners are pointed away from where agents duplicate.** `dups: clones` and
+  `dups: similarity` scan `parallel-consumer-*/src` only, and the similarity job additionally
+  filters `file_extensions: 'java'` - so `docs/`, `.github/`, `bin/` and `AGENTS.md` are scanned by
+  neither. Both were green throughout astubbs/parallel-consumer#287 while one contract sat restated
+  in nine files, four of them stale. Two separate follow-ups, and they are not substitutes:
+  (a) point a clone engine at `docs/` and `.github/` - jscpd handles markdown - which catches
+  verbatim copy-paste between docs, a frequent agent behaviour, but **not** paraphrase; and (b) for
+  a contract specifically, a narrow guard asserting the canonical phrasing appears in its one home
+  and nowhere else, which is more reliable than any similarity metric. Full write-up:
+  [`docs/solutions/documentation-gaps/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](../solutions/documentation-gaps/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md).
 - **NOT ENFORCED YET: the two tool allowlists can drift apart.** `claude.yml` and
   `claude-code-review-dispatch.yml` now carry byte-identical `--allowedTools` lists (the comment
   route adds the inline-comment tool), and nothing checks that. A grant added to one and missed on

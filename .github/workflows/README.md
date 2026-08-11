@@ -23,7 +23,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `chaos-pain.yml` | On-demand seeded chaos hunts for the stall bugs, `workflow_dispatch` with `seed`/`reps`. Self-hosted high-CPU lane. |
 | `check-dependencies.yml` | Blocks a stacked PR until the PR it says it `depends on #N` has merged. |
 | `claude-code-review-dispatch.yml` | The dispatched code reviewer - the expensive half, run when somebody asks for it. |
-| `claude-code-review.yml` | The review gate: asserts a finished review exists on the PR. Invokes no Claude and costs nothing. |
+| `claude-code-review.yml` | The review gate. Invokes no Claude and costs nothing. What satisfies it: [`docs/ci.md`](../../docs/ci.md), stated once there. |
 | `claude.yml` | Answers `@claude` comments, and reviews when asked to - the only route that can raise inline review threads. |
 | `copyright.yml` | Checks source headers against the fork policy on every push and PR. |
 | `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, dependency scanning. |
