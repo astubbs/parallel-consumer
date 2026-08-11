@@ -44,8 +44,11 @@ thread, and everything else follows from that:
 3. The broker-poll thread services it: `BrokerPollSystem.java`'s `maybeDoCommit()` →
    `retrieveOffsetsAndCommit()` → `ConsumerManager.commitSync()` → `consumer.commitSync()`.
 4. A rebalance is underway, so Kafka throws `RebalanceInProgressException`. `commitSync()`'s
-   exception ladder (`ConsumerManager#commitSync`) handles `CommitFailedException`,
-   `TimeoutException` and `SaslAuthenticationException` - **but not this one**, its closest sibling.
+   exception ladder (`ConsumerManager#commitSync` - the `CommitFailedException` branch is no longer at
+   HEAD, see
+   `git log -S'CommitFailedException' -- parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerManager.java`)
+   handles `CommitFailedException`, `TimeoutException` and `SaslAuthenticationException` - **but not
+   this one**, its closest sibling.
 5. It escapes into `BrokerPollSystem.controlLoop()`'s `catch (Exception e)`, which logs
    `"Unknown error"` and **rethrows** - the broker-poll thread dies for good.
 6. That thread is the only producer of commit responses. The blocked control thread waits the full
