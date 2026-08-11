@@ -20,7 +20,7 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   is whatever `pom.xml` says - now `3.9.2`. **Fixed in astubbs#272**, which moved that text into
   `docs/ci.md` and dropped the version entirely, so it names no number that can go stale again.
   The other two are `bin/ci-build.sh 3.9.1` command examples - one in `AGENTS.md` under *How to
-  Build*, and `src/docs/README_TEMPLATE.adoc:1133`, which does reach the published `README.adoc`. Being
+  Build*, and the `bin/ci-build.sh 3.9.1` line in `src/docs/README_TEMPLATE.adoc`, which does reach the published `README.adoc`. Being
   inside a published artefact does not make that one an error: it demonstrates that the script *takes*
   a version argument and asserts nothing about which version CI defaults to, so it stays correct
   whatever the pom says. Do not "fix" either of them.

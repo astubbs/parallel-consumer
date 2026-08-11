@@ -54,7 +54,7 @@ PR astubbs#85 → astubbs#83; PR body carries `depends on #85`). New worktree `.
 
 ## Context & Research (session-verified)
 
-- `ManagedPCInstance.java:112-115,248` - `useCooperativeAssignor` wires `CooperativeStickyAssignor`
+- `ManagedPCInstance.java` (grep `useCooperativeAssignor`) - it wires `CooperativeStickyAssignor`
   into consumer props; zero current users.
 - `ChaosRevokeUnderWorkIT` (PR astubbs#85) - the two-phase driver to extract: storm (60s, no-drain weights
   `ChaosConductor.defaultW4Weights()`, sync commits, heavy 1-in-2000 @ 20s non-interruptible, ticks

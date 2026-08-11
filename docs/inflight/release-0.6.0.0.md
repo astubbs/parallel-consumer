@@ -18,17 +18,18 @@ None of these has an issue of its own - they were found by reading code to diagn
 The first two are wrong *statements* in artefacts the release itself publishes, so they should not
 survive the release.
 
-1. **`CHANGELOG.adoc` says the Kafka client "stays on 3.9.1"; `pom.xml:121` says `3.9.2`.** The
+1. **`CHANGELOG.adoc` says the Kafka client "stays on 3.9.1"; `pom.xml`'s `<kafka.version>` says `3.9.2`.** The
    release notes for an unreleased release are factually wrong. Decide which is intended and make
    them agree.
 2. **The README's Roadmap sends readers to the *upstream* tracker** and refers to this repo in the
    third person: *"have a look at the confluentinc/parallel-consumer GitHub issues, and clone
-   Antony's fork"* (`src/docs/README_TEMPLATE.adoc:1011-1012`). That is pre-fork text, it is the
+   Antony's fork"* (in `src/docs/README_TEMPLATE.adoc`'s `[[roadmap]]` section - the quoted wording is
+   no longer at HEAD: `git log -S"Antony's fork" -- src/docs/README_TEMPLATE.adoc`). That is pre-fork text, it is the
    section someone reads to answer "is this maintained?" (astubbs#195), and it is now doubly wrong because
    all 78 upstream issues are mirrored *here*. Edit the template, not `README.adoc`.
-3. **`PCModule:127-129` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
+3. **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
    `messageBufferSize` is set, so `isMaxReached()` is true from startup and
-   `AbstractParallelEoSStreamProcessor:1130` logs *"Max loading factor steps reached"* at WARN on
+   `AbstractParallelEoSStreamProcessor` logs *"Max loading factor steps reached"* at WARN on
    every control-loop pass. Anyone following the README's buffer-tuning advice gets permanent log
    noise reporting a non-problem. Related: astubbs#155.
 4. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys

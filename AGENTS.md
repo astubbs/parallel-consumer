@@ -98,6 +98,27 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
 
+### Cite by anchor, and repair a citation without rewriting the record
+
+**Never cite a `file:line`.** An unrelated commit inserting lines above the target invalidates the
+citation while the file and the section are both intact, so it still reads as valid and nothing
+checks it. Cite the path plus the smallest distinctive greppable string - an identifier, a flag, a
+config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. The
+repo already applies this in `.github/workflows/pr-checklist.yml`, whose todo-index entries are
+"keyed by marker TEXT, not line number".
+
+Dated documents under `docs/plans/` and `docs/solutions/` are the record of what was known at the
+time, and that admits exactly one edit but requires the other:
+
+- **Rewriting their claims, findings or conclusions to match today's code is forbidden** - it
+  falsifies the record.
+- **Repairing a reference so it still finds what the document was pointing at is required.** The
+  document said "look here"; a citation that no longer resolves makes the record *less* faithful,
+  not more.
+- When the cited thing is gone entirely, point at the history holding it (`git log -S'<string>'
+  -- <path>`, `git log --diff-filter=D -- <path>`) rather than deleting the reference. When it still
+  exists but now *means* something different, that is not a repair: flag it and leave the claim alone.
+
 ## `gh` defaults to the WRONG repo here - fix it before your first command
 
 This fork has two remotes - `origin` → `astubbs/parallel-consumer` (**where the work happens**) and

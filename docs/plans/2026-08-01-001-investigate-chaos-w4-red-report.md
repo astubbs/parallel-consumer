@@ -36,21 +36,22 @@ An unhandled `RebalanceInProgressException` on the commit path permanently kills
 thread, and everything else follows from that:
 
 1. The control thread wants to commit, guarded by `!isRebalanceInProgress.get()`
-   (`AbstractParallelEoSStreamProcessor.java:956`) - a best-effort pre-check that races.
+   (`shouldTryCommitNow` in `AbstractParallelEoSStreamProcessor.java`) - a best-effort pre-check that races.
 2. Under `PERIODIC_CONSUMER_SYNC` the control thread is not the commit owner (the broker-poll thread
-   claims ownership at `BrokerPollSystem.java:133`), so it calls
+   claims ownership in `BrokerPollSystem.java`'s `isResponsibleForCommits()`), so it calls
    `ConsumerOffsetCommitter.commitAndWait()`, enqueues a request, and blocks.
-3. The broker-poll thread services it: `BrokerPollSystem.java:138 maybeDoCommit()` →
+3. The broker-poll thread services it: `BrokerPollSystem.java`'s `maybeDoCommit()` →
    `retrieveOffsetsAndCommit()` → `ConsumerManager.commitSync()` → `consumer.commitSync()`.
 4. A rebalance is underway, so Kafka throws `RebalanceInProgressException`. `commitSync()`'s
-   exception ladder (`ConsumerManager.java:156-196`) handles `CommitFailedException`,
+   exception ladder (`ConsumerManager#commitSync`) handles `CommitFailedException`,
    `TimeoutException` and `SaslAuthenticationException` - **but not this one**, its closest sibling.
-5. It escapes into `BrokerPollSystem.controlLoop()`'s `catch (Exception e)` (`:151`), which logs
-   "Unknown error" and **rethrows** - the broker-poll thread dies for good.
+5. It escapes into `BrokerPollSystem.controlLoop()`'s `catch (Exception e)`, which logs
+   `"Unknown error"` and **rethrows** - the broker-poll thread dies for good.
 6. That thread is the only producer of commit responses. The blocked control thread waits the full
    `offsetCommitTimeout` and throws `Timeout waiting for commit response`.
 7. The control thread dies, PC self-closes with a failure cause, and the close-path commit fails too
-   (the poll thread is gone). The chaos sweep flags it at `ChaosScenarioBase.java:259`.
+   (the poll thread is gone). The chaos sweep flags it in `ChaosScenarioBase.java`, at the
+   `"no instance may end the run with an unclassified failure cause"` assertion.
 
 One retriable protocol condition therefore kills the consumer. In production this is the
 "confluentinc#857 locks forever until manual restart" symptom.
@@ -99,8 +100,10 @@ re-committed next cycle) while still (a) not escaping to kill the poll thread an
 commit response anyway, so the waiter is released immediately instead of hanging for
 `offsetCommitTimeout`.
 
-> **Note for whoever touches this next:** the pre-existing `CommitFailedException` handler at
-> `ConsumerManager.java:156` has the *same* latent flaw - it breaks out of the commit and lets
+> **Note for whoever touches this next:** the pre-existing `CommitFailedException` handler in
+> `ConsumerManager#commitSync` (no longer at HEAD:
+> `git log -S'CommitFailedException' -- parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerManager.java`)
+> has the *same* latent flaw - it breaks out of the commit and lets
 > `onOffsetCommitSuccess()` mark the offsets clean, despite its comment saying the poller will "seek
 > commit later". Worth a follow-up; not changed here to keep this fix reviewable.
 
@@ -180,8 +183,8 @@ Primary, and the one to start with:
 parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/
   chaostests/ChaosRevokeUnderWorkCooperativeIT.java   ::revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor
   chaostests/ChaosRevokeUnderWorkIT.java              (eager arm - fails too)
-  chaostests/AbstractRevokeUnderWorkScenario.java     (shared driver, :82 logs the seed, :147 asserts)
-  chaostests/ChaosScenarioBase.java                   (:259 - the assertion that actually fails)
+  chaostests/AbstractRevokeUnderWorkScenario.java     (shared driver; logs "=== CHAOS", then asserts)
+  chaostests/ChaosScenarioBase.java                   (assertScenarioSlos - the assertion that fails)
 ```
 
 Note both concrete ITs and the abstract driver were **last touched by `192d32bc` (astubbs#87)**, which
@@ -190,7 +193,7 @@ So astubbs#87 is the last commit to touch every file in the failing path, and th
 exactly (section 4.1) - which is why it is the starting SHA. Section 6 explains why I still think the
 mechanism is load rather than a broken refactor.
 
-The assertion that fires, `ChaosScenarioBase.java:259`:
+The assertion that fires, in `ChaosScenarioBase.java`:
 
 ```java
 assertWithMessage("no instance may end the run with an unclassified failure cause (replay: %s)", replayCmd)
@@ -272,13 +275,14 @@ tell us what they *would* have done. The clean comparison is green-`40d3d9fbd` v
 
 ## 5. Why the failure is "unclassified" (mechanism, not cause)
 
-`ManagedPCInstance.isExpectedCloseException()` (`ManagedPCInstance.java:227`) is a **whitelist** that
+`ManagedPCInstance.isExpectedCloseException()` (`ManagedPCInstance.java`) is a **whitelist** that
 walks the cause chain for `InterruptedException`, `WakeupException`, `DisconnectException`,
 `ClosedChannelException`, `java.util.concurrent.TimeoutException`.
 
-The thrown object is `io.confluent.parallelconsumer.internal.InternalRuntimeException`, constructed at
-`ConsumerOffsetCommitter.java:154` via `InternalRuntimeException.msg(...)` - **a bare exception with no
-cause chain**. Nothing in the whitelist can ever match it, so a commit-response timeout is by
+The thrown object is `io.confluent.parallelconsumer.internal.InternalRuntimeException`, constructed in
+`ConsumerOffsetCommitter.commitAndWait()` via `InternalRuntimeException.msg("Timeout waiting for
+commit response ...")` - **a bare exception with no cause chain**. Nothing in the whitelist can ever
+match it, so a commit-response timeout is by
 construction "unexpected". That is why the test reports an SLO breach rather than a tolerated close.
 
 This is mechanism, not root cause: the honest question is whether an instance dying from a commit
@@ -411,10 +415,10 @@ Small, independent of everything above, worth its own tiny PR + unit test:
 `AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT` (`PT30S`):
 
 ```java
-Duration timeout = AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;      // :151
-CommitResponse take = commitResponseQueue.poll(commitTimeout.toMillis(), MILLISECONDS);  // :152
+Duration timeout = AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
+CommitResponse take = commitResponseQueue.poll(commitTimeout.toMillis(), MILLISECONDS);
 if (take == null)
-    throw InternalRuntimeException.msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest);  // :154
+    throw InternalRuntimeException.msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest);
 ```
 
 So every such error misreports how long it actually waited by 3x and ignores the user's configured

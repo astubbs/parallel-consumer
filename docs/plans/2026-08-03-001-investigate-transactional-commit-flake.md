@@ -146,7 +146,8 @@ counted, so the offset committed is one behind.
 
 ### Production ordering — mailbox first, unlock last
 
-`AbstractParallelEoSStreamProcessor.runUserFunction` (~line 1348):
+`AbstractParallelEoSStreamProcessor.runUserFunction` - its `try`/`finally` around
+`runUserFunctionInternal`:
 
 ```java
 try {
@@ -210,7 +211,7 @@ The hypothesis is wrong — and this is a real bug — if any of these turn out 
 
 - some production path releases the produce lock before the work reaches the mailbox (check every
   caller of `ProducingLock::unlock` / `finishProducing`, including
-  `WorkContainer.java:273` and the error/stale paths `handleStaleWork` and the failure branch that
+  `WorkContainer.onPostAddToMailBox` and the error/stale paths `handleStaleWork` and the failure branch that
   calls `addToMailbox(context, wc)` before `finally { cleanUpContext(context); }`);
 - `addToMailbox` is asynchronous in a way that leaves the work uncounted after it returns, so even the
   production ordering has the window;
@@ -276,8 +277,8 @@ the race needs — which makes PIT a *useful reproducer*, not merely a victim.
 |---|---|
 | `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/internal/ProducerManagerTest.java` | the failing test; the TODO comments in `producedRecordsCantBeInTransactionWithoutItsOffsetDirect` are the lead |
 | `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ProducerManager.java` | `preAcquireOffsetsToCommit`, `commitOffsets`, `acquireProduceLock`, `ProducingLock` |
-| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering (~lines 1340–1425) |
-| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java:273` | the other `finishProducing` caller |
+| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering |
+| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java` | `onPostAddToMailBox`, the other `finishProducing` caller |
 | `docs/inflight.md` | the ledger entry for this flake — **update it as you go** |
 
 ## 10. Context worth having
