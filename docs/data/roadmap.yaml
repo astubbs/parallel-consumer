@@ -63,6 +63,7 @@ entries:
     why_now: Streams users hit the same head-of-line blocking, and the idea can be shown to work before it is committed to.
     done_when: An opt-in alpha module exists, isolated from the stable modules, with setup a reader can follow.
     tracking: astubbs#255
+    pull_request: astubbs#271
     caveat: Alpha. Depending on the artifact is the entire opt-in.
 
   - id: connect-integration-preview
@@ -73,6 +74,7 @@ entries:
     why_now: The same reasoning as the Streams preview, for a different and widely deployed surface.
     done_when: An opt-in alpha module exists, isolated from the stable modules.
     tracking: astubbs#240
+    pull_request: astubbs#269
     caveat: Alpha. Depending on the artifact is the entire opt-in.
 
   - id: running-instance-visibility
@@ -86,6 +88,7 @@ entries:
       what matters. An operator has metrics today and no picture.
     done_when: An operator can see shard queues, in-flight work, retries and commit state for a live instance.
     tracking: astubbs#215
+    pull_request: astubbs#268
     caveat: 0.6.0.0 ships a preview and an announcement, not the finished surface.
 
   - id: delivered-value-metrics

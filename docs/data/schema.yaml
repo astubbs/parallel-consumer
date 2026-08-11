@@ -47,6 +47,15 @@ kinds:
     # reason its checklist stayed workable.
     item_contracts:
       entry_required: entries
+    entry_optional:
+      - pull_request
+      - related
+      - tracking
+      - previewed_in
+      - unblocks
+      - blocked_by
+      - evidence
+      - caveat
     entry_required:
       - id
       - title

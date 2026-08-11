@@ -4,9 +4,14 @@
 # than asserting in module-maturity.yaml something the tree contradicts.
 #
 # Whichever PR lands each module moves its row into module-maturity.yaml in the same change, and
-# re-checks the wording against what actually shipped. Streams is tracked by astubbs#255 and Connect
-# by astubbs#240. Neither has a PR yet, so there is nothing to annotate until one opens - when one
-# does, say on it that merging must move the row.
+# re-checks the wording against what actually shipped:
+#
+#   parallel-consumer-streams    astubbs#271  (issue astubbs#255)
+#   parallel-consumer-connect    astubbs#269  (issue astubbs#240)
+#
+# Both are open and neither touches docs/data, so both have been told on the PR that merging must
+# move the row. A third module is coming with no row here yet: astubbs#268 adds
+# parallel-consumer-dashboard, and needs one written when its shape settles.
 #
 # Deliberately outside bin/check-docs-data.sh: staged content references things that do not exist,
 # so gating it would either fail permanently or force the references to be faked.
@@ -14,7 +19,7 @@
 schema_version: 1
 kind: module-maturity-staged
 staged_rows:
-  - artifact: parallel-consumer-streams-spike
+  - artifact: parallel-consumer-streams
     maturity: alpha
     minimum_java: 8
     reliability_confidence: Experimental; module-specific evidence is required and does not inherit stable confidence.

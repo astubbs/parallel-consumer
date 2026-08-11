@@ -14,7 +14,11 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
     lock up a consumer. If it is still open, amend the claim rather than the standard.
   - Move the staged content up as its modules land: the Streams and Connect rows in
     `docs/data/staging/module-maturity-rows.yaml`, and the record in `docs/features/staging/`. Each
-    move belongs to the PR that lands the thing, not to a later sweep.
+    move belongs to the PR that lands the thing, not to a later sweep - astubbs#271 for Streams,
+    astubbs#269 for Connect, both open and neither touching the data yet.
+  - **A third module has no row at all.** astubbs#268 adds `parallel-consumer-dashboard`, which is
+    also the 1.0 gate the roadmap calls a running-instance view. It needs a staged row and a feature
+    record before it lands, or it ships undocumented.
   - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
     replacement, `production-use`, is only as good as the critical-defect gate holding.
 
