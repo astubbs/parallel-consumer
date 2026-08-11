@@ -891,6 +891,51 @@ For a code example, see the <<streams-usage-code>> section.
 
 .Example usage with Kafka Streams
 image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fbf/image.png[Kafka Streams Usage,align="center"]
+[[health-checks]]
+== Health Checks
+
+`ParallelConsumer#getHealth()` returns a `PCHealth` snapshot, so a liveness probe or a Spring Boot Actuator `HealthIndicator` can ask whether an instance needs restarting without casting to a concrete processor type.
+
+.Reading health without a cast
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=healthCheck]
+----
+
+<1> Declared as the `ParallelConsumer` interface - the snapshot is reachable from there, so no cast is needed.
+<2> A snapshot of this instance, taken now.
+<3> The single derived verdict, for a container platform to act on.
+<4> Present only if the instance failed. Absent means it shut down cleanly.
+
+The snapshot carries four things:
+
+[cols="1,3"]
+|===
+|`isHealthy()` |The derived verdict: the control loop is not shutting down *and* no failure has been recorded.
+|`getControllerState()` |The control loop's `State` - one of `UNUSED`, `RUNNING`, `PAUSED`, `DRAINING`, `CLOSING`, `CLOSED`.
+|`getPollerState()` |The broker poller's `State`, reported separately. Diagnostic - it does not affect the verdict, and it is a lifecycle flag rather than a liveness signal: it reads `RUNNING` both before the poll thread starts and after it dies.
+|`getFailureCause()` |An `Optional<Exception>`, present only when the instance failed.
+|`isStateObserved()` |`false` only for the coarse fallback a third-party implementation of the interface inherits. On such a snapshot an absent failure cause means nothing - check this before reading a clean shutdown into one.
+|===
+
+=== What this replaces
+
+`isClosedOrFailed()` is still there and still works, but it collapses a clean shutdown and a crash into one `true`.
+Reading the state and the failure cause together separates them: a closed instance with no failure cause shut down cleanly, and one with a failure cause did not.
+That distinction is the main thing `getHealth()` adds - for the plain up/down answer, a running, paused or closed consumer gives the same verdict `!isClosedOrFailed()` already gave.
+
+A deliberate `pauseIfRunning()` counts as healthy, because pausing is a user action rather than a fault.
+Note that `pauseIfRunning()` moves only the control loop, so a paused instance reports controller `PAUSED` alongside poller `RUNNING` - that divergence is normal and is reported rather than hidden.
+
+=== Healthy does not mean progressing
+
+IMPORTANT: A healthy verdict means the instance is neither shut down nor failed.
+It does *not* mean it is getting any work done.
+A consumer that is processing nothing - because the broker is unreachable, because every record is failing, or because there is simply nothing to read - still reports `RUNNING` and still reports healthy.
+
+For progress, use the <<mertics,Micrometer meters>> instead: the processed-record and offset-commit meters move when work is being done, and a rate derived from them is what a progress check needs.
+The health snapshot deliberately does not try to derive one.
+
 [[mertics]]
 == Metrics
 

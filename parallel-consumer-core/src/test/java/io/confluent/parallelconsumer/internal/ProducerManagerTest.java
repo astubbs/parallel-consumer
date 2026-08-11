@@ -12,6 +12,7 @@ import io.confluent.parallelconsumer.ParallelConsumer;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import io.confluent.parallelconsumer.PollContextInternal;
+import io.confluent.parallelconsumer.State;
 import io.confluent.parallelconsumer.state.ModelUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;

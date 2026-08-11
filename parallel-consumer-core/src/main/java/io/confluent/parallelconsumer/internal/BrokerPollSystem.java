@@ -7,10 +7,12 @@ package io.confluent.parallelconsumer.internal;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import io.confluent.parallelconsumer.State;
 import io.confluent.parallelconsumer.metrics.PCMetrics;
 import io.confluent.parallelconsumer.metrics.PCMetricsDef;
 import io.confluent.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.SneakyThrows;
@@ -29,7 +31,7 @@ import java.util.concurrent.*;
 import static io.confluent.csid.utils.StringUtils.msg;
 import static io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
 import static io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
-import static io.confluent.parallelconsumer.internal.State.*;
+import static io.confluent.parallelconsumer.State.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -47,13 +49,18 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * The single source of truth for this subsystem's lifecycle. Volatile: mutated by the control thread
      * (drain / close transitions) and read by the poll thread's loop and by {@link ConsumerManager}'s
      * {@link #isCloseInProgress()} signal (potentially from committer threads).
+     * <p>
+     * Also read by {@link AbstractParallelEoSStreamProcessor#getHealth()} to report alongside the controller's state.
+     * The getter is package-scoped: users reach this through
+     * {@link io.confluent.parallelconsumer.PCHealth#getPollerState()}, not directly.
      */
+    @Getter(AccessLevel.PACKAGE)
     private volatile State runState = RUNNING;
 
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
 
     /**
-     * While {@link io.confluent.parallelconsumer.internal.State#PAUSED paused} is an externally controlled state that
+     * While {@link io.confluent.parallelconsumer.State#PAUSED paused} is an externally controlled state that
      * temporarily stops polling and work registration, the {@code paused} flag is used internally to pause
      * subscriptions if polling needs to be throttled.
      */
@@ -400,7 +407,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Pause polling from the underlying Kafka Broker.
      * <p>
      * Note: If the poll system is currently not in state
-     * {@link io.confluent.parallelconsumer.internal.State#RUNNING running}, calling this method will be a no-op.
+     * {@link io.confluent.parallelconsumer.State#RUNNING running}, calling this method will be a no-op.
      * </p>
      */
     public void pausePollingAndWorkRegistrationIfRunning() {
@@ -416,7 +423,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Resume polling from the underlying Kafka Broker.
      * <p>
      * Note: If the poll system is currently not in state
-     * {@link io.confluent.parallelconsumer.internal.State#PAUSED paused}, calling this method will be a no-op.
+     * {@link io.confluent.parallelconsumer.State#PAUSED paused}, calling this method will be a no-op.
      * </p>
      */
     public void resumePollingAndWorkRegistrationIfPaused() {

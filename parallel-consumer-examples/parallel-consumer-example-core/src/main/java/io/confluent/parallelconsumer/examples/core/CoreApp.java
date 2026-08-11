@@ -5,6 +5,8 @@ package io.confluent.parallelconsumer.examples.core;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.PCHealth;
+import io.confluent.parallelconsumer.ParallelConsumer;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelStreamProcessor;
 import io.confluent.parallelconsumer.RecordContext;
@@ -248,6 +250,28 @@ public class CoreApp {
 
         pc.closeDrainFirst(); // <3>
         // end::closeModes[]
+    }
+
+    /**
+     * Never called - see {@link #closeModes()} for why the tagged methods in this class exist. This one keeps the
+     * README's health-check example honest: the whole point of the example is that no cast is needed, so the variable
+     * is deliberately declared as the {@link ParallelConsumer} interface. If that stopped being true, this would stop
+     * compiling.
+     */
+    void healthCheck() {
+        // tag::healthCheck[]
+        ParallelConsumer<String, String> pc = ParallelStreamProcessor.createEosStreamProcessor(
+                ParallelConsumerOptions.<String, String>builder()
+                        .consumer(getKafkaConsumer())
+                        .build()); // <1>
+
+        PCHealth health = pc.getHealth(); // <2>
+
+        if (!health.isHealthy()) { // <3>
+            health.getFailureCause().ifPresent(cause -> // <4>
+                    log.error("Parallel Consumer failed - controller is {}", health.getControllerState(), cause));
+        }
+        // end::healthCheck[]
     }
 
     private String preparePayload(RecordContext<String, String> rc) {
