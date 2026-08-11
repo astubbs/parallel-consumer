@@ -36,7 +36,8 @@ An unhandled `RebalanceInProgressException` on the commit path permanently kills
 thread, and everything else follows from that:
 
 1. The control thread wants to commit, guarded by `!isRebalanceInProgress.get()`
-   (`shouldTryCommitNow` in `AbstractParallelEoSStreamProcessor.java`) - a best-effort pre-check that races.
+   (`shouldTryCommitNow` in `AbstractParallelEoSStreamProcessor#maybeAcquireCommitLock`) - a best-effort
+   pre-check that races.
 2. Under `PERIODIC_CONSUMER_SYNC` the control thread is not the commit owner (the broker-poll thread
    claims ownership in `BrokerPollSystem.java`'s `isResponsibleForCommits()`), so it calls
    `ConsumerOffsetCommitter.commitAndWait()`, enqueues a request, and blocks.
