@@ -86,7 +86,12 @@ for t in $entries; do
             # fixedBy cross-check (annotation attribute vs registry Owner line) - advisory only,
             # and only when the class carries exactly one annotation (else ambiguous)
             if [ -n "$file" ] && [ "$(quarantined_occurrences "$file")" = "1" ]; then
-                declared=$(grep -oE 'fixedBy = "PR #[0-9]+' "$file" | grep -oE '[0-9]+' | head -1 || true)
+                # Same three forms the Owner marker accepts - see the parse above. Matching only
+                # `PR #NN` here silently disabled this cross-check the moment an annotation used a
+                # qualified reference: no match, empty `declared`, advisory never fires. A check that
+                # quietly stops checking is worse than one that never existed.
+                declared=$(grep -oE 'fixedBy = "(PR )?(astubbs/parallel-consumer|astubbs)?#?[0-9]+' "$file" \
+                    | grep -oE '[0-9]+$' | head -1 || true)
                 if [ -n "$declared" ] && [ "$declared" != "$pr" ]; then
                     echo "ADVISORY: $t annotation says fixedBy PR #$declared but the registry Owner line says PR #$pr - align them."
                 fi

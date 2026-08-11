@@ -2,7 +2,6 @@ package io.confluent.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
- * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
@@ -10,7 +9,6 @@ import com.google.common.truth.Truth8;
 import io.confluent.parallelconsumer.FakeRuntimeException;
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.Quarantined;
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import io.confluent.parallelconsumer.state.PartitionState;
 import io.confluent.parallelconsumer.state.PartitionStateManager;
@@ -77,14 +75,6 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
     @Test
     // needed due to static accessors in parallel tests
     @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ_WRITE)
-    @Quarantined(
-            reason = "Sleeps out the static retry delay instead of awaiting the retry event, then asserts "
-                    + "on a count that is still moving. Fails as ConditionTimeout at the optional.get() "
-                    + "assertion - expected 139 but was 136 within 30 seconds - when the runner is loaded "
-                    + "enough that the sleep expires before the retry lands.",
-            tracking = "docs/inflight/test-untracked-ci-flakes.md",
-            fixedBy = "astubbs#265",
-            flapping = true)
     void backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing() throws OffsetDecodingError {
         // mock messages downloaded for processing > MAX_TO_QUEUE
         // make sure work manager doesn't queue more than MAX_TO_QUEUE

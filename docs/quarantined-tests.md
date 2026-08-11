@@ -53,9 +53,14 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-Both entries below are timing flakes, not deterministic failures, so both carry `flapping = true`: a
-pass proves nothing and the lane reports it without demanding action. Both were hidden by the
-surefire retry until astubbs#224 removed it, and both are fixed by the same open PR.
+The entry below is a timing flake, not a deterministic failure, so it carries `flapping = true`: a
+pass proves nothing and the lane reports it without demanding action. It was hidden by the surefire
+retry until astubbs#224 removed it.
+
+`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` was
+quarantined here briefly and has been **removed again**: its diagnosis was wrong. See
+[`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md). Rule 1 applies -
+undiagnosed red stays red and blocks, on purpose.
 
 - [ ] `PCMetricsTest.metricsRegisterBinding` - compares a registry gauge against an expectation built
   from a test-side counter snapshot taken earlier in the method, so two independently-advancing
@@ -66,11 +71,3 @@ surefire retry until astubbs#224 removed it, and both are fixed by the same open
   Owner: PR astubbs#265, which replaces the `Thread.sleep(1000)` above the assertions with an
   `await().untilAsserted(...)` on the trailing meters.
 
-- [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  sleeps out the static retry delay instead of awaiting the retry event, then asserts on a count that
-  is still moving. Fails as `ConditionTimeout` at the `optional.get()` assertion - expected 139 but
-  was 136 within 30 seconds - when the runner is loaded enough that the sleep expires before the
-  retry lands. Diagnosis in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-  Owner: PR astubbs#265, which replaces `sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with
-  `await().atMost(ofSeconds(30)).until(() -> attempts.get() >= 2)`.

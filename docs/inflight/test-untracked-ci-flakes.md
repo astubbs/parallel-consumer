@@ -11,7 +11,7 @@ which also has the scan method. What is open is the three tests themselves.
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` | 3/45 | **A regression** - see below |
-| `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, and the mechanism is now known - see below |
+| `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined on astubbs#286 - see below |
 
 **Start with the regression.** astubbs#101 fixed this exact test as "the shutdown-commit flake that
 was aborting PIT", and it is back. It has the best starting position of the three: a known prior fix
@@ -73,27 +73,47 @@ generalises - **do not compare two moving values; await a quiescent state, then 
 
 Rate is now 2 sightings rather than the 1/45 that could be dismissed.
 
-### The strongest evidence is that a rerun failed *somewhere else*
+### The rerun failed somewhere else - which is weaker evidence than it first looks
 
 Re-running the identical job on the identical commit did not reproduce it. It failed at
-`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing:211`
+`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
 instead - `ConditionTimeout`, `expected: 139 but was: 136 within 30 seconds` - which is **row 1 of
 the table above**, the 4/45 entry.
 
-So two consecutive runs of one unchanged commit hit two *different* already-tracked flakes, with
-different failure modes (a `Failure` then an `Error`). A code regression fails the same way twice;
-this did not. That is what makes the flake reading solid, and it is worth more than the file-type
-argument ("the diff has no Java"), which only shows the change is not *causal* and says nothing about
-what is.
+An earlier revision of this entry called that "the strongest evidence", on the reasoning that a code
+regression fails the same way twice and this did not. **That reasoning does not hold and is withdrawn.**
+Under concurrent or stress execution one defect can perturb timing enough to surface different tests
+and different failure modes, so two dissimilar failures do not exclude a regression - they show only
+that the first did not reproduce. Review caught this; it is exactly the invalid-diagnostic-rule trap
+that AGENTS.md warns about, and left standing it would have licensed quarantining a real product bug.
 
-It is also the clearest confirmation so far of what astubbs#224 predicted when it removed the
-retries: these were always failing at this rate, and the retry was buying the green.
+What the rerun **does** establish: the failure is not deterministic, and the unit lane is currently
+producing red from more than one already-tracked test. The load-bearing evidence for the
+`PCMetricsTest` diagnosis is the source-level read above - the counter snapshot and the gauge are
+read at different instants - not the rerun.
 
-## Still open beyond the three
+### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - do not quarantine it
 
-Nothing reads the `Flakes:` markers automatically. With the retry removed, the *gating* lanes now
-surface flakes as failures, but the `highcpu` lane's **optional** suites and the quarantine lane still
-tolerate them via `continue-on-error`, so a periodic marker scan keeps its value. The Chaos Pain Suite
-is deliberately **not** one of those - it sets `optional: "false"` and gates hard, because a chaos RED
-is a real finding (`bug-857-family.md` records one). Until something automates the scan, the rates
-above are one scan on one day and will go stale.
+It was quarantined on astubbs#286 and **removed again in the same PR**, because the diagnosis was
+wrong. Recorded here so the mistake is not repeated.
+
+The failure was attributed to the retry section - "sleeps out the static retry delay instead of
+awaiting the retry event" - and owned by astubbs#265, which replaces that
+`sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with an `await`. Review checked the line number instead of
+the narrative and found it does not fit:
+
+- The failure is at line 211 of the commit CI ran, which is the
+  `waitAtMost(defaultTimeout).untilAsserted(...)` block asserting the committed offset metadata -
+  specifically `Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen)`.
+  The `value of: optional.get()` in the failure text is that `Optional`.
+- That block runs **before** the retry section astubbs#265 rewrites. A change downstream of a failing
+  assertion cannot fix it.
+
+So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen` (136 of
+an expected 139), and nothing currently explains why. Under rule 1 - no quarantine without diagnosis -
+it stays in the gating lane and stays red until someone works out why three records never arrive.
+
+The general lesson is the one that produced the error: the fix PR was matched to the failure by
+**subject-matter resemblance** (both concern this test, both concern waiting) rather than by checking
+that the changed lines execute before the failing assertion. Match a `fixedBy` to a stack line, not
+to a theme.
