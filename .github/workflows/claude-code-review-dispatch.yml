@@ -330,24 +330,33 @@ jobs:
           # amounts to) would then re-run the OTHER PR's gate: that PR goes green, this one stays
           # red, and the log line says the gate was refreshed. `pull_requests[]` carries the
           # association the SHA filter drops, so select on it.
+          # Not --paginate, unlike the gate's check-suite read, and the difference is deliberate:
+          # this list is bounded by construction. One gate run per PR per head, and a re-run
+          # reuses its run rather than adding an entry, so `per_page=100` is orders of magnitude
+          # of headroom. The check-suite list had 15 against a default page of 30, which is not.
           runs=$(gh api \
             "repos/$REPO/actions/workflows/claude-code-review.yml/runs?head_sha=$head_sha&per_page=100")
 
-          # Newest run naming this PR. The API returns runs newest-first, so the first match is
-          # the current attempt rather than a superseded one.
+          # The newest run naming this PR, chosen by `run_number` rather than by taking the first
+          # element. The list is near-certainly newest-first, but that ordering is not documented,
+          # and picking a superseded attempt here would re-run a run the gate's
+          # `cancel-in-progress` concurrency already cancelled. Same reasoning as the paginated
+          # check-suite read in claude-code-review.yml: do not build the gate on an unspecified
+          # order when one expression removes the assumption.
+          #
           # `--arg` + `tonumber` rather than `--argjson`: the input is only known to be digits
           # (step one), and `--argjson 0284` is not valid JSON, which would abort the step over a
           # cosmetically odd but harmless PR number.
           run_id=$(printf '%s' "$runs" | jq -r --arg pr "$PR" \
             '($pr | tonumber) as $n
-             | first(.workflow_runs[] | select(any(.pull_requests[]?; .number == $n)) | .id)
-             // empty')
+             | ([.workflow_runs[] | select(any(.pull_requests[]?; .number == $n))]
+                | max_by(.run_number) | .id) // empty')
 
           # `pull_requests` comes back empty on runs GitHub could not associate - classically
           # fork-head runs, which this job already refused above. Rather than fail closed on an
-          # API quirk, fall back to the previous SHA-only choice and say that is what happened.
+          # API quirk, fall back to the newest run for the SHA and say that is what happened.
           if [ -z "$run_id" ]; then
-            run_id=$(printf '%s' "$runs" | jq -r '.workflow_runs[0].id // empty')
+            run_id=$(printf '%s' "$runs" | jq -r '(.workflow_runs | max_by(.run_number) | .id) // empty')
             if [ -n "$run_id" ]; then
               echo "::warning::No claude-review gate run for $head_sha names PR #$PR." \
                    "Falling back to the newest run for that SHA (run $run_id)."
