@@ -4,11 +4,11 @@ Repo scripts. Two conventions live here because nothing else enforces them.
 
 ## Adding a verification script? Consider granting it to the reviewer
 
-`.github/workflows/claude.yml` gives the PR reviewer an **enumerated allowlist** of commands
-(`--allowedTools`). It is not a glob, and there is no automated check that it stays in step with
-this directory - so a new script is invisible to the reviewer until someone adds it by hand.
-(It lived in `claude-code-review.yml` until the reviewer moved to on demand; that file is now just
-the gate.)
+`.github/workflows/claude-code-review-dispatch.yml` gives the PR reviewer an **enumerated
+allowlist** of commands (`--allowedTools`). It is not a glob, and there is no automated check that
+it stays in step with this directory - so a new script is invisible to the reviewer until someone
+adds it by hand. (It lived in `claude-code-review.yml` until the reviewer moved to on demand; that
+file is now just the gate.)
 
 That gap is not theoretical. `bin/test-check-review-posted.sh` went ungranted while its sibling
 `bin/test-check-copyright-headers.sh` was granted, so when PR astubbs#210 changed the review gate, the
@@ -29,12 +29,11 @@ would hand that margin away for the convenience of not editing one line.
 match `./bin/foo.sh`. Every entry is listed twice for that reason, and a half-added grant is worse
 than none - the reviewer's invocation fails in a way that reads like the script is broken.
 
-**Editing `claude.yml` does not cost you the review on that PR, but your new grant does not apply
+**Editing the reviewer does not cost you the review on that PR, but your new grant does not apply
 to it either.** The action's workflow-validation guard skips itself (exiting 0) whenever the
-workflow file invoking it differs from the default branch - but `issue_comment` events always run
-the *default branch's* copy, so `@claude review this` on the PR adding a grant runs master's
-`claude.yml` and reviews normally, without the new grant. Expect the reviewer to say it lacks it.
-The grant goes live on merge.
+workflow file invoking it differs from the default branch - but the reviewer is dispatched
+`--ref master`, so it runs master's copy of the workflow and reviews normally, without the new
+grant. Expect the reviewer to say it lacks it. The grant goes live on merge.
 
 ## Scripts that guard other scripts
 

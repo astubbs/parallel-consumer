@@ -4,13 +4,16 @@ name: review gate
 # invocation, no JDK, no build. It asserts that a review exists for the CURRENT head of the
 # PR, and goes red when one does not.
 #
-# The reviewer itself is on demand: comment `@claude review this` on the PR and
-# .github/workflows/claude.yml runs it. That is a deliberate split. This workflow used to
-# invoke `claude-code-action` directly on every `pull_request` event, which meant every push
-# spent a full review - overwhelmingly on work that was not ready for one - and coupled
-# "get CI feedback" to "spend a review" tightly enough that people batched their pushes to
-# avoid it. Splitting them decouples the two: push as often as you like, ask for the review
-# when the PR is ready.
+# The reviewer itself is on demand, in .github/workflows/claude-code-review-dispatch.yml:
+#
+#   gh workflow run claude-code-review-dispatch.yml -R astubbs/parallel-consumer --ref master \
+#     -f pr=<number> -f focus="<optional steer>"
+#
+# That is a deliberate split. This workflow used to invoke `claude-code-action` directly on
+# every `pull_request` event, which meant every push spent a full review - overwhelmingly on
+# work that was not ready for one - and coupled "get CI feedback" to "spend a review" tightly
+# enough that people batched their pushes to avoid it. Splitting them decouples the two: push
+# as often as you like, ask for the review when the PR is ready.
 #
 # The obvious version of that change - just delete the `pull_request` trigger - would have
 # been an own goal, because the gate lived INSIDE the reviewer's job. Killing the trigger
@@ -26,10 +29,12 @@ name: review gate
 #
 # One thing this rewrite quietly fixes: because this file no longer invokes
 # `claude-code-action`, the action's workflow-validation guard no longer applies to it. A PR
-# editing the gate used to lose its own review (the action refuses to run when its workflow
-# file differs from the default branch); from now on only a PR editing claude.yml has that
-# problem, and even then only after merge - `issue_comment` events always run the default
-# branch's copy of a workflow.
+# editing the gate used to lose its own review - the action refuses to run when its workflow
+# file differs from the default branch, exits 0, and the gate then correctly reds a REQUIRED
+# check that no re-run can turn green, because the input is the workflow diff itself. That
+# needed an admin ruleset bypass to merge. It does not any more, and for the same reason a PR
+# editing the reviewer does not either: the reviewer is dispatched `--ref master`, so the copy
+# that runs is the default branch's.
 
 on:
   pull_request:

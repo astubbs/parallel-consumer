@@ -1,26 +1,5 @@
 name: Claude Code
 
-# THE REVIEWER, and the general `@claude` handler. Both, on purpose - it is one job, and
-# splitting it would mean two workflows racing to answer the same `@claude` comment.
-#
-# **`@claude review this` on a PR is how a review is requested.** Reviews are no longer run on
-# push: .github/workflows/claude-code-review.yml is now a cheap gate that asserts a review
-# exists for the current head, and this workflow is what produces one. See docs/ci.md for the
-# contract, including when to ask (when the PR is ready) and when not to (every push).
-#
-# Because this workflow now runs the review, it carries the reviewer's tool grants and review
-# instructions, which used to live in claude-code-review.yml. They are reproduced below with
-# their reasoning intact; each of them was added for a specific failure.
-#
-# EDITING THIS FILE DOES NOT BREAK THE PR THAT EDITS IT. `claude-code-action` refuses to run
-# when its workflow file differs from the default branch, which is why a PR editing the OLD
-# reviewer lost its own review. It does not apply here: `issue_comment` (and `issues`, and
-# `pull_request_review*`) events always execute the DEFAULT BRANCH's copy of a workflow, so a
-# `@claude review this` on a PR that edits this file runs master's version and validates
-# trivially. Verified on astubbs/parallel-consumer#279 - run 31453513070 reports
-# `head_branch: master`. The flip side is that changes here only take effect once merged, so
-# the first review of the PR that changes them is done by the old configuration.
-
 on:
   issue_comment:
     types: [created]
@@ -33,30 +12,15 @@ on:
 
 jobs:
   claude:
-    # The `author_association` clauses are not decoration. This job holds
-    # `secrets.CLAUDE_CODE_OAUTH_TOKEN` and now grants shell execution (the repo's test
-    # wrappers and `./mvnw`), and it is triggered by comments, which on a public repo anyone
-    # can leave. Restricting it to people who already have write access keeps the trust
-    # boundary where it was when this ran on `pull_request` from same-repo branches only.
-    # Spelled out per event because the field lives in a different place on each one.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
-    # Bounded because the reviewer may run test suites (see --allowedTools): a wedged suite
-    # must not hold a runner indefinitely. Generous enough for a unit run on a 2-core hosted
-    # box.
-    timeout-minutes: 30
     permissions:
       contents: read
-      # write, not read: the reviewer creates INLINE review comments for blocking findings
-      # (see the blocking-findings instruction in claude_args). The action may well use its
-      # own app token - the summary comment already posts under `read` - but a silently
-      # failing inline comment would mean a blocking finding never gates the merge, which is
-      # the whole point.
-      pull-requests: write
+      pull-requests: read
       issues: read
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
@@ -64,9 +28,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          # Full history: the reviewer compares against the PR base, which a depth-1 clone
-          # can't reach.
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Run Claude Code
         id: claude
@@ -78,67 +40,11 @@ jobs:
           additional_permissions: |
             actions: read
 
-          # Grant the tools the review command + subagents need. Prompt-mode and
-          # mention-mode runs get NO tool grants by default - the earliest runs logged 27
-          # permission denials per review.
-          #
-          # PREFER the repo's own wrappers over a hand-rolled ./mvnw line: the wrappers pin
-          # the group exclusions and CI profile, so the reviewer runs what CI runs. ./mvnw is
-          # granted as well (see below) for the targeted runs a wrapper cannot express. Chaos
-          # is NOT granted - it needs Docker and takes ~2 minutes per scenario arm, far too
-          # slow for a review pass, and it is non-gating anyway.
-          #
-          # BOTH `bin/foo.sh` and `./bin/foo.sh` are granted for every script. These are
-          # PREFIX matches, not globs: `Bash(bin/ci-unit-test.sh:*)` does not match
-          # `./bin/ci-unit-test.sh`, so granting only the bare form denied every natural
-          # invocation. That is not theoretical - it is why the review on
-          # astubbs/parallel-consumer#108 logged 10 permission denials, gave up before running
-          # anything, and still reported success. A grant that cannot match is worse than no
-          # grant: it reads as capability the reviewer does not have.
-          #
-          # Also grants the repo's fast, read-only VERIFICATION scripts (bin/check-*.sh,
-          # bin/test-check-copyright-headers.sh, bin/test-check-review-posted.sh,
-          # bin/check-shell-sigpipe.sh, bin/todo-index.sh) plus the two gate self-tests under
-          # .github/scripts/, so the reviewer can independently re-run what a PR claims rather
-          # than inferring it from the diff. NOT the quarantine/test RUNNERS
-          # (quarantined-test.sh, quarantine-lane-report.sh) - those execute suites, are slow,
-          # and test execution is already covered by the ci-*-test.sh wrappers above.
-          #
-          # Every grant here is a script that EXISTS ON MASTER. Granting one that only exists
-          # on another branch makes the grant inert and the claim false - which is how
-          # `bin/todo-index.sh` briefly ended up listed here before its script merged. A grant
-          # belongs in the PR that adds its script. See bin/AGENTS.md. That is why the OSS
-          # Index audit pair is NOT listed here: those scripts arrive with
-          # astubbs/parallel-consumer#279, and their grants belong in it.
-          #
-          # `actionlint` is granted and is not a repo script - it ships on `ubuntu-latest`,
-          # with .github/actionlint.yaml already present, so the grant can never be inert. It
-          # closes a gap the reviewer reported itself on astubbs/parallel-consumer#102: it
-          # could not lint a workflow PR, on a repo where workflow PRs are common.
-          #
-          # ./mvnw IS granted, for the job the wrappers cannot do: running ONE test class.
-          # Verifying a RED/GREEN claim means reverting the fix and re-running just the new
-          # test - a targeted -Dtest=X run, seconds rather than the ~6 minutes of a full
-          # suite. Without it the reviewer can only re-run everything, which it will not have
-          # time for, so the most valuable check it can make - does this test actually fail
-          # without the fix? - was unavailable.
-          #
-          # The earlier objection stands as GUIDANCE, not a ban: a hand-rolled
-          # `-pl parallel-consumer-core test` line skips the
-          # -Dexcluded.groups=performance,chaos,quarantined the wrappers hardcode (a past P1 -
-          # that exclusion was once a silent no-op, now pinned by
-          # QuarantinedAnnotationContractTest, which covers the wrappers but NOT a
-          # workflow-embedded command) and drops clean/rerunFailingTestsCount. So: whole suite
-          # -> wrapper, every time; ./mvnw only for a scoped -Dtest run, whose result is read
-          # as "did THIS test pass", never as "the suite is green". The system prompt below
-          # says so explicitly.
-          #
-          # NOT blanket Bash(*): this job reads attacker-influencable text (diff, PR body,
-          # comments), so an enumerable allowlist is the safety margin against
-          # injection-into-execution. The `author_association` guard on the job above is the
-          # other half of that margin. Keep it a list.
-          claude_args: |
-            --allowedTools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*),mcp__github_inline_comment__create_inline_comment"
-            --append-system-prompt "When you are asked to review a pull request, these rules apply. You CAN run this repo's tests yourself, and should when the PR adds or changes tests, or when a claim about test results is load-bearing to your review. Use bin/ci-unit-test.sh (fast, no Docker) or bin/ci-integration-test.sh (needs Docker); do NOT run the chaos suite, it is far too slow for a review pass. You can also run the repo's fast verification scripts directly to check a claim rather than trusting the PR body - e.g. bin/check-copyright-headers.sh, bin/check-quarantine-registry.sh - invoke them by their bare path, they are executable. For a SINGLE test class, use ./mvnw directly - e.g. ./mvnw -o -pl parallel-consumer-core -Dtest=SomeTest surefire:test - which takes seconds where a full suite takes minutes. That makes the highest-value check affordable: when a PR claims a test fails without its fix, revert the fix (git stash push the source files), run just that test, and confirm it actually goes RED - a test that passes either way proves nothing, and this is the single most common defect in a regression-test PR. Two rules for scoped runs: never report a targeted -Dtest result as though the suite were green (it skips the -Dexcluded.groups the wrappers pin, and covers one class), and always restore anything you stashed. For whole-suite evidence, use the wrappers, not a hand-rolled ./mvnw line. Reviews are requested on demand rather than fired on every push, so by the time you are asked the CI jobs have usually finished and you have actions:read - READ THEIR RESULTS FIRST and say which ones you read, then execute tests yourself for anything CI does not settle. Do not treat a green CI as evidence a NEW test ran: when a PR adds a test, verify the suite ACTUALLY COLLECTED it (surefire only picks up *Test.java, Test*.java, *Tests.java, *TestCase.java - a test named otherwise silently never runs) rather than trusting a green total. If you run out of time, or a suite fails for environmental reasons, say so explicitly instead of implying you verified it. REVIEW THE PR TITLE AND DESCRIPTION AS PART OF THE DIFF, not as decoration. They are what a future reader gets instead of the diff, and on a squash merge the title BECOMES the commit title, so an inaccurate one is permanent. Check three things. (1) COMPLETENESS: does the description cover every substantive change in the diff? Descriptions are written early and drift as commits land, so a whole fix or workstream missing from an otherwise good description is the common failure - call out what is in the diff but not described. (2) ACCURACY: do specifics match reality - counts, file and test names, flags, numbers of things granted or changed, and any claimed verification? Re-derive them from the diff rather than trusting the prose; a stale \"622 tests\" or \"two scripts\" when the diff says otherwise is a real defect. Treat a checklist item marked N/A as a claim to verify like any other, especially \"docs updated - N/A\" when the diff changes docs. (3) TERMINOLOGY: does it use words the codebase uses, and does any word mislead? Flag a term that means something specific in this repo being used loosely - for example calling cross-test state contamination a \"leak\" in a repo where \"leak\" means a memory leak. Report these as normal findings, non-blocking unless the description actively misrepresents what the code does. BLOCKING FINDINGS MUST BE INLINE REVIEW COMMENTS. This repo sets required_review_thread_resolution, so an unresolved review thread is the ONLY thing that actually gates a merge - a finding written only in your summary comment can be, and will be, merged straight past. So: if you find something that should block the merge (a correctness bug, data loss or corruption, a security hole, a broken public contract, or a test that cannot do what it claims), raise it with mcp__github_inline_comment__create_inline_comment on the offending line, one thread per finding, each stating plainly what breaks and what would fix it. Keep the summary comment for everything else - context, praise, nits and non-blocking observations - and do NOT raise those inline, or routine notes become merge gates and the signal is lost. If you are unsure whether a finding is blocking, put it in the summary and say why you were unsure, rather than blocking on a maybe. Finally: FINISH, or say plainly that you did not. The review gate reads your own task list - a comment left with an unticked box is taken as your statement that you stopped partway, and it holds the claude-review check red. Do not announce that you will continue in the background; there is no background."
+          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
+          # prompt: 'Update the pull request description to include a summary of changes.'
+
+          # Optional: Add claude_args to customize behavior and configuration
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
+          # claude_args: '--allowed-tools Bash(gh pr:*)'
+

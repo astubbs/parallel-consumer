@@ -9,8 +9,9 @@
 #
 # It used to prove "the reviewer step in THIS workflow run posted something", because the
 # reviewer and the gate were two steps of one job that fired on every push. The reviewer no
-# longer runs on push - it is on demand, via a `@claude review this` PR comment routed
-# through .github/workflows/claude.yml - so there is no sibling step whose run id to match.
+# longer runs on push - it is dispatched by hand from
+# .github/workflows/claude-code-review-dispatch.yml - so there is no sibling step in this run
+# whose id to match.
 #
 # What it proves instead, and each rule's job:
 #
@@ -54,7 +55,7 @@
 # STRICT, DELIBERATELY - AND WHAT A RED CHECK MEANS
 #
 # Rule 2 is the strict reading: a review of commit N does not vouch for commit N+1, so a push
-# after a review turns the check red again and wants a fresh `@claude review this`. The
+# after a review turns the check red again and wants a fresh review dispatch. The
 # lenient reading - any review on the PR, ever, satisfies the gate - was rejected because it
 # reports success for code nothing has looked at, which is the exact defect class named in
 # docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md. A gate
@@ -63,7 +64,7 @@
 #
 # So: **a red `claude-review` on a PR nobody has asked to review yet is the expected state,
 # not a fault.** It is not something to fix by editing this script. It is fixed by commenting
-# `@claude review this` once the PR is actually ready. See docs/ci.md.
+# dispatching a review once the PR is actually ready. See docs/ci.md.
 #
 # There is deliberately NO skip word, label, or "trivial change" escape. Any such escape is
 # asserted by the same person who wants to use it, which makes it exactly as strong as not
@@ -241,15 +242,15 @@ case "$verdict" in
         exit 0
         ;;
     3)
-        fail "The reviewer commented on head ${short_sha} at ${latest_review_at} but left unticked task-list boxes - its own record that it stopped partway, so this head has not actually been reviewed. Ask for another review with a '@claude review this' PR comment. See bin/check-review-posted.sh."
+        fail "The reviewer commented on head ${short_sha} at ${latest_review_at} but left unticked task-list boxes - its own record that it stopped partway, so this head has not actually been reviewed. Dispatch another review (see docs/ci.md). See bin/check-review-posted.sh."
         exit 1
         ;;
     4)
-        fail "This PR has been reviewed, but not since ${latest_review_at}, and head ${short_sha} is newer than that (${head_time}). A review of an earlier commit does not vouch for the commits after it. THIS IS THE EXPECTED STATE for a PR that has been pushed to since its last review, and it is not a defect to fix in CI: comment '@claude review this' when the PR is ready for another look. See docs/ci.md."
+        fail "This PR has been reviewed, but not since ${latest_review_at}, and head ${short_sha} is newer than that (${head_time}). A review of an earlier commit does not vouch for the commits after it. THIS IS THE EXPECTED STATE for a PR that has been pushed to since its last review, and it is not a defect to fix in CI: dispatch a review when the PR is ready for another look - see docs/ci.md."
         exit 1
         ;;
     5)
-        fail "This PR has never been reviewed: ${REVIEWER_LOGIN} has not commented on it. THIS IS THE EXPECTED STATE for a new or in-progress PR - the review no longer runs automatically on push, precisely so that work in progress does not spend one. Comment '@claude review this' when the PR is ready for review. See docs/ci.md."
+        fail "This PR has never been reviewed: ${REVIEWER_LOGIN} has not commented on it. THIS IS THE EXPECTED STATE for a new or in-progress PR - the review no longer runs automatically on push, precisely so that work in progress does not spend one. Dispatch a review when the PR is ready for review - see docs/ci.md."
         exit 1
         ;;
     *)

@@ -64,10 +64,13 @@ stack traces (see [`docs/testing.md`](testing.md)).
   invokes no Claude and costs nothing, and asserts one thing: that a review exists for the
   **current head**. It produces the required check `claude-review`, so the job name is an API here
   as it is in `repo-hygiene.yml`. See "The automated review" below.
-- **`claude.yml`** - the **reviewer**, and the general `@claude` handler. Triggered on demand by a
-  comment. It carries the reviewer's tool allowlist and review instructions, and is restricted to
-  commenters who already have write access, because it holds the Claude credential and can execute
-  the repo's test wrappers.
+- **`claude-code-review-dispatch.yml`** - the **reviewer**, `workflow_dispatch` only. It carries
+  the packaged review procedure, the tool allowlist and the review instructions, and takes an
+  optional `focus` steer. See "The automated review" below.
+- **`claude.yml`** - the general `@claude` mention handler, and **not** the reviewer. A mention
+  passes whatever was typed straight through as a free-form prompt: it has no `plugins:` line and
+  never invokes the review command. Good for asking a question on a PR; it is not a review, and
+  the gate does not treat it as one just because a comment appeared.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
   See [`docs/testing.md`](testing.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
@@ -78,8 +81,14 @@ stack traces (see [`docs/testing.md`](testing.md)).
 
 ## The automated review
 
-**The review does not run on push. Ask for it with a `@claude review this` PR comment when the PR
-is ready for review** - not on every push, and not on work in progress.
+**The review does not run on push. Dispatch it when the PR is ready for review** - not on every
+push, and not on work in progress:
+
+```bash
+gh workflow run claude-code-review-dispatch.yml -R astubbs/parallel-consumer --ref master \
+  -f pr=<number> \
+  -f focus="the guard's failure paths, not the docs"
+```
 
 It used to fire on every `pull_request` event, which spent a full review on every push,
 overwhelmingly on branches that were not ready for one. That coupled "get CI feedback" to "spend a
@@ -88,13 +97,32 @@ review" tightly enough that people batched pushes to avoid it. The two are now s
 | | Runs | Cost | Produces |
 |---|---|---|---|
 | **Gate** (`claude-code-review.yml`) | every PR push | none - no Claude, no JDK, no build | the required check `claude-review` |
-| **Reviewer** (`claude.yml`) | on a `@claude review this` comment | a full review | the review itself |
+| **Reviewer** (`claude-code-review-dispatch.yml`) | when dispatched | a full review | the review itself |
+
+**`--ref master` is required, not cosmetic.** It is what lets the reviewer review a PR that edits
+the reviewer - see "Editing the reviewer" below. Dispatching from the PR's own branch reintroduces
+the trap it avoids.
+
+### Seed the review with `-f focus` when you have a steer
+
+A review told where to look hardest is materially better than a bare one, and this is the half of
+the old `@claude` mention route worth keeping. The steer is **appended** to the packaged review
+procedure, never substituted for it, so it adds emphasis without narrowing the review or licensing
+it to skip anything.
+
+**Why not just mention `@claude review this`?** Because a mention passes whatever was typed through
+as the entire prompt. The reviewer is not a free-form request - it is
+`/code-review:code-review <repo>/pull/<n> --comment`, a packaged procedure invoked as a slash
+command with `plugins: 'code-review@claude-code-plugins'`. Route a review through a mention and you
+silently swap that procedure for an improvised one; the output still looks like a review, so
+nothing tells you. **If you ever edit the reviewer, the `plugins:` input and the
+`/code-review:code-review ... --comment` prompt must survive.**
 
 ### A red `claude-review` is the expected state on an unreviewed PR
 
 It is **not** a fault to diagnose and **not** something to fix by editing the gate. It means what
-it says: nothing has reviewed this head yet. The fix is to comment `@claude review this` once the
-work is actually ready. Three distinct reds, each saying which it is:
+it says: nothing has reviewed this head yet. The fix is to dispatch a review once the work is
+actually ready. Three distinct reds, each saying which it is:
 
 - **never reviewed** - nobody has asked. Normal for a new or in-progress PR.
 - **reviewed, but not since `<time>`** - there is a review, but you have pushed since. See below.
@@ -114,7 +142,7 @@ satisfiable by a review of code that no longer exists.
 is asserted by the same person who wants to use it - which makes it exactly as strong as not having
 the gate. The honest escape already exists and is loud: merge with the required check red, which
 leaves a permanent record that somebody chose to merge unreviewed. Re-requesting a review after a
-one-line fix costs one comment and a couple of minutes, so an escape would save little and cost the
+one-line fix costs one command and a couple of minutes, so an escape would save little and cost the
 guarantee.
 
 ### What the gate proves, and what it does not
@@ -139,11 +167,15 @@ default branch's copy, so a PR cannot rewrite its own reviewer. Two consequences
   Editing the gate used to make its own `claude-review` check unfixably red - re-running cannot
   help, since the input is the workflow diff itself - and that meant an admin ruleset bypass to
   merge. It does not any more.
-- **`claude.yml` is affected only after merge.** `issue_comment` events always execute the
-  *default branch's* copy of a workflow, so `@claude review this` on a PR that edits `claude.yml`
-  runs master's version and validates fine. The flip side: changes to the reviewer's grants or
-  instructions do not take effect until they merge, so the PR that makes them is reviewed by the
-  old configuration.
+- **The reviewer is not affected either, as long as it is dispatched `--ref master`.** A dispatch
+  runs the workflow from the ref you name, so master's copy of
+  `claude-code-review-dispatch.yml` does the reviewing while the PR branch supplies only the code
+  under review. Reviewer and reviewed are then two different things, which is precisely what a
+  `pull_request` run cannot arrange. Dispatching from the PR branch instead runs the PR's copy of
+  the reviewer, which is the case the guard exists to refuse - so do not.
+- **The flip side:** changes to the reviewer's grants, procedure or instructions do not take effect
+  until they merge, so the PR that makes them is reviewed by the old configuration. Expect the
+  reviewer to say it lacks a grant that PR adds.
 
 ## Self-hosted lanes
 
