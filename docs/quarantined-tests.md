@@ -29,7 +29,7 @@ immediately followed by the backticked test reference (`Class.method`), and its 
 Unreliable tests carry `flapping = true` on the annotation itself (compile-checked, read by the lane
 reporter).
 
-Rules (full discipline in [`docs/testing.md`](testing.md), and the `@Quarantined` javadoc):
+Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@Quarantined` javadoc):
 
 1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
