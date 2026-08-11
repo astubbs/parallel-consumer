@@ -1,7 +1,7 @@
 ---
 title: The duplication scanners do not look where agents actually duplicate
 date: 2026-08-12
-category: documentation-gaps
+category: workflow-issues
 module: tooling
 problem_type: workflow_issue
 component: development_workflow
@@ -97,6 +97,6 @@ Two follow-ups, tracked in [`docs/inflight/ci-review-agent.md`](../../inflight/c
 
 ## See also
 
-- [`negative-results-need-an-instrument-that-could-have-said-yes.md`](../workflow-issues/negative-results-need-an-instrument-that-could-have-said-yes.md) -
+- [`negative-results-need-an-instrument-that-could-have-said-yes.md`](negative-results-need-an-instrument-that-could-have-said-yes.md) -
   the same shape one level up. A green duplication scan is a negative result, and it was worthless
   here because the instrument could never have said yes.

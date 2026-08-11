@@ -51,7 +51,7 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   verbatim copy-paste between docs, a frequent agent behaviour, but **not** paraphrase; and (b) for
   a contract specifically, a narrow guard asserting the canonical phrasing appears in its one home
   and nowhere else, which is more reliable than any similarity metric. Full write-up:
-  [`docs/solutions/documentation-gaps/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](../solutions/documentation-gaps/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md).
+  [`docs/solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](../solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md).
 - **NOT ENFORCED YET: the two tool allowlists can drift apart.** `claude.yml` and
   `claude-code-review-dispatch.yml` now carry byte-identical `--allowedTools` lists (the comment
   route adds the inline-comment tool), and nothing checks that. A grant added to one and missed on
