@@ -6,6 +6,10 @@
      auto-links on GitHub, and the only one `Fixes`/`Closes` will act on. Fenced code blocks are
      skipped, so pasted logs and command output are fine. -->
 
+<!-- If this PR serves an issue, make the FIRST LINE a link to it, fully qualified so it actually
+     links - e.g. "Closes astubbs/parallel-consumer#155." The reference in the title is NOT clickable.
+     If it serves no single issue, cite none: a loosely related one is a misdirection. -->
+
 ## Description
 
 ...

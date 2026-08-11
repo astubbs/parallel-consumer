@@ -533,6 +533,18 @@ amiss.
 What it checks is that a reference *names* a repo, not that it names the right one: `astubbs#857`
 passes the gate and is still wrong. Resolve the number in both repos before you write it.
 
+**When a PR serves an issue, the body's FIRST LINE links to it.** `Closes
+astubbs/parallel-consumer#155.` or `Part of astubbs/parallel-consumer#197.`, above everything else.
+The reference in the *title* looks like a link and is not one - GitHub does not linkify titles at all
+- so a reader's most obvious route to the context is dead text, and a "Related" section near the
+bottom is one most of them never reach. The title convention is unaffected; it exists for a different
+reason, because the title becomes the squash commit subject.
+
+**Do not reach for a loosely related issue to satisfy either.** A PR that genuinely serves no single
+issue should cite none, in the title or the body. Naming a tracking issue the PR neither closes nor
+blocks is a misdirection: it tells a reader the two are tightly coupled and sends them somewhere that
+does not explain the change. No issue is more honest than the nearest one.
+
 **The PR body is in scope too, and it is the one place the fully qualified form is mandatory.** The
 body is the surface people actually read on GitHub, and a bare `#200` renders there as a *working*
 link to the wrong issue - the exact failure the gate exists to prevent, on its most visible page. So
