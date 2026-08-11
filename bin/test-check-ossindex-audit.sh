@@ -13,21 +13,42 @@
 #   * a 401 leaves `{ }` in the exported report and prints "Failed to fetch component-reports"
 #   * a successful audit writes {"reports": {...}} plus {"vulnerable": {...}} when it found things
 #
+# THE TWO REDS ARE DIFFERENT EXIT CODES, and this suite is what holds them apart:
+#
+#   exit 1 = the scan cannot be proven to have run   (the CHECK is broken)
+#   exit 2 = the scan ran and found something        (the TREE has an untriaged advisory)
+#
+# Asserting the exact code, not merely "non-zero", is the point. A refactor that made findings exit 1
+# would satisfy a non-zero assertion while destroying the distinction the job summary - and the
+# maintainer's response to it - both depend on.
+#
 # Cases:
 #    1. clean scan, no findings                                  -> pass (0)
-#    2. clean scan, findings present                             -> pass (0), findings rendered
+#    2. clean scan, findings present                             -> FAIL (2)   <- the gate
 #    3. 401: failure line in the log AND `{ }` reports           -> FAIL (1)   <- the real regression
 #    4. token expiry shape with the log line ABSENT              -> FAIL (1)   <- leg 2 alone
 #    5. no report exported at all                                -> FAIL (1)   <- leg 1+2
 #    6. log claims 3 modules checked, only 2 reported            -> FAIL (1)   <- leg 3 alone
 #    7. missing log file                                         -> FAIL (1)
-#    8. vulnerable component with NO scored advisories           -> pass (0)   <- renderer crash
-#    9. two advisories carrying no id                            -> pass (0), both counted
+#    8. vulnerable component with NO scored advisories           -> FAIL (2)   <- renderer crash
+#    9. two advisories carrying no id                            -> FAIL (2), both counted
+#   10. findings AND an unprovable scan at once                  -> FAIL (1)   <- precedence
+#   11. the only advisory is excluded in the pom                 -> pass (0)   <- the escape hatch
+#   12. one excluded advisory beside a live one                  -> FAIL (2), only the live one
 #
-# Cases 4 and 6 are the ones worth keeping. Case 4 is the future failure this guard is really for:
-# if Sonatype ever reworded the warning, leg 1 goes quiet and only the structural leg is left. Case 6
-# proves the coverage leg is load-bearing rather than decorative - it fires with no failure line in
-# the log and every present report perfectly well-formed.
+# Cases 4 and 6 are the ones worth keeping among the fail-closed legs. Case 4 is the future failure
+# this guard is really for: if Sonatype ever reworded the warning, leg 1 goes quiet and only the
+# structural leg is left. Case 6 proves the coverage leg is load-bearing rather than decorative - it
+# fires with no failure line in the log and every present report perfectly well-formed.
+#
+# Case 10 pins the precedence. Findings recovered from a scan that cannot be proven to have run are
+# not evidence of anything, so "did not run" has to win - and must not be dressed up as a finding
+# about the tree.
+#
+# Cases 11 and 12 are the ones the gate itself depends on: `excludeVulnerabilityIds` in the root pom
+# is the only way out of a permanent red on a disputed or unfixable finding, and the exported report
+# does NOT pre-filter by it. See the comment on case 11 - this was found on a live run, not reasoned
+# about.
 #
 # Run: bin/test-check-ossindex-audit.sh   (CI runs it BEFORE the guard it protects)
 
@@ -126,15 +147,24 @@ run_guard "$log" "$t"
 assert "clean scan with no findings passes" 0 "$LAST_EC"
 assert_contains "  ...and says so" "no vulnerable components" "$LAST_OUT"
 
-# ── 2. clean scan WITH findings - reported, never fatal ───────────────────────
+# ── 2. clean scan WITH findings - the gate ────────────────────────────────────
+# Exit 2, not 1: the scan worked, so this is a statement about the TREE. Asserting the exact code
+# is what stops a later refactor from collapsing the two reds into one unreadable red.
 t="$TMP/findings"; mkdir -p "$t"
 write_report "$t" core vulnerable
 write_report "$t" vertx
 log=$(write_log "$t" 2)
 run_guard "$log" "$t"
-assert "findings are reported, not fatal" 0 "$LAST_EC"
+assert "findings on a proven scan fail the check" 2 "$LAST_EC"
 assert_contains "  ...naming the advisory" "CVE-2026-54513" "$LAST_OUT"
 assert_contains "  ...and its score" "9.3" "$LAST_OUT"
+assert_contains "  ...saying the check itself is fine" "not a broken check" "$LAST_OUT"
+if grep -qF "did not run" <<< "$LAST_OUT"; then
+    echo "FAIL:   ...and NOT blaming the scan (output claimed the scan did not run)"
+    failures=$((failures + 1))
+else
+    echo "ok:     ...and NOT blaming the scan"
+fi
 
 # ── 3. the real regression: 401 on every module ───────────────────────────────
 t="$TMP/unauth"; mkdir -p "$t"
@@ -196,7 +226,7 @@ cat > "$t/core/target/ossindex-report.json" <<'JSON'
 JSON
 log=$(write_log "$t" 1)
 run_guard "$log" "$t"
-assert "a vulnerable component with no scored advisories does not crash the guard" 0 "$LAST_EC"
+assert "a vulnerable component with no scored advisories does not crash the guard" 2 "$LAST_EC"
 assert_contains "  ...and still renders that component" "org.example:thing" "$LAST_OUT"
 
 # ── 9. advisories with no id must not collapse onto one key ───────────────────
@@ -216,9 +246,78 @@ cat > "$t/core/target/ossindex-report.json" <<'JSON'
 JSON
 log=$(write_log "$t" 1)
 run_guard "$log" "$t"
-assert "two unidentified advisories are counted separately, not collapsed" 0 "$LAST_EC"
+assert "two unidentified advisories are counted separately, not collapsed" 2 "$LAST_EC"
 assert_contains "  ...reporting both of them" "2 advisory(ies)" "$LAST_OUT"
 assert_contains "  ...and keeping the higher score" "7.7" "$LAST_OUT"
+
+# ── 10. both reds at once - "did not run" must win ────────────────────────────
+# Findings recovered from a scan that cannot be proven to have happened are not evidence of
+# anything. If this ever reported exit 2, a broken lane would be triaged as a dependency problem and
+# nobody would go and look at the token.
+t="$TMP/both"; mkdir -p "$t"
+write_report "$t" core vulnerable
+write_empty_report "$t" vertx
+log=$(write_log "$t" 2 failed)
+run_guard "$log" "$t"
+assert "findings AND an unprovable scan report the broken scan, not the findings" 1 "$LAST_EC"
+assert_contains "  ...and say so explicitly" "not a vulnerability finding" "$LAST_OUT"
+
+# ── 11. an excluded advisory must not gate ────────────────────────────────────
+# The pom's `excludeVulnerabilityIds` is the documented escape hatch, and it is the ONLY thing
+# standing between this gate and a permanent red on a disputed or unfixable finding. The plugin
+# honours it when choosing which components to call vulnerable, but still writes the excluded
+# advisory into the exported `vulnerabilities` array AND into a top-level `excludedVulnerabilities`
+# block. Observed on a live authenticated run: CVE-2026-54518 was excluded in the pom, logged under
+# "Excluded vulnerabilities:", and present in `vulnerable` all the same. Gating on the raw array
+# would go red on exactly the debt that was deliberately triaged, and no pom edit could clear it.
+t="$TMP/excluded"; mkdir -p "$t/core/target"
+cat > "$t/core/target/ossindex-report.json" <<'JSON'
+{
+  "reports": { "org.example:thing:jar:1.0:compile": { "coordinates": "pkg:maven/org.example/thing@1.0" } },
+  "excludedVulnerabilities": [ { "id": "CVE-2026-14683", "cvssScore": 2.0 } ],
+  "vulnerable": {
+    "org.example:thing:jar:1.0:compile": {
+      "coordinates": "pkg:maven/org.example/thing@1.0",
+      "vulnerabilities": [ { "id": "CVE-2026-14683", "cvssScore": 2.0 } ]
+    }
+  }
+}
+JSON
+log=$(write_log "$t" 1)
+run_guard "$log" "$t"
+assert "an advisory excluded in the pom does not fail the check" 0 "$LAST_EC"
+assert_contains "  ...and the suppression is stated, not silent" "suppressed by" "$LAST_OUT"
+
+# ── 12. exclusions must not swallow the advisory next to them ─────────────────
+# The opposite error: filtering by component rather than by advisory id would drop a live finding
+# because a *different* advisory on the same component happened to be excluded.
+t="$TMP/partly-excluded"; mkdir -p "$t/core/target"
+cat > "$t/core/target/ossindex-report.json" <<'JSON'
+{
+  "reports": { "org.example:thing:jar:1.0:compile": { "coordinates": "pkg:maven/org.example/thing@1.0" } },
+  "excludedVulnerabilities": [ { "id": "CVE-2026-14683", "cvssScore": 2.0 } ],
+  "vulnerable": {
+    "org.example:thing:jar:1.0:compile": {
+      "coordinates": "pkg:maven/org.example/thing@1.0",
+      "vulnerabilities": [
+        { "id": "CVE-2026-14683", "cvssScore": 2.0 },
+        { "id": "CVE-2026-99999", "cvssScore": 8.1 }
+      ]
+    }
+  }
+}
+JSON
+log=$(write_log "$t" 1)
+run_guard "$log" "$t"
+assert "a live advisory beside an excluded one still fails the check" 2 "$LAST_EC"
+assert_contains "  ...counting only the live one" "1 advisory(ies)" "$LAST_OUT"
+assert_contains "  ...and naming it" "CVE-2026-99999" "$LAST_OUT"
+if grep -qF "CVE-2026-14683" <<< "$LAST_OUT"; then
+    echo "FAIL:   ...and not re-listing the excluded one"
+    failures=$((failures + 1))
+else
+    echo "ok:     ...and not re-listing the excluded one"
+fi
 
 echo
 if [ "$failures" -eq 0 ]; then

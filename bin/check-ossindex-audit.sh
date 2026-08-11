@@ -25,21 +25,39 @@
 # Ossindex; Linux: under $XDG_CACHE_HOME). A warm cache serves results even with a bogus base-URL,
 # so any experiment about reachability must clear it first, and CI must never cache that directory.
 #
-# THE SPLIT THIS SCRIPT ENCODES
+# TWO REDS, AND THEY MUST NOT BE CONFUSED
 #
-#   scan did not run          -> exit 1  (red: the check itself is broken, and that IS actionable)
+#   scan did not run          -> exit 1  (red: the CHECK is broken - an empty result means nothing)
 #   scan ran, found nothing   -> exit 0
-#   scan ran, found problems  -> exit 0, findings rendered  (reporting only, deliberately)
+#   scan ran, found problems  -> exit 2  (red: the TREE has an advisory nobody has looked at)
 #
-# Findings are not fatal today. The original reason was a standing backlog - a job that goes red on
-# every PR for known debt is ignored inside a week - but astubbs/parallel-consumer#281 triaged it, so
-# the audit now reports zero findings and gating would NOT be permanently red. What remains is a
-# weaker, deliberate caution: the exclusions carrying that backlog are only as good as their stated
-# retirement conditions, and this lane has not yet run clean over time. Red stays reserved for "this
-# check stopped working", which is rare and therefore still means something. Flipping findings to
-# fatal is a one-line change here, and the argument for it is now stronger than the argument against
-# - a NEW finding, on a tree whose known debt is already excluded with reasons, is by construction
-# something nobody has looked at.
+# Distinct exit codes, distinct headings and distinct stderr lines, because they demand opposite
+# responses: exit 1 means go fix the credentials or the lane and learn nothing about the tree; exit 2
+# means the lane worked and there is a real advisory to triage. Collapsing them into one
+# undifferentiated red would make the second unreadable - the reader could no longer tell whether the
+# scanner had anything to say. When both are true at once, exit 1 wins: findings from a scan that
+# cannot be proven to have happened are not evidence of anything, in either direction.
+#
+# WHY FINDINGS ARE FATAL
+#
+# They were not, once, and the reason was a standing backlog: a job that goes red on every PR for
+# known debt is ignored inside a week. astubbs/parallel-consumer#281 retired that backlog - every
+# item is now either fixed or an explicit `excludeVulnerabilityIds` entry in the root pom carrying a
+# stated retirement condition. That inverts the argument. On a tree whose known debt is already
+# excluded *with reasons*, a finding is by construction something nobody has looked at, and each one
+# is either a real advisory or an exclusion that needs writing down. Nothing red is left standing.
+#
+# And PR-time rather than the schedule alone, because this repo has one maintainer: a weekly digest
+# nobody is obliged to read is not a control, it is mail. The PR gate is the only channel that
+# reliably has attention, so that is where the finding has to land. The schedule still matters for
+# what a PR cannot see - an unchanged tree acquiring a new advisory - but it is the second channel,
+# not the first.
+#
+# The cost is a false positive blocking unrelated work, and it is real: OSS Index produced two false
+# positives and one CVE id with no public record in a single run against this repo
+# (docs/inflight/ci-ossindex-audit-dead.md). The escape hatch is the same one the backlog used -
+# add the id to `excludeVulnerabilityIds` in the root pom with a reason and a retirement condition -
+# which is a deliberate, reviewable act rather than a flag flip.
 #
 # HOW "DID IT ACTUALLY SCAN" IS DECIDED
 #
@@ -69,6 +87,12 @@
 #   ./mvnw --batch-mode test-compile \
 #       -Dossindex.skip=false -Dossindex.fail=false -Dossindex.authId=ossindex \
 #       -Dossindex.reportFile=target/ossindex-report.json | tee audit.log
+#
+# `-Dossindex.fail=false` is NOT laxity, and must stay - it is what makes this script the single
+# place that decides red. The pom defaults `ossindex.fail` to `true`, and letting Maven fail on
+# findings kills the pipeline (`set -o pipefail`) BEFORE the guard runs: on exactly the runs that
+# have something to say, you would lose both the did-it-actually-scan verdict and the rendered
+# findings table. Maven stays lenient; this script gates.
 #
 # `test-compile` rather than `validate`: the audit mojo resolves TEST-scope dependencies, and the
 # modules depend on `parallel-consumer-core:jar:tests`, so on a machine without those snapshots
@@ -118,6 +142,10 @@ empty = 0
 components = 0
 # coordinates -> {"advisories": {id: score}, "modules": set()}
 found = {}
+# Advisory ids the root pom's `excludeVulnerabilityIds` suppressed, as the plugin itself resolved
+# them. Collected across every module and reported as a count, so a growing exclusion list stays
+# visible in the summary rather than quietly absorbing the whole point of the check.
+excluded_ids = set()
 
 
 def top_of(entry):
@@ -147,10 +175,30 @@ for p in paths:
         continue
     components += len(reports)
     module = p.rsplit("/target/", 1)[0].rsplit("/", 1)[-1]
+
+    # `excludeVulnerabilityIds` in the root pom is the documented escape hatch for a finding that
+    # does not apply, is disputed, or has no fixed version. The plugin honours it when deciding
+    # which COMPONENTS land in `vulnerable`, but the per-component `vulnerabilities` array it
+    # exports is unfiltered - an excluded advisory is still listed there, and is also repeated in
+    # this top-level `excludedVulnerabilities` block. Verified on a live authenticated run: with
+    # CVE-2026-54518 excluded in the pom, the plugin logged it under "Excluded vulnerabilities:"
+    # and still wrote it into `vulnerable`. Gating on the raw array would therefore go red on
+    # exactly the debt that was deliberately triaged, and no pom edit could ever clear it.
+    module_excluded = {
+        v.get("id") for v in (doc.get("excludedVulnerabilities") or []) if v.get("id")}
+    excluded_ids |= module_excluded
+
     for coords, report in (doc.get("vulnerable") or {}).items():
+        listed = report.get("vulnerabilities") or []
+        live = [v for v in listed if v.get("id") not in module_excluded]
+        # Every advisory on this component was excluded, with a reason, in the pom. The plugin
+        # would not normally list such a component at all; belt and braces so an upstream change
+        # to that behaviour cannot resurrect suppressed findings as a red gate.
+        if listed and not live:
+            continue
         entry = found.setdefault(coords, {"advisories": {}, "modules": set()})
         entry["modules"].add(module)
-        for i, vuln in enumerate(report.get("vulnerabilities") or []):
+        for i, vuln in enumerate(live):
             # Positional fallback rather than a single shared "?": OSS Index does not always carry
             # an id, and collapsing every unidentified advisory onto one key silently overwrites
             # scores and under-counts findings. Positional keeps the same advisory de-duplicating
@@ -166,6 +214,7 @@ print("empty_reports=%d" % empty)
 print("components=%d" % components)
 print("vulnerable=%d" % len(found))
 print("advisories=%d" % advisories)
+print("excluded=%d" % len(excluded_ids))
 print("top_score=%s" % (max(scores) if scores else 0))
 print("---")
 
@@ -184,16 +233,16 @@ PY
 # parser's output from assigning arbitrary variables, and the emptiness check below turns a fact
 # renamed above but not here into a loud failure - previously it just became an empty variable, with
 # nothing tying the two halves together.
-empty_reports='' report_files='' components='' vulnerable='' advisories='' top_score=''
+empty_reports='' report_files='' components='' vulnerable='' advisories='' excluded='' top_score=''
 while IFS='=' read -r key value; do
     case "$key" in
         ---) break ;;
-        empty_reports|report_files|components|vulnerable|advisories|top_score)
+        empty_reports|report_files|components|vulnerable|advisories|excluded|top_score)
             printf -v "$key" '%s' "$value" ;;
     esac
 done <<< "$facts"
 
-for fact in empty_reports report_files components vulnerable advisories top_score; do
+for fact in empty_reports report_files components vulnerable advisories excluded top_score; do
     if [ -z "${!fact}" ]; then
         echo "FAIL: internal error - the audit parser emitted no '${fact}' fact." >&2
         exit 1
@@ -241,21 +290,45 @@ REPRO
     exit 1
 fi
 
+# Past here the scan is PROVEN to have run, so anything red below is a statement about the tree, not
+# about the lane. Kept visibly separate - different heading, different exit code, different stderr
+# line - so the two reds can never be mistaken for each other.
 if [ "$vulnerable" -eq 0 ]; then
     echo "## :white_check_mark: OSS Index audit: no vulnerable components"
 else
-    echo "## :warning: OSS Index audit: ${vulnerable} vulnerable component(s), ${advisories} advisory(ies)"
+    echo "## :x: OSS Index audit found ${vulnerable} vulnerable component(s), ${advisories} advisory(ies)"
 fi
 echo
 echo "Scanned **${components}** resolved components across **${report_files}** module(s)."
-if [ "$vulnerable" -gt 0 ]; then
+# Never silent: an exclusion list is the one way a finding can legitimately disappear, so it is
+# stated on every run - green ones included - or it stops being reviewable.
+if [ "$excluded" -gt 0 ]; then
     echo
-    echo "Highest CVSS score seen: **${top_score}**."
-    echo
-    printf '%s\n' "$findings_table"
+    echo "**${excluded}** advisory(ies) were suppressed by \`excludeVulnerabilityIds\` in the root pom."
+    echo "Each carries a reason and a retirement condition there; they are excluded from the verdict"
+    echo "above, not overlooked."
 fi
-echo
-echo "_Findings are **reported, not blocking**. This check goes red only when the scan fails to"
-echo "run - see the header of \`bin/check-ossindex-audit.sh\` for why._"
+if [ "$vulnerable" -eq 0 ]; then
+    echo
+    echo "_The scan ran and the tree is clean. This check goes red two different ways: **the scan"
+    echo "could not be proven to have run** (broken lane, exit 1), or **the scan found something**"
+    echo "(exit 2) - see the header of \`bin/check-ossindex-audit.sh\`._"
+    echo "ok:   OSS Index audit ran - ${report_files} module report(s), ${components} components, 0 vulnerable, ${excluded} excluded" >&2
+    exit 0
+fi
 
-echo "ok:   OSS Index audit ran - ${report_files} module report(s), ${components} components, ${vulnerable} vulnerable" >&2
+echo
+echo "**The scan ran cleanly - this is a real finding, not a broken check.** Known debt is already"
+echo "carried as \`excludeVulnerabilityIds\` entries in the root pom and filtered out above, so"
+echo "anything reaching this table is an advisory nobody has looked at."
+echo
+echo "Highest CVSS score seen: **${top_score}**."
+echo
+printf '%s\n' "$findings_table"
+echo
+echo "Either fix it (upgrade, or drop the dependency), or - if it does not apply, is disputed, or has"
+echo "no fixed version - add the id to \`excludeVulnerabilityIds\` in the root pom **with a reason and"
+echo "a retirement condition**, the way astubbs/parallel-consumer#281 did for the original backlog."
+
+echo "FAIL: OSS Index audit found ${vulnerable} vulnerable component(s), ${advisories} advisory(ies), top CVSS ${top_score} - the scan itself ran fine." >&2
+exit 2

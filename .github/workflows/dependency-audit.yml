@@ -28,11 +28,29 @@
 # once. `bin/check-ossindex-audit.sh` is what makes the job honest; read its header before changing
 # anything here, and note its self-test runs FIRST, per the house pattern in repo-hygiene.yml.
 #
-# RED MEANS "THE CHECK BROKE", NOT "WE HAVE CVEs". Findings are written to the job summary and do
-# not fail the job. That is now a conservative default rather than a necessity: since
-# astubbs/parallel-consumer#281 triaged the backlog, the audit reports zero findings, so gating would
-# not be permanently red. Left reporting-only until the clean run has held for a while - flipping it
-# is one line. See bin/check-ossindex-audit.sh for the full reasoning.
+# THIS JOB GOES RED TWO DIFFERENT WAYS, AND THEY ARE NOT THE SAME THING.
+#
+#   exit 1  the scan cannot be proven to have run - the CHECK is broken, and nothing was learned
+#           about the tree. Go and look at the token, the `ossindex` server id, or the service.
+#   exit 2  the scan ran and found an advisory - the LANE worked, and there is something to triage.
+#
+# Different exit codes, different summary headings, different stderr lines. Do not collapse them: a
+# single undifferentiated red would leave the reader unable to tell whether the scanner had anything
+# to say. When both are true, exit 1 wins - findings from an unprovable scan are evidence of nothing.
+#
+# WHY FINDINGS GATE THE PR. astubbs/parallel-consumer#281 retired the standing backlog: each item is
+# now an explicit `excludeVulnerabilityIds` entry in the root pom carrying a stated retirement
+# condition. On a tree whose known debt is excluded *with reasons*, a finding is by construction
+# something nobody has looked at - so it is worth stopping for, and the "red every PR for known debt"
+# objection no longer applies. And PR-time rather than the schedule alone because this repo has one
+# maintainer: a weekly digest nobody is obliged to read is mail, not a control. The schedule still
+# earns its place for what no PR can see - time passing - but it is the second channel, not the
+# first.
+#
+# The escape hatch for a false positive (and this scanner produces them - see
+# docs/inflight/ci-ossindex-audit-dead.md) is the same one the backlog uses: add the id to
+# `excludeVulnerabilityIds` with a reason and a retirement condition. The guard honours that list and
+# states the suppression count on every run, including green ones. See bin/check-ossindex-audit.sh.
 #
 # Required repo secrets: OSSINDEX_USERNAME (the account email), OSSINDEX_TOKEN (API token from
 # ossindex.sonatype.org -> account settings). Both already exist.
@@ -62,7 +80,12 @@ permissions:
 
 jobs:
   ossindex:
-    name: "deps: ossindex audit"
+    # Named for what it does, not for who supplies it. "ossindex" is vendor jargon and unfindable in
+    # a checks list; this also has to be told apart at a glance from `deps: vulnerabilities`
+    # (maven.yml), which reviews only the dependencies a PR CHANGES - "whole-tree" is the whole
+    # difference. Job names are an API here, referenced by repo rulesets (see repo-hygiene.yml's
+    # header): renaming is free only while this check is not yet required and not on master.
+    name: "deps: whole-tree CVE scan"
     # Fork PRs receive no secrets, so the audit would 401 and the guard would correctly go red on
     # every one of them - a permanent false alarm that teaches people to ignore the check. Skip
     # instead. Same test the self-hosted lanes use.
@@ -117,12 +140,16 @@ jobs:
       # "Could not resolve dependencies". Verified locally against a repository with those snapshots
       # removed - the reactor has to have compiled them.
       #
-      # Every property is passed explicitly so this command behaves identically whether or not
-      # astubbs/parallel-consumer#259 has merged. `ossindex.skip`, `ossindex.fail` and
-      # `ossindex.authId` are all user properties of the plugin ITSELF, so they work against the
-      # pom as it stands today (which hardcodes `fail=false` and declares no `authId`) and against
-      # the one that PR leaves behind (which wires all three to properties, defaulting skip on).
-      # So this job has no ordering dependency on that PR - and must NOT copy its pom edits here.
+      # Every property is passed explicitly. `ossindex.skip`, `ossindex.fail` and `ossindex.authId`
+      # are user properties of the plugin ITSELF, so the command is robust to how the pom happens to
+      # be wired - it does not depend on the `<skip>`/`<fail>`/`<authId>` elements the root pom
+      # declares today, and would keep working if they were reshuffled.
+      #
+      # `-Dossindex.fail=false` is the load-bearing one, and it is NOT laxity - it is what makes
+      # bin/check-ossindex-audit.sh the single place that decides red. The pom defaults
+      # `ossindex.fail` to TRUE, and letting Maven fail here would take the step down via `pipefail`
+      # BEFORE the guard runs: on exactly the runs with findings we would lose both the
+      # did-it-actually-scan proof and the rendered summary. Maven stays lenient; the guard gates.
       - name: Audit dependencies against OSS Index
         shell: bash
         env:
@@ -138,9 +165,9 @@ jobs:
             -Dossindex.reportFile=target/ossindex-report.json \
             | tee ossindex-audit.log
 
-      # The whole point of the job. Renders findings into the run summary, and goes RED only when it
-      # cannot prove the scan actually happened.
-      - name: Verify the scan ran, and report what it found
+      # The whole point of the job, and the only step that decides red. Renders findings into the run
+      # summary, exits 1 when it cannot prove the scan happened, and 2 when the scan found something.
+      - name: Verify the scan ran, and gate on what it found
         if: always()
         shell: bash
         run: |

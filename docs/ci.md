@@ -74,20 +74,33 @@ stack traces (see [`docs/testing.md`](testing.md)).
   See [`docs/testing.md`](testing.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
-- **`dependency-audit.yml`** - "Dependency Audit", job `deps: ossindex audit`. The **only** place
-  `ossindex-maven-plugin` is switched on (`-Dossindex.skip=false`); it binds to `validate`, so
-  enabling it globally would mean six-plus scans per PR from one account. Runs on every in-repo PR,
-  on dispatch, and **weekly on a schedule** - the schedule is the point, because `deps:
-  vulnerabilities` only reviews dependencies a PR *changes*, so nothing else notices an unchanged
-  tree acquiring a new advisory. (The one deliberate exception to "there is no scheduled build"
-  below; it re-runs no suite the gate already covers.) **Findings do not fail it** - they go to the
-  job summary. That was originally because the tree carried a standing backlog; since
-  astubbs/parallel-consumer#281 triaged it the audit reports zero findings, so this is now a
-  conservative default rather than a necessity, and the case for gating is getting stronger. It goes red only when `bin/check-ossindex-audit.sh` cannot prove the scan happened,
-  and that guard is not optional: the plugin has **no setting that makes an unreachable scanner
-  fatal**, so against an expired token it prints a WARNING and reports `BUILD SUCCESS` - the exact
-  silent-green defect this repo has already shipped once. `bin/test-check-ossindex-audit.sh` runs
-  first. Skipped for fork PRs, which receive no secrets and would 401 forever.
+- **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
+  `deps: vulnerabilities` (`maven.yml`), which reviews only the dependencies a PR *changes*; this one
+  scans the whole resolved tree. The **only** place `ossindex-maven-plugin` is switched on
+  (`-Dossindex.skip=false`); it binds to `validate`, so enabling it globally would mean six-plus
+  scans per PR from one account. Runs on every in-repo PR, on dispatch, and **weekly on a schedule**
+  - the schedule catches what no PR can, an unchanged tree acquiring a new advisory. (The one
+  deliberate exception to "there is no scheduled build" below; it re-runs no suite the gate already
+  covers.) Skipped for fork PRs, which receive no secrets and would 401 forever.
+  - **Findings fail it.** astubbs/parallel-consumer#281 retired the standing backlog into
+    `excludeVulnerabilityIds` entries in the root pom, each carrying a stated retirement condition,
+    so a finding that reaches the gate is by construction an advisory nobody has looked at.
+    PR-time rather than the schedule alone because a solo maintainer will not read a scheduled
+    alert - the PR gate is the only channel with reliable attention.
+  - **Two different reds, and they stay distinguishable.** Exit 1: the scan could not be proven to
+    have run, so the *check* is broken and nothing was learned about the tree. Exit 2: the scan ran
+    and found something, so the *tree* needs triage. Separate headings in the job summary. When both
+    are true at once, exit 1 wins.
+  - **False positive, disputed, or no fixed version?** Add the id to `excludeVulnerabilityIds` in
+    the root pom with a reason and a retirement condition. `bin/check-ossindex-audit.sh` honours
+    that list - the exported report does *not* pre-filter by it - and states the suppression count
+    on every run, green ones included, so the list stays reviewable.
+  - The did-it-actually-scan guard is not optional: the plugin has **no setting that makes an
+    unreachable scanner fatal**, so against an expired token it prints a WARNING and reports
+    `BUILD SUCCESS` - the exact silent-green defect this repo has already shipped once. Maven runs
+    with `-Dossindex.fail=false` deliberately, so a findings-bearing run still reaches the guard
+    instead of dying in the Maven step and taking the summary with it.
+    `bin/test-check-ossindex-audit.sh` runs first.
 - **`release.yml`** - the dispatch-triggered release. See [`docs/releasing.md`](releasing.md).
 - **`.semaphore/`** - legacy Confluent internal CI/release pipelines, retained but inactive on the
   fork.

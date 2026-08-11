@@ -1,6 +1,6 @@
 # OSS Index lane - does it still earn its keep?
 
-The `deps: ossindex audit` lane (added by astubbs/parallel-consumer#279) was justified on Dependabot
+The `deps: whole-tree CVE scan` lane (added by astubbs/parallel-consumer#279) was justified on Dependabot
 missing **transitive** components. That premise has partly expired, so the lane needs one deliberate
 re-look rather than an indefinite assumption.
 
