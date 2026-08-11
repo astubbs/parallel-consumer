@@ -32,7 +32,7 @@ if [ "${QUARANTINE_SKIP_CHECKS:-0}" != "1" ]; then
     echo "(gh unavailable/unauthenticated - owner claims not verified locally; CI verifies them)"
   fi
 fi
-echo "=== Quarantine audit (every entry must be diagnosed; empty fixedBy = unowned, needs an owner) ==="
+echo "=== Quarantine audit (entries are diagnosed, or recorded rule-1 exceptions; empty fixedBy = unowned) ==="
 grep -rnE --include='*.java' --exclude-dir=target -A 4 "$QUARANTINE_ANNOTATION_ERE" . || echo "(no @Quarantined tests - this lane is empty)"
 echo "==================================================================================================="
 
