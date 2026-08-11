@@ -293,7 +293,7 @@ Each of these needs a human edit; most fail loudly, which is why they rank here.
       usage comment.
 - [ ] **`bin/ci-mutation-test.sh:66,70,151`** - unescaped, so an ordinary sweep does catch these
       three. Do not confuse them with R2's escaped ones in the same file.
-- [ ] **`docs/TODO_INDEX.md`** - 48 path references. **Regenerate, do not edit**: `bin/todo-index.sh`.
+- [ ] **`docs/todo-index.md`** - 48 path references. **Regenerate, do not edit**: `bin/todo-index.sh`.
       Gated by `bin/todo-index.sh --check` at `.github/workflows/pr-checklist.yml:52`, so a stale
       index fails the PR.
 - [ ] **IntelliJ run configurations**: `.idea/runConfigurations/_Tag__transactions__.xml:4-5` and
@@ -316,7 +316,8 @@ No work needed, recorded so the next session does not re-derive it: **no `module
 OSGi manifests, no `maven-shade` relocations, no SpotBugs/PMD/Checkstyle filter files keyed on
 package, no JaCoCo includes, no `spring.factories`, no JSON or YAML golden files containing class
 names. Surefire and failsafe select on the `integrationTest*` **path segment**
-(`pom.xml:723-724,750`), not on `io/confluent`, so the split survives the move untouched.
+(`pom.xml:743-744,770` - the surefire `<exclude>`s and the failsafe `<include>`), not on
+`io/confluent`, so the split survives the move untouched.
 
 ## 6. Two non-negotiable verification conditions
 
@@ -357,8 +358,11 @@ Legitimate, expected to remain:
 - [ ] **`NOTICE`** - required by §4(d). Unchanged.
 - [ ] **Copyright headers** on every upstream-derived file - required by §4(b). Unchanged, and now
       each carries the §4(c) modifications line.
-- [ ] **Links to `confluentinc/parallel-consumer`** in `README`, `CHANGELOG`, `AGENTS.md`, mirrors
-      and `upstream-map.yaml`. Naming upstream is the point of those.
+- [ ] **Links to `confluentinc/parallel-consumer`** in `README`, `CHANGELOG`, `AGENTS.md`,
+      `docs/upstream.md`, `docs/issue-references.md`, `docs/refactoring.md`, mirrors and
+      `upstream-map.yaml`. Naming upstream is the point of those. Do not sweep by `AGENTS.md` alone:
+      astubbs#272 split it into topic docs, so `grep -rl confluentinc/parallel-consumer docs/ AGENTS.md`
+      is the list, not a fixed set of filenames.
 - [ ] **The `master-confluent` mirror branch** and anything pinned to it.
 - [ ] **`confluentinc/cp-kafka`** - the TestContainers image. Nothing to do with our namespace.
 - [ ] **`.semaphore/`** - legacy Confluent CI, retained but inactive.
@@ -394,12 +398,20 @@ is a note to whoever runs the generation pass, not text to add now:
 > Java packages renamed from `io.confluent.parallelconsumer.*` to `bz.stub.parallelconsumer.*`.
 > Rewrite your imports; the API is otherwise unchanged, and committed offsets stay compatible.
 
-**This must not be missed at generation time.** The existing `=== Improvements` entry states the
-opposite in so many words - *"Java package names (`io.confluent.parallelconsumer.*`) are unchanged,
-so imports are unaffected"* - so if the rename lands, that sentence becomes false in a published
-artifact and has to go in the same pass. Add it to the release checklist rather than trusting the
-generator to notice, since the generator reads commits and this is a *contradiction* rather than an
-omission.
+**This must not be missed at generation time.** Two passages in the existing `== 0.6.0.0` section
+state the opposite, so if the rename lands they become false in a published artifact and have to go
+in the same pass:
+
+- the section's opening paragraph - *"Drop-in compatible with upstream 0.5.x — the only required
+  change is the Maven groupId (see Breaking below)"*;
+- the `=== Breaking` bullet - *"the library API is otherwise unchanged from upstream"*, which reads
+  as covering identifiers as well as signatures.
+
+A third, blunter one - *"Java package names (`io.confluent.parallelconsumer.*`) are unchanged, so
+imports are unaffected"* - used to sit under `=== Improvements` and was removed by astubbs#276, the
+branding rename, for an unrelated reason. Do not go looking for it. Add these to the release
+checklist rather than trusting the generator to notice, since the generator reads commits and this
+is a *contradiction* rather than an omission.
 
 **If the answer is no-go**, the existing wording is already correct and nothing needs writing. That
 asymmetry is worth noticing: "no" is free to execute *today* and expensive to execute later, which is

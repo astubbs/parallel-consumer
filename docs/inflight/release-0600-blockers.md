@@ -14,10 +14,12 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   the cross-branch note is [`branch-package-rename.md`](branch-package-rename.md).
   **The README already describes the new namespace**, so it is now ahead of the code: if the rename
   slips out of v6 the `== Upgrading` section and the drop-in paragraph have to be reverted in the
-  same breath, or we publish an artefact that documents imports nobody can use. The
-  `=== Improvements` changelog entry still asserts the packages are unchanged and must be corrected
-  at release-note generation, which reads commits and will not notice a stale claim. And the real
-  work is the copyright-provenance model, not the rename itself.
+  same breath, or we publish an artefact that documents imports nobody can use. Two passages in the
+  `== 0.6.0.0` changelog section still assert the packages are unchanged - the opening "only required
+  change is the Maven groupId" paragraph, and the `=== Breaking` bullet's "the library API is
+  otherwise unchanged from upstream" - and must be corrected at release-note generation, which reads
+  commits and will not notice a stale claim. And the real work is the copyright-provenance model, not
+  the rename itself.
 - **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
   two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
   fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when
