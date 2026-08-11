@@ -5,7 +5,7 @@
 # advertises it and is online (`gh api repos/astubbs/parallel-consumer/actions/runners`) - a job
 # pinned to a label nothing serves queues silently until GitHub cancels it, rather than failing.
 #
-# Used by pr-highcpu-fast-feedback.yml and mutation-full-sweep.yml; see docs/SELF_HOSTED_RUNNER.md.
+# Used by pr-highcpu-fast-feedback.yml and mutation-full-sweep.yml; see docs/self-hosted-runner.md.
 self-hosted-runner:
   labels:
     - highcpu
