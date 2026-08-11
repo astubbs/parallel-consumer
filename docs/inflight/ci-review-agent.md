@@ -34,8 +34,12 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   astubbs/parallel-consumer#284.
 - **Freshness is inferred from timestamps, not from a signature over the diff.** Nothing the
   reviewer posts names the SHA it reviewed, and a comment-triggered run raises no check run against
-  the PR head, so the gate compares the review's creation time against the later of the head
-  commit's committer date and the first check suite GitHub raised for that SHA. If the reviewer ever
+  the PR head, so the gate compares the review's creation time against when the head appeared. That
+  moment is the earliest check suite GitHub raised for the SHA, with the commit's committer date used
+  **only as a fallback when no suite exists** - a preference, deliberately *not* the later of the
+  two. (An earlier revision of the gate did take the later, and this note still described that after
+  the code changed; the two disagree exactly where it matters, on a future-dated commit, which under
+  max() holds the check red with no review able to clear it.) If the reviewer ever
   starts stamping the reviewed SHA into its comment, replace the timestamp comparison with it - that
   is strictly better, and the timestamp version can be retired the same day. Two known holes make
   that worth doing rather than merely tidy, both raised on astubbs/parallel-consumer#284: the

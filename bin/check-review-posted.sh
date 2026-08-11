@@ -259,20 +259,35 @@ latest_review_at=$(awk \
     }
     # Track fenced code blocks, so nothing inside one is read as reviewer state.
     #
-    # A closing fence must use the SAME character as its opener and be at least as long
-    # (CommonMark). Toggling on any fence line instead looks equivalent and is not: a review
-    # showing a Markdown example wraps it in a four-backtick fence so the three-backtick block
-    # inside survives, and a naive toggle treats that inner opener as the close - putting the
-    # example back in scope and counting a box it was only DISPLAYING. That produces the exact
-    # permanent red this fence handling exists to prevent, on the exact comment shape most
-    # likely to discuss it.
+    # CommonMark gives a CLOSING fence three requirements, and all three are implemented here
+    # rather than only the one that happened to bite. Two review rounds arrived at this block one
+    # requirement at a time - first "same character and long enough", then "no info string" - so
+    # the whole rule is written out to stop a third round finding the remainder. A closing fence
+    # must:
+    #   1. use the SAME character as its opener (backticks do not close tildes),
+    #   2. be AT LEAST AS LONG as its opener, and
+    #   3. be followed by nothing but whitespace - a fence carrying an info string is CONTENT.
+    #
+    # Each exists because dropping it fails the same way: a fenced example is closed early, a box
+    # the review was only DISPLAYING comes back into scope, and `claude-review` goes red on a
+    # completed review - permanently, because a posted comment never changes. Requirement 2 is a
+    # four-backtick wrapper around a three-backtick example; requirement 3 is a ```markdown block
+    # containing a displayed ```text line. Both are precisely the comment shape a review
+    # DISCUSSING this rule produces, which is why they keep turning up here.
+    #
+    # Indentation is deliberately left lenient (`[ \t]*`, not CommonMark`s 0-3 spaces). Modelling
+    # that properly needs the list-item context this line-wise scanner does not have, and erring
+    # lenient only ever means treating an oddly indented fence AS a fence, which keeps content out
+    # of scope. The strict reading could pull a displayed box back in - the direction that breaks
+    # the gate.
     open && match($0, /^[ \t]*(`{3,}|~{3,})/) {
         fence = substr($0, RSTART, RLENGTH)
         sub(/^[ \t]+/, "", fence)
         ch = substr(fence, 1, 1)
         len = length(fence)
+        after = substr($0, RSTART + RLENGTH)
         if (!fenced) { fenced = 1; fence_ch = ch; fence_len = len }
-        else if (ch == fence_ch && len >= fence_len) { fenced = 0 }
+        else if (ch == fence_ch && len >= fence_len && after ~ /^[ \t]*$/) { fenced = 0 }
         next
     }
     # A GitHub task list is `- [ ]` / `* [ ]` / `+ [ ]`, optionally indented. A ticked box

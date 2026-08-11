@@ -31,6 +31,7 @@
 #    13. a stale finished review plus a fresh unticked tracker              -> FAIL (1)
 #   13b. an unticked box inside a fenced code block                         -> pass (0)
 #   13c. ... inside a 3-backtick example nested in a 4-backtick fence       -> pass (0)
+#   13d. ... behind an EQUAL-length fence carrying an info string           -> pass (0)
 #
 #   SEGMENTATION
 #    14. a comment body forging a marker line with the wrong token          -> FAIL (1)
@@ -53,7 +54,10 @@
 # Case 13 catches a naive whole-stream scan - the finished boxes belong to a review of older
 # code, and the fresh comment is a tracker. Case 13b is the self-referential
 # hazard: a review DISCUSSING this rule shows an unticked box, and a posted comment never
-# changes, so counting it would stick the check red with no way at all to clear it.
+# changes, so counting it would stick the check red with no way at all to clear it. 13c and 13d
+# pin the two remaining CommonMark closing-fence requirements - long enough, and no info string -
+# each of which arrived as its own review round; together with "same character" they are the
+# complete rule, so there is no third case of this shape left to find.
 #
 # Run: bin/test-check-review-posted.sh   (CI runs it before the gate it protects)
 
@@ -239,6 +243,27 @@ Done.'
 
 assert "an unticked box in a 3-backtick example nested inside a 4-backtick fence" \
     0 "$(run_checker "$(comment "$AFTER_BOTH" "$REVIEWER" "$NESTED_FENCE_BODY")")"
+
+# The third CommonMark closing-fence requirement: a fence carrying an INFO STRING is content, not
+# a close. Same character and same length as the opener, so requirements 1 and 2 both pass and
+# only this one stands between the displayed box and a permanent red. Equal length is the point -
+# the four-backtick wrapper above cannot express it.
+INFO_STRING_FENCE_BODY='**Claude finished @astubbs'"'"'s task in 1m 52s** —— [View job](https://github.com/astubbs/parallel-consumer/actions/runs/31453513070)
+
+- [x] Reviewed the completion rule
+
+Showing how a tracker renders, inside one 3-backtick block:
+
+```markdown
+```text
+- [ ] Run the review
+```
+```
+
+Done.'
+
+assert "an equal-length fence with an info string does not close the block" \
+    0 "$(run_checker "$(comment "$AFTER_BOTH" "$REVIEWER" "$INFO_STRING_FENCE_BODY")")"
 
 # --- segmentation -----------------------------------------------------------------------
 
