@@ -54,8 +54,12 @@ stack traces (see [`docs/testing.md`](testing.md)).
   **One job per concern**, named `<area>: <check>` to match the master ruleset's context
   convention - a job renamed here silently stops satisfying that ruleset, so treat the names as an
   API. `sigpipe` runs `bin/check-shell-sigpipe.sh`, which fails any `bin/*.sh` piping into
-  `grep -q` under `pipefail` - that construct reports failure exactly when it *matches*, and
-  shellcheck does not detect it. `actions` runs `bin/check-action-versions.sh`, keeping every
+  `grep -q` under `pipefail` - that construct can report failure *because* it matched, once the
+  producer still has more than a pipe buffer left to write when `grep` exits, so it passes every
+  small fixture and surfaces only in production. shellcheck does not detect it, and the full
+  mechanism is in the script's own header and in
+  [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+  `actions` runs `bin/check-action-versions.sh`, keeping every
   GitHub Action pinned to one version across all workflows. Self-tests run first. **Both are
   required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
