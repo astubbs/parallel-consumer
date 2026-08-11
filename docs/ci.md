@@ -60,6 +60,23 @@ stack traces (see [`docs/testing.md`](testing.md)).
   required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
   loud, and they gate precisely so those failures cannot be skimmed past.
+  - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
+    exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
+    (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
+    upstream fix is merged, and the entry exists only because no release carries it yet). A
+    temporary entry is marked `TEMPORARY-SINCE: YYYY-MM-DD` in the comment above it, and the check
+    fails once it is more than **90 days** old - one quarter, anchored on jackson-databind 2.18.x's
+    observed patch cadence (median gap ~65 days), since the upstream patch line, not our own
+    release cycle, is what actually retires these entries. Undated, unparseable and future-dated
+    markers **fail** rather than reading as "not expired yet", and so does an id with no rationale
+    comment, because an unclassified entry silently means standing-forever. **Exit 3**, deliberately
+    not 1 or 2: those belong to `bin/check-ossindex-audit.sh` (broken lane / real finding) and this
+    is neither - the scan and the tree are fine, the bookkeeping has rotted. The red is always
+    clearable in one reviewable line: retire the entry if the fix shipped, or re-date / reclassify
+    it having re-checked upstream. It lives here rather than in the audit job because that job is
+    skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
+    when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
+    status check** - adding it to the master ruleset is a separate, deliberate act.
 - **`claude-code-review.yml`** - automated PR review. The job ends with a gate,
   `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs
   first), asserting that a review from *this* run actually landed on the PR. Without it the check
@@ -94,7 +111,9 @@ stack traces (see [`docs/testing.md`](testing.md)).
   - **False positive, disputed, or no fixed version?** Add the id to `excludeVulnerabilityIds` in
     the root pom with a reason and a retirement condition. `bin/check-ossindex-audit.sh` honours
     that list - the exported report does *not* pre-filter by it - and states the suppression count
-    on every run, green ones included, so the list stays reviewable.
+    on every run, green ones included, so the list stays reviewable. If the fix is already merged
+    upstream and you are only waiting for a release, mark it `TEMPORARY-SINCE: YYYY-MM-DD` so it
+    expires (see `repo-hygiene.yml` above) instead of quietly joining the standing list.
   - The did-it-actually-scan guard is not optional: the plugin has **no setting that makes an
     unreachable scanner fatal**, so against an expired token it prints a WARNING and reports
     `BUILD SUCCESS` - the exact silent-green defect this repo has already shipped once. Maven runs

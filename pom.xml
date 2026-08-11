@@ -624,9 +624,21 @@
                          release that does not exist, a disputed record being settled, a migration we
                          have deferred). The TEMPORARY entries at the end are waiting on a specific
                          upstream fix that is already written and merged, and are expected to be
-                         deleted within weeks; they are dated so a reader can see when "temporary"
-                         started. If a temporary entry is more than a release cycle old, that is a bug
-                         in this list, not a fact about the world. -->
+                         deleted within weeks. If a temporary entry is more than a release cycle old,
+                         that is a bug in this list, not a fact about the world.
+
+                         THE FORMAT BELOW IS ENFORCED, not a convention. bin/check-cve-exclusions.sh
+                         (Repo Hygiene) parses this block on every PR:
+
+                           * every id must sit under a comment - an unclassified id reads as
+                             standing-forever, which is how temporary becomes permanent by accident;
+                           * any comment saying TEMPORARY must carry `TEMPORARY-SINCE: YYYY-MM-DD`,
+                             and undated / unparseable / future-dated all FAIL rather than passing as
+                             "not expired yet";
+                           * a temporary entry older than 90 days fails the check, naming itself.
+
+                         Nothing else was ever going to tell us: these ids are not in OSV, NVD or
+                         GHSA, so no Dependabot alert exists to chase them. -->
                     <excludeVulnerabilityIds>
                         <!-- org.hdrhistogram:HdrHistogram (via micrometer-core). Both are
                              VulDB-assigned, local-access-only, and carry isDisputed: true in the CVE
@@ -670,7 +682,11 @@
                              exclusion). -->
                         <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
 
-                        <!-- ==== TEMPORARY - delete when Jackson 2.18.10 ships (added 2026-08-11) ====
+                        <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
+
+                             The date is machine-read by bin/check-cve-exclusions.sh, which fails the
+                             Repo Hygiene check once this entry is 90 days old. Change it only after
+                             re-checking upstream, never to buy quiet.
 
                              com.fasterxml.jackson.core:jackson-databind, example-streams only, at
                              runtime scope via kafka-streams 3.9.2. Unlike everything above, these two

@@ -301,12 +301,18 @@ fi
 echo
 echo "Scanned **${components}** resolved components across **${report_files}** module(s)."
 # Never silent: an exclusion list is the one way a finding can legitimately disappear, so it is
-# stated on every run - green ones included - or it stops being reviewable.
+# stated on every run - green ones included - or it stops being reviewable. The retirement
+# conditions on that list are no longer only prose: bin/check-cve-exclusions.sh dates the temporary
+# entries and fails once one outlives its window. That check lives in repo-hygiene.yml rather than
+# here on purpose - this job is skipped for fork PRs and dies early on a broken lane, which is
+# exactly when an unwatched list would rot. See its header.
 if [ "$excluded" -gt 0 ]; then
     echo
     echo "**${excluded}** advisory(ies) were suppressed by \`excludeVulnerabilityIds\` in the root pom."
     echo "Each carries a reason and a retirement condition there; they are excluded from the verdict"
-    echo "above, not overlooked."
+    echo "above, not overlooked. Temporary entries are dated and expire -"
+    echo "\`bin/check-cve-exclusions.sh\` (Repo Hygiene) fails once one outlives its window, so those"
+    echo "conditions are enforced rather than merely written down."
 fi
 if [ "$vulnerable" -eq 0 ]; then
     echo
