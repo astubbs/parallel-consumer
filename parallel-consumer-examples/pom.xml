@@ -18,6 +18,9 @@
     <packaging>pom</packaging>
 
     <modules>
+        <!-- Shared scaffolding the other example modules depend on. Listed first for readability only -
+             reactor order is derived topologically from declared dependencies, not from this list. -->
+        <module>parallel-consumer-example-support</module>
         <module>parallel-consumer-example-core</module>
         <module>parallel-consumer-example-metrics</module>
         <module>parallel-consumer-example-streams</module>

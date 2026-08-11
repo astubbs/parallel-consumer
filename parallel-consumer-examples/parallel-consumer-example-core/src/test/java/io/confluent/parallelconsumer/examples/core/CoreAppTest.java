@@ -2,27 +2,25 @@ package io.confluent.parallelconsumer.examples.core;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.csid.utils.KafkaTestUtils;
 import io.confluent.csid.utils.LongPollingMockConsumer;
+import io.confluent.parallelconsumer.examples.support.ExampleMockConsumers;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Serdes;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 import java.time.Duration;
 
-import static org.mockito.Mockito.when;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 @Slf4j
@@ -69,13 +67,11 @@ class CoreAppTest {
 
     class CoreAppUnderTest extends CoreApp {
 
-        LongPollingMockConsumer<String, String> mockConsumer = Mockito.spy(new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST));
+        LongPollingMockConsumer<String, String> mockConsumer = ExampleMockConsumers.spiedLongPollingMockConsumer();
         TopicPartition tp = new TopicPartition(inputTopic, 0);
 
         @Override
         Consumer<String, String> getKafkaConsumer() {
-            when(mockConsumer.groupMetadata())
-                    .thenReturn(new ConsumerGroupMetadata("groupid")); // todo fix AK mock consumer
             return mockConsumer;
         }
 

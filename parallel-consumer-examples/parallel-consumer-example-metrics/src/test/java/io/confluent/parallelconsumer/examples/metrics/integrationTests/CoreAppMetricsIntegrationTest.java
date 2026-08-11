@@ -8,15 +8,13 @@ package io.confluent.parallelconsumer.examples.metrics.integrationTests;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.confluent.csid.utils.LongPollingMockConsumer;
 import io.confluent.parallelconsumer.examples.metrics.CoreApp;
+import io.confluent.parallelconsumer.examples.support.ExampleMockConsumers;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.awaitility.Awaitility;
 import org.junit.Assert;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import pl.tlinkowski.unij.api.UniLists;
@@ -27,8 +25,6 @@ import java.net.URL;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
-
-import static org.mockito.Mockito.when;
 
 @Slf4j
 @Testcontainers
@@ -42,8 +38,7 @@ public class CoreAppMetricsIntegrationTest {
     void testMetrics() {
         org.testcontainers.Testcontainers.exposeHostPorts(7001);
 
-        var mockConsumer = Mockito.spy(new LongPollingMockConsumer<String, String>(OffsetResetStrategy.EARLIEST));
-        when(mockConsumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("groupid")); // todo fix AK mock consumer
+        LongPollingMockConsumer<String, String> mockConsumer = ExampleMockConsumers.spiedLongPollingMockConsumer();
         CoreAppUnderTest coreApp = new CoreAppUnderTest(mockConsumer);
 
         final var expectedMetrics =

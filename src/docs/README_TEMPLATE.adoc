@@ -140,6 +140,9 @@ It also opens up new use cases like extreme parallelism, external data enrichmen
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=example]
 ----
 
+That snippet is the API in miniature, and it is deliberately the smallest thing that runs.
+If what you actually want to know is whether the library earns its place in your system, each module also carries a worked example taken from a real industry, showing a problem the partition model makes hard and what it takes to fix it: <<parcel-tracking-example,parcel scan tracking>> (logistics, core), <<flight-search-example,flight search fan-out>> (travel, Vert.x), <<meter-telemetry-example,smart meter telemetry>> (energy, Reactor), and <<order-fulfilment-example,order fulfilment>> (e-commerce, metrics).
+
 An overview article to the library can also be found on Confluent's https://www.confluent.io/blog/[blog]: https://www.confluent.io/blog/introducing-confluent-parallel-message-processing-client/[Introducing the Confluent Parallel Consumer].
 
 [#demo]
@@ -240,17 +243,19 @@ Using Vert.x without using this library with *ordered* processing requires deali
 *Unordered* processing with Vert.x is somewhat easier, however offset management is still quite complicated, and the Parallel Consumer also provides optimizations for message-level acknowledgment in this case.
 This library handles offset commits for both ordered and unordered processing cases.
 
+[[scenarios]]
 === Scenarios
 
 Below are some real world use cases which illustrate concrete situations where the described advantages massively improve performance.
+Four of them are worked through in code under <<usage,Usage>>, and are linked from the bullet they belong to.
 
 * Slow consumer systems in transactional systems (online vs offline or reporting systems)
-** Notification system:
+** [[scenario-notifications]]Notification system (worked through in code as <<flight-search-example,flight search fan-out>>, where the slow third party is a fare provider):
 +
 *** Notification processing system which sends push notifications for a user to acknowledge two-factor authentication requests on their mobile for authorising a website login, requires optimal end-to-end latency for a good user experience.
 *** A specific message in this queue uncharacteristically takes a long time to process because the third party system is sometimes unpredictably slow to respond and so holds up the processing for *ALL* other notifications for other users that are in the same partition behind this message.
 *** Using key order concurrent processing will allow notifications to proceed while this message either slowly succeeds or times out and retires.
-** Slow GPS tracking system (slow HTTP service interfaces that can scale horizontally)
+** [[scenario-gps]]Slow GPS tracking system (slow HTTP service interfaces that can scale horizontally) - worked through in code as <<parcel-tracking-example,parcel scan tracking>>
 *** GPS tracking messages from 100,000 different field devices pour through at a high rate into an input topic.
 *** For each message, the GPS location coordinates is checked to be within allowed ranges using a legacy HTTP services, dictated by business rules behind the service.
 *** The service takes 50ms to process each message, however can be scaled out horizontally without restriction.
@@ -269,11 +274,11 @@ While the HTTP system probably cannot handle 2,000,000 messages per second, your
 *** Consider a system where message data is passed through a fraud prediction model which takes CPU cycles, instead of an external system being slow.
 *** We can scale easily the number of CPUs on our virtual machine where the processing is being run, but we choose not to scale the partitions or consumers (see above).
 *** By deploying onto machines with far more CPUs available, we can run our prediction model massively parallel, increasing our throughput and reducing our end-to-end response times.
-* Spikey load with latency sensitive non-functional requirements
+* [[scenario-spikey-settlement]]Spikey load with latency sensitive non-functional requirements - worked through in code as <<meter-telemetry-example,smart meter telemetry>>, whose daily settlement run has exactly this shape
 ** An upstream system regularly floods our input topic daily at close of business with settlement totals data from retail outlets.
 *** Situations like this are common where systems are designed to comfortably handle average day time load, but are not provisioned to handle sudden increases in traffic as they don't happen often enough to justify the increased spending on processing capacity that would otherwise remain idle.
 *** Without adjusting the available partitions or running consumers, we can reduce our maximum end-to-end latency and increase throughout to get our global days outlet reports to division managers so action can be taken, before close of business.
-** Natural consumer behaviour
+** [[scenario-natural-bursts]]Natural consumer behaviour - worked through in code as <<order-fulfilment-example,order fulfilment>>, along with the signals an operator watches while it happens
 *** Consider scenarios where bursts of data flooding input topics are generated by sudden user behaviour such as sales or television events ("Oprah" moments).
 *** For example, an evening, prime-time game show on TV where users send in quiz answers on their devices.
 The end-to-end latency of the responses to these answers needs to be as low as technically possible, even if the processing step is quick.
@@ -451,6 +456,7 @@ If you have questions or find a bug, raise an {issues_link}[issue] on GitHub.
 
 This library is copyright Confluent, Inc. and contributors, and licensed under the Apache License Version 2.0.
 
+[[usage]]
 == Usage
 
 === Maven
@@ -541,6 +547,40 @@ You have the option to either use callbacks to be notified of events, or use the
 
 In future versions, we plan to look at supporting other streaming systems like https://github.com/ReactiveX/RxJava[RxJava] via modules.
 
+[[parcel-tracking-example]]
+=== Parcel Scan Tracking (Logistics)
+
+A courier network emits a scan every time a parcel is handled - picked up, arrived at a depot, loaded for delivery, delivered - and the tracking page needs the handling depot's coordinates from a geocoding API that blocks for tens of milliseconds and is sometimes unavailable.
+Scans are keyed by consignment and one partition carries many consignments, so with a vanilla consumer the network's throughput is a function of the geocoder's latency rather than of the depots' workload, and adding partitions is the only lever.
+Processing the partition with no ordering at all is faster and wrong, because a consignment's status must never go backwards from `DELIVERED` to `OUT_FOR_DELIVERY`: `KEY` ordering is the third option, and is what this example is for.
+
+This is the <<scenario-gps,slow HTTP service>> scenario in code.
+`CoreApp` above is this module's API reference - "how do I call this?" - and this example is the worked use case: "why would I reach for it?".
+
+.Setup - ordering and concurrency are the only two decisions
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/ParcelTrackingApp.java[tag=parcelTracking]
+----
+
+<1> `KEY` ordering: at most one scan per consignment in flight, in offset order, while scans for different consignments run in parallel.
+`UNORDERED` would be faster and wrong here, and `PARTITION` would be correct and no faster than a plain consumer.
+<2> Concurrency sized for the geocoding API's connection pool, not for the machine's core count.
+These threads spend their lives blocked on a network call, and overlapping that wait is the work being done.
+
+.Geocode every parcel scan concurrently, in per-consignment order
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/ParcelTrackingApp.java[tag=parcelTrackingProcess]
+----
+
+<1> `pollAndProduce`, because the geocoded position is published back to a topic - offsets are committed only once the produce has completed.
+<2> `trackScan` is *this example's own scaffolding* - the logging and the in-flight counting - wrapping the single blocking geocode call, and it deliberately lives outside the copied region.
+It comes from an example-support module that is never published to Maven Central, so a snippet that referenced it would not compile in your project.
+When it throws, Parallel Consumer retries the scan.
+
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/ParcelTrackingApp.java[parcel tracking example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/test/java/io/confluent/parallelconsumer/examples/core/ParcelTrackingAppTest.java[test], which asserts that consignments really are geocoded concurrently while each consignment's own scans stay in order.
+
 [[batching]]
 === Batching
 
@@ -581,6 +621,47 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-ver
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
 
+[[flight-search-example]]
+=== Flight Search Fan-Out (Travel)
+
+A traveller asks for a route on a date, and nobody sells that answer from a single database: the price comes from several fare providers, each a remote HTTP API of its own, and the cheapest of their answers is the one shown while the traveller waits.
+Searches are keyed by route, because a route's searches are the ones whose cached fares must be applied in offset order, and searches for different routes are wholly independent.
+So there are two dimensions of concurrency here rather than one - the three provider calls *within* one search, and the searches *across* routes - and the interesting part is that neither of them is a worker thread.
+
+This is the <<scenario-notifications,slow third party system>> scenario in code, with fare providers in place of the notification gateway.
+`VertxApp` above is this module's API reference - "how do I call this?" - and this example is the worked use case: "why would I reach for it?".
+
+.Setup - and the connection pool is the trap here
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/FlightSearchApp.java[tag=flightSearch]
+----
+
+<1> `KEY` ordering on the route: at most one search per route in flight, in offset order, while different routes are priced in parallel.
+<2> Searches in flight *across* routes.
+Each one is three outstanding HTTP requests rather than one, which is what the pool below has to be sized for.
+<3> One `WebClient` for the whole application, built here rather than left to Parallel Consumer.
+The convenience constructor sizes the pool to `maxConcurrency` - one connection per record in flight - which is three times too small for this fan-out, and the failure is silent: two of every three legs would queue behind a connection and the fan-out would quietly degrade into a sequence.
+
+.Price every search by asking all three fare providers at once
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/FlightSearchApp.java[tag=flightSearchProcess]
+----
+
+<1> `vertxFuture` is the non-blocking entry point: return the `Future` your composition produces, and the record is completed when that `Future` completes.
+Nothing blocks, and the dispatch pool is deliberately a *single* thread - what overlaps is the outstanding HTTP exchanges and the records they belong to, not a pool of workers.
+<2> The fan out.
+The loop only builds `Future` objects and never waits on one, so all three requests are on the wire together and the search costs the slowest provider rather than the sum of them.
+<3> Recover per leg, *before* the join, because `Future.all` fails fast on the first failure and one unreachable provider would otherwise fail the whole search.
+It is also the domain-correct behaviour: two quotes still make a search.
+<4> The join.
+Use `Future.all(List)`, not the deprecated `CompositeFuture.all(List)`.
+
+`beginSearch` and `finishSearch` are this example's own logging and in-flight counting, and live outside the copied region on purpose - they come from an example-support module that is never published to Maven Central.
+
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/FlightSearchApp.java[flight search example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/test/java/io/confluent/parallelconsumer/examples/vertx/FlightSearchAppTest.java[test], which asserts that the three provider calls really are issued together, that routes are priced concurrently, and that an unavailable provider does not fail the search.
+
 [[project-reactor]]
 === Project Reactor
 
@@ -594,6 +675,49 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 ----
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/ReactorApp.java[tag=example]
 ----
+
+[[meter-telemetry-example]]
+=== Smart Meter Telemetry (Energy)
+
+An electricity supplier settles consumption in 48 half-hourly _settlement periods_, and one Kafka record is one meter's day: keyed by meter id, carrying all 48 periods.
+So a record is not one unit of work, it is forty-eight of them, and the time-series store downstream accepts them at its own pace rather than at the topic's.
+There are two independent bounds in play, and readers routinely conflate them - how many meter readings are in flight *across* meters, which is Parallel Consumer's `maxConcurrency`, and how many settlement periods are in flight *within* one reading, which is Reactor's `limitRate` and is yours to declare.
+
+This is the <<scenario-spikey-settlement,spikey settlement load>> scenario in code.
+`ReactorApp` above is this module's API reference - "how do I call this?" - and this example is the worked use case: "why would I reach for it?".
+
+NOTE: Parallel Consumer does not do backpressure for you.
+It hands your function a record and subscribes to whatever publisher you return, with unbounded demand.
+The throttling below is yours, inside one record's stream, and that is the honest scope of the claim.
+
+.Setup - this half only declares the outer bound
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/MeterTelemetryApp.java[tag=meterTelemetry]
+----
+
+<1> `KEY` ordering on the meter id: a meter's settlement days are applied in order, so yesterday's corrected reading cannot land after today's, while different meters stream in parallel.
+<2> The *outer* bound - meter readings in flight across meters.
+
+.Ingest each meter's day at the rate the downstream store asks for
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/MeterTelemetryApp.java[tag=meterTelemetryProcess]
+----
+
+<1> `react` is the only entry point on `ReactorProcessor`; never call the core `poll*` methods on it.
+<2> One record expands into its 48 settlement periods.
+A single-element publisher would have no demand to throttle, and `limitRate` is a `Flux` operator, so it would not even compile on a `Mono`.
+<3> `doOnRequest` sits *upstream* of `limitRate`, and the order is the whole point.
+Below `limitRate` the callback would report `request(unbounded)` forever - that is Parallel Consumer's own subscription, not the throttle - and the example would silently demonstrate nothing.
+<4> The *inner* bound - eight settlement periods, four hours of the meter's day, requested at a time and replenished as they are consumed.
+<5> Reduce to exactly one element, or the record is completed once *per sample*.
+`react` subscribes with `subscribe(onNext, onError)` and reads every `onNext` as "this record is done", so a 48 element `Flux` reports the same offset succeeded 48 times and offsets stop committing.
+`count()` gives the subscriber one signal, and it says something useful while it is there.
+
+`openReading`, `recordDemand`, `ingestSample` and `finishReading` are this example's own logging and in-flight counting, and live outside the copied region on purpose - they come from an example-support module that is never published to Maven Central.
+
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/MeterTelemetryApp.java[smart meter telemetry example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/test/java/io/confluent/parallelconsumer/examples/reactor/MeterTelemetryAppTest.java[test], which asserts on the demand signals themselves, so the `doOnRequest` placement above cannot silently regress.
 
 [[spring]]
 [[streams-usage-code]]
@@ -1074,6 +1198,85 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-met
 
 NOTE:: any additional binders / metrics need to be cleaned up appropriately - for example the Kafka Consumer Metrics registered above - need to be closed using `kafkaClientMetrics.close()` after calling shutting down Parallel Consumer as Parallel Consumer will close Kafka Consumer on shutdown.
 
+[[order-fulfilment-example]]
+=== Order Fulfilment (E-commerce)
+
+A retailer's order stream is keyed by customer, and every order moves through picked, packed and dispatched in that order - a customer's order must never be dispatched before it has been packed - with each stage allocating stock in a warehouse system that blocks, and sometimes has nothing to give.
+Processing the partition one order at a time makes peak trading throughput a function of that system's latency, and processing it with no ordering at all is faster and wrong.
+What this example is really for, though, is the *signals*: what an operator sees on a dashboard while all of that is happening, and what it costs in time series to see it.
+
+This is the <<scenario-natural-bursts,sudden burst of user behaviour>> scenario in code.
+The metrics `CoreApp` above is this module's API reference - "how do I wire a registry up?" - and this example is the worked use case: "why would I reach for it?".
+
+.Setup - one registry for the application's meters and Parallel Consumer's own
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/io/confluent/parallelconsumer/examples/metrics/OrderFulfilmentApp.java[tag=orderFulfilment]
+----
+
+<1> `KEY` ordering on the customer: many customers' orders in flight at once, never two stages of the same customer's order.
+<2> Concurrency sized for the warehouse system's connection pool, not for the machine's core count.
+<3> Hand Parallel Consumer the *same* registry the application's own meters use, so the `pc_*` series sit beside the `order_*` series and one dashboard can put "orders in flight" next to "records in flight".
+<4> Tags added to every `pc_*` meter.
+Bounded values only - each one multiplies the series count.
+
+Note what is *not* set there: `pcInstanceTag`.
+That tag is the identity Parallel Consumer registers and clears its own meters under, so it has to be unique per instance - two instances sharing a value means closing one deregisters meters the other is still publishing.
+Left unset, as here, Parallel Consumer generates a unique one.
+It does cost a label value per instance, which is the one place this example accepts extra cardinality on purpose; a long-lived deployment should therefore set it to something that identifies the *instance* - the pod name, say - rather than leave it to a value that is fresh on every restart.
+
+.Publish the signals a fulfilment dashboard is built from
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/io/confluent/parallelconsumer/examples/metrics/OrderFulfilmentApp.java[tag=orderFulfilmentProcess]
+----
+
+<1> One order stage per record, processed concurrently with every other customer's.
+<2> `fulfilStage` is this example's own instrumentation - it starts the `LongTaskTimer` sample and the latency `Timer`, and increments the outcome counter - wrapping the single blocking call to the warehouse system.
+It lives outside the copied region on purpose, as it comes from an example-support module that is never published to Maven Central.
+
+==== Querying the Result
+
+The example publishes three meter families, which is what makes the following queries possible.
+They use a consistent `5m` range so that panels on one dashboard agree with each other.
+
+.Throughput, per distribution centre. The latency timer's own `_count` already carries this, so a separate throughput counter would be redundant
+[source,promql]
+----
+sum by (warehouse) (rate(order_allocation_seconds_count[5m]))
+----
+
+.Allocation latency, 99th percentile, aggregated across every instance in the fleet
+[source,promql]
+----
+histogram_quantile(0.99, sum by (le) (rate(order_allocation_seconds_bucket[5m])))
+----
+
+.Orders in flight right now, from the `LongTaskTimer`. A plain `Timer` cannot answer this, because it only records on completion
+[source,promql]
+----
+sum(order_allocation_active_seconds_active_count)
+----
+
+.Work Parallel Consumer is holding - active *or* waiting - for the panel beside it
+[source,promql]
+----
+sum by (pcinstance) (pc_inflight_records{service="order-fulfilment"})
+----
+
+The two gauges are neighbours, not duplicates, and a dashboard should not label them as though either could replace the other.
+`order_allocation_active_seconds_active_count` counts calls currently *inside* the warehouse system.
+`pc_inflight_records` counts every record Parallel Consumer still has in flight, which includes records that failed and are sitting out their retry delay before the next attempt - no allocation call is running for those, so they show in the second gauge and not the first.
+That gap between the two is a signal in its own right: a persistent one is retry backlog.
+
+The failure rate comes from `order_allocation_outcomes_total`, tagged by a bounded `outcome` of `allocated`, `out_of_stock` or `error` - three time series for ever, whatever the traffic.
+Tagging that counter by order or customer id instead would give one series per order in production, and a query that is simultaneously unaffordable and useless, because nobody dashboards a single order's failure rate.
+Identifiers belong in logs and traces, which are indexed for exactly that.
+
+TIP: The latency timer publishes a percentile *histogram* rather than client-side percentiles, because only buckets can be aggregated.
+Client-side quantiles are computed per process, and cannot be averaged or summed afterwards, so a fleet's 99th percentile is simply not recoverable from them - which is what the `histogram_quantile` query above depends on.
+
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/io/confluent/parallelconsumer/examples/metrics/OrderFulfilmentApp.java[order fulfilment example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/OrderFulfilmentAppMetricsTest.java[test], which scrapes the endpoint with a real Prometheus and asserts that the two in-flight meters agree while a cohort is held open with nothing waiting to be retried, that the latency series really are buckets, and that no order id ever became a tag value.
 
 [[roadmap]]
 == Roadmap

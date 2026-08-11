@@ -38,6 +38,24 @@
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
+        <!-- ConcurrencyObserver / RunSummary - the instrumentation the industry examples wrap around
+             their user function. Deliberately NOT published to Maven Central, which is exactly why every
+             tagged (copied) region keeps it at arm's length: a reader's copy of a snippet must not
+             reference a coordinate they cannot depend on. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-example-support</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- ExampleMockConsumers - the mock consumer every example test drives its app with, built once
+             there instead of copy-pasted into each module's test. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-example-support</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
