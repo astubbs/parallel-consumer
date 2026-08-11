@@ -25,7 +25,11 @@ every PR by the Quarantine Audit job, and again before every lane run):
 
 **Machine-parsed format** (the checks depend on it): each entry is an unchecked checkbox line, `- [ ]`,
 immediately followed by the backticked test reference (`Class.method`), and its text must contain
-`Owner: PR #NN` (omit only for diagnosed-but-unowned entries, which the checks flag as advisory).
+`Owner: PR astubbs#NN` (omit only for diagnosed-but-unowned entries, which the checks flag as
+advisory). A bare `Owner: PR #NN` still parses, so older entries keep working, but prefer the
+qualified form: `bin/check-issue-refs.sh` rejects a bare `#NN` on an added line because the
+fork's numbers sit inside confluentinc's range, and before the qualifier was accepted this file
+could not satisfy both gates at once. `Owner: PR astubbs/parallel-consumer#NN` parses too.
 Unreliable tests carry `flapping = true` on the annotation itself (compile-checked, read by the lane
 reporter).
 
@@ -59,7 +63,7 @@ surefire retry until astubbs#224 removed it, and both are fixed by the same open
   `PARTITION_HIGHEST_COMPLETED_OFFSET` expected 203.0 but was 207.0 - four more records completed in
   the gap, so the metric was *more* current than the expectation testing it. Diagnosis in
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-  Owner: PR #265, which replaces the `Thread.sleep(1000)` above the assertions with an
+  Owner: PR astubbs#265, which replaces the `Thread.sleep(1000)` above the assertions with an
   `await().untilAsserted(...)` on the trailing meters.
 
 - [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
@@ -68,5 +72,5 @@ surefire retry until astubbs#224 removed it, and both are fixed by the same open
   was 136 within 30 seconds - when the runner is loaded enough that the sleep expires before the
   retry lands. Diagnosis in
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-  Owner: PR #265, which replaces `sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with
+  Owner: PR astubbs#265, which replaces `sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with
   `await().atMost(ofSeconds(30)).until(() -> attempts.get() >= 2)`.
