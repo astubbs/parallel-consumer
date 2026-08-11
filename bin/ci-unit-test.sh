@@ -21,5 +21,4 @@ set -euo pipefail
   -Pci \
   clean test \
   -Dexcluded.groups=performance,chaos,quarantined \
-  -Dsurefire.rerunFailingTestsCount=2 \
   "$@"
