@@ -20,12 +20,17 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   has to act. This is the largest single thing the on-demand split gave up. Closing it needs either
   a trigger that carries a PR context (an `issue_comment` command phrase would, and would restore
   tag mode wholesale) or a posting route independent of that MCP server.
-- **Inherited constraint for whoever edits the reviewer next: your change lands unverified.**
-  `claude-code-action` refuses to run unless the invoking workflow file is byte-identical to the
-  default branch's copy, so `--ref <your branch>` is refused and `--ref master` runs the old copy -
-  the dispatch route did **not** break that chicken-and-egg. Exercise the change with a `--ref
-  master` dispatch immediately after merging, and read the run. Reviewing your PR is a separate
-  thing and does work; the mechanism is in [`docs/ci.md`](../ci.md).
+- **OPEN, and it is the first thing to do after this lands: the dispatched reviewer has never
+  completed an end-to-end review.** Nothing has yet observed it read a PR, post a summary comment
+  as `claude[bot]`, and turn `claude-review` green in one run - only the individual mechanisms were
+  proved on runners. It could not be verified before merging, because `claude-code-action` refuses
+  to run unless the invoking workflow file is byte-identical to the default branch's copy: `--ref
+  <your branch>` is refused and `--ref master` runs the old copy. So the very first action after
+  the merge is a `--ref master` dispatch against a live PR, and **reading the run** rather than
+  assuming. Until someone has done that and said so here, treat the reviewer as unproven. The same
+  constraint is inherited by whoever edits the reviewer next - your change will land unverified
+  too. Reviewing a PR that edits this workflow is a separate thing and does work; the mechanism is
+  in [`docs/ci.md`](../ci.md).
 - **The gate is still timestamp-based, and a check run against the head SHA would be better.** If
   the identity or freshness rules ever need reopening, the fix is not to loosen who may satisfy the
   gate (that lets any bot report through) but to have the reviewer raise a check run on the reviewed
