@@ -71,10 +71,11 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-      # Lets the reviewer read the PR's CI results. Worth more here than it was on the old
-      # push trigger: a review is requested when the branch is ready, by which time the test
-      # jobs have usually finished, so their results are actually available to read.
-      actions: read
+      # read: lets the reviewer read the PR's CI results - worth more here than on the old push
+      # trigger, since a review is requested when the branch is ready, by which time the test
+      # jobs have usually finished. write: for the final step, which re-runs the review gate so
+      # the required check re-evaluates once this review has posted.
+      actions: write
 
     steps:
       # `pr` reaches a git ref and a prompt, so it is checked before either. A dispatch
@@ -215,3 +216,42 @@ jobs:
             --append-system-prompt "You CAN run this repo's tests yourself, and should when the PR adds or changes tests, or when a claim about test results is load-bearing to your review. Use bin/ci-unit-test.sh (fast, no Docker) or bin/ci-integration-test.sh (needs Docker); do NOT run the chaos suite, it is far too slow for a review pass. You can also run the repo's fast verification scripts directly to check a claim rather than trusting the PR body - e.g. bin/check-copyright-headers.sh, bin/check-quarantine-registry.sh - invoke them by their bare path, they are executable. For a SINGLE test class, use ./mvnw directly - e.g. ./mvnw -o -pl parallel-consumer-core -Dtest=SomeTest surefire:test - which takes seconds where a full suite takes minutes. That makes the highest-value check affordable: when a PR claims a test fails without its fix, revert the fix (git stash push the source files), run just that test, and confirm it actually goes RED - a test that passes either way proves nothing, and this is the single most common defect in a regression-test PR. Two rules for scoped runs: never report a targeted -Dtest result as though the suite were green (it skips the -Dexcluded.groups the wrappers pin, and covers one class), and always restore anything you stashed. For whole-suite evidence, use the wrappers, not a hand-rolled ./mvnw line. Reviews are requested on demand rather than fired on every push, so by the time you are asked the CI jobs have usually finished and you have actions:read - READ THEIR RESULTS FIRST and say which ones you read, then execute tests yourself for anything CI does not settle. Do not treat a green CI as evidence a NEW test ran: when a PR adds a test, verify the suite ACTUALLY COLLECTED it (surefire only picks up *Test.java, Test*.java, *Tests.java, *TestCase.java - a test named otherwise silently never runs) rather than trusting a green total. If you run out of time, or a suite fails for environmental reasons, say so explicitly instead of implying you verified it. REVIEW THE PR TITLE AND DESCRIPTION AS PART OF THE DIFF, not as decoration. They are what a future reader gets instead of the diff, and on a squash merge the title BECOMES the commit title, so an inaccurate one is permanent. Check three things. (1) COMPLETENESS: does the description cover every substantive change in the diff? Descriptions are written early and drift as commits land, so a whole fix or workstream missing from an otherwise good description is the common failure - call out what is in the diff but not described. (2) ACCURACY: do specifics match reality - counts, file and test names, flags, numbers of things granted or changed, and any claimed verification? Re-derive them from the diff rather than trusting the prose; a stale \"622 tests\" or \"two scripts\" when the diff says otherwise is a real defect. Treat a checklist item marked N/A as a claim to verify like any other, especially \"docs updated - N/A\" when the diff changes docs. (3) TERMINOLOGY: does it use words the codebase uses, and does any word mislead? Flag a term that means something specific in this repo being used loosely - for example calling cross-test state contamination a \"leak\" in a repo where \"leak\" means a memory leak. Report these as normal findings, non-blocking unless the description actively misrepresents what the code does. BLOCKING FINDINGS MUST BE INLINE REVIEW COMMENTS. This repo sets required_review_thread_resolution, so an unresolved review thread is the ONLY thing that actually gates a merge - a finding written only in your summary comment can be, and will be, merged straight past. So: if you find something that should block the merge (a correctness bug, data loss or corruption, a security hole, a broken public contract, or a test that cannot do what it claims), raise it with mcp__github_inline_comment__create_inline_comment on the offending line, one thread per finding, each stating plainly what breaks and what would fix it. Keep the summary comment for everything else - context, praise, nits and non-blocking observations - and do NOT raise those inline, or routine notes become merge gates and the signal is lost. If you are unsure whether a finding is blocking, put it in the summary and say why you were unsure, rather than blocking on a maybe. Finally: FINISH, or say plainly that you did not. The review gate reads your own task list - a comment left with an unticked box is taken as your statement that you stopped partway, and it holds the claude-review check red. Do not announce that you will continue in the background; there is no background."
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
+
+      # WITHOUT THIS STEP THE GATE STAYS RED FOREVER AFTER A SUCCESSFUL REVIEW.
+      #
+      # `claude-review` is produced by .github/workflows/claude-code-review.yml, which triggers
+      # only on `pull_request` events. Dispatching a review fires no such event, and a check run
+      # keeps its last conclusion until something re-runs it - so the review would post, satisfy
+      # the gate's rules, and the required check would still show the red it recorded before the
+      # review existed. Requesting a review would not actually clear the check, which is the one
+      # thing this PR's whole contract promises it does.
+      #
+      # Re-running the gate's existing run is what keeps the check attached to the same head
+      # SHA: a re-run reports into the same check suite on that commit, whereas a fresh
+      # dispatch- or comment-triggered run would attach its check to the default branch instead
+      # and never satisfy the PR's required check.
+      #
+      # `always()`, so a failed or timed-out review still refreshes the gate rather than leaving
+      # a stale verdict behind. Never fails the job: not finding a gate run to re-run is a
+      # reason to say so, not to fail a review that already happened.
+      - name: Re-run the review gate so it sees this review
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          run_id=$(gh api \
+            "repos/$REPO/actions/workflows/claude-code-review.yml/runs?head_sha=$head_sha&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')
+
+          if [ -z "$run_id" ]; then
+            echo "::warning::No claude-review gate run found for head $head_sha - nothing to re-run." \
+                 "The gate will re-evaluate on the next push to this PR."
+            exit 0
+          fi
+
+          echo "Re-running the review gate (run $run_id) for head $head_sha."
+          gh run rerun "$run_id" -R "$REPO" || \
+            echo "::warning::Could not re-run gate run $run_id; re-run it by hand to clear claude-review."

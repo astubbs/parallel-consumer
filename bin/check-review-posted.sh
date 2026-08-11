@@ -18,8 +18,8 @@
 #   1. IDENTITY   - a comment authored by the reviewer bot exists. The author comes from the
 #                   GitHub API (the `.user.login` field), not from anything inside the comment
 #                   body, so no amount of writing in a comment makes it look like the bot.
-#   2. FRESHNESS  - that comment was created at or after the current head commit appeared, so
-#                   the reviewer cannot have been looking at older code. This is the rule that
+#   2. FRESHNESS  - that comment was created strictly after the current head appeared, so the
+#                   reviewer cannot have been looking at older code. This is the rule that
 #                   makes the gate mean "this PR was reviewed" rather than "this PR was
 #                   reviewed once, a while ago, before the last four commits".
 #   3. COMPLETION - that comment has no unticked task-list box left in it. The action writes
@@ -63,8 +63,8 @@
 # review of code that no longer exists.
 #
 # So: **a red `claude-review` on a PR nobody has asked to review yet is the expected state,
-# not a fault.** It is not something to fix by editing this script. It is fixed by commenting
-# dispatching a review once the PR is actually ready. See docs/ci.md.
+# not a fault.** It is not something to fix by editing this script. It is fixed by dispatching
+# a review once the PR is actually ready. See docs/ci.md.
 #
 # There is deliberately NO skip word, label, or "trivial change" escape. Any such escape is
 # asserted by the same person who wants to use it, which makes it exactly as strong as not
@@ -92,27 +92,51 @@
 #
 # WHICH TIMESTAMP COUNTS AS "THE HEAD APPEARED"
 #
-# Two are passed in and the later wins:
+# Two are passed in, and the SERVER-SIDE one wins whenever it is present:
 #
-#   * the head commit's committer date - accurate, but written by the author's own clock and
-#     set when the commit was CREATED, which can be well before it was pushed;
 #   * the creation time of the first check suite GitHub raised for that SHA - server-side, and
-#     effectively when GitHub first saw the commit.
+#     effectively when GitHub first saw the commit. PREFERRED.
+#   * the head commit's committer date - a FALLBACK, used only when the check-suite time is
+#     absent (a brand new SHA, or an API that has not caught up).
 #
-# Taking the later of the two closes the window where somebody commits, then asks for a
-# review, then pushes: the review would postdate the commit's own date and look fresh, while
-# in fact it ran before the code reached the PR. The check-suite time may be absent (a brand
-# new SHA, or an API that has not caught up), in which case the committer date is used alone
-# and that window reopens - stated here rather than pretended away.
+# The server-side time is preferred rather than max()'d with the committer date, because the
+# committer date is written by the author's own clock and is therefore contributor-controlled:
+# under max(), a commit dated in the future would outrank every real review timestamp and hold
+# the required check red until that date arrived, with no way to clear it. A stuck-red gate
+# that no review can satisfy is worse than the window preferring the server time gives up -
+# and it gives up almost nothing, because the check-suite time IS effectively the push time,
+# so it already closes the "commit, then request a review, then push" window that the
+# committer date was carried for.
+#
+# EQUALITY IS TREATED AS STALE. These timestamps are whole seconds, so a review created in the
+# same second that a newer head arrived is genuinely ambiguous. The comparison is therefore
+# strictly greater, not >=: the gate has to fail closed, so ambiguity resolves to "not
+# reviewed". The cost is a rare extra review request; the benefit is that no false-green path
+# survives on a one-second tie.
 #
 # LIMIT, STATED PLAINLY
 #
 # This proves the reviewer bot posted a finished comment after the current head appeared. It
 # does not read the review, and it never will - a check that judges review quality is a check
-# nobody can keep honest. It also cannot tell a review from any other answer the bot gave on
-# the PR: `@claude what does this file do?` produces a comment that satisfies all three rules.
-# That is the same boundary the previous version drew, for the same reason - this is a guard
-# against the action failing quietly, not against somebody who wants to get around it.
+# nobody can keep honest. Three specific things it does NOT do:
+#
+#   1. It cannot tell a review from any other answer the bot gave on the PR: `@claude what
+#      does this file do?` produces a comment that satisfies all three rules and turns the
+#      check green. Documented in docs/ci.md too, so nobody reads a green check as more than
+#      it is.
+#   2. The check-suite time is global to the SHA, not scoped to this PR's head transition. A
+#      force-push onto a commit that already ran checks elsewhere carries that older
+#      timestamp, so a review of a previous head can postdate it and pass. Narrow - it needs a
+#      force-push to a previously-tested SHA - but real.
+#   3. It runs from the PR's own checkout, like every other `pull_request` check in this repo,
+#      so it polices a tree that can edit it.
+#
+# The remedy for 1 and 2 is the same and is recorded in docs/inflight/ci-review-agent.md: have
+# the reviewer record the exact SHA it reviewed, as a check run on that head, and gate on that
+# instead of on a timestamp. It is blocked until the dispatch route is proven after merge.
+#
+# All three are the same boundary the previous version drew, for the same reason - this is a
+# guard against the action failing quietly, not against somebody who wants to get around it.
 #
 # Usage: gh api repos/OWNER/REPO/issues/N/comments --paginate \
 #            --jq '.[] | "<!-- check-review-posted \(env.MARKER_TOKEN) \(.created_at) \(.user.login) -->", (.body // "")' \
@@ -179,10 +203,12 @@ if [ -n "$head_first_seen_at" ] && ! [[ $head_first_seen_at =~ $iso_re ]]; then
     exit 2
 fi
 
-# The later of the two, for the reason under "WHICH TIMESTAMP COUNTS" above.
-head_time=$head_committed_at
-if [ -n "$head_first_seen_at" ] && [[ $head_first_seen_at > $head_time ]]; then
-    head_time=$head_first_seen_at
+# Server-side time when we have one, the commit's own date only as a fallback. NOT max() of
+# the two - see "WHICH TIMESTAMP COUNTS" above: the committer date is contributor-controlled,
+# so max() lets a future-dated commit hold the check red forever.
+head_time=$head_first_seen_at
+if [ -z "$head_time" ]; then
+    head_time=$head_committed_at
 fi
 
 comment_stream=$(cat)
@@ -195,9 +221,9 @@ comment_stream=$(cat)
 #
 # awk prints the newest reviewer comment's timestamp (empty if there is none) and reports its
 # verdict as an exit code:
-#   0 a finished reviewer comment at or after head_time
-#   3 a reviewer comment at or after head_time, but it never ticked its own boxes
-#   4 reviewer comments exist, all of them older than head_time
+#   0 a finished reviewer comment strictly after head_time
+#   3 a reviewer comment strictly after head_time, but it never ticked its own boxes
+#   4 reviewer comments exist, none of them after head_time
 #   5 the reviewer has never commented on this PR
 verdict=0
 latest_review_at=$(awk \
@@ -207,13 +233,15 @@ latest_review_at=$(awk \
     function settle() {
         if (open && login == reviewer) {
             saw_reviewer = 1
-            if (created >= head_time) {
+            # Strictly after, never equal: whole-second timestamps make a tie ambiguous, and
+            # an ambiguous gate has to fail closed. See "EQUALITY IS TREATED AS STALE".
+            if (created > head_time) {
                 saw_fresh = 1
                 if (!unticked) complete = 1
             }
             if (created > latest) latest = created
         }
-        open = 0; unticked = 0; created = ""; login = ""
+        open = 0; unticked = 0; fenced = 0; created = ""; login = ""
     }
     # A marker line, and only a marker line, starts a new comment. The token check is what
     # stops a comment that quotes the marker from opening one - see "HOW THE STREAM IS
@@ -221,9 +249,23 @@ latest_review_at=$(awk \
     NF == 6 && $1 == "<!--" && $2 == "check-review-posted" && $3 == token && $6 == "-->" {
         settle(); open = 1; created = $4; login = $5; next
     }
+    # Track fenced code blocks, so nothing inside one is read as reviewer state.
+    # A fence is ``` or ~~~ at the start of a line, optionally indented.
+    open && /^[ \t]*(```|~~~)/ { fenced = !fenced; next }
     # A GitHub task list is `- [ ]` / `* [ ]` / `+ [ ]`, optionally indented. A ticked box
     # holds an x, so only a whitespace-filled box means "not done".
-    open && /^[ \t]*[-*+][ \t]+\[[ \t]\]([ \t]|$)/ { unticked = 1 }
+    #
+    # Only an unticked box the reviewer wrote as ITS OWN state counts. One inside a fenced
+    # code block is being DISPLAYED - an example, or feedback quoted back - not a progress
+    # tracker. Counting those was a live hazard, not a theoretical one: a review of the PR
+    # introducing this rule would very likely show an unticked box while discussing it, and
+    # since a posted comment never changes, the check would then stay red with no way at all
+    # to clear it.
+    #
+    # A `>`-quoted box needs no separate guard: the pattern anchors on the list bullet, so a
+    # line starting with `>` cannot match it in the first place. Adding one would have been a
+    # rule no test could ever make fail.
+    open && !fenced && /^[ \t]*[-*+][ \t]+\[[ \t]\]([ \t]|$)/ { unticked = 1 }
     END {
         settle()
         print latest
@@ -238,7 +280,7 @@ short_sha=${head_sha:0:8}
 
 case "$verdict" in
     0)
-        echo "Reviewed: ${REVIEWER_LOGIN} posted a finished review at ${latest_review_at}, at or after head ${short_sha} appeared (${head_time})."
+        echo "Reviewed: ${REVIEWER_LOGIN} posted a finished review at ${latest_review_at}, after head ${short_sha} appeared (${head_time})."
         exit 0
         ;;
     3)
@@ -246,7 +288,7 @@ case "$verdict" in
         exit 1
         ;;
     4)
-        fail "This PR has been reviewed, but not since ${latest_review_at}, and head ${short_sha} is newer than that (${head_time}). A review of an earlier commit does not vouch for the commits after it. THIS IS THE EXPECTED STATE for a PR that has been pushed to since its last review, and it is not a defect to fix in CI: dispatch a review when the PR is ready for another look - see docs/ci.md."
+        fail "This PR has been reviewed, but not since ${latest_review_at}, and head ${short_sha} is at least as new as that (${head_time}). A review of an earlier commit does not vouch for the commits after it. THIS IS THE EXPECTED STATE for a PR that has been pushed to since its last review, and it is not a defect to fix in CI: dispatch a review when the PR is ready for another look - see docs/ci.md."
         exit 1
         ;;
     5)

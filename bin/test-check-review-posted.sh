@@ -18,15 +18,17 @@
 #   FRESHNESS  (the strict rule - a review of commit N does not vouch for N+1)
 #     5. the only review predates the head commit                           -> FAIL (1)
 #     6. a stale review plus a fresh one                                    -> pass (0)
-#     7. review created at exactly the head's timestamp                     -> pass (0)
+#     7. review created in the SAME SECOND the head appeared                -> FAIL (1)
 #     8. review lands between the commit's own date and the push GitHub saw -> FAIL (1)
 #     9. ... and with no check-suite time known, the same stream passes     -> pass (0)
+#    9b. a FUTURE-dated committer clock does not hold a real review stale   -> pass (0)
 #
 #   COMPLETION
 #    10. fresh review, but with an unticked task-list box                   -> FAIL (1)
 #    11. fresh unticked tracker plus a fresh finished review                -> pass (0)
 #    12. an unticked box in somebody ELSE's comment                         -> pass (0)
 #    13. a stale finished review plus a fresh unticked tracker              -> FAIL (1)
+#   13b. an unticked box inside a fenced code block                         -> pass (0)
 #
 #   SEGMENTATION
 #    14. a comment body forging a marker line with the wrong token          -> FAIL (1)
@@ -39,10 +41,15 @@
 #    19. malformed head timestamp                                          -> usage (2)
 #    20. malformed (non-empty) first-seen timestamp                        -> usage (2)
 #
-# Cases 8 and 9 are the pair that keeps the two-timestamp rule honest: identical stream,
-# identical review, and the verdict flips purely on whether GitHub's own record of when the
-# commit arrived is available. Case 13 is the one that catches a naive whole-stream scan -
-# the finished boxes belong to a review of older code, and the fresh comment is a tracker.
+# Case 7 is the one-second tie: whole-second timestamps make equality ambiguous, so the gate
+# resolves it as stale rather than risk a false green. Cases 8, 9 and 9b pin the timestamp
+# choice - the server-side check-suite time is PREFERRED and the committer date is only a
+# fallback - and 9b is why it is a preference rather than a max(): under max(), a commit
+# dated in the future would hold the check red forever with no review able to clear it.
+# Case 13 catches a naive whole-stream scan - the finished boxes belong to a review of older
+# code, and the fresh comment is a tracker. Case 13b is the self-referential
+# hazard: a review DISCUSSING this rule shows an unticked box, and a posted comment never
+# changes, so counting it would stick the check red with no way at all to clear it.
 #
 # Run: bin/test-check-review-posted.sh   (CI runs it before the gate it protects)
 
@@ -147,14 +154,21 @@ assert "a stale review plus a fresh one" \
     0 "$(run_checker "$stale_review
 $fresh_review")"
 
-assert "review created at exactly the head's timestamp" \
-    0 "$(run_checker "$(comment "$FIRST_SEEN_AT" "$REVIEWER" "$FINISHED_BODY")")"
+assert "review created in the same second the head appeared is ambiguous, so stale" \
+    1 "$(run_checker "$(comment "$FIRST_SEEN_AT" "$REVIEWER" "$FINISHED_BODY")")"
 
 assert "review between the commit's own date and the push GitHub saw" \
     1 "$(run_checker "$(comment "$BETWEEN" "$REVIEWER" "$FINISHED_BODY")")"
 
 assert "the same review passes when no check-suite time is known" \
     0 "$(run_checker "$(comment "$BETWEEN" "$REVIEWER" "$FINISHED_BODY")" "$COMMITTED_AT" "")"
+
+# The committer date is written by the contributor's own clock, so a skewed or deliberately
+# future-dated commit would, under a max() of the two timestamps, outrank every real review and
+# hold the required check red until that date arrived - unfixable by reviewing. Preferring the
+# server-side check-suite time is what stops that.
+assert "a future-dated committer clock does not hold a real review stale" \
+    0 "$(run_checker "$(comment "$AFTER_BOTH" "$REVIEWER" "$FINISHED_BODY")" "2099-01-01T00:00:00Z" "$FIRST_SEEN_AT")"
 
 # --- completion -------------------------------------------------------------------------
 
@@ -172,6 +186,25 @@ $fresh_other_bot")"
 assert "stale finished review plus a fresh unticked tracker" \
     1 "$(run_checker "$stale_review
 $fresh_tracker")"
+
+# A finished review that DISPLAYS an unticked box - as a fenced example, or quoting feedback
+# back - is not a reviewer that stopped partway. This is the self-referential case: a review of
+# the PR that introduced the unticked-box rule quotes one while discussing it, and a posted
+# comment never changes, so counting it would stick the check red permanently.
+FENCED_BODY='**Claude finished @astubbs'"'"'s task in 1m 52s** —— [View job](https://github.com/astubbs/parallel-consumer/actions/runs/31453513070)
+
+- [x] Reviewed the completion rule
+
+The gate treats a line like this as an unfinished tracker:
+
+```markdown
+- [ ] Run the review
+```
+
+That is the behaviour under discussion.'
+
+assert "an unticked box inside a fenced code block is displayed, not a tracker" \
+    0 "$(run_checker "$(comment "$AFTER_BOTH" "$REVIEWER" "$FENCED_BODY")")"
 
 # --- segmentation -----------------------------------------------------------------------
 

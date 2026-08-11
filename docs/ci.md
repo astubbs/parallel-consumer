@@ -69,8 +69,10 @@ stack traces (see [`docs/testing.md`](testing.md)).
   optional `focus` steer. See "The automated review" below.
 - **`claude.yml`** - the general `@claude` mention handler, and **not** the reviewer. A mention
   passes whatever was typed straight through as a free-form prompt: it has no `plugins:` line and
-  never invokes the review command. Good for asking a question on a PR; it is not a review, and
-  the gate does not treat it as one just because a comment appeared.
+  never invokes the review command, so what it produces is an answer, not a review. **Be aware
+  that the gate cannot tell the difference** - any fresh, finished `claude[bot]` comment
+  satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
+  the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
   See [`docs/testing.md`](testing.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
@@ -149,10 +151,26 @@ guarantee.
 
 `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first)
 takes the PR's comments and requires **one** comment that is all three of: authored by the reviewer
-bot per the GitHub API, created at or after the head appeared, and free of unticked task-list boxes.
-It does not read the review, and it never will - a check that judges review quality is a check
-nobody can keep honest. It is a guard against the action failing quietly, not against somebody who
-wants to get around it. **Do not disable it to get a green check.**
+bot per the GitHub API, created strictly after the head appeared, and free of unticked task-list
+boxes. Four limits are worth knowing before reading a green tick as a review:
+
+1. **It does not read the review, and never will** - a check that judges review quality is a
+   check nobody can keep honest.
+2. **It cannot tell a review from any other answer the bot gave.** Asking `@claude` a question on
+   the PR produces a comment satisfying all three rules, which turns the check green. A known
+   limit, not a distinction the gate makes.
+3. **The head's arrival time is the SHA's, not this PR's.** Force-pushing onto a commit that
+   already ran checks elsewhere carries that older timestamp, so a review of a previous head can
+   postdate it.
+4. **It runs from the PR's own checkout**, like every other `pull_request` check here, so it
+   polices a tree that can edit it.
+
+The remedy for 2 and 3 is one change, recorded in
+[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md): have the reviewer record the
+exact SHA it reviewed as a check run on that head, and gate on that rather than on a timestamp.
+
+It is a guard against the action failing quietly, not against somebody who wants to get around
+it. **Do not disable it to get a green check.**
 
 The gate exists because `claude-code-action` exits 0 in several situations where it reviews
 nothing, so a check wired straight to it certifies nothing while looking identical to "reviewed, no

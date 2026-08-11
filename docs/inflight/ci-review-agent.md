@@ -22,12 +22,27 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   would let any bot report satisfy the gate) but to have the reviewer create a check run on the PR
   head SHA and gate on that instead - which is strictly better, being SHA-exact rather than
   timestamp-based, and would retire the freshness machinery below.
+- **The gate runs from the PR's own checkout.** A `pull_request` job checks out the PR, so both
+  the gate script and the workflow file come from the tree they are policing. Pre-existing and
+  repo-wide rather than anything the on-demand split introduced: `copyright`, `shell: sigpipe`,
+  the issue-reference gate and the quarantine audit all execute PR-authored code the same way,
+  and on a `pull_request` trigger the workflow file is inherently PR-supplied, so no change
+  confined to one workflow closes it. Checking the gate script out from the base ref would close
+  the script-tampering half and leave the workflow-file half open - a half-measure worth doing
+  only as part of a repo-wide move to default-branch-controlled checks. The standing bound is the
+  threat model: trusted authors, and fork PRs that receive no secrets and cannot merge. Raised on
+  astubbs/parallel-consumer#284.
 - **Freshness is inferred from timestamps, not from a signature over the diff.** Nothing the
   reviewer posts names the SHA it reviewed, and a comment-triggered run raises no check run against
   the PR head, so the gate compares the review's creation time against the later of the head
   commit's committer date and the first check suite GitHub raised for that SHA. If the reviewer ever
   starts stamping the reviewed SHA into its comment, replace the timestamp comparison with it - that
-  is strictly better, and the timestamp version can be retired the same day.
+  is strictly better, and the timestamp version can be retired the same day. Two known holes make
+  that worth doing rather than merely tidy, both raised on astubbs/parallel-consumer#284: the
+  check-suite timestamp is global to the SHA, so force-pushing onto a commit that already ran
+  checks elsewhere lets a review of an earlier head postdate it; and the gate cannot tell a review
+  from any other `claude[bot]` answer on the PR, so replying to a `@claude` question greens it.
+  Both dissolve once the reviewed SHA is recorded.
 - **The OSS Index audit grants must be carried across at merge.** `bin/check-ossindex-audit.sh` and
   `bin/test-check-ossindex-audit.sh` are granted on astubbs/parallel-consumer#279, in
   `claude-code-review.yml` - the file the reviewer no longer lives in. **Whichever of
