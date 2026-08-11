@@ -15,24 +15,13 @@ deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub rel
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
 None of these has an issue of its own - they were found by reading code to diagnose something else.
-The first two are wrong *statements* in artefacts the release itself publishes, so they should not
-survive the release.
 
-1. **`CHANGELOG.adoc` says the Kafka client "stays on 3.9.1"; `pom.xml`'s `<kafka.version>` says `3.9.2`.** The
-   release notes for an unreleased release are factually wrong. Decide which is intended and make
-   them agree.
-2. **The README's Roadmap sends readers to the *upstream* tracker** and refers to this repo in the
-   third person: *"have a look at the confluentinc/parallel-consumer GitHub issues, and clone
-   Antony's fork"* (in `src/docs/README_TEMPLATE.adoc`'s `[[roadmap]]` section - the quoted wording is
-   no longer at HEAD: `git log -S"Antony's fork" -- src/docs/README_TEMPLATE.adoc`). That is pre-fork text, it is the
-   section someone reads to answer "is this maintained?" (astubbs#195), and it is now doubly wrong because
-   all 78 upstream issues are mirrored *here*. Edit the template, not `README.adoc`.
-3. **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
+1. **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
    `messageBufferSize` is set, so `isMaxReached()` is true from startup and
    `AbstractParallelEoSStreamProcessor` logs *"Max loading factor steps reached"* at WARN on
    every control-loop pass. Anyone following the README's buffer-tuning advice gets permanent log
    noise reporting a non-problem. Related: astubbs#155.
-4. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
+2. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
    but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a
    caller's `trace_id` is lost crossing into the worker threads and the vert.x event loop. Raised by
    a user in the `confluentinc#907` thread (astubbs#195).
