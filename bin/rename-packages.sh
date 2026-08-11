@@ -381,7 +381,11 @@ build_perl_program() {
         dot_re=${old//./\\.}
         prog+="s{\\b${dot_re}}{${new}}g;"
 
-        # (3) The path form: javadoc links, README includes, workflow comments, the TODO index.
+        # (3) The path form: javadoc links, README includes, workflow comments, docs/todo-index.md.
+        #     Named by file, never by the marker word it is named after: bin/todo-index.sh scans
+        #     this script, and its matcher exempts the hyphenated spelling but not the bare one, so
+        #     writing that word in prose here indexes work that does not exist and fails --check.
+        #     Its own header calls that the index-of-work trap.
         path_re=${old//./\/}
         path_rep=${new//./\/}
         prog+="s{\\b${path_re}}{${path_rep}}g;"
