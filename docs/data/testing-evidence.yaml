@@ -228,7 +228,7 @@ investigation_records:
 quarantine:
   # The registry states its own rules and is the source for them. Do not restate them here; they
   # would drift, and this file would then contradict the document it is citing as evidence.
-  rules: ../QUARANTINED_TESTS.md
+  rules: ../quarantined-tests.md
   current_status: Empty - no test carries the annotation, and the registry records why the last two were re-enabled.
   verification:
     - bin/check-quarantine-registry.sh

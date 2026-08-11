@@ -18,7 +18,7 @@ tracker, which is the wrong way round.
   problem the first was raised for has largely been fixed since. They should not sit on a 1.0 train
   implying they gate it.
 - **The sweeps are chores, not roadmap entries.** Javadoc cleanup, dead code, and the todo sweep. The
-  last is already covered by `docs/TODO_INDEX.md`.
+  last is already covered by `docs/todo-index.md`.
 - **The disabled-test sweep has been promoted to a v6 gate**, so it leaves the 1.0 train entirely. It
   lives in `release-0.6.0.0.md`, tracked by astubbs#263. Note the issue claims six files carry
   `@Disabled` while a current count finds four tests; reconcile rather than trusting either number.
