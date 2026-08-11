@@ -14,7 +14,7 @@
     </parent>
 
     <artifactId>parallel-consumer-examples</artifactId>
-    <name>Kafka Parallel Consumer Examples</name>
+    <name>Parallel Consumer - Examples</name>
     <packaging>pom</packaging>
 
     <modules>

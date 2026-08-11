@@ -14,7 +14,7 @@
     </parent>
 
     <artifactId>parallel-consumer-example-core</artifactId>
-    <name>Kafka Parallel Consumer Example - Core</name>
+    <name>Parallel Consumer - Examples - Core</name>
 
     <dependencies>
         <!-- tag::exampleDep[] -->
