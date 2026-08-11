@@ -381,6 +381,12 @@ Nothing lints commit messages, so all of this is on you.
   every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` gate fails a
   human-authored PR when the checklist is missing entirely *or* any box is left unchecked without an
   `N/A`, so dropping the template is not a bypass. Only real bot authors are exempt.
+- **Ask for the automated review when the PR is ready - it does not run on push.** Dispatch
+  `claude-code-review-dispatch.yml --ref master -f pr=<number> -f focus="<steer>"`. Enforced by the
+  required `claude-review` check, which stays red until a review exists for the **current head** -
+  so **a red `claude-review` on a PR nobody has reviewed yet is the expected state, not a fault**,
+  and never something to fix by editing the gate. The full command, why `--ref master` is required,
+  what `focus` does and when to ask: [`docs/ci.md`](docs/ci.md).
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the
   specific review comment, NOT as a separate top-level PR comment - a summary comment leaves the
   original conversation unresolved and can block merge on "unresolved conversations". When a finding
