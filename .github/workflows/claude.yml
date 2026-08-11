@@ -96,7 +96,34 @@ jobs:
             exit 0
           fi
 
+          head_repo=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.repo.full_name // ""')
           sha=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
+
+          # A FORK PR MUST STAY RED, AND THIS IS WHERE THAT NEARLY BROKE.
+          #
+          # "A fork PR cannot turn the gate green" in docs/ci.md is a deliberate boundary, not an
+          # oversight: the dispatched reviewer refuses fork heads outright, and the gate accepts
+          # only a `claude[bot]` comment, so the two together mean a fork PR has no route to green
+          # and is merged (or not) on a human's judgement instead.
+          #
+          # Refreshing the gate here would have quietly dissolved that. This workflow answers
+          # `@claude` on ANY PR including a fork's, and the gate cannot tell a review from any
+          # other finished `claude[bot]` reply - so a maintainer merely ASKING a question on a
+          # fork PR would have turned its required check green. That is precisely the
+          # self-asserted escape docs/ci.md rejects by name: the person who wants the merge would
+          # also be the person certifying the review.
+          #
+          # So Claude still answers on fork PRs - that is useful and harmless - but the gate is
+          # not refreshed, because emitting no PR number is what `refresh-gate` skips on.
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::notice::PR #$pr has its head in '${head_repo:-<deleted fork>}', not $REPO." \
+                 "Answering the comment, but NOT refreshing claude-review: a fork PR cannot turn" \
+                 "the gate green (docs/ci.md, 'A fork PR cannot turn the gate green')."
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "PR #$pr, head $sha at the time this review started."
           echo "pr=$pr" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -199,7 +226,22 @@ jobs:
           # boundary so this job never has to fetch the PR to learn it.
           REVIEWED_SHA: ${{ needs.claude.outputs.reviewed_sha }}
         run: |
-          head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          pr_json=$(gh api "repos/$REPO/pulls/$PR")
+          head_sha=$(printf '%s' "$pr_json" | jq -r '.head.sha')
+          head_repo=$(printf '%s' "$pr_json" | jq -r '.head.repo.full_name // ""')
+
+          # The fork refusal, a second time. `pr-context` already emits no PR number for a fork
+          # head, so reaching this line means something upstream changed. It is repeated rather
+          # than trusted because it is a security boundary and the whole cost is one jq read of a
+          # response this step already fetches - and because the failure mode is silent: a fork
+          # PR going green looks exactly like a fork PR being reviewed.
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::error::Refusing to refresh claude-review for PR #$PR, whose head is in" \
+                 "'${head_repo:-<deleted fork>}' rather than $REPO. A fork PR cannot turn the" \
+                 "gate green - see docs/ci.md. Reaching this means the pr-context guard was" \
+                 "bypassed; fix that rather than this."
+            exit 1
+          fi
 
           # Refuse to refresh the gate for a head this review did not look at. If the PR moved
           # while the review ran, the review covers the old commit, and re-running the gate now

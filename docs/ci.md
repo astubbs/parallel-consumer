@@ -143,7 +143,10 @@ is not - and it is recorded in [`docs/inflight/ci-review-agent.md`](inflight/ci-
 
 Both routes now clear the gate themselves. Each has a `refresh-gate` job that re-runs
 `claude-review` after a review that actually succeeded, because the gate only ever triggers on
-`pull_request` and a check run keeps its last conclusion until something re-runs it.
+`pull_request` and a check run keeps its last conclusion until something re-runs it. **Neither
+refreshes it for a fork head** - see "A fork PR cannot turn the gate green" below, which the comment
+route has to enforce explicitly because, unlike the dispatched reviewer, it will happily answer on a
+fork PR.
 
 **Escape hatch, if a review posts and `claude-review` stays red anyway:** re-run the gate's existing
 run by hand. Re-running the *existing* run is what matters - it reports back into the same check
@@ -251,6 +254,14 @@ guarantee.
 
 This is the one case where merging with the check red is the *expected* route rather than a last
 resort, so it is written down rather than left to be discovered.
+
+Both review routes have to hold this line, and they hold it differently. The dispatched reviewer
+refuses a fork head outright and never runs. The `@claude` comment route **does** answer on a fork
+PR - that is useful, and it executes nothing - but it refuses to refresh `claude-review` afterwards.
+Without that refusal a maintainer merely *asking* a question on a fork PR would turn its required
+check green, since the gate cannot tell a review from any other finished `claude[bot]` reply. That
+is the self-asserted escape rejected at the end of this section, arriving by accident instead of on
+purpose.
 
 The reviewer refuses any PR whose head is not in this repo, on purpose: `workflow_dispatch` hands
 the job `CLAUDE_CODE_OAUTH_TOKEN`, and it then checks out `refs/pull/<pr>/head` and runs the repo's
