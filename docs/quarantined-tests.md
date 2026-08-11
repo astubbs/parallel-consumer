@@ -55,7 +55,7 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 Both entries below are timing flakes, not deterministic failures, so both carry `flapping = true`: a
 pass proves nothing and the lane reports it without demanding action. Both were hidden by the
-surefire retry until astubbs#224 removed it, and both are fixed by the same open PR.
+surefire retry until astubbs#224 removed it.
 
 - [ ] `PCMetricsTest.metricsRegisterBinding` - compares a registry gauge against an expectation built
   from a test-side counter snapshot taken earlier in the method, so two independently-advancing
@@ -67,10 +67,11 @@ surefire retry until astubbs#224 removed it, and both are fixed by the same open
   `await().untilAsserted(...)` on the trailing meters.
 
 - [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  sleeps out the static retry delay instead of awaiting the retry event, then asserts on a count that
-  is still moving. Fails as `ConditionTimeout` at the `optional.get()` assertion - expected 139 but
-  was 136 within 30 seconds - when the runner is loaded enough that the sleep expires before the
-  retry lands. Diagnosis in
+  **UNDIAGNOSED, quarantined as an explicit rule-1 exception by owner decision**: at 4/45 it is the
+  most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
+  `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
+  `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier
+  quarantine attributed it to the retry-delay sleep and was reverted: that code runs *after* the
+  failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
+  unverified hypothesis and its falsification path are in
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-  Owner: PR astubbs#265, which replaces `sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with
-  `await().atMost(ofSeconds(30)).until(() -> attempts.get() >= 2)`.

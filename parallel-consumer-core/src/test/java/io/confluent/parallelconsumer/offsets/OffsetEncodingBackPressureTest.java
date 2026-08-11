@@ -78,12 +78,12 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
     // needed due to static accessors in parallel tests
     @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ_WRITE)
     @Quarantined(
-            reason = "Sleeps out the static retry delay instead of awaiting the retry event, then asserts "
-                    + "on a count that is still moving. Fails as ConditionTimeout at the optional.get() "
-                    + "assertion - expected 139 but was 136 within 30 seconds - when the runner is loaded "
-                    + "enough that the sleep expires before the retry lands.",
+            reason = "UNDIAGNOSED - quarantined as an explicit rule-1 exception by owner decision, because at "
+                    + "4/45 it blocked every PR. Fails as ConditionTimeout at the getHighestSeenOffset() "
+                    + "assertion: the committed high-water mark never reaches expectedHighestSeen (139), with "
+                    + "a different actual each run (136, 132 seen). Unverified hypothesis and its "
+                    + "falsification path are in the tracking entry.",
             tracking = "docs/inflight/test-untracked-ci-flakes.md",
-            fixedBy = "astubbs#265",
             flapping = true)
     void backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing() throws OffsetDecodingError {
         // mock messages downloaded for processing > MAX_TO_QUEUE
