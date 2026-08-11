@@ -54,13 +54,24 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   granted on the reviewer, since it ships with the runner and can never be inert.
 - **Credential exposure is unresolved, not cleared.** The reviewer runs PR-authored Maven/test code
   in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`, with `pull-requests: write`. The
-  move to `workflow_dispatch` keeps the *who* bound the old `pull_request` trigger gave for free -
-  dispatching requires write access to the repository - so no new restriction was needed. That is
-  still a bound on who can start it, not an answer to whether the token is scrubbed before the
-  action spawns Bash subprocesses. Needs confirmation from the action's docs or maintainers. Until
-  then: trusted authors only, and note that the code being executed comes from the PR branch, which
-  a trusted dispatcher does not necessarily control. (`pull-requests: write` may also be droppable
-  back to `read` if the action posts via its own app token.)
+  move to `workflow_dispatch` bounds *who can start it* - dispatching requires write access to the
+  repository - but an earlier revision of this entry concluded from that that no new restriction
+  was needed, which was wrong: dispatch permission says the DISPATCHER is trusted and says nothing
+  about the branch. `pull_request` withheld secrets from fork PRs for free; `workflow_dispatch` does
+  not. So the reviewer now **refuses fork heads explicitly** (its "Validate inputs and refuse fork
+  heads" step), which re-establishes the old boundary. What remains open is the narrower question:
+  whether the token is scrubbed before the action spawns Bash subprocesses, which needs confirmation
+  from the action's docs or maintainers. Until then, in-repo heads only - and note that even an
+  in-repo PR branch is code a trusted dispatcher does not necessarily control.
+  (`pull-requests: write` may also be droppable back to `read` if the action posts via its own app
+  token.)
+- **Fork PRs have no green path, and a secretless reviewer is the only real fix.** Refusing fork
+  heads means the gate - which accepts only a `claude[bot]` comment - can never go green on a fork
+  PR, so those merge with `claude-review` red unless the commits are moved to a branch in this repo.
+  Raised on astubbs/parallel-consumer#284 and documented as a known limit in `docs/ci.md`. The fix
+  is a review job that runs the untrusted checkout WITHOUT the credential; letting a maintainer
+  assert the PR was reviewed was rejected, being the same self-asserted escape the gate refuses
+  everywhere else.
 - **`claude.yml` grants nothing, and that is now fine - but know what it means.** The `@claude`
   mention handler passes no `--allowed-tools` at all, and an absent allowlist is not permissive:
   Bash is simply not pre-approved and there is no interactive approver in CI, so every script call

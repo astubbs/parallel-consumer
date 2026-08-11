@@ -19,11 +19,22 @@ on a PR whose whole subject was that gate misreporting.
 `check-*.sh`, `test-check-*.sh`, the `ci-*-test.sh` wrappers. A reviewer that can re-run what a PR
 asserts catches a false claim; one that cannot is guessing.
 
-**Do not grant** anything that writes, publishes, or reaches the network beyond `gh` reads. The
-allowlist is deliberately enumerated rather than `Bash(*)`: that job has no fork guard beyond
-`sender.type != Bot`, and it reads attacker-influencable text (the diff, the PR body, comments), so
-an enumerable list is the safety margin against injection-into-execution. Widening it to `bin/*`
-would hand that margin away for the convenience of not editing one line.
+**Do not grant** anything that writes, publishes, or reaches the network beyond `gh` reads. Two
+different boundaries meet at that allowlist, and mistaking one for the other is how it gets widened:
+
+- **Whose code the job runs** is settled by the reviewer's own fork guard - its "Validate inputs and
+  refuse fork heads" step rejects any PR whose head is not in this repo, because
+  `workflow_dispatch` holds `CLAUDE_CODE_OAUTH_TOKEN` while checking out `refs/pull/<pr>/head`. The
+  old `pull_request` trigger got that for free, since GitHub withholds secrets from fork PRs; on a
+  dispatch it is explicit. The allowlist has nothing to do with this one.
+- **What that code can talk the reviewer into running** is what the allowlist is for, and the fork
+  guard does nothing for it. An in-repo head does not make the diff, the PR body and the comments
+  trustworthy - they are still attacker-influencable text being fed to a model that can call Bash.
+  Enumerating the commands rather than granting `Bash(*)` is the margin against
+  injection-into-execution.
+
+Widening it to `bin/*` hands away the second margin for the convenience of not editing one line, and
+the first guard will not notice.
 
 **Grant BOTH spellings.** These are prefix matches, not globs: `Bash(bin/foo.sh:*)` does **not**
 match `./bin/foo.sh`. Every entry is listed twice for that reason, and a half-added grant is worse

@@ -151,6 +151,34 @@ leaves a permanent record that somebody chose to merge unreviewed. Re-requesting
 one-line fix costs one command and a couple of minutes, so an escape would save little and cost the
 guarantee.
 
+### A fork PR cannot turn the gate green
+
+This is the one case where merging with the check red is the *expected* route rather than a last
+resort, so it is written down rather than left to be discovered.
+
+The reviewer refuses any PR whose head is not in this repo, on purpose: `workflow_dispatch` hands
+the job `CLAUDE_CODE_OAUTH_TOKEN`, and it then checks out `refs/pull/<pr>/head` and runs the repo's
+build and test scripts from it - so reviewing a fork would execute untrusted code beside the
+credential. The old `pull_request` trigger prevented that for free by withholding secrets from fork
+PRs; on a dispatch the guard has to be explicit. Meanwhile the gate accepts only a `claude[bot]`
+comment, so no amount of careful human reading satisfies it. The two facts together mean a fork PR
+stays red.
+
+Two honest options, in order:
+
+1. **Push the same commits to a branch in this repo and open the PR from there.** The reviewer runs
+   and the check can go green. This is the path worth offering a contributor whose change you want
+   to land.
+2. **Review it by hand and merge with `claude-review` red**, which leaves the same permanent record
+   as any other unreviewed merge.
+
+**Deliberately not offered: letting a maintainer declare the PR reviewed.** That is the
+self-asserted escape rejected just above, wearing a different hat - the person who wants the merge
+would also be the person certifying the review, which makes the gate exactly as strong as not
+having one. The real fix is a reviewer that can run without the credential, which is a different
+piece of work and is recorded in
+[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
+
 ### What the gate proves, and what it does not
 
 `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first)
