@@ -207,9 +207,16 @@ quality_system:
     posture: Advisory PR-scoped signal; full sweep is separately invoked.
     inspect: bin/ci-mutation-test.sh
   - id: review-delivery
-    detects: A missing automated-review result rather than claiming a review happened because a job was green.
-    posture: The workflow's final gate verifies a review comment was posted for that run.
-    inspect: .github/workflows/claude-code-review.yml
+    detects: A review that never happened or never finished, rather than claiming a review because a job was green.
+    posture: >-
+      Split in two: the review is requested on demand, and a cheap always-on gate requires that a finished
+      review already exists on the PR. Deliberately not per-commit - that coverage comes from an auto-reviewer
+      on every push, and enforcing it here cost a contested timestamp comparison and the reviewed-SHA plumbing;
+      trigger to restore it are parked in docs/inflight/parked-strict-review-gate-freshness.md. There is no
+      skip word, and a fork head is refused outright, so a red gate on an unreviewed PR is the expected state,
+      not a fault. Comment metadata only; it cannot judge whether the review was any good, nor tell a review
+      from any other answer the bot gave.
+    inspect: bin/check-review-posted.sh, gated by .github/workflows/claude-code-review.yml and dispatched by .github/workflows/claude-code-review-dispatch.yml
 investigation_records:
   - defect: Drain-path zombie and busy-spin under contention.
     proof: A real drain-path defect was isolated while investigating a flaky integration test; no timeout was loosened.

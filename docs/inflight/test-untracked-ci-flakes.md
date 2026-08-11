@@ -1,4 +1,4 @@
-# Three flakes CI was hiding, none of them tracked anywhere
+# Flakes CI was hiding, none of them tracked when found
 
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
@@ -12,6 +12,7 @@ which also has the scan method. What is open is the three tests themselves.
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` | 3/45 | **A regression** - see below |
 | `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined (owner astubbs#265) - see below |
+| `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
 **Start with the regression.** astubbs#101 fixed this exact test as "the shutdown-commit flake that
 was aborting PIT", and it is back. It has the best starting position of the three: a known prior fix
@@ -26,6 +27,43 @@ helper is where the message comes from, not necessarily where the cause is.
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
+
+Seen 2026-08-12 on astubbs#287, a PR whose diff contained **no Java at all** - which is what settles
+rule 2 (master-state, not PR-state) without needing a rate: nothing in the change could have caused
+it.
+
+```
+ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect:367
+  value of: getElapsed()  expected to be at least PT20S  but was PT19.998S
+```
+
+**Two milliseconds short on a twenty-second bound**, which is the shape of a measurement error rather
+than a behavioural one - the code under test either blocks for the full delay or it does not, and it
+does not miss by 0.01%.
+
+**The defect is in the shared helper, not in this test.** `BlockedThreadAsserter#assertUnblocksAfter`
+arms the unblocking task with `scheduledExecutorService.schedule(...)` and only *then* starts the
+clock it later compares against `unblocksAfter`. The scheduler begins counting its delay from inside
+that `schedule()` call, so the measured window starts **after** the delay does, and is short by
+however long arming plus lambda setup takes. Under load that gap widens past a millisecond and
+`isAtLeast` fails a correct implementation. Any test using this helper can show the same signature,
+which is why it is filed against the helper.
+
+**Owned: astubbs#262** stamps `armedAtNanos` immediately before `schedule()` and asserts against that
+instead. Its own comment is honest about the residual: the window measured is now slightly *longer*
+than the true one, so the error is sub-millisecond and in the safe direction - a genuinely early
+return is still caught unless it is early by less than the arming cost.
+
+**Note astubbs#265 touches the same line differently**, deleting the assertion along with the sleeps
+it removes. Whichever of the two lands second will conflict here, and the conflict is a real
+decision - measure it correctly, or stop measuring it - not a mechanical merge.
+
+**Why it was not in this ledger already.** The 2026-08-07 scan read surefire `Flakes:` markers, which
+only appear when the retry re-ran a test and it then passed. This one failed the run outright, so it
+left no marker and no scan would have found it. Flakes now get quarantined as they are met, rather
+than waiting for a sweep.
 
 ### `PCMetricsTest.metricsRegisterBinding` - second sighting, and it is a test defect
 

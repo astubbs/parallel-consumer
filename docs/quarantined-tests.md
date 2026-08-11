@@ -59,9 +59,9 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-Both entries below are timing flakes, not deterministic failures, so both carry `flapping = true`: a
-pass proves nothing and the lane reports it without demanding action. Both were hidden by the
-surefire retry until astubbs#224 removed it.
+Every entry below is a timing flake rather than a deterministic failure, so all carry
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
+were hidden by the surefire retry until astubbs#224 removed it.
 
 - [ ] `PCMetricsTest.metricsRegisterBinding` - compares a registry gauge against an expectation built
   from a test-side counter snapshot taken earlier in the method, so two independently-advancing
@@ -71,6 +71,18 @@ surefire retry until astubbs#224 removed it.
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
   Owner: PR astubbs#265, which replaces the `Thread.sleep(1000)` above the assertions with an
   `await().untilAsserted(...)` on the trailing meters.
+
+- [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
+  the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
+  assertions, so the same signature can surface from any test that uses it. The unblocker is
+  scheduled *before* the elapsed clock starts, so the measured window begins later than the delay it
+  is compared against and is systematically short by however long arming the scheduler takes;
+  `isAtLeast(unblocksAfter)` then fails by a millisecond or two under load. Seen as `getElapsed()
+  expected to be at least PT20S but was PT19.998S` - 2ms short on a 20s bound - on a PR whose diff
+  contained no Java at all, which is what rules out PR-state under rule 2. Diagnosis in
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+  Owner: PR astubbs#262, which anchors the measurement to a nanos stamp taken just before
+  `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
 
 - [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
   **UNDIAGNOSED, quarantined as an explicit rule-1 exception by owner decision**: at 4/45 it is the

@@ -23,6 +23,10 @@ stack traces (see [`docs/testing.md`](testing.md)).
 
 ## Workflows
 
+**For a one-line-per-file index, see [`.github/workflows/README.md`](../.github/workflows/README.md)** -
+it sits next to the files, so it is what you find when you are looking at them rather than at this
+document. This section is the detail behind it.
+
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
@@ -64,17 +68,32 @@ stack traces (see [`docs/testing.md`](testing.md)).
   required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
   loud, and they gate precisely so those failures cannot be skimmed past.
+### The three `claude*` workflows, and which is which
+
+Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
+**not** review - so read this before editing any of them. One judges, two review:
+
+| File | Runs when | What it is |
+|---|---|---|
+| `claude-code-review.yml` | every PR push | **the gate.** Judges; never reviews |
+| `claude-code-review-dispatch.yml` | `workflow_dispatch` | **the dispatched reviewer** |
+| `claude.yml` | an `@claude` comment | **the comment reviewer**, and the general mention handler |
+
 - **`claude-code-review.yml`** - the **review gate**, not the reviewer. It runs on every PR push,
-  invokes no Claude and costs nothing, and asserts one thing: that a review exists for the
-  **current head**. It produces the required check `claude-review`, so the job name is an API here
-  as it is in `repo-hygiene.yml`. See "The automated review" below.
-- **`claude-code-review-dispatch.yml`** - the **reviewer**, `workflow_dispatch` only. It carries
-  the packaged review procedure, the tool allowlist and the review instructions, and takes an
-  optional `focus` steer. See "The automated review" below.
-- **`claude.yml`** - the general `@claude` mention handler, and **not** the reviewer. A mention
-  passes whatever was typed straight through as a free-form prompt: it has no `plugins:` line and
-  never invokes the review command, so what it produces is an answer, not a review. **Be aware
-  that the gate cannot tell the difference** - any fresh, finished `claude[bot]` comment
+  invokes no Claude and costs nothing, and asserts exactly one thing - stated once, under
+  ["The gate asks..."](#the-gate-asks-has-this-pr-been-reviewed-not-was-every-commit-reviewed)
+  below, and deliberately not repeated here. It produces the required check `claude-review`, so
+  the job name is an API here as it is in `repo-hygiene.yml`.
+- **`claude-code-review-dispatch.yml`** - the **dispatched reviewer**, `workflow_dispatch` only.
+  It carries the packaged review procedure, the tool allowlist and the review instructions, and
+  takes an optional `focus` steer. It cannot open inline review comments. See "The automated
+  review" below.
+- **`claude.yml`** - the `@claude` mention handler, and **also a reviewer**: it holds the same
+  execution allowlist as the dispatched route and is the **only** route that can open inline
+  review threads, so it is the one to use when you want findings that block a merge. What it does
+  not carry is the packaged procedure - a mention passes whatever was typed straight through as a
+  free-form prompt - so `@claude review this` gets you a review, and `@claude why is X slow?` gets
+  you an answer. **The gate cannot tell those two apart**: any finished `claude[bot]` comment
   satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
   the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
@@ -124,45 +143,213 @@ silently swap that procedure for an improvised one; the output still looks like 
 nothing tells you. **If you ever edit the reviewer, the `plugins:` input and the
 `/code-review:code-review ... --comment` prompt must survive.**
 
+### The `@claude review this` comment route, and the one thing it does better
+
+Commenting `@claude review this` on a PR runs `claude.yml`. It holds **the same curated tool
+allowlist as the dispatched reviewer**, so it can run this repo's check scripts and its test suites
+rather than reading and guessing.
+
+It was briefly granted nothing, and the gap showed: on `astubbs/parallel-consumer#288` the reviewer
+said so itself - "tool permissions blocked Bash execution ... Everything above is from static
+reading" - on a PR whose entire diff was check scripts and their tests. (An absent allowlist is not
+permissive: Bash is simply not pre-approved, and CI has no interactive approver, so every script
+call is refused.) The argument for leaving it that way was that comment text is
+attacker-influencable where a dispatch is not. That is true and it is not the operative difference:
+**both** routes run PR-authored code, and the protection was never that the trigger is trusted - it
+is that the list is curated to this repo's own scripts, that the job holding it has no write grant,
+and that it is withheld on fork heads. So the lists are the same, deliberately, and
+[`.github/workflows/claude.yml`](../.github/workflows/claude.yml) says to keep them that way.
+
+**On a fork PR this route answers but does not run anything** - and "answers" needs one
+qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put
+PR-controlled executables beside `CLAUDE_CODE_OAUTH_TOKEN`: a fork could replace an allowlisted
+script and wait to be asked to run the checks. That is the hazard the dispatched reviewer avoids by
+refusing fork heads outright; here the *reply* still happens, with no execution tools.
+
+The qualification: **only a maintainer gets that reply.** `claude-code-action` runs its own
+collaborator-permission check and exits before Claude starts, so a fork author - or anyone else
+without write access - commenting `@claude` gets nothing at all, on any PR. That is the action's
+behaviour rather than something this workflow chooses, and it is why the trusted-commenter
+carve-out is defence in depth rather than the only guard. The useful case on a fork PR is a
+*maintainer* asking a question and getting a read-only answer.
+
+The job is also capped at 30 minutes, since a comment can start a test suite.
+
+**This route can open real inline review threads, and the dispatched one cannot.** The action
+installs its inline-comment server only for an *entity* event; `issue_comment` is one and
+`workflow_dispatch` is not. Since unresolved review threads are what mechanically gate a merge here,
+a blocking finding from this route actually blocks, where the dispatch route's can only ask a human
+to act. **If you want findings that hold the merge, ask for the review by comment.**
+
+The dispatch route keeps two advantages: `-f focus` for a steer, and the packaged
+`/code-review:code-review` procedure rather than whatever the comment said.
+
+Both routes now clear the gate themselves. Each has a `refresh-gate` job that re-runs
+`claude-review` after a review that actually succeeded, because the gate only ever triggers on
+`pull_request` and a check run keeps its last conclusion until something re-runs it. **Neither
+refreshes it for a fork head** - see "A fork PR cannot turn the gate green" below, which the comment
+route has to enforce explicitly because, unlike the dispatched reviewer, it will happily answer on a
+fork PR.
+
+**Escape hatch, if a review posts and `claude-review` stays red anyway:** re-run the gate's existing
+run by hand. Re-running the *existing* run is what matters - it reports back into the same check
+suite on the same commit, where a fresh run would attach its check to the default branch and never
+satisfy the PR's required check.
+
+```bash
+gh run list -R astubbs/parallel-consumer --workflow claude-code-review.yml -c <the PR head SHA>
+gh run rerun <run-id> --failed -R astubbs/parallel-consumer
+```
+
+### What the dispatch trigger costs
+
+`claude-code-action` picks its behaviour from the **event**. On a pull-request event it runs in
+*tag* mode - it opens a tracking comment as `claude[bot]`, installs an MCP server for inline review
+comments, and installs another for reading CI. On anything else it runs in *agent* mode with none
+of them, and `workflow_dispatch` is not a pull-request event.
+
+It also cannot be made into one. Handing the action a synthesised `pull_request` payload via
+`GITHUB_EVENT_NAME` / `GITHUB_EVENT_PATH` looks like it should work and does not: the runner writes
+the `GITHUB_*` context variables into every step's environment *after* the step's own `env:` block,
+so the override is discarded. Measured, not assumed - a step declaring both saw
+`GITHUB_EVENT_NAME as this step sees it: 'workflow_dispatch'`. The payload file's contents are
+writable; the event name is not, and the name alone picks the mode.
+
+So the reviewer runs in agent mode, and three things are paid for explicitly rather than lost
+quietly:
+
+| Lost | Replaced by |
+|---|---|
+| the `claude[bot]` tracking comment the gate reads | a **mandatory** summary comment, required by the reviewer's system prompt as its last action |
+| `mcp__github_inline_comment__create_inline_comment` | **nothing on this route** - ask by comment instead, see below |
+| the CI-status MCP server | `gh run list` / `gh run view` grants plus `additional_permissions: actions: read`. Not `gh pr checks` - reading check runs needs a `checks` scope this token cannot be given |
+
+**The inline-comment loss is real, and it is confined to this route.** An unresolved review thread
+is the only thing that mechanically gates a merge here, and the *dispatched* reviewer can no longer
+open one: the action installs its inline-comment server only for an entity event, and a
+`workflow_dispatch` is not one. On a dispatch, blocking findings arrive as a marked section at the
+top of the summary comment, with the reviewer instructed to say plainly that a human has to act on
+them.
+
+**The comment route does not have this problem** - `issue_comment` *is* an entity event, so
+`claude.yml` grants the tool and gets real review threads. So the honest guidance is not "we lost
+inline comments", it is **"ask by comment when you want findings that block, and by dispatch when
+you want the packaged procedure or a `-f focus` steer"**. Closing the gap on the dispatch route
+itself would need a trigger that carries a PR context; it is recorded in
+[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
+
+### Editing the reviewer cannot be tested before it merges
+
+`claude-code-action` refuses to run unless the workflow file invoking it is **byte-identical to the
+copy on the default branch**. That guard is what stops a PR rewriting its own reviewer, and it
+applies to a dispatch just as it does to a `pull_request` run: `--ref <a branch that edits this
+workflow>` gets
+
+```
+Skipping action due to workflow validation: The workflow file must exist and have identical
+content to the version on the repository's default branch.
+```
+
+and the action exits. So a change to `claude-code-review-dispatch.yml` can only be exercised for
+real **after** it is on master, dispatched `--ref master`. Plan for that: land the change, dispatch
+once against a live PR, and read the run rather than assuming.
+
+**A PR that edits the reviewer can still be reviewed, though - do not reach for a bypass.** The
+refusal is about which workflow file *runs*, not about which code is *read*. A `--ref master`
+dispatch runs master's copy, so validation passes, and the checkout step below fetches
+`refs/pull/<n>/head` - so master's reviewer reads the PR's diff, including its edits to this
+workflow, and posts the summary comment that turns `claude-review` green. What cannot happen before
+the merge is exercising the PR's **new** reviewer behaviour; reviewing the PR is a different thing
+and it works.
+
+The one case where that is not true is a PR fixing a reviewer that is *itself* broken on master -
+this PR being the example, since master's dispatched reviewer refuses every invocation. Then there
+is nothing on master to dispatch and merging does need an admin bypass, the same cost
+`astubbs/parallel-consumer#124` paid. That is a property of the bug being fixed, not of touching the
+file.
+
+The action **exits 0** when it refuses like this, so the reviewer job explicitly checks the
+action's own `conclusion` output and fails when it is empty. Without that step the run is green,
+eleven seconds long, and has reviewed nothing - which is
+[the defect this repo keeps meeting](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+
 ### A red `claude-review` is the expected state on an unreviewed PR
 
 It is **not** a fault to diagnose and **not** something to fix by editing the gate. It means what
-it says: nothing has reviewed this head yet. The fix is to dispatch a review once the work is
-actually ready. Three distinct reds, each saying which it is:
+it says: nobody has asked for a review yet. The fix is to ask for one when the work is ready. Two
+distinct reds, each saying which it is:
 
-- **never reviewed** - nobody has asked. Normal for a new or in-progress PR.
-- **reviewed, but not since `<time>`** - there is a review, but you have pushed since. See below.
+- **never reviewed** - `claude[bot]` has not commented. Normal for a new or in-progress PR.
 - **the reviewer left unticked boxes** - it started and did not finish, so ask again.
 
-### Strict on purpose: a review of commit N does not vouch for commit N+1
+(A third red is possible and says so plainly: the PR's head is in a fork. See "A fork PR cannot
+turn the gate green" below.)
 
-The gate requires a review **newer than the current head**, so a push after a review turns it red
-again and wants a fresh one. The lenient alternative - any review on the PR, ever, satisfies the
-gate - was rejected because it reports success for code nothing has looked at, which is exactly the
-class named in
-[`docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
-A gate whose whole job is to stand in for a missing always-on reviewer must not itself be
-satisfiable by a review of code that no longer exists.
+### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
+
+<!-- CANONICAL: the gate contract. Nowhere else states what satisfies the gate - everything else
+     links here. If you change this paragraph, run bin/check-review-gate-contract.sh. -->
+
+**Any finished `claude[bot]` review on the PR satisfies it**, whenever it was posted. A review of
+the first commit therefore vouches for the twentieth, and that is a deliberate reversal of the
+rule this repo shipped first.
+
+**This paragraph is the only statement of that contract.** It was restated in nine files at one
+point, in nine slightly different sentences, and four of them were still describing the *previous*
+contract weeks after it changed - caught one at a time by four separate review rounds. Every other
+mention now links here instead of paraphrasing.
+
+It is a real trade, so it is worth knowing why it was made rather than discovering the cost by
+surprise. Strict is the stronger guarantee - a review of commit N genuinely does not vouch for
+commit N+1 - and it was abandoned not because it was wrong but because of **what enforcing it
+cost**, and because the per-commit coverage it protected already arrives from elsewhere: a
+separate auto-reviewer reads every push. What freshness cost was the **timestamp machinery**: a
+contested comparison between the contributor-controlled committer date and the server-side
+check-suite time, same-second ties, an endpoint with undocumented ordering, and the reviewed-SHA
+plumbing crossing job boundaries. All of that is gone.
+
+**What it did not cost, despite an earlier draft here saying so, is the `actions: write` scope.**
+Both `refresh-gate` jobs still hold it, because the gate is produced by a `pull_request` workflow
+and a review landing after the last push raises no event to re-evaluate it - true under either
+rule. That scope is a cost of *how the check is produced*, not of what it asks, so leniency could
+never have paid it off; retiring it needs the reviewer to raise a check run on the reviewed SHA.
+The distinction matters to anyone weighing a return to strictness: restoring it buys back the
+guarantee at the price of the timestamp machinery alone, not of a new privilege escalation.
+
+**The assumption that makes this safe is that the auto-review keeps happening.** If it ever stops,
+per-commit coverage stops coming from anywhere and nothing announces it - the gate keeps passing,
+because "a review exists on this PR" is still true. That trigger, and the archived strict
+implementation, are recorded in
+[`docs/inflight/parked-strict-review-gate-freshness.md`](inflight/parked-strict-review-gate-freshness.md).
+Read it before re-proposing strictness; it is a considered trade, not an oversight.
 
 **There is deliberately no skip word, label or "trivial change" escape**, because any such escape
 is asserted by the same person who wants to use it - which makes it exactly as strong as not having
 the gate. The honest escape already exists and is loud: merge with the required check red, which
-leaves a permanent record that somebody chose to merge unreviewed. Re-requesting a review after a
-one-line fix costs one command and a couple of minutes, so an escape would save little and cost the
-guarantee.
+leaves a permanent record that somebody chose to merge unreviewed.
 
 ### A fork PR cannot turn the gate green
 
 This is the one case where merging with the check red is the *expected* route rather than a last
 resort, so it is written down rather than left to be discovered.
 
-The reviewer refuses any PR whose head is not in this repo, on purpose: `workflow_dispatch` hands
-the job `CLAUDE_CODE_OAUTH_TOKEN`, and it then checks out `refs/pull/<pr>/head` and runs the repo's
-build and test scripts from it - so reviewing a fork would execute untrusted code beside the
-credential. The old `pull_request` trigger prevented that for free by withholding secrets from fork
-PRs; on a dispatch the guard has to be explicit. Meanwhile the gate accepts only a `claude[bot]`
-comment, so no amount of careful human reading satisfies it. The two facts together mean a fork PR
-stays red.
+**The gate itself refuses a fork head**, before it looks at any comment. That is the primary
+guard and it is stated first because it became load-bearing when the freshness rule went: the
+gate now asks only whether a finished `claude[bot]` comment exists on the PR, and the `@claude`
+route answers on fork PRs quite happily - so without the refusal, a maintainer merely *asking a
+question* on a fork PR would satisfy the required check on the next push. That is the
+self-asserted escape rejected at the end of this section, arriving by accident rather than on
+purpose.
+
+Two further facts hold the same line from the other side. The **dispatched reviewer** refuses any
+PR whose head is not in this repo: `workflow_dispatch` hands the job `CLAUDE_CODE_OAUTH_TOKEN`, and
+it then checks out `refs/pull/<pr>/head` and runs the repo's build and test scripts from it - so
+reviewing a fork would execute untrusted code beside the credential. The old `pull_request` trigger
+prevented that for free by withholding secrets from fork PRs; on a dispatch the guard has to be
+explicit. The **comment route** does answer on a fork PR - useful, and harmless once its execution
+allowlist is withheld - but produces nothing the gate will accept.
+
+So a fork PR stays red, from three directions.
 
 Two honest options, in order:
 
@@ -179,27 +366,43 @@ having one. The real fix is a reviewer that can run without the credential, whic
 piece of work and is recorded in
 [`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md).
 
+### The reviewer runs PR code, so it holds no write grant
+
+The fork refusal answers *whose* code runs beside the credential. The second boundary answers *what
+that code could reach*, and it is why the reviewer is **two jobs**.
+
+The `review` job checks out the PR and executes its scripts - that is the point of letting the
+reviewer run tests - so on a PR branch those scripts are whatever the PR says they are. It therefore
+runs at `actions: read`, and its checkout sets `persist-credentials: false` so the job's token is
+not written into `.git/config` beside the code it is about to run.
+
+The one write grant the contract needs, `actions: write` to re-run the gate, lives in a second job,
+`refresh-gate`, which **checks nothing out**. Held in `review` instead, that token could dispatch,
+cancel or re-run any workflow in the repo - `release.yml` among them - from a filesystem a PR author
+controls. A same-repository PR does mean a write-access author, but write access to a branch is not
+the same thing as a token that can fire a release. **Do not merge the two jobs back together.**
+
 ### What the gate proves, and what it does not
 
 `bin/check-review-posted.sh` (self-tested by `bin/test-check-review-posted.sh`, which runs first)
-takes the PR's comments and requires **one** comment that is all three of: authored by the reviewer
-bot per the GitHub API, created strictly after the head appeared, and free of unticked task-list
-boxes. Four limits are worth knowing before reading a green tick as a review:
+takes the PR's comments and requires **one** comment that is both: authored by the reviewer bot
+per the GitHub API, and free of unticked task-list boxes. Three limits are worth knowing before
+reading a green tick as a review:
 
 1. **It does not read the review, and never will** - a check that judges review quality is a
    check nobody can keep honest.
 2. **It cannot tell a review from any other answer the bot gave.** Asking `@claude` a question on
-   the PR produces a comment satisfying all three rules, which turns the check green. A known
-   limit, not a distinction the gate makes.
-3. **The head's arrival time is the SHA's, not this PR's.** Force-pushing onto a commit that
-   already ran checks elsewhere carries that older timestamp, so a review of a previous head can
-   postdate it.
-4. **It runs from the PR's own checkout**, like every other `pull_request` check here, so it
+   the PR produces a comment satisfying both rules, which turns the check green. A known limit,
+   not a distinction the gate makes - and a larger one now that age is not a rule, since any such
+   answer counts for the life of the PR. This is why fork PRs are refused outright rather than
+   left to the comment rules.
+3. **It runs from the PR's own checkout**, like every other `pull_request` check here, so it
    polices a tree that can edit it.
 
-The remedy for 2 and 3 is one change, recorded in
-[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md): have the reviewer record the
-exact SHA it reviewed as a check run on that head, and gate on that rather than on a timestamp.
+The remedy for 2 is one change, recorded in
+[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md): have the reviewer raise a check
+run on the exact SHA it reviewed, and gate on that rather than on comment metadata. That would
+also retire the `refresh-gate` jobs and the last `actions: write` in the review system.
 
 It is a guard against the action failing quietly, not against somebody who wants to get around
 it. **Do not disable it to get a green check.**
