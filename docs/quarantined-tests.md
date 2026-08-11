@@ -35,12 +35,18 @@ reporter).
 
 Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@Quarantined` javadoc):
 
-1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose.
+1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose. The
+   repository owner can grant an explicit exception when the blocking cost outweighs the pressure;
+   the entry must say so ("rule-1 exception"), keep the failure signature as its reason, and carry
+   the diagnosis as its open task.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **Re-enable = the owning fix PR deletes the annotation AND this entry in the same commit**, after
    merging master - atomically restoring the test to the gating lane.
-4. Every entry needs an owning fix PR. An entry without one is diagnosed-but-unowned: flag it, find it
-   an owner.
+4. An owning fix PR is the goal, not a precondition. An entry without one is unowned and legal - the
+   audit flags it as an advisory, not an error, and the lane report on every PR plus the release
+   guard keep it loud until someone owns it. What the checks *hard-fail* is an owner claim that is
+   wrong: a closed-unmerged owner (orphaned entry), or a merged owner with the test still
+   quarantined (re-enable overdue).
 5. **A release is blocked while this list is non-empty** (`release.yml` guard; dry runs warn instead) -
    a release must not ship while tests are held out of the gates. Snapshots still publish (dev
    artifacts, master is always `-SNAPSHOT`).
