@@ -19,6 +19,13 @@ gh api -X PUT repos/astubbs/parallel-consumer/rulesets/15055005 ...   # add cont
 
 Re-read the current ruleset first and add to its existing contexts rather than replacing them.
 
+**The context string is `docs data: audit`, bare.** Not `CI / docs data: audit`. That prefix is only how
+the GitHub web UI renders workflow-slash-job; the ruleset matches the check-run name, which is the job
+name alone. The contexts already in this ruleset prove it - `quarantine: audit`, `dups: clones`,
+`cache` and `tests` are all stored bare - and `gh pr checks 273 --json name` reports exactly
+`docs data: audit`. A context added with the `CI /` prefix would never match any check run, so it
+would sit permanently "expected" and block every PR while looking like a typo nobody can locate.
+
 ## Worth checking at the same time
 
 Several other lanes report but are not required, most of them deliberately: the three `Analyze (*)`
