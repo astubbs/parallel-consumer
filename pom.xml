@@ -9,7 +9,7 @@
 
     <groupId>bz.stub.parallelconsumer</groupId>
     <artifactId>parallel-consumer-parent</artifactId>
-    <name>Kafka Parallel Consumer</name>
+    <name>Parallel Consumer for Apache Kafka</name>
     <version>0.6.0.0-SNAPSHOT</version>
     <description>Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with key concurrency and extendable non-blocking IO processing.
     </description>
@@ -70,9 +70,14 @@
         <!-- Copyright-header conformance is enforced by bin/check-copyright-headers.sh, run in the
              `validate` phase by exec-maven-plugin (below), so a plain `mvn` build catches violations
              and not only the copyright.yml GitHub Action. It is provenance-aware: upstream-derived
-             files keep the Confluent header, fork-original files use the fork header - see AGENTS.md
-             "Copyright rules for this fork". Skip it with -Dcopyright.skip=true. -->
+             files keep the Confluent header, fork-original files use the fork header - see
+             docs/copyright.md. Skip it with -Dcopyright.skip=true. -->
         <copyright.skip>false</copyright.skip>
+        <!-- OSS Index dependency audit. Off by default because the API needs an account token that
+             not every contributor will have - see the ossindex-maven-plugin config below for how to
+             supply one and switch this to false. -->
+        <ossindex.skip>true</ossindex.skip>
+        <ossindex.fail>true</ossindex.fail>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
 
         <!-- standard props -->
@@ -105,6 +110,7 @@
         <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
         <pitest.version>1.25.8</pitest.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
+        <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
 
         <!-- core -->
         <slf4j.version>2.0.18</slf4j.version>
@@ -271,7 +277,8 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.11.0</version>
+                        <!-- version comes from pluginManagement below, so the examples module's
+                             skipPublishing declaration inherits it outside this profile too -->
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -577,7 +584,20 @@
                 <version>3.2.0</version>
                 <configuration>
                     <scope>runtime</scope>
-                    <fail>false</fail>
+                    <!-- Off by default and visibly off, rather than on and hoping: the API no longer
+                         serves anonymous component-report requests, and a run without credentials 401s
+                         and still reports SUCCESS - so a green audit is never by itself evidence that
+                         it scanned. `authId` names a <server> in settings.xml holding the account
+                         token; once that exists, run it with `mvn test-compile -Dossindex.skip=false`
+                         (not `validate` - the mojo needs test-scope resolution) and confirm the run
+                         actually returned findings, because nothing else will. Clear the client's
+                         on-disk report cache first, or a warm cache will answer for it.
+
+                         Why `fail` cannot police this, both traps in full, and what the first
+                         authenticated run found: docs/inflight/ci-ossindex-audit-dead.md -->
+                    <authId>ossindex</authId>
+                    <skip>${ossindex.skip}</skip>
+                    <fail>${ossindex.fail}</fail>
                 </configuration>
                 <executions>
                     <execution>
@@ -897,6 +917,13 @@
                                 <reactorModuleConvergence />
                                 <banDuplicatePomDependencyVersions />
                                 <requireSameVersions />
+                                <!-- Catches the "version declared only inside a profile, consumed from a child
+                                     module" trap: Maven only degrades that to a build WARNING, which scrolls past.
+                                     central-publishing-maven-plugin was in exactly that state - versioned in the
+                                     `maven-central` profile, declared version-less in the examples module - so every
+                                     ordinary build printed six malformed-model warnings. Verified to fail on the
+                                     unfixed tree, so this rule guards the fix rather than rubber-stamping it. -->
+                                <requirePluginVersions />
                             </rules>
                         </configuration>
                     </execution>
@@ -1058,6 +1085,11 @@
         <!-- Management -->
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.sonatype.central</groupId>
+                    <artifactId>central-publishing-maven-plugin</artifactId>
+                    <version>${central-publishing-maven-plugin.version}</version>
+                </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-site-plugin</artifactId>

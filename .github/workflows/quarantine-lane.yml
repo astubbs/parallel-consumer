@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v6
       # Fail fast on rule violations BEFORE spending a test run - same checks as quarantine-audit,
       # here validating master's state.
-      - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
+      - name: Enforce registry (docs/quarantined-tests.md matches @Quarantined annotations)
         run: bin/check-quarantine-registry.sh
       - name: Verify owner claims
         env:

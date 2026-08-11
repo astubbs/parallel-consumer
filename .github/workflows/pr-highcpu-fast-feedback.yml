@@ -45,7 +45,7 @@
 # request workflows from outside collaborators" MUST be set to "Require approval for ALL outside collaborators"
 # (the default only gates FIRST-TIME contributors - a fork author with one prior merged PR would otherwise be
 # auto-approved and could reach this self-hosted runner). Keep that setting on, or don't trigger on
-# `pull_request` at all (mirror self-hosted-tests.yml). See docs/SELF_HOSTED_RUNNER.md.
+# `pull_request` at all (mirror self-hosted-tests.yml). See docs/self-hosted-runner.md.
 
 name: highcpu
 
