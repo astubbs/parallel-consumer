@@ -90,17 +90,30 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   for the life of the PR rather than only until the next push. That is why fork heads are refused
   by the gate outright rather than left to the comment rules. It dissolves if the reviewer ever
   stamps the reviewed SHA into a check run; see the entry above.
-- **CARRIED, but never exercised: the OSS Index audit grants.** The carry-across this entry used to
-  demand has happened. astubbs/parallel-consumer#279 merged the on-demand split in, found the
+- **CARRIED, and then REFUSED AT RUN TIME: the OSS Index audit grants.** The carry-across this entry
+  used to demand has happened. astubbs/parallel-consumer#279 merged the on-demand split in, found the
   reviewer no longer lived in `claude-code-review.yml`, and moved `bin/check-ossindex-audit.sh`,
   `bin/test-check-ossindex-audit.sh`, `bin/check-cve-exclusions.sh` and
   `bin/test-check-cve-exclusions.sh` - bare and `./` forms - into BOTH allowlists deliberately
   rather than by luck. That was the first live instance of the drift the entry above warns about,
   and it took a judgement no merge resolution would have made on its own, which is the argument for
-  `bin/check-review-tool-grants.sh` existing. What stays **open** is that no reviewer has run any of
-  the four yet: until a review invokes one and says so here, the grants are asserted capability, not
-  demonstrated. `actionlint` was the fifth of that set and was already granted, since it ships with
-  the runner and can never be inert.
+  `bin/check-review-tool-grants.sh` existing. `actionlint` was the fifth of that set and was already
+  granted, since it ships with the runner and can never be inert.
+
+  **OPEN, and it makes the grants worth less than they look: a second approval layer beyond
+  `--allowedTools` silently refuses granted scripts.** On the comment route, run
+  [`31547154463`](https://github.com/astubbs/parallel-consumer/actions/runs/31547154463) reviewing
+  astubbs/parallel-consumer#279 - a pull request whose diff *is* those scripts - the reviewer tried
+  `bin/test-check-ossindex-audit.sh` and `bin/test-check-cve-exclusions.sh` in the bare and `./`
+  spellings and under `sh`, and every attempt returned `this command requires approval` with no
+  prompt it could reach. It checked its own `--allowedTools` for the route it was running and found
+  them correct, so the workflow allowlist is ruled out as the cause. The consequence is not confined
+  to these four: if a granted command can still be refused by something else, curating the allowlist
+  buys less than the list implies, and a review of a `bin/` change is a manual trace of the scripts
+  rather than a run of them - which is exactly what that review was. What would settle it: name the
+  layer that emits `this command requires approval` inside `claude-code-action` (its permission
+  mode, its `settings` input, or its own tool-permission defaults), and establish whether a
+  non-interactive run can be made to grant instead of refuse. Under separate investigation.
 - **Credential exposure is unresolved, not cleared.** The reviewer runs PR-authored Maven/test code
   in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`, with `pull-requests: write`. The
   move to `workflow_dispatch` bounds *who can start it* - dispatching requires write access to the
