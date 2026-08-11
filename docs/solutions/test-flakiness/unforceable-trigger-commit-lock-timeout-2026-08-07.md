@@ -16,7 +16,7 @@ severity: low
 status: "SOLVED - test-side fix merged to master in astubbs#220 (rebase-merged 2026-08-07, `c429d8b6`). PC is healthy; no product defect. Which of the two paths CI hit was NOT established (no DEBUG in that job); the fix closes both."
 last_updated: 2026-08-07
 related_prs:
-  - "astubbs#220 - this fix, plus the investigation rules and probe correction in AGENTS.md"
+  - "astubbs#220 - this fix, plus the investigation rules and probe correction added to AGENTS.md; astubbs#272 has since moved the probe thresholds to docs/testing.md and the settling method to docs/investigating.md"
   - "astubbs#110 - the SIBLING flake on this same producerTransactionLock (ProducerManagerTest), fixed 2026-08-03; source of the control-arm method"
   - "astubbs#86 - introduced AmbientProbeExtension/ProgressProbe, whose 'probe clean' verdict this work qualified"
   - "astubbs#98 - the backpressure test that only passed by racing its own setup (the sibling rule, opposite direction)"
@@ -291,7 +291,7 @@ an unrelated PR, rather than this test method. Checked and discounted on that ba
 - `docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md` - the only prior investigation
   into this same `producerTransactionLock`. Different defect (the test released the produce lock too
   early, opening a window production never opens), same discipline. Its §11 control-arm method is now
-  promoted into `AGENTS.md`.
+  promoted into [`docs/investigating.md`](../../investigating.md).
 - `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` - **a sibling rule, not the same
   one.** That doc's hazard is an await satisfied *too early* by a vacuously-true condition (a
   false-pass). This one's hazard is an await whose trigger may *never fire* (a false-fail). Same
