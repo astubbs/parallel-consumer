@@ -57,7 +57,9 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 ====
 This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-It is a *drop-in replacement*: the Java API and package (`bz.stub.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+The Java API is unchanged from upstream 0.5.x, but the Maven `groupId` and the Java packages *move*.
+Your imports change; nothing you call does.
+See <<upgrading-from-upstream,Upgrading from upstream 0.5.x>> for the one-line change.
 
 [source,xml]
 ----
@@ -635,6 +637,29 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 
 [[upgrading]]
 == Upgrading
+
+[[upgrading-from-upstream]]
+=== From upstream 0.5.x to this fork
+
+Two things move, and neither changes what you call.
+The Maven `groupId` becomes `bz.stub.parallelconsumer`, and the Java packages move with it.
+
+// The lines below MUST keep the old spelling: they are the instruction for getting off it, and a
+// migration step that names only the destination tells the reader nothing. rename-packages.sh would
+// otherwise rewrite them into a package moving to itself and a sed that does nothing - which passes
+// every check the script has, because the sweep hunts old spellings that SHOULD have been rewritten.
+// rename-packages: freeze-begin(upgrade-instructions)
+Update your dependency declaration to the new `groupId`, then rewrite your imports:
+
+[source,bash]
+----
+find . -name '*.java' -exec sed -i 's/io\.confluent\.parallelconsumer/bz.stub.parallelconsumer/g' {} +
+----
+
+NOTE: That `sed -i` is GNU syntax. On macOS or BSD, use `sed -i '' -e 's/…/…/g'` instead -- BSD `sed` reads the argument after `-i` as a backup-file suffix.
+
+The library's shared internal utilities moved with it, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
+// rename-packages: freeze-end(upgrade-instructions)
 
 === From 0.4 to 0.5
 
