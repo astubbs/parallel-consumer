@@ -55,7 +55,11 @@ greens are trusted.
   `ManagedPCInstance` + `KafkaClientUtils` directly (accepted DRY tension, forced by additive-only; noted
   for consolidation when the suite lands post-astubbs#29-rebase).
 - **Tag exclusion mechanism**: pom `<excluded.groups>performance</excluded.groups>` default feeds
-  failsafe; extend to `performance,chaos` (comma list is the documented pattern, pom L86).
+  failsafe; extend to `performance,chaos` (comma list is the documented pattern, `pom.xml`, grep
+  `(skip multiple groups)`).
+  (Citation repair: this cited the pom by line number, which now lands on `<skipTests>false</skipTests>`
+  - an unrelated build property. The override comment it meant is the `-Dexcluded.groups=` block, and
+  the default it names has since grown `quarantined` alongside the `chaos` this plan added.)
 - **Zombie probe building blocks already in-tree**: AdminClient `describeConsumerGroups` +
   `ConsumerGroupState` pattern (used by `LatestResetTailNudgeIT`); rebalance-blocked = group in
   `PREPARING_REBALANCE`/`COMPLETING_REBALANCE` beyond T.
@@ -192,6 +196,11 @@ re-run - tune until the known real bug (pre-fix composition, not injected) is ca
   (branch pointer + calibration results table).
 - Modify: `docs/inflight.md` (this branch): chaos suite Phase 1 entry - where it lives, how to run
   (`-Dincluded.groups=chaos`, seed protocol), calibration evidence, transplant plan (post-astubbs#29-rebase).
+  (Pointer repair: the single file `docs/inflight.md` became the directory
+  [`docs/inflight/`](../inflight/) on 2026-08-04, deleted in `0de96fc` - `git show
+  0de96fc^:docs/inflight.md` for the version this unit edited, grep `Chaos Pain Suite`. The chaos
+  suite's live entry is [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md), the
+  Phase 2+ roster that succeeded this one.)
 
 **Test expectation:** none - docs.
 

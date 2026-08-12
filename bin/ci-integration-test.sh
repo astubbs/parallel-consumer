@@ -11,7 +11,7 @@
 # -DforkCount=4 -DreuseForks=true to run integration in forked per-broker mode
 # (each JVM fork gets its own broker - reliable AND parallel; the ci profile
 # runs sequentially on GitHub-hosted 2-core runners). See
-# docs/SELF_HOSTED_RUNNER.md.
+# docs/self-hosted-runner.md.
 
 set -euo pipefail
 
@@ -23,5 +23,4 @@ set -euo pipefail
   clean verify \
   -DskipUTs=true \
   -Dexcluded.groups=performance,chaos,quarantined \
-  -Dsurefire.rerunFailingTestsCount=2 \
   "$@"

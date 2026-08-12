@@ -45,8 +45,8 @@ import static org.awaitility.Awaitility.await;
  * at a commit BEFORE the fix (expect RED - the probe violation names the mechanism) and again at the
  * fix commit (expect GREEN). The RED->GREEN flip is the evidence that the fix addresses the mechanism
  * the probe watches. Add {@code -Dchaos.seed=<seed>} to replay a specific schedule; on-demand CI runs
- * via {@code .github/workflows/chaos-pain.yml} (workflow_dispatch: seed, reps). See AGENTS.md
- * "Chaos Pain Suite".
+ * via {@code .github/workflows/chaos-pain.yml} (workflow_dispatch: seed, reps). See
+ * {@code docs/testing.md}, "Chaos Pain Suite".
  */
 @Tag("chaos")
 @Timeout(600)

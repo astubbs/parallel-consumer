@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>parallel-consumer-vertx</artifactId>
-    <name>Kafka Parallel Consumer Vert.x</name>
+    <name>Parallel Consumer - Vert.x</name>
 
     <modelVersion>4.0.0</modelVersion>
 

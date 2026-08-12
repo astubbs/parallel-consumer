@@ -1,0 +1,33 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Global pause and resume
+category: operability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.1.0
+  evidence:
+    tag: 0.5.1.0
+    path: CHANGELOG.adoc
+    basis: Listed as content of this release - pause and resume without unsubscribing from topics.
+readme_anchor: features-list
+summary: Pause new work submission across the processor without unsubscribing from its topics, then resume when the application is ready.
+use_this_when:
+  - An application-level circuit-breaker or maintenance condition needs to stop new processing without leaving the consumer group.
+  - You want in-flight work to complete without issuing new processing work.
+setup:
+  methods:
+    - pauseIfRunning
+    - resumeIfPaused
+opt_in:
+  mechanism: Call the processor's pause or resume API.
+  isolated_from_stable_modules: false
+boundaries:
+  - Pause does not interrupt work already in flight.
+  - Automatic per-partition throttling is separate from this application-controlled processor state.
+references:
+  - label: Processor pause implementation
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java

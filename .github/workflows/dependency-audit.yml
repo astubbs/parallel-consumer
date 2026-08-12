@@ -1,0 +1,211 @@
+# Whole-tree dependency vulnerability audit against Sonatype OSS Index.
+#
+# WHAT THIS COVERS THAT NOTHING ELSE DOES
+#
+# `deps: vulnerabilities` (maven.yml, actions/dependency-review-action) gates PRs, but only on the
+# dependencies a PR *changes*. Dependabot alerts cover the standing tree, but read from GitHub's
+# dependency graph, which holds what the poms DECLARE rather than what Maven resolves - so a purely
+# transitive component can carry a published advisory and never produce an alert. `lz4-java` is the
+# measured case here: GHSA-xx22-p4ch-683r exists and nothing fired. (One confirmed miss, not three -
+# the wider claim was checked and withdrawn; see
+# docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md.) The
+# gap is a **whole-tree scan, on a schedule**, which is what the `schedule:` trigger below is for:
+# an unchanged tree acquires new advisories, and nothing else in this repo would ever notice.
+#
+# This is the one exception to docs/ci.md's "there is no scheduled build, deliberately". That rule
+# rejects cron lanes that RE-RUN suites the PR gate already covers. This lane covers something the
+# gate cannot: the passage of time.
+#
+# ONE JOB, DELIBERATELY. `ossindex-maven-plugin` is bound to `validate`, which every Maven job in
+# this repo runs, so "enabled in CI" would mean six-plus scans per PR from a single account and a
+# burnt rate limit for zero extra signal. This job is the only place it is deliberately switched ON
+# (`-Dossindex.skip=false`, below).
+#
+# Everywhere else it is switched OFF by the `ossindex.skip` property in the pom
+# (astubbs/parallel-consumer#259, merged), so "exactly one job scans" is now unconditional rather
+# than aspirational: this is the only workflow that passes `-Dossindex.skip=false`.
+#
+# A GREEN MAVEN RUN IS NOT EVIDENCE THE SCAN HAPPENED. The plugin's `fail` parameter covers
+# "vulnerable components were found", not "the request failed" - with an expired token it prints a
+# WARNING and reports BUILD SUCCESS. That silent-green is the exact defect this repo already shipped
+# once. `bin/check-ossindex-audit.sh` is what makes the job honest; read its header before changing
+# anything here, and note its self-test runs FIRST, per the house pattern in repo-hygiene.yml.
+#
+# THIS JOB GOES RED TWO DIFFERENT WAYS, AND THEY ARE NOT THE SAME THING.
+#
+#   exit 1  the scan cannot be proven to have run - the CHECK is broken, and nothing was learned
+#           about the tree. Go and look at the token, the `ossindex` server id, or the service.
+#   exit 2  the scan ran and found an advisory - the LANE worked, and there is something to triage.
+#
+# Different exit codes, different summary headings, different stderr lines. Do not collapse them: a
+# single undifferentiated red would leave the reader unable to tell whether the scanner had anything
+# to say. When both are true, exit 1 wins - findings from an unprovable scan are evidence of nothing.
+#
+# WHY FINDINGS GATE THE PR. astubbs/parallel-consumer#281 retired the standing backlog: each item is
+# now an explicit `excludeVulnerabilityIds` entry in the root pom carrying a stated retirement
+# condition. On a tree whose known debt is excluded *with reasons*, a finding is by construction
+# something nobody has looked at - so it is worth stopping for, and the "red every PR for known debt"
+# objection no longer applies. And PR-time rather than the schedule alone because this repo has one
+# maintainer: a weekly digest nobody is obliged to read is mail, not a control. The schedule still
+# earns its place for what no PR can see - time passing - but it is the second channel, not the
+# first.
+#
+# The escape hatch for a false positive - and this scanner produces them, measured: two false
+# positives and one phantom CVE id in a single run
+# (docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md) - is
+# the same one the backlog uses: add the id to `excludeVulnerabilityIds` with a reason and a
+# retirement condition. The guard honours that list and states the suppression count on every run,
+# including green ones. See bin/check-ossindex-audit.sh.
+#
+# Required repo secrets: OSSINDEX_USERNAME (the account email), OSSINDEX_TOKEN (API token from
+# ossindex.sonatype.org -> account settings). Both already exist.
+
+name: Dependency Audit
+
+on:
+  schedule:
+    # Weekly, Mondays 06:17 UTC - findings land at the start of the week. Weekly rather than daily
+    # because the result only moves when the advisory database does, and a digest nobody reads is
+    # worth less than one they do. Off the hour on purpose: GitHub drops scheduled runs that pile up
+    # at :00. Cron only fires from the default branch, so this does nothing until it is on master.
+    - cron: '17 6 * * 1'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: dependency-audit-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Read-only. Findings go to the job summary rather than a PR comment specifically so this job never
+# needs `pull-requests: write` - it runs PR-authored build code in the same job that holds the OSS
+# Index token, and every permission it does not have is one that cannot be turned against it.
+# See docs/inflight/ci-review-agent.md for the same exposure question on the review job.
+permissions:
+  contents: read
+
+jobs:
+  ossindex:
+    # Named for what it does, not for who supplies it. "ossindex" is vendor jargon and unfindable in
+    # a checks list; this also has to be told apart at a glance from `deps: vulnerabilities`
+    # (maven.yml), which reviews only the dependencies a PR CHANGES - "whole-tree" is the whole
+    # difference. Job names are an API here, referenced by repo rulesets (see repo-hygiene.yml's
+    # header): renaming is free only while this check is not yet required and not on master.
+    name: "deps: whole-tree CVE scan"
+    # TWO WAYS A PR ARRIVES WITHOUT THE OSS INDEX CREDENTIALS, AND BOTH MUST SKIP RATHER THAN GO RED.
+    # The preflight below turns a missing secret into a red check on purpose - it is the right answer
+    # when the secret is missing by accident. On these two it would be missing by design, every time,
+    # which is a permanent false alarm that teaches people to ignore the check.
+    #
+    #   1. FORK PRs receive no secrets at all. Same test the self-hosted lanes use.
+    #   2. DEPENDABOT PRs. The branch is in THIS repository, so the fork test above passes it - but
+    #      GitHub swaps the secret store for a Dependabot-triggered run: `secrets.*` resolves against
+    #      Dependabot secrets, not Actions secrets, so OSSINDEX_USERNAME/OSSINDEX_TOKEN come back
+    #      empty and the preflight fails deterministically. Every dependency-update PR would carry a
+    #      red whole-tree audit, on the PRs least likely to be read line by line.
+    #
+    # Gated on `github.actor` rather than the PR author because the actor is what actually selects
+    # the secret store: when a human pushes to a Dependabot branch the run is theirs, Actions secrets
+    # ARE present, and the scan should run normally.
+    #
+    # The alternative - mirroring the two secrets into the Dependabot secret store - was rejected. It
+    # would put the OSS Index token in a second store, reachable by a job that runs `test-compile`
+    # over a dependency set an automated process just changed. The scheduled whole-tree scan covers
+    # what those PRs merge anyway, one channel later and without handing the credential around.
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # `server-id` must match the plugin's `authId`, which is `ossindex`. setup-java writes a
+          # settings.xml whose <server> reads these two env var NAMES at Maven runtime, so the
+          # secrets have to be in `env:` on the Maven step - not here.
+          server-id: ossindex
+          server-username: OSSINDEX_USERNAME
+          server-password: OSSINDEX_TOKEN
+          # No `cache: maven` - see the caching note at the top of maven.yml.
+
+      # Restore-only, off maven.yml's rotating prepare-deps key. This job must not SAVE a cache: it
+      # would compete with the key the build lanes own, and it resolves a different (smaller) set.
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Before the guard runs, prove the guard still works - the sequencing repo-hygiene.yml and
+      # copyright.yml both use. A guard nobody has watched fail is decoration.
+      - name: Self-test the did-it-actually-scan guard
+        run: bash bin/test-check-ossindex-audit.sh
+
+      # An empty secret produces a 401, which the guard catches - but it names three possible causes
+      # where this step names the actual one. Cheap, and it fails before spending a build.
+      - name: Preflight - credentials must be present
+        env:
+          OSSINDEX_USERNAME: ${{ secrets.OSSINDEX_USERNAME }}
+          OSSINDEX_TOKEN: ${{ secrets.OSSINDEX_TOKEN }}
+        run: |
+          if [ -z "${OSSINDEX_USERNAME}" ] || [ -z "${OSSINDEX_TOKEN}" ]; then
+            echo "::error::OSSINDEX_USERNAME / OSSINDEX_TOKEN are not both set as repo secrets. The audit cannot authenticate, and OSS Index no longer serves anonymous component-report requests."
+            exit 1
+          fi
+
+      # `test-compile`, not `validate`: the audit mojo resolves TEST-scope dependencies and the
+      # modules depend on `parallel-consumer-core:jar:tests`, so on a runner with no PC snapshots
+      # installed a bare `ossindex:audit` (or a `validate`-only run) dies at the second module with
+      # "Could not resolve dependencies". Verified locally against a repository with those snapshots
+      # removed - the reactor has to have compiled them.
+      #
+      # Every property is passed explicitly. `ossindex.skip`, `ossindex.fail` and `ossindex.authId`
+      # are user properties of the plugin ITSELF, so the command is robust to how the pom happens to
+      # be wired - it does not depend on the `<skip>`/`<fail>`/`<authId>` elements the root pom
+      # declares today, and would keep working if they were reshuffled.
+      #
+      # `-Dossindex.fail=false` is the load-bearing one, and it is NOT laxity - it is what makes
+      # bin/check-ossindex-audit.sh the single place that decides red. The pom defaults
+      # `ossindex.fail` to TRUE, and letting Maven fail here would take the step down via `pipefail`
+      # BEFORE the guard runs: on exactly the runs with findings we would lose both the
+      # did-it-actually-scan proof and the rendered summary. Maven stays lenient; the guard gates.
+      - name: Audit dependencies against OSS Index
+        shell: bash
+        env:
+          OSSINDEX_USERNAME: ${{ secrets.OSSINDEX_USERNAME }}
+          OSSINDEX_TOKEN: ${{ secrets.OSSINDEX_TOKEN }}
+        run: |
+          # pipefail, or `tee` swallows a Maven BUILD FAILURE and the step goes green on a broken run.
+          set -o pipefail
+          ./mvnw --batch-mode test-compile \
+            -Dossindex.skip=false \
+            -Dossindex.fail=false \
+            -Dossindex.authId=ossindex \
+            -Dossindex.reportFile=target/ossindex-report.json \
+            | tee ossindex-audit.log
+
+      # The whole point of the job, and the only step that decides red. Renders findings into the run
+      # summary, exits 1 when it cannot prove the scan happened, and 2 when the scan found something.
+      - name: Verify the scan ran, and gate on what it found
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          bash bin/check-ossindex-audit.sh ossindex-audit.log | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Kept so a finding can be triaged from the structured report rather than re-run by hand, and
+      # so a failed run can be diagnosed from the log that produced the verdict.
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ossindex-reports
+          path: |
+            ossindex-audit.log
+            **/target/ossindex-report.json
+          if-no-files-found: warn
