@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
@@ -8,7 +8,7 @@ package io.confluent.parallelconsumer.internal;
 import java.io.Closeable;
 import java.time.Duration;
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 
 public interface DrainingCloseable extends Closeable {
 

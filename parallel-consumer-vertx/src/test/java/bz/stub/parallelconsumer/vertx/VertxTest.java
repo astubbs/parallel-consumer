@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.vertx;
+package bz.stub.parallelconsumer.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -6,9 +6,9 @@ package io.confluent.parallelconsumer.vertx;
  */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import io.confluent.csid.utils.WireMockUtils;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
+import bz.stub.parallelconsumer.internal.utils.WireMockUtils;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -36,7 +36,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
