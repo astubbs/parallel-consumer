@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -17,8 +17,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static org.awaitility.Awaitility.await;
 
@@ -39,7 +39,7 @@ import static org.awaitility.Awaitility.await;
  * regardless), but only volume makes the duplicate reliably observable.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.internal.ProduceLockReleaseTest for unit-level cover of the release itself
+ * @see bz.stub.parallelconsumer.internal.ProduceLockReleaseTest for unit-level cover of the release itself
  */
 @Tag("transactions")
 @Timeout(60)

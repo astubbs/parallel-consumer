@@ -3,10 +3,10 @@
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
-import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,7 +16,7 @@ import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -26,7 +26,7 @@ public class BrokerPollerBackpressureTest extends BrokerIntegrationTest<String, 
     static final int MAX_CONCURRENCY = 10;
 
     /**
-     * Must divide exactly by {@link #MAX_CONCURRENCY}: {@link io.confluent.parallelconsumer.internal.PCModule} turns
+     * Must divide exactly by {@link #MAX_CONCURRENCY}: {@link bz.stub.parallelconsumer.internal.PCModule} turns
      * this into a STATIC load factor (buffer / concurrency = 15), which caps records taken out of the shards at
      * exactly this buffer size.
      */

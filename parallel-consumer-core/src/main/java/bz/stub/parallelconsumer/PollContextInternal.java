@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.ProducerManager;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.experimental.Delegate;
