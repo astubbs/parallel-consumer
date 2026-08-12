@@ -9,6 +9,55 @@ second; it is the per-branch procedure and it is authoritative over any summary 
 
 ---
 
+## HIGH PRIORITY — NEEDS A HUMAN: astubbs#51 is excluded from the sweep
+
+**astubbs#51 (`features/enable-virtual-threads`) cannot be brought across by this procedure and has
+been dropped from it.** It is the only cross-repository PR of the 38: its head lives on
+`devingryu`'s fork, so `origin/features/enable-virtual-threads` does not exist and step 0 of the
+per-branch recipe is unrunnable. Verified with
+`gh pr list --json number,isCrossRepository` — every other PR in the sweep is `false`.
+
+The commit is reachable as `refs/pull/51/head` (`b4d5c2df`), so the rename *could* be performed
+locally. That is not the problem. The problem is the other end: **there is nowhere to put the
+result.** Phase D fast-forwards each `<branch>-rename` into its parent and the parent here is a
+branch in someone else's repository. A renamed local branch with no push destination is not a
+delivered result, it is a branch that quietly rots while the tree moves underneath it.
+
+Whoever picks this up is choosing between:
+
+- **Push to the contributor's fork**, if they enabled maintainer edits. Check with
+  `gh pr view 51 --json maintainerCanModify`. This is the only option that keeps the PR mergeable
+  without the contributor doing anything.
+- **Ask the contributor to run the procedure** on their fork, pointing them at
+  `bin/rename-packages.sh` and the `BRINGING AN OPEN BRANCH ACROSS` block. Correct, and slow, and it
+  is a 2021-era PR whose author may not still be reachable.
+- **Close it**, and re-open the work as a fork-owned branch if the feature is still wanted.
+
+Doing nothing has a cost and a deadline: once the rename lands on master, astubbs#51's diff is
+against paths that no longer exist. Every day it stays open, the eventual merge gets worse — and it
+is the one branch in this operation where the fork cannot fix that unilaterally.
+
+`refs/pull/51/merge` is the wrong ref to use for any of this: it is GitHub's speculative merge with
+the base, not the contributor's work.
+
+### Also waiting on a human, lower priority
+
+- **`dups: similarity` is a required check and fails on any renamed branch, as a false positive.**
+  The five near-identical `TestConventionsArchTest.java` files score 89-91% against each other and
+  always have — on astubbs#293 they score 89.57-91.04 and the job passes. The same numbers fail on
+  astubbs#294 because the check compares against base *by file path*, and after a 234-file rename no
+  path has a base counterpart, so pre-existing duplication reads as newly introduced. Nothing in the
+  diff became more duplicated. This will fire on all 38 branches at Phase D. Options: make the
+  action's base comparison rename-aware, add a documented temporary exemption, or override at merge.
+- **The third refusal case: `src/docs/README_TEMPLATE.adoc`'s `confluent-accelerators` link.** The
+  path-form scan matches `io/confluent` inside the URL `www.confluent.io/confluent-accelerators/` —
+  a live external link, not a package reference. Master deleted the line in `04cb92de` as part of a
+  wholesale intro rewrite, so "delete what master deleted" does **not** inherit the conflict-free
+  property that makes the astubbs#289 deletion safe, and the line sits next to the guarded prose.
+  **2 of 37 branches** are affected. Probe: `git merge-base --is-ancestor 04cb92de origin/<headRef>`.
+
+---
+
 ## What exists right now
 
 | Thing | Where | State |
