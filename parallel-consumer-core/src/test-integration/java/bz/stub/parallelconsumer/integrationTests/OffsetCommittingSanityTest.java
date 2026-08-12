@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -24,8 +25,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Future;
 
-import static io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase.defaultTimeoutSeconds;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.NOT_TRANSACTIONAL;
+import static bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase.defaultTimeoutSeconds;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.NOT_TRANSACTIONAL;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -36,7 +37,7 @@ import static org.awaitility.Awaitility.waitAtMost;
  * <p>
  * Reproduces issue 62: https://github.com/confluentinc/parallel-consumer/issues/62
  *
- * @see io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest#closeOpenBoundaryCommits
+ * @see bz.stub.parallelconsumer.ParallelEoSStreamProcessorTest#closeOpenBoundaryCommits
  */
 @Slf4j
 public class OffsetCommittingSanityTest extends BrokerIntegrationTest<String, String> {

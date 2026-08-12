@@ -1,11 +1,12 @@
-package io.confluent.parallelconsumer.truth;
+package bz.stub.parallelconsumer.truth;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.FailureMetadata;
-import io.confluent.parallelconsumer.model.CommitHistory;
+import bz.stub.parallelconsumer.model.CommitHistory;
 import io.stubbs.truth.generator.SubjectFactoryMethod;
 import io.stubbs.truth.generator.UserManagedSubject;
 import one.util.streamex.StreamEx;
@@ -21,7 +22,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 
-import static io.confluent.parallelconsumer.truth.CommitHistorySubject.commitHistories;
+import static bz.stub.parallelconsumer.truth.CommitHistorySubject.commitHistories;
 
 /**
  * Optionally move this class into source control, and add your custom assertions here.

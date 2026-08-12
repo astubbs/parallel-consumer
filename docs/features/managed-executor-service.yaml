@@ -27,4 +27,4 @@ boundaries:
   - The configured executor must be valid for the runtime; this option does not create or tune the server-managed resource.
 references:
   - label: Managed executor option
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java

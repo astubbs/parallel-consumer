@@ -39,8 +39,8 @@ boundaries:
   - The measure runs from when a record was taken as work, so it covers both the executor queue and the user function's own runtime. It does not cover the shard-queue wait before the record was selected.
 references:
   - label: Meter definition
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/metrics/PCMetricsDef.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java
   - label: Threshold evaluation and warning
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ProcessingShard.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ProcessingShard.java
   - label: Metrics
     path: README.adoc#mertics

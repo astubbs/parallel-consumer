@@ -1,16 +1,17 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
-import io.confluent.parallelconsumer.state.PartitionState;
-import io.confluent.parallelconsumer.state.PartitionStateManager;
-import io.confluent.parallelconsumer.state.WorkContainer;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
+import bz.stub.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.PartitionStateManager;
+import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import one.util.streamex.LongStreamEx;
@@ -29,9 +30,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertTruth;
-import static io.confluent.parallelconsumer.ManagedTruth.assertWithMessage;
-import static io.confluent.parallelconsumer.state.PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT;
+import static bz.stub.parallelconsumer.ManagedTruth.assertTruth;
+import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
+import static bz.stub.parallelconsumer.state.PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT;
 
 /**
  * UnitTest version of {@link OffsetEncodingBackPressureTest}.

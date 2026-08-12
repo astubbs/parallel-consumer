@@ -1,15 +1,16 @@
-package io.confluent.parallelconsumer.mutiny;
+package bz.stub.parallelconsumer.mutiny;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.PCRetriableException;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.PollContextInternal;
-import io.confluent.parallelconsumer.internal.ExternalEngine;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.PCRetriableException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
@@ -26,7 +27,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 
 /**
  * Adapter for using Mutiny as the asynchronous execution engine.
@@ -73,7 +74,7 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
      * @see #onRecord(Function)
      * @see ParallelConsumerOptions
      * @see ParallelConsumerOptions#batchSize
-     * @see io.confluent.parallelconsumer.ParallelStreamProcessor#poll
+     * @see bz.stub.parallelconsumer.ParallelStreamProcessor#poll
      */
 
     /**
