@@ -19,10 +19,12 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.assertj.core.util.Lists;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -43,22 +45,66 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 public class LoadTest extends DbTest {
 
-    // Untagged, so this runs in the gating integration lane, and it is a listed member of the
-    // load-tightness flake family at this volume (docs/inflight/test-load-tightness-flakes.md).
-    // Classify before raising it - that family is where the confluentinc#857 deadlock was hiding.
-    static int total = 4_000;
+    /**
+     * The gating volume. Untagged, so this runs in the gating integration lane, and it is a listed
+     * member of the load-tightness flake family at exactly this volume
+     * (docs/inflight/test-load-tightness-flakes.md). Classify before raising it - that family is
+     * where the confluentinc#857 deadlock was hiding.
+     */
+    static final int GATING_TOTAL = 4_000;
+
+    /**
+     * The range this test was actually run at by hand. Authored in {@code af1fa5de} (2020-06-17) as
+     * four commented-out alternatives beside the live value, and deleted in {@code e67d8b89} on the
+     * grounds that they were dead - but none of them was ever live, so the ladder was the only
+     * record of which volumes anyone had exercised. Reachable now without editing the file:
+     *
+     * <pre>./mvnw verify -Pci -Dload.total=400000</pre>
+     *
+     * The same commit also parked {@code 8}, which is not a volume rung at all - it is the
+     * fast-iteration setting for working on this harness itself, and it was deleted as though it
+     * were one of the volumes. It is {@code -Dload.total=8}, and it works now: as parked it could
+     * never have run, because the key range is derived as {@code volume / 100} and eight records
+     * gave zero keys. {@link #setupTestData} floors that at one.
+     * <p>
+     * Property convention is {@code <concern>.<knob>}, matching the existing {@code chaos.seed} and
+     * {@code ambient.probe}.
+     */
+    static final int[] RECOVERED_VOLUMES = {40_000, 80_000, 400_000};
+
+    /**
+     * The volume the high-volume case runs at when the performance lane selects it. The smallest
+     * recovered rung, so the lane gets a genuine high-volume run without a multi-hour default.
+     */
+    static final int HIGH_VOLUME_TOTAL = RECOVERED_VOLUMES[0];
+
+    static int total = Integer.getInteger("load.total", GATING_TOTAL);
+
+    /**
+     * A completion ceiling, not a performance assertion. The gating volume keeps exactly the 60
+     * seconds it has always had; larger volumes get proportionally longer, because a fixed wait is
+     * what made every higher rung unreachable regardless of whether the run was healthy. A load
+     * test's job is to complete - proving a rate is what the performance suite is for. Tighten it
+     * only with a measurement in hand.
+     */
+    private static Duration completionCeiling(int volume) {
+        return ofSeconds(Math.max(60, volume / 100));
+    }
 
     @SneakyThrows
-    public void setupTestData() {
+    public void setupTestData(int volume) {
         setupTopic();
 
-        publishMessages(total / 100, total, topic);
+        // One key per hundred records, but never zero. Below 100 records the original `volume / 100`
+        // produced an empty key list and publishMessages threw IndexOutOfBounds on the first send -
+        // which is why the parked `8` could not have run as written, in af1fa5de or since.
+        publishMessages(Math.max(1, volume / 100), volume, topic);
     }
 
     @SneakyThrows
     @Test
     void timedNormalKafkaConsumerTest() {
-        setupTestData();
+        setupTestData(total);
 
         // subscribe in advance, it can be a few seconds
         getKcu().getConsumer().subscribe(UniLists.of(topic));
@@ -69,7 +115,25 @@ public class LoadTest extends DbTest {
     @SneakyThrows
     @Test
     void asyncConsumeAndProcess() {
-        setupTestData();
+        asyncConsumeAndProcess(total);
+    }
+
+    /**
+     * The same scenario at one of the {@link #RECOVERED_VOLUMES}. Tagged, so the gating lane never
+     * runs it and the default excluded groups keep it out; select it with
+     * {@code -Dincluded.groups=performance}, and reach the top of the recovered range by adding
+     * {@code -Dload.total=400000}.
+     */
+    @SneakyThrows
+    @Test
+    @Tag("performance")
+    void asyncConsumeAndProcessAtVolume() {
+        asyncConsumeAndProcess(Integer.getInteger("load.total", HIGH_VOLUME_TOTAL));
+    }
+
+    @SneakyThrows
+    private void asyncConsumeAndProcess(int volume) {
+        setupTestData(volume);
 
         KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer();
         //
@@ -87,7 +151,7 @@ public class LoadTest extends DbTest {
 
         AtomicInteger msgCount = new AtomicInteger(0);
 
-        ProgressBar pb = ProgressBarUtils.getNewMessagesBar(log, total);
+        ProgressBar pb = ProgressBarUtils.getNewMessagesBar(log, volume);
 
         try (pb) {
             async.poll(r -> {
@@ -101,10 +165,10 @@ public class LoadTest extends DbTest {
             });
 
             // keep checking how many message's we've processed
-            await().atMost(ofSeconds(60)).until(() -> {
+            await().atMost(completionCeiling(volume)).until(() -> {
                 // log.debug("msg count: {}", msgCount.get());
                 pb.stepTo(msgCount.get());
-                return msgCount.get() >= total;
+                return msgCount.get() >= volume;
             });
         }
         async.close();
@@ -150,7 +214,7 @@ public class LoadTest extends DbTest {
             });
 
             try (pb) {
-                await().atMost(ofSeconds(60)).untilAsserted(() -> {
+                await().atMost(completionCeiling(total)).untilAsserted(() -> {
                     assertThat(count).hasValue(total);
                 });
             }
