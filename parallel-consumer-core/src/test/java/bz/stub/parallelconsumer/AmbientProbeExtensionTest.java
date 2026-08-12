@@ -52,6 +52,15 @@ import static org.mockito.Mockito.when;
  */
 class AmbientProbeExtensionTest {
 
+    /**
+     * Every {@link AmbientProbeExtension#buildAutopsy} call mutates the same static once-per-JVM
+     * environment-dump guard, whether or not the test cares about the dump - the first caller wins it
+     * and every later one gets the "already dumped" line. This module runs JUnit thread-parallel
+     * outside {@code -Pci}, so any two of them that are not serialised can red each other. Hold this
+     * lock on every test that calls {@code buildAutopsy}, not just the two asserting on the dump.
+     */
+    private static final String ENVIRONMENT_DUMP_LOCK = "ambient-probe-environment-dump";
+
     // --- fixtures for the isDisabled() matrix ---
 
     static class PlainFixture {
@@ -114,12 +123,9 @@ class AmbientProbeExtensionTest {
 
     // --- environment dump (what JavaEnvTest used to do by hand) ---
 
-    /**
-     * Serialised against its sibling: both mutate the same static guard, and this module runs JUnit
-     * thread-parallel outside {@code -Pci}, so unsynchronised they can interleave and red each other.
-     */
+    /** Asserts on the guard itself, so it resets it first - see {@link #ENVIRONMENT_DUMP_LOCK}. */
     @Test
-    @ResourceLock("ambient-probe-environment-dump")
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyCarriesTheEnvironmentDumpOncePerRun() {
         AmbientProbeExtension.resetEnvironmentDumpForTest();
         var probe = observerProbe();
@@ -137,7 +143,7 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
-    @ResourceLock("ambient-probe-environment-dump")
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     @SetSystemProperty(key = "ambient.probe.test.multiline", value = "alpha\nbeta")
     void environmentDumpEscapesNewlinesSoOneLinePerProperty() {
         AmbientProbeExtension.resetEnvironmentDumpForTest();
@@ -151,6 +157,7 @@ class AmbientProbeExtensionTest {
     // --- autopsy rendering ---
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyReportsProbeCleanWhenNothingObserved() {
         var probe = observerProbe();
 
@@ -164,6 +171,7 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyListsViolationsWithCount() {
         var probe = observerProbe();
         probe.getViolations().add("ZOMBIE_MEMBER/REBALANCE_BLOCKED: synthetic dwell violation");
@@ -179,6 +187,7 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyShowsFrozenPartitionDetailWhenNoViolationCrossedBounds() {
         var probe = observerProbe();
         var tp = new TopicPartition("in-topic", 12);
