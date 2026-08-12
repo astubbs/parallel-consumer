@@ -3,10 +3,10 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Regenerate docs/TODO_INDEX.md - an index of every TODO/FIXME/XXX marker in the tree.
+# Regenerate docs/todo-index.md - an index of every TODO/FIXME/XXX marker in the tree.
 #
 # Usage:
-#   bin/todo-index.sh            # rewrite docs/TODO_INDEX.md
+#   bin/todo-index.sh            # rewrite docs/todo-index.md
 #   bin/todo-index.sh --check    # exit 1 if the committed index is stale (for CI)
 #
 # Why generated and not hand-maintained: a hand-written list of TODOs is wrong the day after it is
@@ -31,7 +31,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-OUT="docs/TODO_INDEX.md"
+OUT="docs/todo-index.md"
 SELF="bin/todo-index.sh"
 
 CHECK_MODE=false
@@ -73,9 +73,9 @@ MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
 # NOTE: this filter is applied to `grep -n` output, so line-anchored patterns must allow the
 # leading "<lineno>:" prefix - anchoring on ^[[:space:]] alone silently never matches.
 #   references TO a marker elsewhere, e.g. "the run-length optimisation TODO on {@link X}"
-#   compound names    todo-index.sh, TODO_INDEX.md   (a filename, not a marker - this one is live:
-#                                                     .github/workflows/claude-code-review.yml names
-#                                                     the script in a comment)
+#   compound names    todo-index.sh, todo-index.md   (a filename, not a marker - this one is live:
+#                                                     the review workflows name the script in a
+#                                                     comment)
 NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO|[Tt][Oo][Dd][Oo][-_][A-Za-z])'
 
 emit_body() {

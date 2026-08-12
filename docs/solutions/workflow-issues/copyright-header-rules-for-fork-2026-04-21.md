@@ -33,7 +33,7 @@ tags:
 > - Renames/moves/extractions of upstream files are registered in the provenance lists inside `bin/check-copyright-headers.sh`.
 > - Still valid from this doc: never bump years incidentally or standalone (years are deliberately not policed by the scanner), the `NOTICE` file is the legal attribution record, and header-only changes without substantive code changes remain prohibited.
 >
-> The authoritative rules live in `AGENTS.md`, "Copyright rules for this fork". The incident narrative below is kept as the historical record.
+> The authoritative rules live in [`docs/copyright.md`](../../copyright.md). The incident narrative below is kept as the historical record.
 
 ## Context
 
@@ -141,7 +141,7 @@ The commit only added a null-epoch guard. The range `2020-2022` was correct. The
 
 ## Related
 
-- `AGENTS.md`, "Copyright rules for this fork" under Code Style - the codified rules (authoritative source)
+- [`docs/copyright.md`](../../copyright.md) - the codified rules (authoritative source)
 - `bin/check-copyright-headers.sh` + `bin/test-check-copyright-headers.sh` - the enforcement and its self-tests (PR astubbs#90)
 - `.github/workflows/copyright.yml` - CI enforcement
 - `NOTICE` file at repo root - legal attribution structure
