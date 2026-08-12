@@ -341,13 +341,29 @@ Counts are out of the 37 branches attempted.
 | E | the accelerators URL reads as a package path | 2 | delete the line |
 | F | a prose guard whose sentence the branch never had | 2 attempted, ~121 repo-wide | **fixed in the tooling** |
 
-**B, D and E share one shape, and it is the lesson worth carrying.** Each is a master commit that made
+A fifth instance of the same shape turned up in the tail, and it is worth naming because it is the one
+that does **not** announce itself as a refusal. On the four oldest branches — the same four as class D —
+`pom.xml` still carries `license-maven-plugin` and its `license-maven-plugin-git` extension, which
+master has since removed entirely. That extension's jgit cannot read a worktree's `.git` **file**, so
+`./mvnw -N process-sources` reports failure inside a sweep worktree even though the asciidoc regen goal
+has already run and produced a correct `README.adoc`. **Judge the regen by its output, not by the exit
+code**: `--verify-only` passing afterwards is the real check, and it did pass on every affected branch.
+On master's current `pom.xml` the command exits 0 cleanly, which is why 30-odd agents never saw it.
+
+**B, D, E and the license plugin share one shape, and it is the lesson worth carrying.** Each is a master commit that made
 the rename mechanical — deleting dead config, removing an include, dropping a stale link — which older
 branches simply do not have. The procedure was written against master's tip and silently assumed every
 branch was rebased onto it. **When a cleanup lands "ahead of the rename so the change stays mechanical",
 it makes the rename mechanical only for branches that contain it.** A future sweep should screen for
 each such prerequisite commit up front with `git merge-base --is-ancestor`, rather than discovering
 them one refusal at a time.
+
+**A copyright count that DROPS after the rename is not a check that stopped running.** astubbs#38 went
+from 15 violations to 0. The 15 were upstream-derived files modified since the fork point without a
+`Modifications Copyright` line — the branch's own pre-existing debt. The rename's content commit touches
+those same files and stamps the line in, so it healed the debt rather than hiding it; verified by
+finding the content commit as the one that added the line. Expect this on any branch carrying that debt,
+and check which commit added the line before believing either story.
 
 **C is the one that will bite again outside this project.** `git checkout <ref> -- <file>` is a
 whole-file overwrite, so a branch that had registered its own file provenance in
