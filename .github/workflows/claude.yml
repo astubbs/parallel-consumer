@@ -79,7 +79,7 @@ jobs:
       # Defined here so the two carve-outs in `pr-context` - fork head, untrusted commenter -
       # switch one value rather than editing a list in several places.
       # KEEP IN SYNC with `--allowedTools` in claude-code-review-dispatch.yml.
-      REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(bin/check-ossindex-audit.sh:*),Bash(./bin/check-ossindex-audit.sh:*),Bash(bin/test-check-ossindex-audit.sh:*),Bash(./bin/test-check-ossindex-audit.sh:*),Bash(bin/check-cve-exclusions.sh:*),Bash(./bin/check-cve-exclusions.sh:*),Bash(bin/test-check-cve-exclusions.sh:*),Bash(./bin/test-check-cve-exclusions.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
+      REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-*.sh:*),Bash(./bin/check-*.sh:*),Bash(bin/test-check-*.sh:*),Bash(./bin/test-check-*.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
     permissions:
       contents: read
       pull-requests: read
@@ -304,6 +304,12 @@ jobs:
           # action documents exactly that ("The base GitHub tools are always included. Use
           # --allowedTools to add additional tools", docs/configuration.md) - so the tracking
           # comment, the `mcp__github_ci__*` readers and the git tools all survive this line.
+          #
+          # `Bash(bin/check-*.sh:*)` AND `Bash(bin/test-check-*.sh:*)` ARE PATTERNS ON PURPOSE.
+          # Do not "tidy" them back into one grant per script. The reason is stated once, at
+          # length, on the dispatch route's copy of this list - the short version is that a grant
+          # a PR adds never applies to that PR, so a per-script grant has to land in an earlier
+          # PR than its script, and that is why four of them were missing when they were needed.
           #
           # ==> KEEP IN SYNC WITH `--allowedTools` IN claude-code-review-dispatch.yml. <==
           # The two lists are byte-identical apart from the inline-comment tool, and nothing

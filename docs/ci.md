@@ -522,6 +522,13 @@ default branch's copy, so a PR cannot rewrite its own reviewer. Two consequences
   the PR exercises master's `claude.yml`. Both routes now say so in the reviewer's system prompt,
   because this has already been misdiagnosed once as an approval layer beyond `--allowedTools`
   ([`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md)).
+- **So new `bin/` guards are granted by pattern, not one at a time.** Both allowlists carry
+  `Bash(bin/check-*.sh:*)` and `Bash(bin/test-check-*.sh:*)` (each in the bare and `./` spelling),
+  which means **a new `bin/check-*.sh` needs no allowlist change at all** - it is covered the
+  moment it exists on the default branch. Adding a guard under some other name still needs its
+  grant landed in an earlier PR than the script. The reasoning, and what the pattern deliberately
+  accepts, is in
+  [`claude-code-review-dispatch.yml`](../.github/workflows/claude-code-review-dispatch.yml).
 
 ## Self-hosted lanes
 

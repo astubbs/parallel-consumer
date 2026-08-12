@@ -108,9 +108,11 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
 
   **What is left open is only that the grants remain unexercised**, which is the general condition
   of the bullet above rather than anything specific to these four: a grant a PR adds can never apply
-  to that PR, on any route. They - and the `bin/check-*` / `bin/test-check-*` wildcard patterns that
-  replaced the enumeration - land unverified, and the confirming step is the `--ref master` dispatch
-  already named above, prompted to run a `bin/check-*.sh` and quote its output.
+  to that PR, on any route. The enumeration has since been replaced by `Bash(bin/check-*.sh:*)` and
+  `Bash(bin/test-check-*.sh:*)` so that the *convention* is granted once instead of each script
+  separately - but the patterns land unverified for the same reason, and the confirming step is the
+  `--ref master` dispatch already named above, prompted to run a `bin/check-*.sh` and quote its
+  output.
 - **OPEN DECISION: the comment route reviews the PR but runs the default branch.** `claude.yml`'s
   checkout names no `ref:`, so an `issue_comment` run has master's tree on disk and the PR's files
   nowhere - `refs/pull` never appears in one. Every execution grant on that route therefore operates
