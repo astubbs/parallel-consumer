@@ -475,7 +475,7 @@ This library is copyright Confluent, Inc. and contributors, and licensed under t
 
 === Maven
 
-This project publishes to Maven Central under the group ID `bz.stub.parallelconsumer`: https://central.sonatype.com/namespace/bz.stub.parallelconsumer[browse it on Maven Central].
+This project is available in Maven Central, https://repo1.maven.org/maven2/bz/stub/parallelconsumer/[repo1].
 
 Latest version can be seen https://search.maven.org/artifact/bz.stub.parallelconsumer/parallel-consumer-core[here].
 
