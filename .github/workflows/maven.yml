@@ -326,14 +326,14 @@ jobs:
       #                        PIT writes history to /tmp/{groupId}.{artifactId}...
       #                        which we cache above via actions/cache.
       # targetClasses: internal.* only — the core engine where mutations matter most.
-      #   Broadening to io.confluent.parallelconsumer.* hit GitHub's 6h job cap (#41).
+      #   Broadening to bz.stub.parallelconsumer.* hit GitHub's 6h job cap (#41).
       - name: Run PIT mutation testing
         run: |
           ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
             -Dlicense.skip \
             -Djacoco.skip=true \
-            -DtargetClasses="io.confluent.parallelconsumer.internal.*" \
-            -DtargetTests="io.confluent.parallelconsumer.*" \
+            -DtargetClasses="bz.stub.parallelconsumer.internal.*" \
+            -DtargetTests="bz.stub.parallelconsumer.*" \
             -DjvmArgs=-Xmx1g \
             -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
             -Dthreads=1 \

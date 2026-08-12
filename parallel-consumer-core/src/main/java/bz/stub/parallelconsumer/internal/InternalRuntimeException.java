@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.StringUtils;
 import lombok.experimental.StandardException;
 
 /**

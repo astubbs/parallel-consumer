@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer.examples.metrics;
+package bz.stub.parallelconsumer.examples.metrics;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;

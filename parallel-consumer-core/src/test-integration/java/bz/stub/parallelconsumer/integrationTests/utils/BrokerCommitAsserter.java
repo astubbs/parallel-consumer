@@ -1,7 +1,8 @@
-package io.confluent.parallelconsumer.integrationTests.utils;
+package bz.stub.parallelconsumer.integrationTests.utils;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.AccessLevel;
@@ -15,7 +16,7 @@ import pl.tlinkowski.unij.api.UniSets;
 import java.time.Duration;
 import java.util.Set;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
+import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
 import static java.time.Duration.ofSeconds;
 import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
 

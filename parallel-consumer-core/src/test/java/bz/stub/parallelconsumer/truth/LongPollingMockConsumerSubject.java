@@ -1,13 +1,14 @@
-package io.confluent.parallelconsumer.truth;
+package bz.stub.parallelconsumer.truth;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.Subject;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.parallelconsumer.model.CommitHistory;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.model.CommitHistory;
 import io.stubbs.truth.generator.SubjectFactoryMethod;
 import io.stubbs.truth.generator.UserManagedSubject;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -19,7 +20,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertAbout;
-import static io.confluent.parallelconsumer.truth.CommitHistorySubject.commitHistories;
+import static bz.stub.parallelconsumer.truth.CommitHistorySubject.commitHistories;
 
 /**
  * @author Antony Stubbs

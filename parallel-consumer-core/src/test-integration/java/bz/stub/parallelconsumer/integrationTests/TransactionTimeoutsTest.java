@@ -1,20 +1,21 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.csid.utils.LatchTestUtils;
-import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.parallelconsumer.FakeRuntimeException;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.integrationTests.utils.BrokerCommitAsserter;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.ProducerManager;
-import io.confluent.parallelconsumer.internal.ProducerWrapper;
+import bz.stub.parallelconsumer.internal.utils.LatchTestUtils;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.integrationTests.utils.BrokerCommitAsserter;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.ProducerWrapper;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
@@ -39,8 +40,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.NEW_GROUP;
+import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.NEW_GROUP;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.mockito.ArgumentMatchers.any;
@@ -52,7 +53,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *
  * @author Antony Stubbs
  * @see ProducerManager
- * @see io.confluent.parallelconsumer.internal.ProducerManagerTest
+ * @see bz.stub.parallelconsumer.internal.ProducerManagerTest
  */
 @Tag("transactions")
 @Slf4j
