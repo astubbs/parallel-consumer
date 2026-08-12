@@ -162,6 +162,18 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
                         + "re-fire over and the whole experiment is void")
                 .isNotEmpty();
 
+        assertThat(phases.dispatchedInRunTwo + phases.dispatchedToPool)
+                .as("premise: this is the CONTROL and must not have touched the seam in either phase - "
+                        + "PcDispatchSwitch defaults ON, so seam-off is never ambient")
+                .isZero();
+
+        assertThat(phases.runTwo)
+                .as("CONTROL premise: run 2 must actually punctuate. lowestStreamTime() returns "
+                        + "Long.MAX_VALUE for an empty list, which satisfies the >= below - so without "
+                        + "this the control could go green having observed nothing, and it is the arm "
+                        + "the whole attribution rests on.")
+                .isNotEmpty();
+
         assertThat(lowestStreamTime(phases.runTwo))
                 .as("CONTROL: with the seam off, the committed TopicPartitionMetadata carries the "
                         + "partition time and the restart restores the mark to %s. Run 2 may still "
@@ -185,7 +197,14 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
         Phases phases = runBothPhases("pc-refire");
 
         assertThat(phases.dispatchedToPool)
-                .as("premise: this arm must have gone through the PC dispatch seam")
+                .as("premise: run 1 went through the PC dispatch seam")
+                .isPositive();
+
+        assertThat(phases.dispatchedInRunTwo)
+                .as("premise for the MEASURED phase: run 2 must also have gone through the seam. The "
+                        + "counter was previously read only after run 1, so a run 2 that silently fell "
+                        + "back to stock would still satisfy the premise while the assertion below was "
+                        + "read as a PC-path result.")
                 .isPositive();
 
         assertThat(phases.runOne)
@@ -205,10 +224,15 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
                         + "seam and not to how the test is built. Cause is named in pc-streams.patch's "
                         + "own seedStreamTime comment: a PC-written group's committed metadata is PC's "
                         + "frontier payload, not Streams' TopicPartitionMetadata, so the decode yields "
-                        + "UNKNOWN and there is nothing to seed from. WHEN THIS IS FIXED this assertion "
-                        + "INVERTS to isGreaterThanOrEqualTo(highest), matching the control.",
-                        lateTimestamp(), phases.highestRunOneStreamTime)
-                .isLessThan(phases.highestRunOneStreamTime);
+                        + "UNKNOWN and there is nothing to seed from. Asserted below run 1's LOWEST "
+                        + "event time (%s), not merely below its highest: a replayed run-1 record would "
+                        + "punctuate below the highest too, so the looser band could not tell mark loss "
+                        + "from replay. Nothing run 1 produced can punctuate below its own base. WHEN "
+                        + "THIS IS FIXED this assertion INVERTS to isGreaterThanOrEqualTo(highest), "
+                        + "matching the control. Fix direction: populate PC's own opaque rider (KTD-S7), "
+                        + "do NOT reintroduce Streams' TopicPartitionMetadata as a second writer.",
+                        lateTimestamp(), phases.highestRunOneStreamTime, runOneBaseTimestamp)
+                .isLessThan(runOneBaseTimestamp);
     }
 
     /** Runs phase 1, closes, restarts the same application id, runs phase 2. */
@@ -224,9 +248,10 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
         KafkaStreams runOne = null;
         long dispatched;
         try {
-            // Assigned INSIDE the try: startAndAwaitRunning start()s the client before awaiting RUNNING,
-            // so a timeout there would orphan a live client - threads, consumer, producer, group
-            // membership - that no finally ever closed, and it would linger into the next arm.
+            // Assigned inside the try for ordinary scoping. Note the startup-timeout case is NOT handled
+            // here and cannot be: startAndAwaitRunning start()s before awaiting, so on timeout it never
+            // returns and this variable stays null. That leak is closed in the base class, at the only
+            // place holding the reference. An earlier commit claimed this line fixed it; it did not.
             runOne = startTopology(appId, inputTopic, outputTopic);
             await().atMost(Duration.ofSeconds(60))
                     .until(() -> recordsProcessed.get() >= RUN_ONE_RECORDS);
@@ -235,8 +260,10 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
         } finally {
             // Clean close: this arm is about what a restart restores, not about crash behaviour, and a
             // clean close is what writes the committed metadata the restart reads back.
-            if (runOne != null) {
-                runOne.close(Duration.ofSeconds(30));
+            if (runOne != null && !runOne.close(Duration.ofSeconds(30))) {
+                // Not swallowed: a timed-out close skips the final commit this restart reads back, and
+                // leaves threads that keep incrementing the static counter past the mid-method reset.
+                throw new IllegalStateException("run 1 did not shut down within the timeout in " + name);
             }
         }
         List<String> runOnePunctuations = drainAll(outputTopic);
@@ -251,21 +278,23 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
         recordsProcessed.set(0);
         produceAt(inputTopic, lateTimestamp(), STEP, RUN_TWO_RECORDS, "late");
         KafkaStreams runTwo = null;
+        long dispatchedInRunTwo;
         try {
             runTwo = startTopology(appId, inputTopic, outputTopic);
             await().atMost(Duration.ofSeconds(60))
                     .until(() -> recordsProcessed.get() >= RUN_TWO_RECORDS);
             sleepThrough(SETTLE, "letting run 2 punctuate if it is going to in " + name);
+            dispatchedInRunTwo = PcDispatchCounters.getRecordsDispatchedToPool() - dispatched;
         } finally {
-            if (runTwo != null) {
-                runTwo.close(Duration.ofSeconds(30));
+            if (runTwo != null && !runTwo.close(Duration.ofSeconds(30))) {
+                throw new IllegalStateException("run 2 did not shut down within the timeout in " + name);
             }
         }
         // Scoped past run 1's output, so run 1's punctuations cannot satisfy a run 2 assertion.
         List<String> runTwoPunctuations = drainFrom(outputTopic, outputEnd);
         log.info("=== [{}] run 2 punctuated at {}", name, runTwoPunctuations);
 
-        return new Phases(runOnePunctuations, runTwoPunctuations, highest, dispatched);
+        return new Phases(runOnePunctuations, runTwoPunctuations, highest, dispatched, dispatchedInRunTwo);
     }
 
     /**
@@ -317,17 +346,17 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
                      getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
             consumer.assign(UniLists.of(partition));
             consumer.seek(partition, fromOffset);
-            // Stop after a few consecutive quiet polls rather than always burning the whole budget.
-            // This keeps the property that matters - an arm may legitimately observe nothing, so there is
-            // no await-for-at-least-one that would hang on silence - while returning as soon as the topic
-            // has gone quiet, whether that is because nothing came or because everything already did.
-            int quiet = 0;
-            for (int poll = 0; poll < 8 && quiet < 3; poll++) {
-                int before = values.size();
+            // Bounded by the topic's actual end offset, not by quietness. A quiet-poll exit looked
+            // cheaper but a cold consumer's first polls legitimately return empty, so three of them could
+            // end the drain with records still unread - and that truncation is not symmetric: an empty
+            // read makes the control pass and the PC arm fail. Reading to a known end keeps the property
+            // that matters (an arm may legitimately observe nothing, so there is no await-for-at-least-one
+            // to hang on silence) without inventing silence that is not there.
+            long end = endOffset(topic);
+            for (int poll = 0; poll < 12 && consumer.position(partition) < end; poll++) {
                 for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
                     values.add(record.value());
                 }
-                quiet = values.size() == before ? quiet + 1 : 0;
             }
         }
         return values;
@@ -392,12 +421,16 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
 
         private final long dispatchedToPool;
 
+        private final long dispatchedInRunTwo;
+
         private Phases(final List<String> runOne, final List<String> runTwo,
-                       final long highestRunOneStreamTime, final long dispatchedToPool) {
+                       final long highestRunOneStreamTime, final long dispatchedToPool,
+                       final long dispatchedInRunTwo) {
             this.runOne = runOne;
             this.runTwo = runTwo;
             this.highestRunOneStreamTime = highestRunOneStreamTime;
             this.dispatchedToPool = dispatchedToPool;
+            this.dispatchedInRunTwo = dispatchedInRunTwo;
         }
     }
 }

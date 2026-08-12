@@ -121,15 +121,25 @@ abstract class BrokerStreamsIntegrationTest extends BrokerIntegrationTest<String
         streams.start();
 
         AtomicInteger polls = new AtomicInteger();
-        await().atMost(STARTUP_TIMEOUT).until(() -> {
-            KafkaStreams.State state = streams.state();
-            // Every tenth poll, not every one: a slow start would otherwise bury the run's own logging under
-            // a line per Awaitility interval, and the state only matters when it stops changing.
-            if (polls.getAndIncrement() % 10 == 0) {
-                log.info("Waiting for Streams to run, state={}", state);
-            }
-            return state == KafkaStreams.State.RUNNING;
-        });
+        try {
+            await().atMost(STARTUP_TIMEOUT).until(() -> {
+                KafkaStreams.State state = streams.state();
+                // Every tenth poll, not every one: a slow start would otherwise bury the run's own logging
+                // under a line per Awaitility interval, and the state only matters when it stops changing.
+                if (polls.getAndIncrement() % 10 == 0) {
+                    log.info("Waiting for Streams to run, state={}", state);
+                }
+                return state == KafkaStreams.State.RUNNING;
+            });
+        } catch (Throwable startupFailure) {
+            // Close where it was started. The client is already start()ed by the time this await runs, so a
+            // timeout here would otherwise orphan live threads, a consumer, a producer and group membership
+            // that no caller can reach - the instance is never returned, so no caller-side try/finally can
+            // close it. A caller-side null guard does not help for the same reason.
+            log.error("Streams did not reach RUNNING; closing the partially started client", startupFailure);
+            streams.close(Duration.ofSeconds(30));
+            throw startupFailure;
+        }
         return streams;
     }
 }
