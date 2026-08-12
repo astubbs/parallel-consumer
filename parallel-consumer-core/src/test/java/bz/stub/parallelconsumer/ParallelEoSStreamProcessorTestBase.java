@@ -1,11 +1,12 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.PCModule;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 

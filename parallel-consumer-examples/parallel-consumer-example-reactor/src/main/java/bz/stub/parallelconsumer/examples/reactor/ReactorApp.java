@@ -1,11 +1,12 @@
-package io.confluent.parallelconsumer.examples.reactor;
+package bz.stub.parallelconsumer.examples.reactor;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.reactor.ReactorProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.reactor.ReactorProcessor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;

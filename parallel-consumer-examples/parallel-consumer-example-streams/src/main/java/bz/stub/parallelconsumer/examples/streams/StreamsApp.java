@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.examples.streams;
+package bz.stub.parallelconsumer.examples.streams;
 
 /*-
  * Copyright (C) 2020 Confluent, Inc.
@@ -6,8 +6,8 @@ package io.confluent.parallelconsumer.examples.streams;
  */
 
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelStreamProcessor;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;

@@ -1,4 +1,4 @@
-package io.confluent.csid.utils;
+package bz.stub.parallelconsumer.internal.utils;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors

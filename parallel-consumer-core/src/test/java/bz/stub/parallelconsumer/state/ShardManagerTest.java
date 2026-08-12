@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.assertj.core.api.Assertions;
