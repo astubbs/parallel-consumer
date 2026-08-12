@@ -29,12 +29,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
-import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -214,9 +216,8 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
         long dispatched;
         try {
             await().atMost(Duration.ofSeconds(60))
-                    .until(() -> recordsProcessed.get() >= INPUT_RECORDS);
-            await().atMost(Duration.ofSeconds(60))
-                    .until(() -> punctuationsFired.get() >= PUNCTUATIONS_AWAITED);
+                    .until(() -> recordsProcessed.get() >= INPUT_RECORDS
+                            && punctuationsFired.get() >= PUNCTUATIONS_AWAITED);
 
             punctuations = punctuationsFired.get();
             dispatched = PcDispatchCounters.getRecordsDispatchedToPool();
@@ -231,9 +232,13 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
             streams.close(Duration.ofSeconds(30));
         }
 
-        // Read AFTER the client is gone, so nothing further can be produced while the reader runs.
-        List<String> forwarded = drainAll(outputTopic);
-        List<String> changelog = drainAll(appId + "-" + STORE + "-changelog");
+        // Read AFTER the client is gone, so nothing further can be produced while the reader runs. Both
+        // topics come off ONE subscription: two sequential drains each paid the full fixed poll budget,
+        // which was most of this class's runtime.
+        String changelogTopic = appId + "-" + STORE + "-changelog";
+        Map<String, List<String>> drained = drainAll(outputTopic, changelogTopic);
+        List<String> forwarded = drained.get(outputTopic);
+        List<String> changelog = drained.get(changelogTopic);
         log.info("=== [{}] output topic: {}", name, forwarded);
         log.info("=== [{}] changelog records: {}", name, changelog.size());
 
@@ -255,24 +260,41 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
         return punctuated;
     }
 
-    /** Every record currently on the topic, read from the beginning with a fresh group. */
-    private List<String> drainAll(final String topic) {
-        List<String> values = new ArrayList<>();
+    /**
+     * Every record currently on each topic, read from the beginning with one fresh group across all of
+     * them and bucketed by topic.
+     * <p>
+     * One subscription rather than one per topic: each drain pays the whole fixed poll budget, so a
+     * second sequential call doubled the dominant cost of this class for no extra information.
+     */
+    private Map<String, List<String>> drainAll(final String... topics) {
+        Map<String, List<String>> byTopic = new HashMap<>();
+        for (String topic : topics) {
+            byTopic.put(topic, new ArrayList<>());
+        }
         try (KafkaConsumer<String, String> consumer =
                      getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            consumer.subscribe(UniLists.of(topic));
+            consumer.subscribe(Arrays.asList(topics));
             // Poll a fixed number of times rather than awaiting a count: the whole question is whether
-            // anything is there, so a condition on "at least one" would hang for 90s on the very result
-            // this test exists to detect.
+            // anything is there, so a condition on "at least one" would hang for its full timeout on the
+            // very result this test exists to detect.
             for (int poll = 0; poll < 10; poll++) {
                 for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
-                    values.add(record.value());
+                    byTopic.get(record.topic()).add(record.value());
                 }
             }
         }
-        return values;
+        return byTopic;
     }
 
+    /**
+     * Hand-rolled rather than {@code KafkaClientUtils.produceMessages}, which generates exactly this
+     * key/value scheme and would otherwise be the right reuse. It reaches {@code ModelUtils(new
+     * PCModuleTestEnv())} and so needs {@code org.threeten.extra.MutableClock}, a core test-scoped
+     * dependency that is not on this module's test classpath - the swap fails with
+     * {@code NoClassDefFoundError} at runtime. Using it would mean widening this module's test
+     * dependencies to save six lines.
+     */
     private void produceInput(final String inputTopic) {
         try (KafkaProducer<String, String> producer =
                      getKcu().createNewProducer(KafkaClientUtils.ProducerMode.NOT_TRANSACTIONAL)) {
@@ -315,8 +337,7 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
                                                     + punctuationsFired.incrementAndGet();
                                             // The two effects under test, in one punctuation.
                                             kvStore.put(marker, marker);
-                                            this.context.forward(new org.apache.kafka.streams.processor.api.Record<>(
-                                                    marker, marker, timestamp));
+                                            this.context.forward(new Record<>(marker, marker, timestamp));
                                         });
                             }
 
