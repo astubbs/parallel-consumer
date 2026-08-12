@@ -1,13 +1,14 @@
-package io.confluent.parallelconsumer.truth;
+package bz.stub.parallelconsumer.truth;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.OptionalSubject;
 import com.google.common.truth.Subject;
-import io.confluent.parallelconsumer.model.CommitHistory;
+import bz.stub.parallelconsumer.model.CommitHistory;
 import io.stubbs.truth.generator.SubjectFactoryMethod;
 import io.stubbs.truth.generator.UserManagedSubject;
 import lombok.ToString;

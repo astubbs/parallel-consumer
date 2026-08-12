@@ -30,4 +30,4 @@ boundaries:
   - Automatic per-partition throttling is separate from this application-controlled processor state.
 references:
   - label: Processor pause implementation
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java

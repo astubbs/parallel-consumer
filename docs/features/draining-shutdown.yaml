@@ -32,4 +32,4 @@ boundaries:
   - A user function that swallows interruption can delay close until the configured timeout is exceeded.
 references:
   - label: Close-mode example
-    path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java
+    path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java

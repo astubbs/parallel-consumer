@@ -11,7 +11,7 @@ availability:
   since: 0.3.0.0
   evidence:
     tag: 0.3.0.0
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
     basis: defaultMessageRetryDelay is present as an option in this file at the 0.3.0.0 tag; the 0.3.0.0 release notes do not name it.
   milestones:
     - release: 0.3.2.0
@@ -34,6 +34,6 @@ boundaries:
   - The delay is a target, not an exact scheduling guarantee.
 references:
   - label: Retry-delay options
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
   - label: Custom retry delays
     path: docs/features/custom-retry-delay.yaml

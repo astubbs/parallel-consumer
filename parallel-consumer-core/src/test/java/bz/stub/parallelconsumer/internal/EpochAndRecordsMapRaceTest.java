@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.state.ModelUtils;
-import io.confluent.parallelconsumer.state.PartitionStateManager;
-import io.confluent.parallelconsumer.state.ShardManager;
-import io.confluent.parallelconsumer.state.WorkContainer;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.state.ModelUtils;
+import bz.stub.parallelconsumer.state.PartitionStateManager;
+import bz.stub.parallelconsumer.state.ShardManager;
+import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
