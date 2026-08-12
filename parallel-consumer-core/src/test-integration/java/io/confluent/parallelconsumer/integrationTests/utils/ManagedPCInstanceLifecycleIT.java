@@ -9,10 +9,14 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -134,9 +138,25 @@ class ManagedPCInstanceLifecycleIT {
         private final List<Runnable> tasks = new CopyOnWriteArrayList<>();
 
         void runAll() {
-            List<Runnable> toRun = List.copyOf(tasks);
+            List<Runnable> toRun = new ArrayList<>(tasks);
             tasks.clear();
             toRun.forEach(Runnable::run);
+            // submit() wraps each task in a FutureTask, which captures a throwable instead of
+            // propagating it. Drain the outcomes, or a run() that blew up on the (null)
+            // KafkaClientUtils it must never reach is indistinguishable from one that aborted
+            // cleanly - which would make the caller's abort assertion unfalsifiable.
+            for (Runnable task : toRun) {
+                if (task instanceof Future) {
+                    try {
+                        ((Future<?>) task).get();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("interrupted draining a queued task", e);
+                    } catch (ExecutionException e) {
+                        throw new AssertionError("queued task threw instead of aborting cleanly", e.getCause());
+                    }
+                }
+            }
         }
 
         @Override
@@ -150,7 +170,7 @@ class ManagedPCInstanceLifecycleIT {
 
         @Override
         public List<Runnable> shutdownNow() {
-            return List.of();
+            return Collections.emptyList();
         }
 
         @Override
