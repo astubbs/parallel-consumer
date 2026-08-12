@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.streams.integrationTests;
+package bz.stub.parallelconsumer.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.streams.PcDispatchCounters;
-import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
-import io.confluent.parallelconsumer.streams.integrationTests.BaselineFixture.Row;
+import bz.stub.parallelconsumer.streams.PcDispatchCounters;
+import bz.stub.parallelconsumer.streams.PcDispatchSwitch;
+import bz.stub.parallelconsumer.streams.integrationTests.BaselineFixture.Row;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.LongDeserializer;

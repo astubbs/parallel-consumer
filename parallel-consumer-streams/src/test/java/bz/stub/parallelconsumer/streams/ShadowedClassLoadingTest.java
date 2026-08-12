@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.streams;
+package bz.stub.parallelconsumer.streams;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * nothing at all. That is the single most likely way this module produces a false positive, so it is asserted
  * directly rather than inferred from behaviour.
  *
- * @see io.confluent.parallelconsumer.streams.integrationTests.ShadowedStreamsControlTest
+ * @see bz.stub.parallelconsumer.streams.integrationTests.ShadowedStreamsControlTest
  */
 @Slf4j
 class ShadowedClassLoadingTest {

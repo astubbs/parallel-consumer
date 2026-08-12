@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.streams.integrationTests;
+package bz.stub.parallelconsumer.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */

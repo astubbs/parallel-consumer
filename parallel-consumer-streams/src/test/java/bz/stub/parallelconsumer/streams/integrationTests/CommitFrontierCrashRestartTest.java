@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.streams.integrationTests;
+package bz.stub.parallelconsumer.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
-import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.streams.PcDispatchSwitch;
+import bz.stub.parallelconsumer.streams.PcTaskDispatcher;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -56,7 +56,7 @@ import static org.awaitility.Awaitility.await;
  * defect U9 removes; the assertion messages state what the failure means.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.streams.PcTaskDispatcher
+ * @see bz.stub.parallelconsumer.streams.PcTaskDispatcher
  */
 @Slf4j
 // PcDispatchSwitch is process-wide; a concurrent test flipping it would change which dispatch path this

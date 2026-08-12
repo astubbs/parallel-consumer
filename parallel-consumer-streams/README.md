@@ -156,7 +156,7 @@ median gain. Across all three the median ratio was 5.1x to 8.0x, the quickest-re
 figure with real spread in it. Quote it as a range if you quote it at all. Absolute latencies move with
 machine load, which is why the test asserts a floor of 3x on the median rather than the measured
 figure, and a ceiling of 1.5x on the control. Reproduce with `HeadOfLineBlockingBenchmarkTest`
-([source](src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java)) -
+([source](src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java)) -
 it is an integration test, so `./mvnw -pl .,parallel-consumer-streams verify` - or better,
 [run it against your own topology](#do-not-take-any-of-this-on-trust-run-your-own-topology-both-ways).
 
@@ -183,7 +183,7 @@ argument:
 
 Against the pre-fix mechanism the first row committed offset 11 - the consumer position - which is the
 defect the test exists to demonstrate. Source:
-[`CommitFrontierCrashRestartTest`](src/test/java/io/confluent/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java).
+[`CommitFrontierCrashRestartTest`](src/test/java/bz/stub/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java).
 
 ### Do not take any of this on trust: run your own topology both ways
 
@@ -296,7 +296,7 @@ change to the library you already use. It is not one:
 | This module is a **leaf**. It depends on `parallel-consumer-core`; nothing depends on it | grep the reactor for `parallel-consumer-streams` - the only hits are its own pom and the `<module>` line in the root pom |
 | Adding it **changed no shipped code in any existing module** | diff this branch against `master`: outside this module and the docs, nothing under any `src/main` changed at all. The edits are the root pom's `<module>` line, a `NOTICE` addition attributing the modified Apache classes, a skip in the copyright-header script for generated Apache source, and new test-only files in the examples module |
 | The patched Kafka classes exist **only inside this module's own jar** | they are compiled from a patch at build time into this module's `target/classes` |
-| The seam is **unreachable** from core, vert.x and reactor | no source in those modules names `PcDispatchSwitch` or the `io.confluent.parallelconsumer.streams` package. The stock-baseline fixture in the examples module asserts *at runtime* that the patched classes are absent from a JVM that does not depend on this module, and fails the build if one appears |
+| The seam is **unreachable** from core, vert.x and reactor | no source in those modules names `PcDispatchSwitch` or the `bz.stub.parallelconsumer.streams` package. The stock-baseline fixture in the examples module asserts *at runtime* that the patched classes are absent from a JVM that does not depend on this module, and fails the build if one appears |
 
 So **taking the dependency is the entire opt-in, and not taking it is a complete opt-out** that
 requires no configuration, no flag, and no knowledge that this module exists.
@@ -352,7 +352,7 @@ Two things to know before you get a surprising result:
   never changes record paths halfway through a run. Tests that touch it must be `@Isolated`.
 - **There is no example application yet.** The working demonstrations on this branch are the
   integration tests under
-  [`src/test/.../integrationTests`](src/test/java/io/confluent/parallelconsumer/streams/integrationTests) -
+  [`src/test/.../integrationTests`](src/test/java/bz/stub/parallelconsumer/streams/integrationTests) -
   `PcDrivenStreamsProofTest` and `PcDrivenStatefulProofTest` are the two to read first. The existing
   `parallel-consumer-example-streams` module shows the *old* pattern (a topology handing slow work to a
   separate Parallel Consumer downstream) and does not use this module.

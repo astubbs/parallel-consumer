@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.EqualsAndHashCode;
@@ -18,8 +19,8 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.internal.Documentation.getLinkHtmlToDocSection;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.Documentation.getLinkHtmlToDocSection;
 
 
 /**

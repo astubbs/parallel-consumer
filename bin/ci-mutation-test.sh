@@ -63,11 +63,11 @@ if [ "${PIT_FULL_SWEEP:-}" = "true" ]; then BASE_REF=""; fi
 # ("nothing asserts this" is indistinguishable from "the race didn't happen this run"). The offset
 # encoders/decoders are the opposite on both counts: deterministic tests, so a survivor is a REAL gap,
 # and high stakes, since a silent bug there means lost or duplicated records.
-TARGET_CLASSES="${PIT_TARGET_CLASSES:-io.confluent.parallelconsumer.offsets.*}"
+TARGET_CLASSES="${PIT_TARGET_CLASSES:-bz.stub.parallelconsumer.offsets.*}"
 # What gets RUN to compute coverage - the dominant cost of any run (~332s of instrumented full-suite
 # execution), paid up front whether you mutate two classes or two hundred. Narrowing this is the only
 # lever that touches that cost; caching mutant verdicts does not.
-TARGET_TESTS="${PIT_TARGET_TESTS:-io.confluent.parallelconsumer.*}"
+TARGET_TESTS="${PIT_TARGET_TESTS:-bz.stub.parallelconsumer.*}"
 if [ -n "$BASE_REF" ]; then
   git fetch --no-tags -q origin "$BASE_REF" 2>/dev/null || true
 fi
@@ -82,7 +82,7 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
   # failWhenNoMutations (default true) would then fail the goal outright instead of the "nothing to mutate" skip.
   CHANGED_ALL=$(git diff --name-only --diff-filter=d "origin/${BASE_REF}" HEAD -- parallel-consumer-core/src/main/java/ 2>/dev/null \
     | sed -E 's#.*/src/main/java/##; s#/#.#g; s#\.java$##' \
-    | { grep -E '^io\.confluent\.parallelconsumer\.' || true; })
+    | { grep -E '^bz\.stub\.parallelconsumer\.' || true; })
   if [ -z "$CHANGED_ALL" ]; then
     echo "PIT: no core main-source classes changed vs origin/${BASE_REF} - nothing to mutate, skipping."
     summary "### Mutation (PIT): skipped"
@@ -101,7 +101,7 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
   # So the lane mutates changed classes only where a survivor is DECIDABLE. Start narrow, deliberately:
   # offsets.* alone, the case argued in the plan doc. Widen it (state.* is the obvious candidate) once
   # this demonstrably works, not before - walk the scope SIDEWAYS, then up, and only on evidence.
-  DECIDABLE="${PIT_DECIDABLE_PACKAGES:-^io\.confluent\.parallelconsumer\.offsets\.}"
+  DECIDABLE="${PIT_DECIDABLE_PACKAGES:-^bz\.stub\.parallelconsumer\.offsets\.}"
   CHANGED=$(printf '%s\n' "$CHANGED_ALL" | { grep -E "$DECIDABLE" || true; })
   SKIPPED=$(printf '%s\n' "$CHANGED_ALL" | { grep -Ev "$DECIDABLE" || true; })
   if [ -z "$CHANGED" ]; then
@@ -148,7 +148,7 @@ set +e
   -Djacoco.skip=true \
   -DtargetClasses="${TARGET_CLASSES}" \
   -DtargetTests="${TARGET_TESTS}" \
-  -DexcludedTestClasses="io.confluent.parallelconsumer.integrationTests.*" \
+  -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*" \
   -DjvmArgs=-Xmx2g \
   -DoutputFormats=XML,HTML \
   -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
@@ -203,7 +203,7 @@ if [ -n "$STATS" ]; then
     # Emit file/line as separate fields so the sort is NUMERIC on the line - sorting "File:119" as text
     # puts line 119 above line 38, which makes the table read as though it were in no order at all.
     # The description's fully-qualified paths are stripped: file:line already locates the mutant, so
-    # "for io/confluent/parallelconsumer/offsets/Foo::bar" is 60 characters of noise per row.
+    # "for bz/stub/parallelconsumer/offsets/Foo::bar" is 60 characters of noise per row.
     PARSED=$(sed -n "s|.*status='\([A-Z_]*\)'.*<sourceFile>\([^<]*\)</sourceFile>.*<lineNumber>\([0-9]*\)</lineNumber>.*<description>\(.*\)</description>.*|\2\t\3\t\1\t\4|p" "$REPORT")
     # SURVIVED / NO_COVERAGE are findings: something is untested. MEMORY_ERROR / RUN_ERROR / NON_VIABLE
     # are NOT - they mean the mutant could not be evaluated (minion died, bytecode unloadable), which is

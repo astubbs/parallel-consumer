@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.examples.streams.integrationTests;
+package bz.stub.parallelconsumer.examples.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -109,7 +109,7 @@ abstract class StockBaselineFixtureSupport extends BrokerIntegrationTest<String,
             "org.apache.kafka.streams.processor.internals.ProcessorContextImpl",
             "org.apache.kafka.streams.processor.internals.RecordCollectorImpl");
 
-    private static final String PATCHED_MODULE_MARKER_CLASS = "io.confluent.parallelconsumer.streams.PcDispatchSwitch";
+    private static final String PATCHED_MODULE_MARKER_CLASS = "bz.stub.parallelconsumer.streams.PcDispatchSwitch";
 
     /**
      * Defines the topology under test. A lambda rather than an overridden method so a generator can keep its

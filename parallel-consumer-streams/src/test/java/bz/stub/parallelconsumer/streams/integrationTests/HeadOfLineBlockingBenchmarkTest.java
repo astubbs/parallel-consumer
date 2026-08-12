@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.streams.integrationTests;
+package bz.stub.parallelconsumer.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;

@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.integrationTests.state;
+package bz.stub.parallelconsumer.integrationTests.state;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.ConsumerGroupState;
@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 import static pl.tlinkowski.unij.api.UniLists.of;

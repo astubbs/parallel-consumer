@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.streams.integrationTests;
+package bz.stub.parallelconsumer.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.streams.PcDispatchCounters;
-import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.streams.PcDispatchCounters;
+import bz.stub.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -49,7 +49,7 @@ import static org.awaitility.Awaitility.await;
  * second PC arm and destroying the only baseline the module has.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.streams.PcTaskDispatcherTest
+ * @see bz.stub.parallelconsumer.streams.PcTaskDispatcherTest
  * @see ShadowedStreamsControlTest
  */
 @Slf4j
