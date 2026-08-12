@@ -247,7 +247,8 @@ class RunLengthEncoderTest {
      * calls the per-offset encode for each one), so provoking an {@code int} overflow genuinely iterates ~2.1
      * billion offsets - which is why the {@code INT} case is slow (~1.5 min). Making it fast needs a
      * delta-aware {@code invoke()} (the run-length optimisation TODO on {@link OffsetSimultaneousEncoder}), a
-     * main-code change tracked in {@code docs/inflight.md} - not something to fake at the test level.
+     * main-code change tracked in {@code docs/refactoring.md} under
+     * {@code offsets/OffsetSimultaneousEncoder.java} - not something to fake at the test level.
      */
     @ParameterizedTest
     @EnumSource(names = {"SHORT", "INT"}, mode = INCLUDE)

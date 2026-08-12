@@ -185,15 +185,15 @@ where `S` = when the record took the lock and `T` = when the commit attempt bega
 ends there is no contention left, so the remaining ~33s of the await is dead time. Timing the sleep
 from the attempt makes the margin a property of the test, not of the scheduler.
 
-**Path 2 - no attempt at all.** `maybeAcquireCommitLock` (`AbstractParallelEoSStreamProcessor.java:956-957`) computes:
+**Path 2 - no attempt at all.** `maybeAcquireCommitLock` (`AbstractParallelEoSStreamProcessor.java`) computes:
 
 ```java
 final boolean shouldTryCommitNow = isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get();
 ```
 
-The no-arg `setDirty()` - the mark-true path, `PartitionState.java:232-234` - has **exactly one
-caller**: `PartitionState#onSuccess` (`:258-265`, call at `:265`). `onFailure` is a no-op (`:268-270`).
-(There is a second `setDirty(false)` overload used by `setClean()` at `:226-228`; it clears the flag
+The no-arg `setDirty()` - the mark-true path, `PartitionState.java` - has **exactly one
+caller**: `PartitionState#onSuccess`, whose last statement is that `setDirty()` call. `onFailure` is a
+no-op. (There is a second `setDirty(false)` overload used by `setClean()`; it clears the flag
 and is not a second way to set it.) So if every other record of the batch succeeds *before* the slow
 one starts, nothing marks dirty during its hold, no commit is attempted, and no timeout can fire - not
 late, simply never. `requestCommitAsap()` cannot rescue this, because `isDirty` is AND-ed into the
@@ -259,12 +259,13 @@ Relatives found, neither the same defect:
 
 | Test | What it is |
 |---|---|
-| `DrainCloseTest` (`:57`, `:60`) | Closest relative. Two bare `sleep(2000)`/`sleep(5000)` sequence a close-drain race. Not this defect, because `closeDrainFirst` is *commanded* - which is itself the smell: the await's `isClosedOrFailed` disjunct is guaranteed to fire, so the await is pure synchronisation and the real check is the `assertEquals` after it. |
-| `RetriesTest` (`:78-80`) | Candidate. `throwOnHeader` and `checking` are flipped on 3s/2s sleeps against a running consumer; the test's premise holds only if the consumer got there inside those windows. |
+| `DrainCloseTest` | Closest relative. Two bare `sleep(2000)`/`sleep(5000)` sequence a close-drain race. Not this defect, because `closeDrainFirst` is *commanded* - which is itself the smell: the await's `isClosedOrFailed` disjunct is guaranteed to fire, so the await is pure synchronisation and the real check is the `assertEquals` after it. |
+| `RetriesTest` (the `sleepQuietly(3000)` / `sleepQuietly(2000)` pair) | Candidate. `throwOnHeader` and `checking` are flipped on 3s/2s sleeps against a running consumer; the test's premise holds only if the consumer got there inside those windows. |
 
-Checked and dismissed: the chaos and probe pacing loops, `OffsetCommittingSanityTest:135` (an explicit
-`JUST_SLEEP` check mode, not a synchronisation), `RebalanceEoSDeadlockTest:90` (the injected delay *is*
-the mechanism under test), `TransactionMarkersTest:160` (a deliberately blocked record).
+Checked and dismissed: the chaos and probe pacing loops, `OffsetCommittingSanityTest` (an explicit
+`JUST_SLEEP` check mode, not a synchronisation), `RebalanceEoSDeadlockTest`'s `sleepTimeMs` delay (it
+*is* the mechanism under test), `TransactionMarkersTest`'s `Thread.sleep(Long.MAX_VALUE)` (a
+deliberately blocked record).
 
 This is a point-in-time sweep, not a standing guarantee - re-run it if the class comes up again.
 

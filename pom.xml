@@ -137,14 +137,16 @@
              wiremock-jre8 2.35.2 otherwise drags in byte-buddy 1.12.18, which wins the conflict
              and lacks the JAVA_V21 field mockito 5.23 needs -> MockitoInitializationException.
              Remove this pin once wiremock 3.x (a deferred major) drops the stale transitive.
-             Test/provided scope only - not in the shipped artifact. See docs/inflight.md. -->
+             Test/provided scope only - not in the shipped artifact.
+             See docs/inflight/deps-deferred-majors.md, the wiremock-jre8 row. -->
         <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
         <logback.version>1.6.1</logback.version>
         <!-- Held at 1.13.0: keep the micrometer family version-aligned with
              micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
-             prometheus package rename is migrated). See docs/inflight.md. -->
+             prometheus package rename is migrated).
+             See docs/inflight/deps-deferred-majors.md, the micrometer-core row. -->
         <micrometer-core.version>1.13.15</micrometer-core.version>
     </properties>
 

@@ -100,9 +100,12 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   There is no such layer. That run was an `issue_comment`, which GitHub runs from the **default
   branch**, so the list in force was master's `REVIEW_TOOL_ALLOWLIST` - which does not contain those
   four grants. The action prints the resolved list twice (the step's `claude_args`, and the SDK's
-  `allowedTools` array) and they are absent from both. The reviewer's contrary self-check cited
-  `claude.yml:60` and `claude-code-review-dispatch.yml:394` - the same line numbers in both copies -
-  after reading the **PR's** copy over `gh pr diff`, not the copy underneath it. The rule it ran
+  `allowedTools` array) and they are absent from both. The reviewer's contrary self-check cited the
+  two allowlists - `REVIEW_TOOL_ALLOWLIST:` in `.github/workflows/claude.yml`, and
+  `--allowedTools "Bash(gh issue view` in `.github/workflows/claude-code-review-dispatch.yml` - **by
+  line number**, and the line numbers it quoted exist in both copies, so nothing in the citation said
+  which copy it had read. It had read the **PR's** copy over `gh pr diff`, not the copy underneath
+  it. (That ambiguity is exactly why `AGENTS.md` -> "Cite by anchor" forbids `file:line`.) The rule it ran
   into is stated once, canonically, in [`docs/ci.md`](../ci.md) -> "Editing the reviewer"; this
   entry does not restate it.
 

@@ -54,8 +54,12 @@ PR astubbs#85 → astubbs#83; PR body carries `depends on #85`). New worktree `.
 
 ## Context & Research (session-verified)
 
-- `ManagedPCInstance.java:112-115,248` - `useCooperativeAssignor` wires `CooperativeStickyAssignor`
-  into consumer props; zero current users.
+- `ManagedPCInstance.java` (grep `useCooperativeAssignor`) - it wires `CooperativeStickyAssignor`
+  into consumer props; zero current users. (Point-in-time, and this plan is what changed it: the
+  variant proposed below landed in `192d32bc`, so a grep at HEAD now returns its callers in
+  `AbstractRevokeUnderWorkScenario`, `ChaosRevokeUnderWorkIT` and `ChaosRevokeUnderWorkCooperativeIT`.
+  For the tree this claim describes, search before that commit - `git grep useCooperativeAssignor
+  192d32bc^` - which finds only the flag's declaration and wiring, and no callers.)
 - `ChaosRevokeUnderWorkIT` (PR astubbs#85) - the two-phase driver to extract: storm (60s, no-drain weights
   `ChaosConductor.defaultW4Weights()`, sync commits, heavy 1-in-2000 @ 20s non-interruptible, ticks
   300-1000ms, fleet 10-14, 250k backlog, `max.poll.interval.ms=30s` via `extraConsumerProps`) then
@@ -155,7 +159,12 @@ evidence; no bound changed without documented arithmetic.
 **Files:**
 - Modify: `ChaosRevokeUnderWorkCooperativeIT` javadoc (calibration record), `ChaosRevokeUnderWorkIT`
   javadoc (pointer to sibling), `docs/inflight.md` (Class 2 hunt status update; any new findings
-  rostered), `docs/plans/2026-07-31-001-...-plan.md` (this plan, durable copy, status annotations).
+  rostered), `docs/plans/2026-07-31-001-feat-chaos-w4-cooperative-variant-plan.md` (this plan, durable
+  copy, status annotations).
+  (Pointer repair: the single file `docs/inflight.md` became the directory
+  [`docs/inflight/`](../inflight/) on 2026-08-04, deleted in `0de96fc` - `git show
+  0de96fc^:docs/inflight.md` for the version this unit edited. The Class 2 hunt status now lives in
+  [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md).)
 
 **Verification:** docs match the measured record; commits on `feats/chaos-w4-cooperative`; push +
 propose the stacked PR (`depends on #85`) - ask before opening, per convention.

@@ -72,6 +72,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
 | [`docs/issue-references.md`](docs/issue-references.md) | Writing any reference to an issue or PR - the full convention and the gate |
+| [`docs/citations.md`](docs/citations.md) | Repairing a citation that no longer resolves, in a plan or solution write-up you may not rewrite |
 | [`docs/copyright.md`](docs/copyright.md) | Adding, renaming or extracting a file: which header it gets and why |
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
@@ -97,6 +98,17 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
+### Cite by anchor, never by line number
+
+**Never cite a `file:line`.** An unrelated commit inserting lines above the target invalidates the
+citation while the file and the section are both intact, so it still reads as valid and nothing
+checks it. Cite the path plus the smallest distinctive greppable string - an identifier, a flag, a
+config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. Run
+the grep before you commit the citation.
+
+Repairing one that has already gone stale in a dated record is its own procedure, because those
+documents may not be rewritten to match today's code: [`docs/citations.md`](docs/citations.md).
 
 ## `gh` defaults to the WRONG repo here - fix it before your first command
 

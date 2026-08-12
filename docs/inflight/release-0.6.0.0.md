@@ -18,7 +18,7 @@ None of these has an issue of its own - they were found by reading code to diagn
 The first two are wrong *statements* in artefacts the release itself publishes, so they should not
 survive the release.
 
-1. **`CHANGELOG.adoc` says the Kafka client "stays on 3.9.1"; `pom.xml:121` says `3.9.2`.** The
+1. **`CHANGELOG.adoc` says the Kafka client "stays on 3.9.1"; `pom.xml`'s `<kafka.version>` says `3.9.2`.** The
    release notes for an unreleased release are factually wrong. Decide which is intended and make
    them agree.
 2. ~~**The README's Roadmap sends readers to the *upstream* tracker** and refers to this repo in the
@@ -27,9 +27,9 @@ survive the release.
    the Roadmap section now states outright that this repository is where maintenance happens. Note
    that the replacement promises the issue tracker is *"the single place to look"* for what is
    planned, which the roadmap work has to reconcile - see `docs/plans/2026-08-10-003-docs-roadmap-plan.md`.
-3. **`PCModule:127-129` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
+3. **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
    `messageBufferSize` is set, so `isMaxReached()` is true from startup and
-   `AbstractParallelEoSStreamProcessor:1130` logs *"Max loading factor steps reached"* at WARN on
+   `AbstractParallelEoSStreamProcessor` logs *"Max loading factor steps reached"* at WARN on
    every control-loop pass. Anyone following the README's buffer-tuning advice gets permanent log
    noise reporting a non-problem. Related: astubbs#155.
 4. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
