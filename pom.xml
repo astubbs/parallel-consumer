@@ -1277,10 +1277,6 @@
             <url>https://repo1.maven.org/maven2/</url>
         </repository>
         <repository>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-        </repository>
-        <repository>
             <id>astubbs-truth-generator</id>
             <url>https://packagecloud.io/astubbs/truth-generator/maven2</url>
             <snapshots>
