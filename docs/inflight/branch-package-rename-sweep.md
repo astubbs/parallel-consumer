@@ -13,21 +13,29 @@ second; it is the per-branch procedure and it is authoritative over any summary 
 
 | Thing | Where | State |
 |---|---|---|
-| The tooling | `tooling/package-rename-script` (#280), pushed | The script, its 112-assertion self-test, the procedure block |
-| Renamed master, ready | `rename-final-rehearsal`, **local only** | master + #280, renamed, prose corrected, full build + tests **green** |
-| A renamed PR branch | `260-rename-final` + tag `260-final-preupdate`, local | #260 brought across, both merge directions verified |
+| The tooling | `tooling/package-rename-script` (astubbs#280), pushed | The script, its 114-assertion self-test, the procedure block |
+| Renamed master, ready | `rename-final-rehearsal`, **local only** | master + astubbs#280, renamed, prose corrected, full build + tests **green** |
+| A renamed PR branch | `260-rename-final` + tag `260-final-preupdate`, local | astubbs#260 brought across, both merge directions verified |
 | Earlier rehearsal | `rename-stage`, `260-rename`, `264-rename`, local | **Throwaway.** Superseded by `rename-final-rehearsal`. Delete when convenient |
 
 `rename-final-rehearsal` is the candidate for master's rename. It was built off `origin/master` with the
-real #280 merged — no stand-ins.
+real astubbs#280 merged — no stand-ins.
 
-**Known open item on #280:** its `tooling: package rename` CI check fails, 8 of 120 assertions, all in
-the freeze-region code, on that feature's first CI run. The suite passes 112/112 locally, twelve runs
-including under `env -i`, and `refs/pull/280/merge` is byte-identical to the branch — so it is not base
-drift. Suspect runner tool-version skew (CI `git 2.54.0` and mawk vs local `git 2.47.3`). The check is
-**not** in master's required-status-checks, so it does not block merge, but it is the safety net for the
-tool this whole plan runs. `gh run rerun <id> --failed` separates flake from environment skew in one
-shot. **Resolve this before Phase A merges.**
+**Closed: astubbs#280's 8 CI failures were a real portability bug, not flake and not base drift.**
+`FREEZE_ID_ERE` reached `awk` through `-v`, which runs C-string escape processing over the value before
+`match()` ever sees it. `\(` is not a defined escape and POSIX leaves it implementation-defined: local
+mawk keeps the backslash, so the parens stay literal; the CI awk drops it, so they become groups, the
+id of every region reads as empty, and a correctly written freeze region is refused as unnamed. All
+eight failures follow from that one substitution — reproduced locally, exactly and in order, by
+stripping the backslashes from that one variable. The regex now uses `[(]`/`[)]`, which carry no
+backslash for `-v` to eat, and the suite asserts the value survives the mangling as well as the raw
+form, so the next machine with a different awk fails the assertion instead of the feature.
+
+The general rule, worth more than the fix: **a regex crossing into awk through `-v` must contain no
+backslash escapes.** `SWEEP_ERE` (`io[\\./]*conflu`) still does — inside a bracket expression, which is
+where awks disagree about whether the backslash is a member of the class or an escape. It is not
+currently failing, because both spellings still match what the sweep needs, but it is the same class of
+hazard and it is now written down.
 
 ---
 
@@ -61,7 +69,7 @@ one merge each.
 First subagent task. There is no PR for master's rename yet.
 
 1. `rename-final-rehearsal` already holds it, green. Verify rather than trust: `bash
-   bin/test-rename-packages.sh` (112/0), `bash bin/rename-packages.sh --verify-only` (exit 0), `bash
+   bin/test-rename-packages.sh` (114/0), `bash bin/rename-packages.sh --verify-only` (exit 0), `bash
    bin/check-copyright-headers.sh` (0 violations), `bash bin/check-docs-data.sh` (39 valid), and
    `./mvnw -DskipITs install` (BUILD SUCCESS, 387 tests / 0 failures). JDK:
    `~/.local/share/mise/installs/java/temurin-17.0.20+8`.
@@ -73,7 +81,7 @@ First subagent task. There is no PR for master's rename yet.
    place. Merge method is per-PR in this repo and squash is the habitual choice, so agree the method with
    whoever merges **before** the PR opens.
 4. The commits on that branch, and what each is for:
-   - the `#280` merge — the tooling
+   - the `astubbs#280` merge — the tooling
    - `fix(test): re-point the stale asyncconsumer javadoc reference` — **prerequisite**, the script
      refuses at preflight without it, and it carries the `Modifications Copyright` line that editing an
      upstream-derived file requires
@@ -82,8 +90,8 @@ First subagent task. There is no PR for master's rename yet.
    - `docs(rename): correct the three falsified claims, after the rewrite`
    - `test(arch): exempt the Testcontainers support package`
 5. Confirm it is 0 behind master immediately before merging. Four open PRs touch the mis-pairing files
-   (#266, #268, #269, #271); if one lands while this PR is open, the landing merge has a renamed side
-   meeting edits at old paths.
+   (astubbs#266, astubbs#268, astubbs#269, astubbs#271); if one lands while this PR is open, the
+   landing merge has a renamed side meeting edits at old paths.
 
 ---
 
@@ -154,8 +162,8 @@ come after.
 
 ### The 38 branches
 
-Open PRs, excluding #1 (`codeql`, 2021) and #8 (`features/retry-dlq`, 2022) as too old, #277 (the rename
-plan itself) and #280 (the tooling).
+Open PRs, excluding astubbs#1 (`codeql`, 2021) and astubbs#8 (`features/retry-dlq`, 2022) as too old, astubbs#277 (the rename
+plan itself) and astubbs#280 (the tooling).
 
 | PR | head ref | PR | head ref |
 |---|---|---|---|
@@ -180,12 +188,13 @@ plan itself) and #280 (the tooling).
 | | | 292 | `fix/chaos-harness-double-start-race` |
 | | | 293 | `feats/proxy-requirements` |
 
-**#266, #268, #269 and #271 touch the five near-identical `TestConventionsArchTest.java` files.** Neither
-rehearsal exercised a branch that genuinely edits them with divergent content, so these four are the only
+**astubbs#266, astubbs#268, astubbs#269 and astubbs#271 touch the five near-identical
+`TestConventionsArchTest.java` files.** Neither rehearsal exercised a branch that genuinely edits them
+with divergent content, so these four are the only
 untested shape left. Do them with attention, not last.
 
-Two are worth knowing about in advance: **#38 is a dependabot branch** (it may be force-pushed under
-you), and **#263/#264 are a stacked pair** — #264 builds on #263's work.
+Two are worth knowing about in advance: **astubbs#38 is a dependabot branch** (it may be force-pushed under
+you), and **astubbs#263/#264 are a stacked pair** — astubbs#264 builds on astubbs#263's work.
 
 ---
 
@@ -244,7 +253,7 @@ Each was tried and refuted; the reasoning is in the ledger and the script header
 
 Two full rehearsals, both merge directions, all gates green.
 
-| | #260 (4 files) | #264 (26 files, deletes some) |
+| | astubbs#260 (4 files) | astubbs#264 (26 files, deletes some) |
 |---|---|---|
 | files moved | 235 | 233 |
 | `mis-paired` | 0 | 0 |
