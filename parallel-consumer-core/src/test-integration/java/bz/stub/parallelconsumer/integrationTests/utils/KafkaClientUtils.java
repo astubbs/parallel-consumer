@@ -1,0 +1,468 @@
+
+/*-
+ * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
+ */
+package bz.stub.parallelconsumer.integrationTests.utils;
+
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.state.ModelUtils;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import one.util.streamex.IntStreamEx;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.common.IsolationLevel;
+import org.apache.kafka.common.errors.TopicExistsException;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.testcontainers.containers.KafkaContainer;
+import pl.tlinkowski.unij.api.UniLists;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.NOT_TRANSACTIONAL;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.TRANSACTIONAL;
+import static java.time.Duration.ofSeconds;
+import static java.util.Optional.empty;
+import static org.apache.commons.lang3.RandomUtils.nextInt;
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Utilities for creating and manipulating clients
+ * <p>
+ * Caution: When creating new consumers with new group ids, the old group id is overwritten and so cannot be
+ * automatically be reused anymore.
+ *
+ * @author Antony Stubbs
+ */
+@Slf4j
+public class KafkaClientUtils implements AutoCloseable {
+
+    public static final int MAX_POLL_RECORDS = 10_000;
+    public static final String GROUP_ID_PREFIX = "group-1-";
+
+    /**
+     * Gives every PC built here a unique id so its threads ({@code pc-control-PCn}, {@code pc-broker-poll-PCn})
+     * and the {@code pcId} MDC are attributable to one instance in the logs. Without it, concurrent PC
+     * instances all log under the same generic thread names and are impossible to tell apart - which made
+     * the confluentinc#857 silent-stall investigation much harder than it needed to be.
+     */
+    private static final AtomicInteger PC_INSTANCE_COUNTER = new AtomicInteger();
+
+    class PCVersion {
+        public static final String V051 = "0.5.1";
+    }
+
+
+    private final KafkaContainer kContainer;
+
+    @Getter
+    private KafkaConsumer<String, String> consumer;
+
+    @Setter
+    private OffsetResetStrategy offsetResetPolicy = OffsetResetStrategy.EARLIEST;
+
+    @Getter
+    private KafkaProducer<String, String> producer;
+
+    /**
+     * volatile + nulled on {@link #close()}: the ambient probe's sampler daemon thread reads this via
+     * {@link #adminIfOpen()} before each admin read, so it must see both the open() assignment and the
+     * close() clear - otherwise a still-running sampler can call into a closed client.
+     */
+    @Getter
+    private volatile AdminClient admin;
+
+    /**
+     * The admin client only while inside the {@link #open()}..{@link #close()} window, else empty.
+     * The lifecycle-safe accessor for background samplers (the ambient probe): empty means "no usable
+     * admin client right now - skip this sample". Mid-test code can keep using {@link #getAdmin()}.
+     */
+    public Optional<AdminClient> adminIfOpen() {
+        return Optional.ofNullable(admin);
+    }
+
+    @Getter
+    @Setter
+    private volatile String groupId = GROUP_ID_PREFIX + nextInt();
+
+    /**
+     * todo docs
+     */
+    private KafkaConsumer<String, String> lastConsumerConstructed;
+
+    public KafkaClientUtils(KafkaContainer kafkaContainer) {
+        kafkaContainer.addEnv("KAFKA_transaction_state_log_replication_factor", "1");
+        kafkaContainer.addEnv("KAFKA_transaction_state_log_min_isr", "1");
+        kafkaContainer.start();
+        this.kContainer = kafkaContainer;
+    }
+
+    private Properties setupCommonProps() {
+        var commonProps = new Properties();
+        String servers = this.kContainer.getBootstrapServers();
+        commonProps.put("bootstrap.servers", servers);
+        return commonProps;
+    }
+
+    private Properties setupProducerProps() {
+        var producerProps = setupCommonProps();
+
+        producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+        return producerProps;
+    }
+
+    public Properties setupConsumerProps(String groupIdToUse) {
+        var consumerProps = setupCommonProps();
+
+        //
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupIdToUse);
+        consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, IsolationLevel.READ_COMMITTED.toString().toLowerCase(Locale.ROOT));
+
+        // Reset
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, offsetResetPolicy.name().toLowerCase());
+
+        //
+        //    consumerProps.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 10);
+        //    consumerProps.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 100);
+
+        // make sure we can download lots of records if they're small. Default is 500
+//        consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1_000_000);
+        consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, MAX_POLL_RECORDS);
+
+        return consumerProps;
+    }
+
+    @BeforeEach
+    public void open() {
+        log.info("Setting up clients...");
+        consumer = this.createNewConsumer();
+        producer = this.createNewProducer(false);
+        admin = AdminClient.create(setupCommonProps());
+    }
+
+    @AfterEach
+    public void close() {
+        if (producer != null)
+            producer.close();
+        if (consumer != null)
+            consumer.close();
+        if (admin != null) {
+            try {
+                admin.close();
+            } finally {
+                admin = null; // publish "closed" to sampler threads via adminIfOpen(), even if close() throws; open() reassigns per test
+            }
+        }
+    }
+
+    public enum GroupOption {
+        REUSE_GROUP,
+        NEW_GROUP
+    }
+
+
+    public <K, V> KafkaConsumer<K, V> createNewConsumer(String groupId) {
+        return createNewConsumer(groupId, new Properties());
+    }
+
+    public <K, V> KafkaConsumer<K, V> createNewConsumer(GroupOption reuseGroup) {
+        return createNewConsumer(reuseGroup.equals(GroupOption.NEW_GROUP));
+    }
+
+    public <K, V> KafkaConsumer<K, V> createNewConsumer() {
+        return createNewConsumer(false);
+    }
+
+    @Deprecated
+    public <K, V> KafkaConsumer<K, V> createNewConsumer(boolean newConsumerGroup) {
+        return createNewConsumer(newConsumerGroup, new Properties());
+    }
+
+    @Deprecated
+    public <K, V> KafkaConsumer<K, V> createNewConsumer(Properties options) {
+        return createNewConsumer(false, options);
+    }
+
+    public <K, V> KafkaConsumer<K, V> createNewConsumer(boolean newConsumerGroup, Properties options) {
+        if (newConsumerGroup) {
+            // overwrite the group id with a new one
+            String newGroupId = GROUP_ID_PREFIX + nextInt();
+            this.groupId = newGroupId; // save it for reuse later
+        }
+        return createNewConsumer(this.groupId, options);
+    }
+
+    @Deprecated
+    public <K, V> KafkaConsumer<K, V> createNewConsumer(String groupId, Properties options) {
+        Properties properties = setupConsumerProps(groupId);
+
+        // override with custom
+        properties.putAll(options);
+
+        KafkaConsumer<K, V> kvKafkaConsumer = new KafkaConsumer<>(properties);
+        log.debug("New consume {}", kvKafkaConsumer);
+        return kvKafkaConsumer;
+    }
+
+    /**
+     * Initialises the producer as well, so can't use with PC
+     */
+    public <K, V> KafkaProducer<K, V> createAndInitNewTransactionalProducer() {
+        KafkaProducer<K, V> txProd = createNewProducer(TRANSACTIONAL);
+        txProd.initTransactions();
+        return txProd;
+    }
+
+    /**
+     * @deprecated use the enum version {@link #createNewProducer(ProducerMode)} instead, since = {@link PCVersion#V051}
+     */
+    @Deprecated
+    public <K, V> KafkaProducer<K, V> createNewProducer(boolean transactional) {
+        var mode = transactional ? TRANSACTIONAL : NOT_TRANSACTIONAL;
+        return createNewProducer(mode);
+    }
+
+    public KafkaProducer<String, String> createNewProducer(CommitMode commitMode) {
+        return createNewProducer(ProducerMode.matching(commitMode));
+    }
+
+    public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode) {
+        Properties properties = setupProducerProps();
+
+        var txProps = new Properties();
+        txProps.putAll(properties);
+
+        if (mode.equals(TRANSACTIONAL)) {
+            // random number, so we get a unique producer tx session each time. Normally wouldn't do this in production,
+            // but sometimes running in the test suite our producers' step on each other between test runs and this causes
+            // Producer Fenced exceptions:
+            // Error looks like: Producer attempted an operation with an old epoch. Either there is a newer producer with
+            // the same transactionalId, or the producer's transaction has been expired by the broker.
+            txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, this.getClass().getSimpleName() + ":" + nextInt()); // required for tx
+            txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) ofSeconds(10).toMillis()); // speed things up
+        }
+
+        KafkaProducer<K, V> kvKafkaProducer = new KafkaProducer<>(txProps);
+
+        log.debug("New producer {}", kvKafkaProducer);
+        return kvKafkaProducer;
+    }
+
+    public enum ProducerMode {
+        TRANSACTIONAL, NOT_TRANSACTIONAL;
+
+        public static ProducerMode matching(CommitMode commitMode) {
+            return commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER)
+                    ? TRANSACTIONAL
+                    : NOT_TRANSACTIONAL;
+        }
+    }
+
+    /**
+     * Create a single named topic and block until the broker confirms it exists, tolerating a
+     * topic that already exists (idempotent).
+     * <p>
+     * Prefer this over calling {@code getAdmin().createTopics(...)} directly: it waits for creation
+     * to actually complete, avoiding the flaky "topic not ready yet" races a bare or short-timeout
+     * call produces on a cold or loaded CI broker.
+     */
+    public CreateTopicsResult createTopic(String name, int numPartitions) {
+        return createTopicsBlocking(UniLists.of(new NewTopic(name, numPartitions, (short) 1)));
+    }
+
+    public List<NewTopic> createTopics(int numTopics) {
+        List<NewTopic> newTopics = IntStreamEx.range(numTopics)
+                .mapToObj(i
+                        -> new NewTopic("in-" + i + "-" + nextInt(), empty(), empty()))
+                .toList();
+        createTopicsBlocking(newTopics);
+        return newTopics;
+    }
+
+    /**
+     * Generous bound for topic creation. Far above the ~sub-second a healthy broker needs (the old
+     * 1s bound here was the flake), but bounded so a genuinely unresponsive broker fails fast with a
+     * clear message instead of hanging the test until the outer CI timeout.
+     */
+    private static final int TOPIC_CREATE_TIMEOUT_SECONDS = 60;
+
+    /**
+     * Shared blocking topic create: submits the topics and waits for the broker to confirm creation.
+     * Tolerates {@link TopicExistsException} so callers can "ensure" a topic idempotently; any other
+     * failure propagates as a {@link RuntimeException} rather than being silently swallowed.
+     */
+    private CreateTopicsResult createTopicsBlocking(List<NewTopic> newTopics) {
+        CreateTopicsResult result = getAdmin().createTopics(newTopics);
+        try {
+            result.all().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (TimeoutException e) {
+            throw new RuntimeException("Timed out after " + TOPIC_CREATE_TIMEOUT_SECONDS
+                    + "s waiting for the broker to create topics " + newTopics, e);
+        } catch (ExecutionException e) {
+            if (!(e.getCause() instanceof TopicExistsException)) {
+                throw new RuntimeException(e);
+            }
+            // topic already exists — idempotent create, fine
+        }
+        return result;
+    }
+
+    public List<String> produceMessages(String topicName, long numberToSend) throws InterruptedException, ExecutionException {
+        return produceMessages(topicName, numberToSend, "", numberToSend);
+    }
+
+    public List<String> produceMessages(String topicName, long numberToSend, long numberOfUniqueKeys) throws InterruptedException, ExecutionException {
+        return produceMessages(topicName, numberToSend, "", numberOfUniqueKeys);
+    }
+
+    public List<String> produceMessages(String topicName, long numberToSend, String prefix) throws InterruptedException, ExecutionException {
+        return produceMessages(topicName, numberToSend, prefix, numberToSend);
+    }
+
+    public List<String> produceMessages(String topicName, long numberToSend, String prefix, long numberOfUniqueKeys) throws InterruptedException, ExecutionException {
+        log.info("Producing {} messages to {}", numberToSend, topicName);
+        final List<String> expectedKeys = new ArrayList<>();
+        List<Future<RecordMetadata>> sends = new ArrayList<>();
+        try (Producer<String, String> kafkaProducer = createNewProducer(false)) {
+
+            var mu = new ModelUtils(new PCModuleTestEnv());
+            List<ProducerRecord<String, String>> recs = new ArrayList<>();
+            while (recs.size() < numberToSend) { //generate records in blocks of numberOfUniqueKeys
+                recs.addAll(mu.createProducerRecords(topicName, numberOfUniqueKeys, prefix));
+            }
+            recs = recs.subList(0, (int) numberToSend); //trim back to requested number to send
+
+            for (var record : recs) {
+                Future<RecordMetadata> send = kafkaProducer.send(record, (meta, exception) -> {
+                    if (exception != null) {
+                        log.error("Error sending, ", exception);
+                    }
+                });
+                sends.add(send);
+                expectedKeys.add(record.key());
+            }
+            log.debug("Finished sending test data");
+        }
+        // make sure we finish sending before next stage
+        log.debug("Waiting for broker acks");
+        for (Future<RecordMetadata> send : sends) {
+            RecordMetadata recordMetadata = send.get();
+            boolean b = recordMetadata.hasOffset();
+            assertThat(b).isTrue();
+        }
+        assertThat(sends).hasSize(Math.toIntExact(numberToSend));
+        return expectedKeys;
+    }
+
+    public List<String> produceMessagesWithThrowHeader(String topicName, long numberToSend) throws InterruptedException, ExecutionException {
+        log.debug("Producing {} messages to {}", numberToSend, topicName);
+        final List<String> expectedKeys = new ArrayList<>();
+        List<Future<RecordMetadata>> sends = new ArrayList<>();
+        try (Producer<String, String> kafkaProducer = createNewProducer(false)) {
+
+            var mu = new ModelUtils(new PCModuleTestEnv());
+            List<ProducerRecord<String, String>> recs = new ArrayList<>();
+            for (int i = 0; i < numberToSend; i++) {
+                ProducerRecord<String, String> record = new ProducerRecord<>(topicName, "k-" + i, "value-" + i);
+                if (i % 2 == 0) {
+                    record.headers().add("throw", "true".getBytes());
+                }
+                recs.add(record);
+            }
+
+
+            for (var record : recs) {
+                Future<RecordMetadata> send = kafkaProducer.send(record, (meta, exception) -> {
+                    if (exception != null) {
+                        log.error("Error sending, ", exception);
+                    }
+                });
+                sends.add(send);
+                expectedKeys.add(record.key());
+            }
+            log.debug("Finished sending test data");
+        }
+        // make sure we finish sending before next stage
+        log.debug("Waiting for broker acks");
+        for (Future<RecordMetadata> send : sends) {
+            RecordMetadata recordMetadata = send.get();
+            boolean b = recordMetadata.hasOffset();
+            assertThat(b).isTrue();
+        }
+        assertThat(sends).hasSize(Math.toIntExact(numberToSend));
+        return expectedKeys;
+    }
+
+    public ParallelEoSStreamProcessor<String, String> buildPc(ProcessingOrder order, CommitMode commitMode, int maxPoll) {
+        return buildPc(order, commitMode, maxPoll, GroupOption.REUSE_GROUP);
+    }
+
+    public ParallelEoSStreamProcessor<String, String> buildPc(ProcessingOrder order, CommitMode commitMode, int maxPoll, GroupOption groupOption) {
+        Properties consumerProps = new Properties();
+        consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPoll);
+        boolean newConsumerGroup = groupOption.equals(GroupOption.NEW_GROUP);
+        KafkaConsumer<String, String> newConsumer = createNewConsumer(newConsumerGroup, consumerProps);
+        lastConsumerConstructed = newConsumer;
+
+        var pc = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
+                .ordering(order)
+                .consumer(newConsumer)
+                .commitMode(commitMode)
+                .maxConcurrency(100)
+                .build());
+
+        pc.setTimeBetweenCommits(ofSeconds(1));
+
+        // unique per-instance id so concurrent PCs are distinguishable in the logs (see PC_INSTANCE_COUNTER)
+        pc.setMyId(Optional.of("PC" + PC_INSTANCE_COUNTER.incrementAndGet()));
+
+        // sanity
+        return pc;
+    }
+
+    public ParallelEoSStreamProcessor<String, String> buildPc(ProcessingOrder key, GroupOption groupOption) {
+        return buildPc(key, PERIODIC_CONSUMER_ASYNCHRONOUS, 500, groupOption);
+    }
+
+    public ParallelEoSStreamProcessor<String, String> buildPc(ProcessingOrder key) {
+        return buildPc(key, PERIODIC_CONSUMER_ASYNCHRONOUS, 500);
+    }
+
+    public KafkaConsumer<String, String> getLastConsumerConstructed() {
+        return lastConsumerConstructed;
+    }
+
+}

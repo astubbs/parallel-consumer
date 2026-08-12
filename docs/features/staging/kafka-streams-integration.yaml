@@ -30,7 +30,7 @@ use_this_when:
   - You want concurrency for that stage without splitting the topic into far more partitions or running many Streams instances.
 setup:
   pattern: Streams writes to an intermediate topic; Parallel Consumer consumes it with its own Consumer, group id and ordering mode.
-  example: parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/io/confluent/parallelconsumer/examples/streams/StreamsApp.java
+  example: parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/bz/stub/parallelconsumer/examples/streams/StreamsApp.java
   readme_code: README.adoc#streams-usage-code
 opt_in:
   mechanism: Add a topic boundary between the topology and the parallel stage; no extra artifact beyond the Parallel Consumer module you already use.

@@ -1,0 +1,38 @@
+package bz.stub.parallelconsumer.vertx;
+
+/*-
+ * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import io.vertx.core.Vertx;
+import io.vertx.core.VertxOptions;
+import io.vertx.ext.web.client.WebClient;
+import org.junit.jupiter.api.BeforeEach;
+
+public abstract class VertxBaseUnitTest extends ParallelEoSStreamProcessorTestBase {
+
+    JStreamVertxParallelEoSStreamProcessor<String, String> vertxAsync;
+
+    @Override
+    protected AbstractParallelEoSStreamProcessor initAsyncConsumer(ParallelConsumerOptions parallelConsumerOptions) {
+        VertxOptions vertxOptions = new VertxOptions();
+        Vertx vertx = Vertx.vertx(vertxOptions);
+        WebClient wc = WebClient.create(vertx);
+        var build = parallelConsumerOptions.toBuilder()
+                .maxConcurrency(10)
+                .build();
+        vertxAsync = new JStreamVertxParallelEoSStreamProcessor<>(vertx, wc, build);
+
+        return vertxAsync;
+    }
+
+    @BeforeEach
+    public void setupData() {
+        super.primeFirstRecord();
+    }
+
+}

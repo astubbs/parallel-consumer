@@ -11,7 +11,7 @@ availability:
   since: 0.1.0
   evidence:
     tag: 0.1.0
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
     basis: >-
       The first tagged release already carries a user-settable commit interval, as timeBetweenCommits on
       the processor. The changelog does not name it at any release, so the source is the evidence.
@@ -40,6 +40,6 @@ boundaries:
   - Shortening it trades broker load against replay. The CommitMode Javadoc states the trade, and the README includes it.
 references:
   - label: commitInterval option and transactionsValidation
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
   - label: Interval reduction under transactions, in the CommitMode Javadoc
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java#transactionalJavadoc
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java#transactionalJavadoc

@@ -9,6 +9,55 @@ second; it is the per-branch procedure and it is authoritative over any summary 
 
 ---
 
+## HIGH PRIORITY — NEEDS A HUMAN: astubbs#51 is excluded from the sweep
+
+**astubbs#51 (`features/enable-virtual-threads`) cannot be brought across by this procedure and has
+been dropped from it.** It is the only cross-repository PR of the 38: its head lives on
+`devingryu`'s fork, so `origin/features/enable-virtual-threads` does not exist and step 0 of the
+per-branch recipe is unrunnable. Verified with
+`gh pr list --json number,isCrossRepository` — every other PR in the sweep is `false`.
+
+The commit is reachable as `refs/pull/51/head` (`b4d5c2df`), so the rename *could* be performed
+locally. That is not the problem. The problem is the other end: **there is nowhere to put the
+result.** Phase D fast-forwards each `<branch>-rename` into its parent and the parent here is a
+branch in someone else's repository. A renamed local branch with no push destination is not a
+delivered result, it is a branch that quietly rots while the tree moves underneath it.
+
+Whoever picks this up is choosing between:
+
+- **Push to the contributor's fork**, if they enabled maintainer edits. Check with
+  `gh pr view 51 --json maintainerCanModify`. This is the only option that keeps the PR mergeable
+  without the contributor doing anything.
+- **Ask the contributor to run the procedure** on their fork, pointing them at
+  `bin/rename-packages.sh` and the `BRINGING AN OPEN BRANCH ACROSS` block. Correct, and slow, and it
+  is a 2021-era PR whose author may not still be reachable.
+- **Close it**, and re-open the work as a fork-owned branch if the feature is still wanted.
+
+Doing nothing has a cost and a deadline: once the rename lands on master, astubbs#51's diff is
+against paths that no longer exist. Every day it stays open, the eventual merge gets worse — and it
+is the one branch in this operation where the fork cannot fix that unilaterally.
+
+`refs/pull/51/merge` is the wrong ref to use for any of this: it is GitHub's speculative merge with
+the base, not the contributor's work.
+
+### Also waiting on a human, lower priority
+
+- **`dups: similarity` is a required check and fails on any renamed branch, as a false positive.**
+  The five near-identical `TestConventionsArchTest.java` files score 89-91% against each other and
+  always have — on astubbs#293 they score 89.57-91.04 and the job passes. The same numbers fail on
+  astubbs#294 because the check compares against base *by file path*, and after a 234-file rename no
+  path has a base counterpart, so pre-existing duplication reads as newly introduced. Nothing in the
+  diff became more duplicated. This will fire on all 38 branches at Phase D. Options: make the
+  action's base comparison rename-aware, add a documented temporary exemption, or override at merge.
+- **The third refusal case: `src/docs/README_TEMPLATE.adoc`'s `confluent-accelerators` link.** The
+  path-form scan matches `io/confluent` inside the URL `www.confluent.io/confluent-accelerators/` —
+  a live external link, not a package reference. Master deleted the line in `04cb92de` as part of a
+  wholesale intro rewrite, so "delete what master deleted" does **not** inherit the conflict-free
+  property that makes the astubbs#289 deletion safe, and the line sits next to the guarded prose.
+  **2 of 37 branches** are affected. Probe: `git merge-base --is-ancestor 04cb92de origin/<headRef>`.
+
+---
+
 ## What exists right now
 
 | Thing | Where | State |
@@ -273,6 +322,104 @@ Origin §6's deferred verification is **done**: compile and the full unit suite 
 Docker integration suite.
 
 ---
+
+## The six things that actually blocked branches
+
+The plan predicted one blocker per branch (the `asyncconsumer` javadoc). The sweep found six classes.
+Every one was found by an agent **stopping and reporting instead of improvising**, which is the single
+highest-value rule in the procedure: five agents diagnosed class B independently and none of them
+invented a fix, so it cost one investigation rather than 33 divergent resolutions.
+
+Counts are out of the 37 branches attempted.
+
+| | What | Branches | Resolution |
+|---|---|---|---|
+| A | `asyncconsumer` javadoc has no rule | all | verbatim replacement, already in the procedure |
+| B | dead `io.confluent.csid` logback loggers, deleted on master by astubbs#289 | 33 | delete the same lines; verified on astubbs#31 |
+| C | the tooling checkout wipes the branch's own copyright-manifest entry | 3 | restore the entry; verified on astubbs#202 |
+| D | the README regen inlines the frozen CHANGELOG | 4 | apply astubbs#113's replacement; verified on astubbs#105 |
+| E | the accelerators URL reads as a package path | 2 | delete the line |
+| F | a prose guard whose sentence the branch never had | 2 attempted, ~121 repo-wide | **fixed in the tooling** |
+
+A fifth instance of the same shape turned up in the tail, and it is worth naming because it is the one
+that does **not** announce itself as a refusal. On the four oldest branches — the same four as class D —
+`pom.xml` still carries `license-maven-plugin` and its `license-maven-plugin-git` extension, which
+master has since removed entirely. That extension's jgit cannot read a worktree's `.git` **file**, so
+`./mvnw -N process-sources` reports failure inside a sweep worktree even though the asciidoc regen goal
+has already run and produced a correct `README.adoc`. **Judge the regen by its output, not by the exit
+code**: `--verify-only` passing afterwards is the real check, and it did pass on every affected branch.
+On master's current `pom.xml` the command exits 0 cleanly, which is why 30-odd agents never saw it.
+
+**B, D, E and the license plugin share one shape, and it is the lesson worth carrying.** Each is a master commit that made
+the rename mechanical — deleting dead config, removing an include, dropping a stale link — which older
+branches simply do not have. The procedure was written against master's tip and silently assumed every
+branch was rebased onto it. **When a cleanup lands "ahead of the rename so the change stays mechanical",
+it makes the rename mechanical only for branches that contain it.** A future sweep should screen for
+each such prerequisite commit up front with `git merge-base --is-ancestor`, rather than discovering
+them one refusal at a time.
+
+**A copyright count that DROPS after the rename is not a check that stopped running.** astubbs#38 went
+from 15 violations to 0. The 15 were upstream-derived files modified since the fork point without a
+`Modifications Copyright` line — the branch's own pre-existing debt. The rename's content commit touches
+those same files and stamps the line in, so it healed the debt rather than hiding it; verified by
+finding the content commit as the one that added the line. Expect this on any branch carrying that debt,
+and check which commit added the line before believing either story.
+
+**C is the one that will bite again outside this project.** `git checkout <ref> -- <file>` is a
+whole-file overwrite, so a branch that had registered its own file provenance in
+`bin/check-copyright-headers.sh` lost it. The failure then surfaces four steps downstream — copyright
+fails, so `mvnw` fails, so the README regen is skipped, so the README keeps its old spelling, so the
+completeness check fails — and reads as "the rename broke something". astubbs#202 traced the whole
+cascade back to one deleted line. The procedure warned about taking too few files; it did not warn that
+taking them is destructive to what the branch had added.
+
+**F was a genuine tool defect and was fixed rather than worked around**, because it does not scale: the
+orphan refusal sat before the `--defer-prose` check, so the flag meaning "prose is master's problem"
+could not reach it, and replicating the guard's logic across the repo showed 121 of 193 branches would
+fail the same way. On master it still refuses — a guard matching nothing is still not a passing check —
+and a negative control asserts that widening the branch case did not soften the master case.
+
+Cost of that fix, measured rather than assumed: branches carry a copy of the tooling, so master's copy
+now differs from theirs and each branch gains **one** extra conflict on `bin/rename-packages.sh`,
+add/add, resolved by taking master's side. One mechanical conflict per branch, against a tool that
+would otherwise block ~121.
+
+## What the real sweep measured, superseding the rehearsal numbers
+
+Two swept branches were merge-tested against renamed master in throwaway worktrees — nothing
+committed, no branch touched. **This is not Phase D**, which is a fast-forward; it is the later
+per-branch master merge, measured early.
+
+| | astubbs#263 (small) | astubbs#268 (`feats/web-gui`, 311 files moved) |
+|---|---|---|
+| conflicted paths | **3** | **22** |
+| of which prose (`README.adoc`, `README_TEMPLATE.adoc`) | 2 | 2 |
+| of which `TestConventionRules.java` | 1 | 1 |
+| of which logback | 0 | 9 |
+| of which branch content | 0 | 10 |
+
+Every conflict is mechanical. The prose pair resolves to master's wording, as the procedure already
+says. `TestConventionRules.java` conflicts because master's rename added the Testcontainers exemption
+to it. The logback ones are the interesting class, and they are **avoidable noise this sweep chose to
+accept**: master's astubbs#289 deleted the dead logger lines AND collapsed the blank runs around them
+AND removed one further commented `ParallelConsumerTestBase` logger. The sweep's prescribed deletion
+removes only the logger lines, so the two sides differ by whitespace and one comment, and git reports
+a conflict on ~8-9 logback files per pre-289 branch. Both sides are commented-out dead configuration,
+so resolution is trivial in every case.
+
+A future sweep of this shape should transplant the upstream commit's hunks whole rather than deleting
+the offending lines, and would save roughly 8 spurious conflicts on each of 33 branches. Re-running
+the 30 branches already green to buy that was not judged worth it — the conflicts are loud, mechanical,
+and land at a step a human is doing anyway.
+
+**The mis-pairing fear did not materialise, at any pool size.** The plan was written around five
+near-identical `TestConventionsArchTest.java` files. Branches carry more — astubbs#268 seven,
+astubbs#269 eight, astubbs#266 ten — and in every case all of them paired within their own module at
+R100, with no cross-module invention and nothing dropped to an add/delete pair. The reason is
+structural, not luck: the move commit changes only paths, so each file scores exactly 100% against its
+own former path and git never has a tie to break. The documented cross-module cycle is a property of
+the **squashed** arm alone, and pool size does not touch the supported shape. It does mean a squash on
+astubbs#266 would now damage ten files rather than the five the plan describes.
 
 ## Housekeeping
 
