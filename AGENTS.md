@@ -39,7 +39,10 @@ an older one has been superseded, absorbed by tooling, or is now stated twice.
   comment.
 - **Cite incidents, never retell them.** If the story behind a rule has no durable home yet, write
   it into `docs/solutions/` first and link it from there.
-- **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it.
+- **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it, and
+  **name the owner in the pointer**: "X owns this; what is here is the part that binds every
+  session". A pointer that only lists adjacent topics reads as *further detail*, so a reader who
+  found a complete-looking rule here stops - and then edits the copy instead of the original.
 - **Do not pre-empt misreadings.** A rule needing three paragraphs to defend it against
   misinterpretation is a rule that needs rewriting.
 - **Before you move or rename any labelled block, grep the whole repo for its text** -
@@ -92,7 +95,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
-| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status | Editorial opinion, and upstream **issues** - those live in the fork mirrors |
+| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status; plus a cache of *frozen* upstream **issue** facts | Editorial opinion, and the live state of an upstream issue - that belongs to its fork mirror |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
@@ -439,8 +442,8 @@ actually start it; if it maps to an upstream issue, link it rather than duplicat
 Work that maps to an upstream PR must have an entry in `src/docs/development/upstream-map.yaml`,
 updated **at every lifecycle transition of your own work, in the same commit that causes it**.
 Nothing automated checks the fork side of that mapping, so a stale entry passes every check and
-quietly rots. Work that maps to an upstream *issue* goes on the fork mirror instead - the manifest
-tracks upstream PRs only.
+quietly rots. An upstream *issue*'s live status is owned by its fork mirror, never the manifest.
 
-The manifest schema, the mirrors, the commit trailers and the upstream sweep are all in
-[`docs/upstream.md`](docs/upstream.md).
+[`docs/upstream.md`](docs/upstream.md) **owns this topic** - the manifest schema and what it may
+cache about an upstream issue, the mirrors, the commit trailers, the sweep. The above is only the
+part that binds every session; where the two disagree, that doc wins.
