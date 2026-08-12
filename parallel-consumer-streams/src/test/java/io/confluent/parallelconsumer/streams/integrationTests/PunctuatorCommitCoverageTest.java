@@ -4,12 +4,16 @@ package io.confluent.parallelconsumer.streams.integrationTests;
  */
 
 import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import io.confluent.parallelconsumer.streams.PcDispatchCounters;
 import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -22,6 +26,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
+
+import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.Map;
@@ -63,6 +69,32 @@ import static org.awaitility.Awaitility.await;
  * neither arm would write one after a handful of punctuations. Punctuator output on the output topic does
  * not disappear either: without EOS the producer sends it on its own schedule whether or not
  * {@code flush()} is ever called. Recorded here because a later reader will reach for both.
+ *
+ * <h2>What the diagnostics turned up, and why it outranks the punctuator question</h2>
+ * The arms log dispatch counters and the group's committed offset as well as the metric, because
+ * {@code commit-total} alone cannot tell "the PC path declined to commit" apart from "the seam was never
+ * dispatching". Measured:
+ * <ul>
+ *   <li><b>The seam was dispatching</b> on the PC arms - offered=5 accepted=5 dispatched=5 completed=5,
+ *       and zero on the stock arms. So the PC arms are genuinely the PC path.</li>
+ *   <li><b>At the drain, every arm reads {@code commit-total=0} and no committed offset at all.</b> The
+ *       commits come later, which is why the settle exists.</li>
+ *   <li><b>The PC arms end with the input partition committed at offset 5 while {@code commit-total}
+ *       never leaves zero.</b> Offsets reach the broker on the PC path by a route that does not go
+ *       through {@code StreamThread.maybeCommit()}, whose sensor only records when
+ *       {@code taskManager.commit(...)} returns a non-zero count.</li>
+ * </ul>
+ * <b>That route is not yet identified, and this class does not claim one.</b> The dispatcher runs no PC
+ * control loop - it holds a {@code WorkManager} and a stub {@code Consumer} - so PC is not committing on
+ * its own behalf. The remaining candidates are the {@code TaskManager} paths that commit without the
+ * thread sensor: {@code handleCorruption}, {@code handleRevocation}, and the close/suspend path.
+ * Narrowing further needs debug logging this module's two test-classpath logging bindings currently
+ * defeat.
+ * <p>
+ * <b>The consequence for the punctuator work.</b> If {@code commitNeeded()} is not what drives offset
+ * commits on the PC path, then the handover's framing - punctuator effects "never become commit-covered"
+ * - is at best imprecise, and the one-line {@code || commitNeeded} candidate cannot be evidenced by
+ * measuring commit cadence until the actual route is known.
  *
  * @author Antony Stubbs
  * @see io.confluent.parallelconsumer.streams.PcTaskDispatcher#hasUncommittedWork()
@@ -114,6 +146,7 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
     void resetCounters() {
         recordsProcessed.set(0);
         punctuationsFired.set(0);
+        PcDispatchCounters.reset();
     }
 
     @AfterEach
@@ -225,6 +258,7 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
         String inputTopic = setupTopic(name + "-in");
         ensureTopic(inputTopic, 1);
         String appId = name + "-" + System.nanoTime();
+        TopicPartition inputPartition = new TopicPartition(inputTopic, 0);
 
         produceInput(inputTopic);
 
@@ -235,6 +269,11 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
             await().atMost(Duration.ofSeconds(60))
                     .until(() -> recordsProcessed.get() >= INPUT_RECORDS);
             log.info("=== [{}] all {} records processed", name, INPUT_RECORDS);
+            // Sampled before the settle, because when the commit lands decides which route committed it:
+            // a commit already present here, with commit-total still at zero, cannot have come from
+            // StreamThread.maybeCommit and points at a TaskManager path (revocation/corruption/close).
+            log.info("=== [{}] at drain: commit-total={} committed={}",
+                    name, commitTotal(streams), committedOffsetOrNull(appId, inputPartition));
 
             // Phase 2: let the drain's own record-driven commits finish, so the measured window is not
             // reading their tail. Fixed, not a converge-loop - see SETTLE.
@@ -253,6 +292,21 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
             double after = commitTotal(streams);
             log.info("=== [{}] idle window: commit-total {} -> {} over {} punctuations",
                     name, before, after, punctuationsFired.get() - punctuationsBefore);
+
+            // Diagnostics, not assertions. commit-total alone cannot distinguish "the PC path decided not
+            // to commit" from "the seam was never dispatching in the first place", and the two have
+            // opposite consequences for what this class demonstrates. The counters answer the first
+            // question and the group's committed offset answers the second.
+            log.info("=== [{}] dispatch counters: offered={} accepted={} dispatched={} completed={} failed={}",
+                    name,
+                    PcDispatchCounters.getRecordsOfferedToWorkManager(),
+                    PcDispatchCounters.getRecordsAcceptedByWorkManager(),
+                    PcDispatchCounters.getRecordsDispatchedToPool(),
+                    PcDispatchCounters.getRecordsCompletedSuccessfully(),
+                    PcDispatchCounters.getRecordsFailed());
+            log.info("=== [{}] committed offset for {}: {}",
+                    name, inputPartition, committedOffsetOrNull(appId, inputPartition));
+
             return after - before;
         } finally {
             streams.close(Duration.ofSeconds(30));
@@ -277,6 +331,18 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
             }
         }
         return total;
+    }
+
+    /**
+     * The application's own committed offset for its input partition, or {@code null} if the group has
+     * never committed. The reader carries the app's group id but never subscribes, so it performs an
+     * OffsetFetch without joining and cannot rebalance the topology under test - the same trick
+     * {@code CommitFrontierCrashRestartTest} uses.
+     */
+    private OffsetAndMetadata committedOffsetOrNull(final String appId, final TopicPartition inputPartition) {
+        try (KafkaConsumer<String, String> groupReader = getKcu().createNewConsumer(appId)) {
+            return groupReader.committed(UniSets.of(inputPartition)).get(inputPartition);
+        }
     }
 
     private void produceInput(final String inputTopic) {
