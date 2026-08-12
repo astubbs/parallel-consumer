@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer.mutiny;
+package bz.stub.parallelconsumer.mutiny;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.parallelconsumer.BatchTestBase;
-import io.confluent.parallelconsumer.BatchTestMethods;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.RateLimiter;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.BatchTestBase;
+import bz.stub.parallelconsumer.BatchTestMethods;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.RateLimiter;
 import io.smallrye.mutiny.Uni;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +24,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.csid.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 @Slf4j
 public class MutinyBatchTest extends MutinyUnitTestBase implements BatchTestBase {

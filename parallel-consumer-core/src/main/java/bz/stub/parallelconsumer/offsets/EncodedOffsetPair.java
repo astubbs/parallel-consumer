@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -14,14 +15,14 @@ import lombok.extern.slf4j.Slf4j;
 import java.nio.ByteBuffer;
 import java.util.Comparator;
 
-import static io.confluent.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrap;
-import static io.confluent.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrapToIncompletes;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v1;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
-import static io.confluent.parallelconsumer.offsets.OffsetRunLength.*;
-import static io.confluent.parallelconsumer.offsets.OffsetSimpleSerialisation.decompressZstd;
-import static io.confluent.parallelconsumer.offsets.OffsetSimpleSerialisation.deserialiseByteArrayToBitMapString;
+import static bz.stub.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrap;
+import static bz.stub.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrapToIncompletes;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.*;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v1;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
+import static bz.stub.parallelconsumer.offsets.OffsetRunLength.*;
+import static bz.stub.parallelconsumer.offsets.OffsetSimpleSerialisation.decompressZstd;
+import static bz.stub.parallelconsumer.offsets.OffsetSimpleSerialisation.deserialiseByteArrayToBitMapString;
 
 /**
  * Encapsulates the encoding type, and the actual encoded data, when creating an offset map encoding. Central place for

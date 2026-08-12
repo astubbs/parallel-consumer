@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -23,7 +24,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
+import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
 import static one.util.streamex.StreamEx.of;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;

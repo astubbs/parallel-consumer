@@ -1,7 +1,8 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 import com.github.luben.zstd.ZstdInputStream;
 import com.github.luben.zstd.ZstdOutputStream;
@@ -20,7 +21,7 @@ import java.util.TreeSet;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
-import static io.confluent.csid.utils.BackportUtils.readFully;
+import static bz.stub.parallelconsumer.internal.utils.BackportUtils.readFully;
 
 /**
  * Methods for compressing, decompressing and encoding / encoding data.
