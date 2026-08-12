@@ -402,7 +402,7 @@ the four removed.
 - `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java` (modify)
 - `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/LoadTest.java` (modify)
 - `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionAndCommitModeTest.java` (modify)
-- `docs/TODO_INDEX.md` (regenerate)
+- `docs/todo-index.md` (regenerate)
 - `docs/refactoring.md` (modify)
 
 **Approach.**
@@ -424,7 +424,7 @@ the four removed.
 6. Re-run `bin/todo-index.sh` in the same commit. Two of the markers touched here are indexed, and
    `--check` gates the PR Checklist job.
 
-**Patterns to follow.** `docs/TODO_INDEX.md`'s own header records why the index is generated and why
+**Patterns to follow.** `docs/todo-index.md`'s own header records why the index is generated and why
 it must be regenerated with any marker change.
 
 **Test scenarios.**
@@ -597,7 +597,7 @@ key-order blocking is running again.
 **Files.**
 - `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/ParallelEoSStreamProcessorTest.java` (modify)
 - `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java` (modify, if the shared helper is added)
-- `docs/TODO_INDEX.md` (regenerate - step 3 deletes an indexed marker)
+- `docs/todo-index.md` (regenerate - step 3 deletes an indexed marker)
 
 **Approach.**
 

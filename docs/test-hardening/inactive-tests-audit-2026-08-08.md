@@ -42,7 +42,7 @@ the ones that actually mislead:
 | **Tests that assert nothing** | **15 of 292** (5.1%). They can fail only by throwing. |
 | **Tests that report green with their assertions branched away** | **1 test, 5 sites** - `OffsetEncodingTests`, via a helper named `assumeWorkingCodec` that is not an assumption. |
 
-**Currently quarantined: zero.** `docs/QUARANTINED_TESTS.md` and the code agree.
+**Currently quarantined: zero.** `docs/quarantined-tests.md` and the code agree.
 
 ---
 
@@ -62,7 +62,7 @@ grep -rn "@Disabled\|@Ignore" --include="*.java" .
 
 # Live quarantines (both must be 0)
 rg -c --no-filename "^\s*@Quarantined" -g '*.java' . | awk '{s+=$1} END {print s+0}'
-grep -c "^- \[ \]" docs/QUARANTINED_TESTS.md
+grep -c "^- \[ \]" docs/quarantined-tests.md
 ```
 
 Empty-body, placeholder and assertion-free detection needs a brace-matching parser that masks
@@ -611,7 +611,7 @@ Probably delete: `SampleTestingFailsafePluginInclusionCore`, `JavaEnvTest.checkJ
 
 ```bash
 rg -c --no-filename "^\s*@Quarantined" -g '*.java' . | awk '{s+=$1} END {print s+0}'   # 0
-grep -c "^- \[ \]" docs/QUARANTINED_TESTS.md                                           # 0
+grep -c "^- \[ \]" docs/quarantined-tests.md                                           # 0
 ```
 
 A naive `grep -rn "@Quarantined"` returns 13, but **every one is a string fixture inside the

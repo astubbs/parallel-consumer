@@ -138,7 +138,7 @@ entry in `docs/refactoring.md`, which describes the branch by the wrong commit, 
 R16. Correct the stale `origin/refactor/empty-tests` entry in `docs/refactoring.md`, which
 describes work whose removal half has already landed on master via upstream `confluentinc#493`.
 
-R19. Add an `AGENTS.md` Testing pointer to the audit, in the style of the existing `TODO_INDEX.md`
+R19. Add an `AGENTS.md` Testing pointer to the audit, in the style of the existing `todo-index.md`
 and quarantine pointers, so the next agent finds it without knowing it exists.
 
 ### Scope Boundaries
@@ -170,7 +170,7 @@ single assertion. No CHANGELOG entry is added - `AGENTS.md` states a PR never co
 
 ### Sources
 
-- `docs/QUARANTINED_TESTS.md` and `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/Quarantined.java` - the governed alternative to `@Disabled`, and the policy statement that motivates this audit.
+- `docs/quarantined-tests.md` and `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/Quarantined.java` - the governed alternative to `@Disabled`, and the policy statement that motivates this audit.
 - `docs/test-hardening/disabled-and-weakened-tests-audit-2026-04-22.md` on branch `refactor/test-hardening` (commit `c44edbf0`) - the predecessor audit being absorbed.
 - The `origin/refactor/test-hardening` and `origin/refactor/empty-tests` entries in `docs/refactoring.md`, and the Superseded list in `docs/inflight/branch-stale-and-diagnostic.md` - the ledger entries that hid it.
 - `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` - evidence that a test passing vacuously is a live failure mode here.
@@ -236,7 +236,7 @@ flowchart TD
     F -->|runs code, no assertion found| J{Assertion inside<br/>a helper?}
     F -->|asserts| K[Healthy]
 
-    C --> N[docs/QUARANTINED_TESTS.md<br/>existing, untouched]
+    C --> N[docs/quarantined-tests.md<br/>existing, untouched]
     D --> O[Audit: false-positive section]
 
     E --> P[Audit: per-test, with<br/>reason and commit evidence]
@@ -358,7 +358,7 @@ still makes a claim master contradicts.
 notes are produced by the generator from the commit log, so the commit subject carries the
 operator-visible fact instead.
 
-**Patterns to follow.** `docs/TODO_INDEX.md`'s "Prioritised? See the refactoring backlog" section
+**Patterns to follow.** `docs/todo-index.md`'s "Prioritised? See the refactoring backlog" section
 states the inventory-versus-triage split; keep the new document consistent with it.
 
 **Test scenarios.** `Test expectation: none -- documentation. The issue-reference gate in
