@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.vertx;
  */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.WireMock;
 import io.confluent.csid.utils.WireMockUtils;
 import io.confluent.parallelconsumer.PollContext;
 import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
@@ -193,6 +194,74 @@ class VertxTest extends VertxBaseUnitTest {
         assertThat(res).extracting(AsyncResult::cause).containsOnlyNulls();
         assertThat(res).extracting(x -> x.result().statusCode()).containsOnly(200);
         assertThat(res).extracting(x -> x.result().bodyAsString()).contains(WireMockUtils.stubResponse);
+    }
+
+    /**
+     * Characterizes what a non-2xx status does, which nothing asserted before. The stub
+     * {@code VertxTest.handleHttpResponseCodes} was named for this and was deleted in
+     * {@code cadf4c95} - correctly, its body was {@code assertThat(true).isFalse()} behind
+     * {@code @Disabled} and it had never run green. The gap it named was real: audit §1.3 records
+     * that non-2xx handling is untested and that the nearest test asserts 200 on the happy path
+     * only.
+     * <p>
+     * A Vert.x {@code WebClient} future completes successfully for <em>any</em> HTTP response and
+     * fails only on transport errors, and
+     * {@code VertxParallelEoSStreamProcessor}'s {@code send.onSuccess} calls
+     * {@code onUserFunctionSuccess}. So a 500 is a delivered response, not a processing failure,
+     * and the offset commits.
+     * <p>
+     * That is a contract, not a bug: parallel-consumer takes no position on status codes, the same
+     * way it takes no position on how a value was serialised. A user who wants a 5xx retried says
+     * so - with a response predicate, or by throwing from their own function. This test exists so
+     * that contract fails loudly if it ever changes silently.
+     */
+    @SneakyThrows
+    @Test
+    void serverErrorStatusStillCommits() {
+        stubServer.stubFor(WireMock.get(WireMock.urlPathEqualTo("/server-error"))
+                .willReturn(WireMock.aResponse().withStatus(500).withBody("boom")));
+
+        var latch = new CountDownLatch(1);
+        vertxAsync.addVertxOnCompleteHook(latch::countDown);
+
+        var futureStream = vertxAsync.vertxHttpRequestStream((webClient, rec) -> {
+            RequestInfo reqInfo = getGoodHost();
+            return webClient.get(reqInfo.getPort(), reqInfo.getHost(), "/server-error");
+        });
+
+        awaitLatch(latch);
+
+        var res = getResults(futureStream);
+        assertThat(res).hasSize(1).doesNotContainNull();
+        // the future succeeded - the response was delivered, so nothing failed as far as vertx is concerned
+        assertThat(res).extracting(AsyncResult::cause).containsOnlyNulls();
+        assertThat(res).extracting(x -> x.result().statusCode()).containsOnly(500);
+
+        // and the work is treated as done: the offset commits
+        awaitForCommitExact(1);
+    }
+
+    /**
+     * The other side of the boundary in {@link #serverErrorStatusStillCommits}, and the reason that
+     * contract is defensible: a transport failure - nothing delivered - does fail the future. The
+     * distinction is what a user needs in order to decide where to put their own error handling.
+     */
+    @SneakyThrows
+    @Test
+    void transportFailureIsDistinctFromANonSuccessStatus() {
+        var latch = new CountDownLatch(1);
+        vertxAsync.addVertxOnCompleteHook(latch::countDown);
+
+        var futureStream = vertxAsync.vertxHttpRequestStream((webClient, rec) -> {
+            RequestInfo unreachable = getBadRequest();
+            return webClient.get(unreachable.getPort(), unreachable.getHost(), unreachable.getContextPath());
+        });
+
+        awaitLatch(latch);
+
+        var res = getResults(futureStream);
+        assertThat(res).hasSize(1).doesNotContainNull();
+        assertThat(res).extracting(AsyncResult::cause).doesNotContainNull();
     }
 
     private List<AsyncResult<HttpResponse<Buffer>>> getResults(
