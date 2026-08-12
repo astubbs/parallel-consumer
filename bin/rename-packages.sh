@@ -5,6 +5,10 @@
 
 # Performs the fork's package rename - io.confluent.* -> bz.stub.* - on whatever branch it is run in.
 #
+# BRINGING AN OPEN PR BRANCH ACROSS? The complete procedure is the section titled BRINGING AN OPEN
+# BRANCH ACROSS, below. It is eight numbered steps, each one a command. Start there and read nothing
+# else first; the sections before it are the measurements behind the steps, not prerequisites.
+#
 # READ THE PROJECT'S IN-FLIGHT ENTRY BEFORE YOU RUN THIS: `docs/inflight/branch-package-rename.md`.
 # It is the canonical entry for the whole package-rename project and it records findings this run
 # NEEDS - references deliberately left for the rename to fix rather than fixed in place, and the
@@ -161,6 +165,93 @@
 # corrected elsewhere: fix it once on master, and pass the flag on the PR branches, where the
 # corrected sentence arrives from master at merge. (The changelog is frozen for the rewrite, so its
 # claim is merely left stale.)
+#
+# BRINGING AN OPEN BRANCH ACROSS
+#
+# For the author - human or agent - of one of the open PRs. This is the whole procedure. Every step
+# is a command to RUN, not a state to recognise. Run them in order, and stop at the first surprise:
+# step 8 says what counts as one.
+#
+# 1. DO I NEED TO DO ANYTHING? Run this rather than reasoning about it:
+#
+#      git fetch origin
+#      git diff --quiet origin/master -- bin/rename-packages.sh bin/check-copyright-headers.sh \
+#        && echo "CURRENT - skip to step 3" \
+#        || echo "STALE - do step 2 first"
+#
+#    Run it BEFORE you rename anything. After the rename both files legitimately differ from master's
+#    copies and the answer stops meaning anything.
+#
+#    It compares CONTENT rather than testing `-f`, because a branch can hold an OLDER copy of both
+#    files - present, out of date, and indistinguishable from current by any existence check.
+#
+# 2. HOW DO I GET THE SCRIPT?
+#
+#      git fetch origin
+#      git checkout origin/master -- bin/rename-packages.sh bin/check-copyright-headers.sh
+#      git commit -m "chore: take the rename tooling from master"
+#
+#    NOT a merge. Merging master into a branch that has not been renamed is the exact operation this
+#    script exists to prevent - see RUNNING THIS ON EVERY OPEN PR BRANCH above. `git checkout <ref>
+#    -- <paths>` copies those paths into the index and working tree and records NOTHING about <ref>
+#    in history: no merge base moves, no other file is touched.
+#
+#    NOT a cherry-pick. The tooling arrived over eleven non-merge commits, so there is no single
+#    commit that contains it.
+#
+#    A REF, NOT A SHA. `origin/master` always names the tooling that produced master's current
+#    layout. A sha has to be published by somebody, rots the moment the tooling is touched again, and
+#    a mistyped one silently hands you an older script.
+#
+#    BOTH FILES. This script never calls the copyright checker - it only edits it - so taking just
+#    the script looks sufficient and is not. Without the checker's provenance normalisation every
+#    moved upstream file loses its fork-point lookup and its retained Confluent header becomes a
+#    violation: 197 of them, measured. They heal the moment master merges in, which is precisely what
+#    makes them look like the rename broke something, and gets them "fixed" wrongly.
+#
+# 3. WHAT DO I RUN?
+#
+#      bin/rename-packages.sh --dry-run --defer-prose   # read the work set, change nothing
+#      bin/rename-packages.sh --defer-prose             # apply: move commit, then content commit
+#
+#    `--defer-prose` is required on the DRY RUN as well, not only on the applying run: the prose
+#    guards are checked BEFORE the dry-run exit, so a bare `--dry-run` aborts with `FAIL:` and never
+#    prints the work set. On your branch those sentences are master's to fix - the corrected wording
+#    reaches you at the merge in step 4.
+#
+#    Add `--skip-readme-regen` ONLY if you have no JDK. It excuses README.adoc from the completeness
+#    check, so the check stops being total; the run lists it under MANUAL FOLLOW-UPS. With a JDK,
+#    letting the regen run leaves your README.adoc agreeing with master's, which is one less conflict.
+#
+# 4. WHAT DO I DO NEXT? Merge master - AFTER the rename, NEVER before.
+#
+#      git merge origin/master
+#
+#    The order is the whole point. Renamed-branch meeting renamed-master gives git a rename on each
+#    side to pair against. The reverse gives it a rename on one side and edits at the old paths on
+#    the other, and that resolves silently and wrongly.
+#
+# 5. WHAT WILL I SEE? Conflicts - and they are the good outcome, because they are loud:
+#      - CONFLICT (rename/delete) and CONFLICT (add/add) on the NEW path, with your edit intact.
+#      - Conflicts on the guarded prose sentences. MASTER'S WORDING WINS: discard your side, it is
+#        the old false claim mechanically respelt.
+#
+# 6. WHAT DOES WRONG LOOK LIKE? A merge that reports ZERO conflicts on a branch that skipped step 3.
+#    That is not good luck. That is the silent cross-module corruption described above, already
+#    applied to your tree. Do not push it. Report it.
+#
+# 7. WHERE DO I STOP? Rename your branch, merge master in, resolve, commit, and push YOUR PR BRANCH.
+#
+#      DO NOT merge the PR. DO NOT open a PR. DO NOT touch master.
+#
+#    Landing is a human decision behind review and CI. It is not part of this procedure, and an
+#    instruction that merely omitted it would get supplied by a helpful reader.
+#
+# 8. WHEN DO I STOP AND ASK? Report and stop - do not use judgement - on any of these:
+#      - any refusal at all (dirty tree, or a package with no rule in PKG_MAP)
+#      - `mis-paired` reporting anything other than 0
+#      - a conflict whose correct resolution is not obvious from step 5
+#      - ZERO conflicts where step 5 told you to expect them (that is step 6)
 #
 # Usage:
 #   bin/rename-packages.sh                  # apply and commit (move commit + content commit)
@@ -396,6 +487,24 @@ lose one rename outright.
   --skip-readme-regen   do not run ./mvnw -N process-sources for README.adoc
   --verify-only         run the completeness check only
   -h, --help            this text
+
+BRINGING AN OPEN PR BRANCH ACROSS - the short form. The full eight steps, with the reason behind each,
+are in the BRINGING AN OPEN BRANCH ACROSS section of this file's header. Read them before step 2.
+
+  1. Need to do anything? Run it, do not guess - and run it BEFORE you rename:
+       git fetch origin
+       git diff --quiet origin/master -- bin/rename-packages.sh bin/check-copyright-headers.sh \
+         && echo "CURRENT - skip to 3" || echo "STALE - do 2 first"
+  2. Get the tooling. A file checkout, NOT a merge and NOT a cherry-pick. BOTH files:
+       git checkout origin/master -- bin/rename-packages.sh bin/check-copyright-headers.sh
+  3. Rename your branch (--defer-prose is required on the dry run too, or it aborts unread):
+       bin/rename-packages.sh --dry-run --defer-prose
+       bin/rename-packages.sh --defer-prose
+  4. THEN merge master, never before:  git merge origin/master
+  5. Expect conflicts on the new path with your edit intact, and on the guarded prose - master wins.
+  6. ZERO conflicts after skipping step 3 is silent corruption, not luck. Report it.
+  7. Push YOUR PR BRANCH. Do NOT merge the PR, do NOT open a PR, do NOT touch master.
+  8. Any refusal, any non-zero `mis-paired`, or any unclear conflict: STOP and report. Do not improvise.
 
 Read the header of this file for the measurement behind the default, for why running this on every
 open PR branch is mandatory rather than convenient, and for the two references a naive

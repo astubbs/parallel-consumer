@@ -827,6 +827,94 @@ EOF
 
 # --------------------------------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------------------------------
+# The BRINGING AN OPEN BRANCH ACROSS procedure block
+# --------------------------------------------------------------------------------------------------
+#
+# The block IS the delivery mechanism for the fan-out: a stale branch reads it out of origin/master
+# with `git show`, because on that branch the file does not exist yet and `cat` cannot help. Three
+# things are therefore tested rather than assumed - that it reaches --help, that the script's own
+# rewrite cannot eat it, and that the staleness command in step 1 actually discriminates.
+
+helptext="$TMP/helptext.txt"
+bash "$SCRIPT" --help > "$helptext" 2>&1 || true
+
+assert_contains "--help carries the condensed procedure" "$helptext" \
+    "BRINGING AN OPEN PR BRANCH ACROSS"
+assert_contains "--help gives step 1 as a COMMAND, not a description of a state" "$helptext" \
+    'git diff --quiet origin/master -- bin/rename-packages.sh bin/check-copyright-headers.sh'
+assert_contains "--help names BOTH tooling files in the checkout - one file is the 197-violation trap" \
+    "$helptext" 'git checkout origin/master -- bin/rename-packages.sh bin/check-copyright-headers.sh'
+assert_contains "--help states the scope boundary as a PROHIBITION, not an omission" "$helptext" \
+    "Do NOT merge the PR"
+assert_contains "--help says STOP and report rather than inviting judgement" "$helptext" \
+    "STOP and report"
+
+# The header is the long form. An agent pasting `git show origin/master:bin/rename-packages.sh` reads
+# THIS, so the reasons that stop each step being "improved" have to be in it.
+assert_contains "the header carries the full procedure section" "$SCRIPT" \
+    "# BRINGING AN OPEN BRANCH ACROSS"
+assert_contains "the header forecloses the merge variant" "$SCRIPT" "NOT a merge."
+assert_contains "the header forecloses the cherry-pick variant" "$SCRIPT" "NOT a cherry-pick."
+assert_contains "the header forecloses pinning a sha" "$SCRIPT" "A REF, NOT A SHA."
+assert_contains "the header names the zero-conflict outcome as corruption, not luck" "$SCRIPT" \
+    "That is not good luck."
+
+# If a run rewrote the script, the procedure would decay silently across the 40 branches that take it
+# from master - each one carrying instructions one generation staler. SELF_BASENAMES is what prevents
+# it, matched on basename; this asserts the whole file is untouched, block included.
+FIX="$TMP/selfblock"
+new_fixture "$FIX"
+ec="$(run_script "$FIX" --defer-prose)"
+
+# The exit code is asserted FIRST and separately, and that is the whole point. `cmp` alone passes
+# whenever the script was not rewritten - INCLUDING when the run refused before reaching the rewrite,
+# which is exactly what happens if this script stops being excluded from its own processing: the
+# preflight then reads the PKG_MAP and RESIDUE_PATTERNS below as unmapped packages and dies. A guard
+# that cannot tell "excluded" from "aborted early" is decoration; observed, and this is the fix.
+assert "a run with the procedure block present still applies cleanly" 0 "$ec"
+
+if cmp -s "$SCRIPT" "$FIX/bin/rename-packages.sh"; then
+    echo "ok:   the script is byte-identical after a run, so the procedure block survives it"
+else
+    echo "FAIL: the run REWROTE the script itself - the procedure block decays across branches"
+    failures=$((failures + 1))
+fi
+
+# And prove the exclusion by its effect rather than by the file being equal: the old spelling has to
+# still be sitting in the script as DATA after a successful run.
+assert_contains "the script keeps the old spelling as data after a run" \
+    "$FIX/bin/rename-packages.sh" "io.confluent.parallelconsumer"
+
+# Step 1 has to answer "am I stale?" for a branch that has never seen the tooling AND for one holding
+# an older copy. The second is the case `test -f` gets wrong, which is why step 1 diffs content.
+staleness_ec() { # <dir> <ref> -> exit code of step 1's command
+    local ec=0
+    (cd "$1" && git diff --quiet "$2" -- bin/rename-packages.sh bin/check-copyright-headers.sh) || ec=$?
+    echo "$ec"
+}
+
+SFIX="$TMP/staleness"
+new_fixture "$SFIX"
+(cd "$SFIX" && git branch -q pretend-master)
+assert "step 1 reports CURRENT when the branch's tooling matches the ref" 0 \
+    "$(staleness_ec "$SFIX" pretend-master)"
+
+(cd "$SFIX" && git rm -q bin/rename-packages.sh bin/check-copyright-headers.sh \
+    && git commit -qm "a branch cut before the tooling existed")
+assert "step 1 reports STALE when the tooling is ABSENT" 1 \
+    "$(staleness_ec "$SFIX" pretend-master)"
+
+DFIX="$TMP/drifted"
+new_fixture "$DFIX"
+(cd "$DFIX" && git branch -q pretend-master \
+    && printf '# a later change to the tooling\n' >> bin/rename-packages.sh \
+    && git add -A && git commit -qm "the two copies have diverged")
+assert "step 1 reports STALE when the tooling EXISTS but differs - the case 'test -f' misses" 1 \
+    "$(staleness_ec "$DFIX" pretend-master)"
+
+# --------------------------------------------------------------------------------------------------
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "All bin/rename-packages.sh self-tests passed"
