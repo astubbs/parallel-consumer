@@ -836,7 +836,6 @@ fi
 # rename's own change-set does. But "empty" and "the parser drifted" must not look alike, and an empty
 # list must not make this whole section pass by iterating zero times: that is the vacuous pass this
 # suite exists to refuse. So the empty state is asserted explicitly, and a retired guard is replaced by
-# a regression check that its false claim has not come BACK - see RETIRED_PROSE_CLAIMS.
 
 repo_root="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
@@ -848,52 +847,31 @@ parse_pipe_list() { # <var-name> -> the heredoc lines of a `NAME="\` ... `"` blo
 }
 
 guards="$(parse_pipe_list PROSE_GUARDS)"
-retired="$(parse_pipe_list RETIRED_PROSE_CLAIMS)"
 
-if grep -q '^PROSE_GUARDS=""$' "$SCRIPT"; then
-    echo "ok:   PROSE_GUARDS is deliberately empty - every guarded claim has been corrected"
-    if [ -z "$retired" ]; then
-        echo "FAIL: PROSE_GUARDS is empty and RETIRED_PROSE_CLAIMS is too, so this section now checks"
-        echo "      NOTHING. A retired guard becomes a regression check; it does not just disappear."
-        failures=$((failures + 1))
-    fi
-elif [ -z "$guards" ]; then
+if [ -z "$guards" ]; then
     echo "FAIL: could not read PROSE_GUARDS out of $SCRIPT - the parser above has drifted from it"
     failures=$((failures + 1))
 fi
 
-while IFS='|' read -r gpath gere _; do
+# Three states per outlier, and the same assertion is correct on any branch: the claim is still live,
+# or it has been corrected and its corrected form is present. Neither means the sentence was reworded
+# into something nobody declared - the state that used to report "none found" and read clean.
+while IFS='|' read -r gpath gere gfixed _; do
     [ -n "$gpath" ] || continue
     if [ ! -f "$repo_root/$gpath" ]; then
         echo "FAIL: prose guard names $gpath, which does not exist"
         failures=$((failures + 1))
     elif grep -qE "$gere" "$repo_root/$gpath"; then
-        echo "ok:   prose guard still matches its sentence in $gpath"
+        echo "ok:   guarded claim is still live in $gpath, so the guard will fire"
+    elif grep -qE "$gfixed" "$repo_root/$gpath"; then
+        echo "ok:   guarded claim is corrected in $gpath, and its corrected form is present"
     else
-        echo "FAIL: prose guard matches NOTHING in $gpath (pattern: $gere) - the sentence was either"
-        echo "      reworded (re-point the pattern) or corrected (retire the guard)"
+        echo "FAIL: $gpath has NEITHER the claim ($gere) nor its corrected form ($gfixed) - the"
+        echo "      sentence was reworded rather than corrected, and the guard now matches nothing"
         failures=$((failures + 1))
     fi
 done <<EOF
 $guards
-EOF
-
-# The other direction, for guards already retired: the corrected sentence must STAY corrected. Without
-# this, deleting a spent guard quietly re-opens the hole it was closing.
-while IFS='|' read -r rpath rere; do
-    [ -n "$rpath" ] || continue
-    if [ ! -f "$repo_root/$rpath" ]; then
-        echo "FAIL: retired prose claim names $rpath, which does not exist"
-        failures=$((failures + 1))
-    elif grep -qE "$rere" "$repo_root/$rpath"; then
-        echo "FAIL: a RETIRED false claim has come back in $rpath (pattern: $rere) - it was corrected"
-        echo "      once and something reinstated it. Re-correct it, or re-add it to PROSE_GUARDS."
-        failures=$((failures + 1))
-    else
-        echo "ok:   retired claim stays corrected in $rpath ($rere)"
-    fi
-done <<EOF
-$retired
 EOF
 
 # --------------------------------------------------------------------------------------------------

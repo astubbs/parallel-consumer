@@ -514,7 +514,20 @@ SELF_BASENAMES="\
 rename-packages.sh
 test-rename-packages.sh"
 
-# Claims a mechanical rewrite would turn into confident falsehoods: `path|ERE|what to write instead`.
+# Claims a mechanical rewrite would turn into confident falsehoods:
+#   `path | claim-pattern | corrected-pattern | what to write instead`
+#
+# FORWARD-COMPATIBLE BY DESIGN, because these are three known outliers, not a mechanism with a
+# lifecycle. Each entry carries BOTH spellings, so the same declaration is correct before the sentence
+# is corrected and after it - on any branch, in either order, with no retirement step and no second
+# list to keep in sync. Three states:
+#
+#   claim present                  the claim is live      -> refuse, or defer and list it
+#   claim absent, corrected present already corrected     -> pass, and it must STAY corrected
+#   claim absent, corrected absent reworded into something nobody declared -> REFUSE and name it
+#
+# The third state is the one that used to pass silently: a guard whose sentence was reworded rather
+# than corrected matches nothing, and "none found" reads exactly like a clean tree.
 #
 # DELIBERATELY EMPTY, and that is not the same as the parser having drifted. All three original guards
 # are RETIRED: their sentences were corrected in the same change-set that landed the rename, using the
@@ -525,9 +538,9 @@ test-rename-packages.sh"
 # The MECHANISM stays. The next claim a mechanical rewrite would falsify goes here in the same
 # `path|ERE|what to write instead` form, and --defer-prose keeps working for it.
 PROSE_GUARDS="\
-src/docs/README_TEMPLATE.adoc|drop-in replacement.*package.*are unchanged|The drop-in claim stops being TRUE and must not merely be qualified. Plan s8 drafts the replacement: say the packages MOVE from io.confluent.parallelconsumer to bz.stub.parallelconsumer, that the API itself is unchanged, and give the one-line sed under == Upgrading.
-CHANGELOG.adoc|only required change is the Maven groupId|The rename adds a second required change - every import moves - so this becomes a factual error the moment it lands. AGENTS.md allows exactly one changelog edit in a PR: correcting an existing claim that is now false. Rewrite that sentence. Do NOT add a new entry - the 0.6.0.0 section is generated at release time from the commit log.
-CHANGELOG.adoc|library API is otherwise unchanged|Same class as the sentence above, in the === Breaking bullet: after the rename the caller's code changes too, so 'otherwise unchanged' reads as a promise the release does not keep. Correct it in place."
+src/docs/README_TEMPLATE.adoc|drop-in replacement.*package.*are unchanged|Java packages \*move\*|The drop-in claim stops being TRUE and must not merely be qualified. Plan s8 drafts the replacement: say the packages MOVE from io.confluent.parallelconsumer to bz.stub.parallelconsumer, that the API itself is unchanged, and give the one-line sed under == Upgrading.
+CHANGELOG.adoc|only required change is the Maven groupId|two changes are required|The rename adds a second required change - every import moves - so this becomes a factual error the moment it lands. AGENTS.md allows exactly one changelog edit in a PR: correcting an existing claim that is now false. Rewrite that sentence. Do NOT add a new entry - the 0.6.0.0 section is generated at release time from the commit log.
+CHANGELOG.adoc|library API is otherwise unchanged|Rewrite your imports|Same class as the sentence above, in the === Breaking bullet: after the rename the caller's code changes too, so 'otherwise unchanged' reads as a promise the release does not keep. Correct it in place."
 
 # Rename detection is a similarity matrix over unmatched paths, and git gives up above
 # diff.renameLimit with a warning that is easy to miss, then reports add+delete. 264 files move
@@ -1567,10 +1580,16 @@ completeness_check() {
 # --------------------------------------------------------------------------------------------------
 
 check_prose_guards() {
-    local path ere advice found=0
-    while IFS='|' read -r path ere advice; do
+    local path ere fixed advice found=0 orphaned=""
+    while IFS='|' read -r path ere fixed advice; do
         [ -n "$path" ] || continue
         [ -f "$path" ] || continue
+        if ! grep -qE "$ere" "$path"; then
+            # Corrected, or silently reworded into something nobody declared. Only the first is a pass.
+            grep -qE "$fixed" "$path" || orphaned="${orphaned}
+      ${path}: neither the claim (${ere}) nor its corrected form (${fixed}) is present"
+            continue
+        fi
         if grep -nE "$ere" "$path" > "$TMP/prose.txt"; then
             found=$((found + 1))
             echo
@@ -1583,8 +1602,15 @@ check_prose_guards() {
 $PROSE_GUARDS
 EOF
 
+    if [ -n "$orphaned" ]; then
+        echo
+        die "a guarded sentence was reworded rather than corrected:${orphaned}
+     A guard that matches neither spelling reports \"none found\", which reads exactly like a clean
+     tree. Re-point the claim pattern at the new wording, or add the corrected form it should have."
+    fi
+
     if [ "$found" -eq 0 ]; then
-        echo "  none found"
+        echo "  none found - every guarded claim is already corrected"
         return 0
     fi
     if [ "$DEFER_PROSE" = true ]; then
