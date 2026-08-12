@@ -91,6 +91,60 @@ one-line test annotation, so the branch is not a suspect. As with the second sig
 suite randomises its seed per run, so other branches passing the same day only means their seeds did
 not draw this interleaving.
 
+**Fourth sighting, 2026-08-12 - the `ZOMBIE_MEMBER` arm, and the probe genuinely fired.**
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed fail-fast by `ProgressProbe` on
+[job 94014375262](https://github.com/astubbs/parallel-consumer/actions/runs/31564815332/job/94014375262),
+on astubbs#289 at head `976f88c65`. The failing wait is the `await()` in `ChaosChurnStormIT` aliased
+`all messages consumed under churn`, whose `failFast` is `probe violation during run`:
+
+```
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-1929174831' dwelling in PreparingRebalance for 15s
+(bound 15s) - a member is not answering the rebalance (protocol-unresponsive)
+peaks: rebalanceDwell=15426ms lagStagnation=99137ms
+```
+
+23 frozen partitions, stagnant 96-101s, lag from 56 to 1132. **Replay seed `7731567379755737438`** -
+the part no command can recover once the log and artifact expire:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=7731567379755737438
+
+**The two sibling seeds from the same run are the control arm, not a footnote.** Both passed:
+`ChaosRevokeUnderWorkIT` on `642714983109785585` and `ChaosRevokeUnderWorkCooperativeIT` on
+`374908783265204320`. Same run, same runner, same broker image - so whatever this was, it is not an
+ambient property of the machine that hour, and the two revoke-under-work scenarios did not draw it.
+
+**The probe was not vacuous, and that needs saying so nobody dismisses it.** The rule elsewhere is
+that a *clean* probe is only evidence when its detectors could have fired; the converse holds here.
+`rebalanceDwell` reached 15426ms against a 15s bound, with 23 partitions stalled around 100s and
+four-figure lag on several - a detector that fired on its own terms, not a short window that tripped
+a threshold by accident.
+
+**Which arm, and what it is not.** This is the `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED` signature - a
+member not answering the rebalance - and not the `CLASS2_STALL`/`LAG_STAGNATION` signature of the
+second sighting. The zombie-member defect is recorded above as **landed** via astubbs#80, and the
+family's original deadlock (astubbs#29) is still open. **Do not read this entry as identifying
+either.** It records a signature and a replayable seed; which defect it belongs to, if any, is what
+the replay is for.
+
+**Branch context: astubbs#289 is not a suspect, and here is why rather than an assertion.** It
+changes documentation, logback *test* configuration, `<repositories>` blocks in three poms,
+`CODEOWNERS`, deleted upstream CI files, one added unit test, and exactly one line of main source -
+a `String` constant holding a documentation URL. Nothing on the rebalance, poll, commit or shutdown
+path. As with the second and third sightings, the chaos suite randomises its seed per run, so other
+branches passing the same day only means their seeds did not draw this interleaving.
+
+**Retrieval note - the autopsy was NOT in the CI log.** GitHub truncated the job's log stream partway
+through the run, so neither `gh run view --log` nor `--log-failed` contained the
+`=== AMBIENT PROBE AUTOPSY ===` block, and the check-run annotations carried only
+`Process completed with exit code 1`. The autopsy and all three seeds came from the **uploaded test
+report artifact** (`highcpu-fast-feedback-reports-Chaos Pain Suite-*`), inside the failsafe XML for
+the failing class, where the block is embedded in the captured system-out. Go there first for a
+chaos failure; the console is not reliable for this and will look like the verdict simply does not
+exist. This generalises beyond the entry - it belongs in the ambient-probe section of
+`docs/testing.md`, which currently states that every broker integration test failure *log* includes
+the block, and that file was owned by another branch when this was written.
+
 **Gated on astubbs#29: proving thread-parallel integration tests are safe again.** astubbs#68 made the integration
 suite reliable by *forking* per broker (`forkCount=4`), which sidesteps the deadlock rather than
 proving it gone - the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure it was hiding is

@@ -140,7 +140,7 @@ actually runs.
 
 Only one of them announces its absence. We *do* publish snapshots - `parallel-consumer-core:0.6.0.0-SNAPSHOT`
 returns HTTP 200 from `central.sonatype.com/repository/maven-snapshots`, test-jar included - and the
-root pom's `<repositories>` declares `central`, `confluent` and `astubbs-truth-generator`, and **not**
+root pom's `<repositories>` declares `central` and `astubbs-truth-generator`, and **not**
 the Central snapshots repository. (`astubbs-truth-generator` does enable snapshots, but it is a
 different host serving a different artifact, so it cannot answer for these.) Publishing succeeded
 loudly; consuming was never configured, and nothing said so.
