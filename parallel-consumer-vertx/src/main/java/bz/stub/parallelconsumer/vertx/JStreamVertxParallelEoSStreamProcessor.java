@@ -1,13 +1,13 @@
-package io.confluent.parallelconsumer.vertx;
+package bz.stub.parallelconsumer.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.Java8StreamUtils;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.internal.utils.Java8StreamUtils;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
@@ -19,8 +19,8 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Optional;
-import io.confluent.parallelconsumer.internal.DrainingCloseable.DrainingMode;
-import io.confluent.parallelconsumer.internal.JStreamResultDeques;
+import bz.stub.parallelconsumer.internal.DrainingCloseable.DrainingMode;
+import bz.stub.parallelconsumer.internal.JStreamResultDeques;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicLong;
@@ -29,7 +29,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
-import static io.confluent.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 
 /**
  * @deprecated Being removed — the JStream interface is not widely used and its unbounded result deque

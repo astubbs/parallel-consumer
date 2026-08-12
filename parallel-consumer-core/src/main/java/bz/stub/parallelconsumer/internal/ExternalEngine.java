@@ -1,18 +1,19 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContextInternal;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 
-import static io.confluent.csid.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * Overrides key aspects required in common for other threading engines like Vert.x and Reactor

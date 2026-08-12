@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2026 Antony Stubbs and contributors
@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CountDownLatch;
 
 import static com.google.common.truth.Truth.assertThat;
-import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
 import static org.mockito.Mockito.mock;
 
 /**

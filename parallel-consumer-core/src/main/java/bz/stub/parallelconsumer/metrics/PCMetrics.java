@@ -1,7 +1,8 @@
-package io.confluent.parallelconsumer.metrics;
+package bz.stub.parallelconsumer.metrics;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.micrometer.core.instrument.*;
@@ -51,7 +52,7 @@ public class PCMetrics {
 
     /**
      * @param meterRegistry: meterRegistry to use for meter registration - configured through
-     *                       {@link io.confluent.parallelconsumer.ParallelConsumerOptions} on PC initialization
+     *                       {@link bz.stub.parallelconsumer.ParallelConsumerOptions} on PC initialization
      * @param commonTags:    set of tags to add to all meters - for example - PC instance.
      */
     public PCMetrics(MeterRegistry meterRegistry, Iterable<Tag> commonTags, String instanceTag) {

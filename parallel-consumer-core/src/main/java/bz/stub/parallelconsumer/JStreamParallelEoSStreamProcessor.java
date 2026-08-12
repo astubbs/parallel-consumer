@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.Java8StreamUtils;
+import bz.stub.parallelconsumer.internal.utils.Java8StreamUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.util.List;
-import io.confluent.parallelconsumer.internal.DrainingCloseable.DrainingMode;
-import io.confluent.parallelconsumer.internal.JStreamResultDeques;
+import bz.stub.parallelconsumer.internal.DrainingCloseable.DrainingMode;
+import bz.stub.parallelconsumer.internal.JStreamResultDeques;
 
 import java.time.Duration;
 
