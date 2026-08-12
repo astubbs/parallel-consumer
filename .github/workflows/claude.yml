@@ -54,6 +54,28 @@ jobs:
       # trying to clear a gate that does not exist.
       pr_number: ${{ steps.pr-context.outputs.pr }}
     env:
+      # WHAT THE REVIEWER IS TOLD ABOUT WHERE IT CAME FROM.
+      #
+      # Both facts below are properties of the ROUTE, not of the grants, so this note goes on
+      # every path - including the two carve-outs, which withhold the allowlist and nothing else.
+      # A reviewer that does not know its tree is master's will report master's test results as
+      # the PR's, and one that does not know its allowlist is master's will report a refused
+      # grant as a defect in the PR. Both have already happened here: the second on run
+      # 31547154463, which is written up in docs/inflight/ci-review-agent.md.
+      #
+      # ONE LINE, and no double quotes: it is written to $GITHUB_OUTPUT as part of `claude_args`,
+      # which is a single `key=value` line, and it is interpolated inside a `"`-quoted shell
+      # string on the way there.
+      REVIEW_ROUTE_NOTE: >-
+        YOUR TOOL ALLOWLIST AND YOUR WORKING TREE BOTH COME FROM THE DEFAULT BRANCH, NOT FROM THE
+        PULL REQUEST. GitHub runs an issue_comment workflow from the default branch, so the
+        allowlist you are holding is master's copy of .github/workflows/claude.yml, and the
+        checkout under you is master - this workflow names no ref, so the PR's files are not on
+        disk at all. Two consequences. First, a grant the PR adds is NOT in effect for you, so a
+        script the diff appears to grant coming back refused is expected rather than a defect in
+        the PR: say so plainly, and review the change by reading it. Second, anything you DO run -
+        bin/ci-unit-test.sh included - runs master's code and not the PR's, so never offer its
+        result as evidence about this PR. Read the PR's contents with gh pr diff and gh pr view.
       # Defined here so the two carve-outs in `pr-context` - fork head, untrusted commenter -
       # switch one value rather than editing a list in several places.
       # KEEP IN SYNC with `--allowedTools` in claude-code-review-dispatch.yml.
@@ -121,12 +143,20 @@ jobs:
                     "Answering without execution tools." ;;
           esac
 
-          # The allowlist, or nothing if the author is not trusted. The fork head case is handled
-          # separately below and emits an empty value directly - the two carve-outs are
+          # THE ROUTE NOTE IS NOT A CARVE-OUT AND IS NEVER WITHHELD. It tells the reviewer that
+          # its allowlist and its checkout are both the default branch's - see REVIEW_ROUTE_NOTE
+          # above - which is a fact about this workflow, equally true of the degraded reviewer a
+          # fork head or an untrusted commenter gets. Only the ALLOWLIST is conditional.
+          route_note="--append-system-prompt \"$REVIEW_ROUTE_NOTE\""
+
+          # The note, plus the allowlist if and only if the author is trusted. The fork head case
+          # is handled separately below and emits the note alone - the two carve-outs are
           # independent, and either one alone withholds execution.
-          tools_for_trusted_author() {
+          claude_args_for_trusted_author() {
             if [ "$trusted_author" = "true" ]; then
-              printf '%s' "--allowedTools \"$REVIEW_TOOL_ALLOWLIST\""
+              printf '%s %s' "$route_note" "--allowedTools \"$REVIEW_TOOL_ALLOWLIST\""
+            else
+              printf '%s' "$route_note"
             fi
           }
 
@@ -147,14 +177,15 @@ jobs:
           esac
 
           if [ -z "$pr" ]; then
-            # Not a PR at all (an issue). No gate to refresh, and no PR-authored checkout
-            # either - the working tree is the default branch - so the allowlist is safe here.
+            # Not a PR at all (an issue). No gate to refresh - and no PR-authored checkout, though
+            # that is not special to this branch: NO path through this workflow has one, because
+            # the checkout above names no ref. See REVIEW_ROUTE_NOTE.
             echo "Not a pull-request trigger ($EVENT_NAME) - the review gate does not apply."
             {
               echo "pr="
               echo "sha="
               echo "fork_pr=false"
-              echo "claude_args=$(tools_for_trusted_author)"
+              echo "claude_args=$(claude_args_for_trusted_author)"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -182,11 +213,20 @@ jobs:
           # rejects anyone without write access before Claude starts, so a fork AUTHOR commenting
           # `@claude` gets nothing regardless of what this workflow does.
           #
-          # `fork_pr` ALSO withholds the tool allowlist. See "WHAT THIS ROUTE MAY EXECUTE" below:
-          # granting `./mvnw` and the `bin/` scripts on a fork head would put PR-controlled
-          # executables next to CLAUDE_CODE_OAUTH_TOKEN, which is the exact hazard the dispatched
-          # reviewer refuses fork heads to avoid. A fork could replace one of the allowlisted
-          # scripts and wait for the reviewer to be asked to run the checks.
+          # `fork_pr` ALSO withholds the tool allowlist - and the reason previously written here
+          # was wrong, so read the corrected one. It said that granting `./mvnw` and the `bin/`
+          # scripts on a fork head would put PR-controlled executables next to
+          # CLAUDE_CODE_OAUTH_TOKEN. On the DISPATCH route that is exactly right; on THIS one it
+          # is not, because the checkout above names no ref, so the tree is the default branch's
+          # and a fork's files are never on disk to be executed (docs/ci.md, "The comment route
+          # reviews the PR but runs the default branch").
+          #
+          # The withholding stays, for two reasons that do hold. It is the guard that has to
+          # already be in place if that checkout ever gains a `ref:` - which is an open decision,
+          # not a settled no - and reinstating it afterwards is the kind of step that gets
+          # forgotten. And a fork PR's diff, title and comments are attacker-written text this
+          # reviewer reads, so a fork can still try to steer MASTER's granted commands with
+          # hostile arguments; a reader cannot be steered into executing anything.
           if [ "$head_repo" != "$REPO" ]; then
             echo "::notice::PR #$pr has its head in '${head_repo:-<deleted fork>}', not $REPO." \
                  "Answering the comment WITHOUT execution tools, and NOT refreshing" \
@@ -196,8 +236,10 @@ jobs:
               echo "pr="
               echo "sha="
               echo "fork_pr=true"
-              # The whole point: no allowlist, so no execution tools on a fork head.
-              echo "claude_args="
+              # The whole point: no allowlist, so no execution tools on a fork head. The route
+              # note still goes out - it grants nothing, and a reviewer that does not know its
+              # tree is master's is exactly the one that will misreport a fork PR.
+              echo "claude_args=$route_note"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -207,7 +249,7 @@ jobs:
             echo "pr=$pr"
             echo "sha=$sha"
             echo "fork_pr=false"
-            echo "claude_args=$(tools_for_trusted_author)"
+            echo "claude_args=$(claude_args_for_trusted_author)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code
@@ -230,21 +272,33 @@ jobs:
           # runner.
           #
           # The objection to copying it was that comment text is attacker-influencable in a way a
-          # `workflow_dispatch` is not. That is true and it is not the operative difference: BOTH
-          # routes run PR-authored code, and this is an allowlist of this repo's own scripts, not
-          # a shell. The protection was never "the trigger is trusted" - it is that the list is
-          # curated, that the job holding it has no write grant (see `refresh-gate`, and the
-          # `persist-credentials: false` above), and that it is WITHHELD ON FORK HEADS.
+          # `workflow_dispatch` is not. That is true, and this is an allowlist of this repo's own
+          # scripts rather than a shell. The protection was never "the trigger is trusted" - it is
+          # that the list is curated, that the job holding it has no write grant (see
+          # `refresh-gate`, and the `persist-credentials: false` above), and that it is WITHHELD
+          # ON FORK HEADS.
           #
-          # That last one is not decoration. "This route runs PR-authored code" plus "it may run
-          # ./mvnw and the bin/ scripts" plus "the job holds CLAUDE_CODE_OAUTH_TOKEN" is exactly
-          # the combination the dispatched reviewer refuses fork heads to avoid: a fork can
-          # replace an allowlisted script and wait to be asked to run the checks. The dispatch
-          # route answers it by refusing the whole review; this route answers by still replying -
-          # a maintainer asking a question on a fork PR is a legitimate thing - but with NO
-          # execution tools, so there is nothing for replaced code to be executed by. (Only a
-          # maintainer: the action rejects actors without write access before Claude runs, so a
-          # fork AUTHOR gets no reply either way.)
+          # AN EARLIER VERSION OF THIS PARAGRAPH SAID "BOTH ROUTES RUN PR-AUTHORED CODE". THEY DO
+          # NOT, and the difference is this route's, not the dispatch route's. The checkout step
+          # above names no `ref:`, so an `issue_comment` run checks out the DEFAULT BRANCH - the
+          # PR's files are never on disk, and every grant here executes master's copy. A reviewer
+          # asked on a PR to run `bin/ci-unit-test.sh` runs master's suite and reports it as the
+          # PR's unless told otherwise, which is what REVIEW_ROUTE_NOTE now tells it. Whether to
+          # close that by checking out `refs/pull/<n>/head` is an OPEN DECISION and not a bug fix:
+          # it would put PR-authored code beside CLAUDE_CODE_OAUTH_TOKEN on a route anyone with
+          # write access can trigger by comment. Stated once in docs/ci.md, "The comment route
+          # reviews the PR but runs the default branch"; do not settle it here.
+          #
+          # The fork-head withholding is kept regardless - see `pr-context`, which explains why
+          # the hazard it was originally justified by is the dispatch route's rather than this
+          # one's, and what does still justify it. (Only a maintainer ever gets a reply anyway:
+          # the action rejects actors without write access before Claude runs, so a fork AUTHOR
+          # gets nothing either way.)
+          #
+          # `--append-system-prompt` carries REVIEW_ROUTE_NOTE, and unlike `--allowedTools` it is
+          # emitted on EVERY path including the two carve-outs, because it grants nothing. The
+          # dispatch route says the same thing in its own words - it has to, since its provenance
+          # is different: there the workflow comes from master and the CODE is the PR's.
           #
           # `--allowedTools` here ADDS to tag mode's base tools rather than replacing them - the
           # action documents exactly that ("The base GitHub tools are always included. Use

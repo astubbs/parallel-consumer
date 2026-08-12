@@ -115,7 +115,9 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   free-form prompt - so `@claude review this` gets you a review, and `@claude why is X slow?` gets
   you an answer. **The gate cannot tell those two apart**: any finished `claude[bot]` comment
   satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
-  the gate proves" below.
+  the gate proves" below. It also **does not check the PR out** - see
+  ["The comment route reviews the PR but runs the default
+  branch"](#the-comment-route-reviews-the-pr-but-runs-the-default-branch).
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
   See [`docs/testing.md`](testing.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
@@ -203,17 +205,20 @@ said so itself - "tool permissions blocked Bash execution ... Everything above i
 reading" - on a PR whose entire diff was check scripts and their tests. (An absent allowlist is not
 permissive: Bash is simply not pre-approved, and CI has no interactive approver, so every script
 call is refused.) The argument for leaving it that way was that comment text is
-attacker-influencable where a dispatch is not. That is true and it is not the operative difference:
-**both** routes run PR-authored code, and the protection was never that the trigger is trusted - it
-is that the list is curated to this repo's own scripts, that the job holding it has no write grant,
-and that it is withheld on fork heads. So the lists are the same, deliberately, and
-[`.github/workflows/claude.yml`](../.github/workflows/claude.yml) says to keep them that way.
+attacker-influencable where a dispatch is not. That is true, and the protection was never that the
+trigger is trusted - it is that the list is curated to this repo's own scripts, that the job holding
+it has no write grant, and that it is withheld on fork heads. So the lists are the same,
+deliberately, and [`.github/workflows/claude.yml`](../.github/workflows/claude.yml) says to keep
+them that way. What the two routes do **not** share is *whose* code those scripts are - see the next
+section.
 
-**On a fork PR this route answers but does not run anything** - and "answers" needs one
-qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put
-PR-controlled executables beside `CLAUDE_CODE_OAUTH_TOKEN`: a fork could replace an allowlisted
-script and wait to be asked to run the checks. That is the hazard the dispatched reviewer avoids by
-refusing fork heads outright; here the *reply* still happens, with no execution tools.
+**On a fork PR this route answers but does not run anything.** The withholding stays, though the
+reason first written for it - that granting `./mvnw` and the `bin/` scripts against a fork's
+checkout would put PR-controlled executables beside `CLAUDE_CODE_OAUTH_TOKEN` - is the *dispatched*
+reviewer's hazard and not this one's, because this route never checks a fork out at all. Two things
+do still argue for it: the guard has to already be in place if this route's checkout ever gains a
+`ref:`, and a fork's diff and comments are attacker-written text that could try to steer *master's*
+granted commands with hostile arguments. A reader cannot be steered into executing anything.
 
 The qualification: **only a maintainer gets that reply.** `claude-code-action` runs its own
 collaborator-permission check and exits before Claude starts, so a fork author - or anyone else
@@ -249,6 +254,37 @@ satisfy the PR's required check.
 gh run list -R astubbs/parallel-consumer --workflow claude-code-review.yml -c <the PR head SHA>
 gh run rerun <run-id> --failed -R astubbs/parallel-consumer
 ```
+
+### The comment route reviews the PR but runs the default branch
+
+`claude.yml`'s checkout step names **no `ref:`**, so an `issue_comment` run checks out the default
+branch and nothing else - `refs/pull/...` never appears in one. Confirmed on run
+[`31547154463`](https://github.com/astubbs/parallel-consumer/actions/runs/31547154463), whose
+checkout resolved to `git checkout --force -B master refs/remotes/origin/master`.
+
+So on this route the reviewer **reads** the PR through `gh pr diff` and `gh pr view`, but every
+execution grant runs *master's* copy: `bin/ci-unit-test.sh` there runs master's suite, not the PR's,
+and `bin/check-*.sh` checks master's tree. A result reported as the PR's would be wrong, and nothing
+in the run says so, which is why the workflow now tells the reviewer where it is standing
+(`REVIEW_ROUTE_NOTE`). The dispatch route is the opposite arrangement and the one to use when a
+claim has to be *executed* against the PR: it checks out `refs/pull/<n>/head`.
+
+**Whether to close this is an open decision, not a pending fix.** Adding
+`ref: refs/pull/<n>/head` here would make the comment route execute PR-authored code in a job
+holding `secrets.CLAUDE_CODE_OAUTH_TOKEN`, on a trigger anyone with write access fires by typing a
+comment - which re-opens the credential-exposure question tracked in
+[`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md) rather than answering it. The
+tradeoff either way:
+
+| | Leave it (today) | Check out the PR |
+| :--- | :--- | :--- |
+| What the grants execute | master's scripts and suites | the PR's |
+| Value of a `bin/`-change review here | static reading only | can actually run the change |
+| PR code beside the review credential | no | yes, on a comment trigger |
+| Fork PRs | already read-only (allowlist withheld) | withholding becomes load-bearing |
+
+Until it is decided: **ask for the review by dispatch when the claim needs running, and by comment
+when you want findings that mechanically block.**
 
 ### What the dispatch trigger costs
 
@@ -481,7 +517,11 @@ default branch's copy, so a PR cannot rewrite its own reviewer. Two consequences
   the reviewer, which is the case the guard exists to refuse - so do not.
 - **The flip side:** changes to the reviewer's grants, procedure or instructions do not take effect
   until they merge, so the PR that makes them is reviewed by the old configuration. Expect the
-  reviewer to say it lacks a grant that PR adds.
+  reviewer to say it lacks a grant that PR adds. **The comment route is no exception and no
+  escape** - GitHub runs an `issue_comment` workflow from the default branch too, so `@claude` on
+  the PR exercises master's `claude.yml`. Both routes now say so in the reviewer's system prompt,
+  because this has already been misdiagnosed once as an approval layer beyond `--allowedTools`
+  ([`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md)).
 
 ## Self-hosted lanes
 

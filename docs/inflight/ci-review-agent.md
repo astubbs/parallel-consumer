@@ -111,6 +111,22 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   to that PR, on any route. They - and the `bin/check-*` / `bin/test-check-*` wildcard patterns that
   replaced the enumeration - land unverified, and the confirming step is the `--ref master` dispatch
   already named above, prompted to run a `bin/check-*.sh` and quote its output.
+- **OPEN DECISION: the comment route reviews the PR but runs the default branch.** `claude.yml`'s
+  checkout names no `ref:`, so an `issue_comment` run has master's tree on disk and the PR's files
+  nowhere - `refs/pull` never appears in one. Every execution grant on that route therefore operates
+  on master's code: asked to run `bin/ci-unit-test.sh` on a PR, it runs *master's* suite. The
+  workflow's own comment asserted the opposite ("BOTH routes run PR-authored code") and is now
+  corrected; the mechanism and the tradeoff table are in [`docs/ci.md`](../ci.md) -> "The comment
+  route reviews the PR but runs the default branch", and both routes' system prompts now tell the
+  reviewer which arrangement it is in.
+
+  **Do not close this by adding `ref: refs/pull/<n>/head`.** That is the decision, not the fix: it
+  would put PR-authored code in the same job as `secrets.CLAUDE_CODE_OAUTH_TOKEN` on a trigger fired
+  by typing a comment, which is the credential-exposure question in the entry below rather than an
+  answer to it. It also makes the fork-head allowlist withholding load-bearing where today it is
+  belt-and-braces. The cost of leaving it: a review of a `bin/` or test change asked for by comment
+  can only read, and the dispatch route is the one that can run it.
+
 - **Credential exposure is unresolved, not cleared.** The reviewer runs PR-authored Maven/test code
   in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`, with `pull-requests: write`. The
   move to `workflow_dispatch` bounds *who can start it* - dispatching requires write access to the
