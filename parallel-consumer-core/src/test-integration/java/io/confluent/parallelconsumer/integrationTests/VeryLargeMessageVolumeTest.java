@@ -29,6 +29,7 @@ import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -80,6 +81,35 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         runTest(HIGH_MAX_POLL_RECORDS_CONFIG, CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS, ProcessingOrder.KEY);
     }
 
+    static final long GATING_VOLUME = 1_000_000;
+
+    /**
+     * The volume this test runs at. Its history is {@code 1_000_000} -> {@code 100_0000} ->
+     * {@code 1_000_000}: the middle value is the same number differently grouped, so this test was
+     * never kneecapped, and the audit withdrew that claim.
+     * <p>
+     * The {@code 2_000_000} beside it was different. It was added in {@code 2b0ab66b} (2020-11-27)
+     * in the same edit that lowered the live value, so it was never live either - it is an
+     * aspiration, someone recording the volume they wanted this test to reach. {@code e67d8b89}
+     * deleted it as stale, which is not what the audit found. Reach it with:
+     *
+     * <pre>./mvnw verify -Pci -Dincluded.groups=performance -Dvolume.messages=2000000</pre>
+     *
+     * If it does not pass, the diagnosis is the deliverable - not a lowered rung.
+     */
+    private static long volume() {
+        return Long.getLong("volume.messages", GATING_VOLUME);
+    }
+
+    /**
+     * A completion ceiling, not a throughput assertion. Exactly the 120 seconds this test has always
+     * had at its own volume, scaling proportionally above it - a fixed deadline is what would make
+     * the aspiration unreachable regardless of whether the run was healthy.
+     */
+    private static Duration completionCeiling(long messages) {
+        return ofSeconds(Math.max(120, messages * 120 / GATING_VOLUME));
+    }
+
     @SneakyThrows
     private void runTest(int maxPoll, CommitMode commitMode, ProcessingOrder order) {
         String inputName = setupTopic(this.getClass().getSimpleName() + "-input-" + RandomUtils.nextInt());
@@ -87,7 +117,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
         // pre-produce messages to input-topic
         List<String> expectedKeys = new ArrayList<>();
-        long expectedMessageCount = 1_000_000;
+        long expectedMessageCount = volume();
         log.info("Producing {} messages before starting test", expectedMessageCount);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
         try (Producer<String, String> kafkaProducer = getKcu().createNewProducer(false)) {
@@ -168,7 +198,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(ofSeconds(120))
+            waitAtMost(completionCeiling(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     .failFast("PC died - check logs", pc::isClosedOrFailed)
                     //, () -> pc.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
