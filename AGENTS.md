@@ -92,7 +92,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
-| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status; plus a cached, frozen index of closed upstream **issues** and the mirrors that own them | Editorial opinion, and the live state of an upstream issue - that belongs to its fork mirror |
+| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status; plus a cache of *frozen* upstream **issue** facts | Editorial opinion, and the live state of an upstream issue - that belongs to its fork mirror |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
@@ -439,16 +439,7 @@ actually start it; if it maps to an upstream issue, link it rather than duplicat
 Work that maps to an upstream PR must have an entry in `src/docs/development/upstream-map.yaml`,
 updated **at every lifecycle transition of your own work, in the same commit that causes it**.
 Nothing automated checks the fork side of that mapping, so a stale entry passes every check and
-quietly rots. Work that maps to an upstream *issue* is owned by the fork mirror - the mirror holds
-its live state, and the manifest never becomes the place you update an issue's status.
+quietly rots. An upstream *issue*'s live status is owned by its fork mirror, never the manifest.
 
-The manifest may still *cache* the immutable facts about an upstream issue - its number, which
-cohort closed it, and the mirror it maps to (`fork_issue`, or `fork_issues` when one entry groups a
-cohort). This is a read-path optimisation, not a second tracker: grepping one local file is instant,
-while the same answer from the mirrors costs dozens of API round-trips and burns rate limit that
-agents share. It is safe precisely because upstream is archived - a closed 2023 issue's number and
-closure event cannot change, so the cache cannot silently diverge from a moving source. Cache what
-is frozen; never mirror what is still moving.
-
-The manifest schema, the mirrors, the commit trailers and the upstream sweep are all in
-[`docs/upstream.md`](docs/upstream.md).
+The manifest schema, what it may cache about an upstream issue, the mirrors, the commit trailers
+and the upstream sweep are all in [`docs/upstream.md`](docs/upstream.md).

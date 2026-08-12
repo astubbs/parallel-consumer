@@ -22,8 +22,22 @@ re-derived from scratch:
   `.adoc` section anchors via `adoc_anchor`.
 - **`docs/inflight/`** - *transient* cross-branch working notes only, one file per item.
 
-The manifest tracks upstream **PRs** only. **If the work maps to an upstream *issue*, the fork
-mirror is where status goes** - diagnosis, labels, and closing all belong on the mirror.
+The manifest maps upstream **PRs**. **If the work maps to an upstream *issue*, the fork mirror is
+where status goes** - diagnosis, labels, and closing all belong on the mirror.
+
+**But the manifest may cache an issue's *frozen* facts** - its number, the closure event that swept
+it, and the mirror that owns it (`fork_issue`, or `fork_issues` when one entry groups a cohort).
+That is a read-path optimisation, not a second tracker: grepping one local file is instant, while
+the same answer from the mirrors is dozens of API round-trips against a rate limit every agent here
+shares. The usual objection - the copy drifts from its source - needs a source that can still move,
+and an archived upstream's closed issue numbers and closure events cannot. **Cache what is frozen;
+never mirror what is still moving.** The line is *status*: the moment an answer can change, it
+belongs to the mirror and the manifest must not hold a copy.
+
+This is also what makes a cohort record possible. A set derived from live mirror titles is whatever
+the mirrors say today; the point of `sweep-2023-admin-closure` is a fixed cutoff - *these* are the
+items upstream closed administratively - which is exactly the thing no query can reconstruct once
+the mirrors move on.
 
 ## Keeping the manifest in sync is the agent's job
 
