@@ -53,6 +53,10 @@ import java.util.function.Supplier;
  * {@link #stop()}, so callers see a quiesced fleet - no drainer races the test's settle/teardown
  * close. The conductor keeps its own authoritative per-instance state machine and never calls
  * {@code toggle()}, so the managed {@code started} flag (which only gates toggle) stays out of play.
+ * Because {@code stopAsync()} returns before the close completes, the conductor can mark an instance
+ * STOPPED and redraw a RESTART while the previous restart is still queued; {@code start()} refuses
+ * that second submission and the conductor leaves the instance STOPPED rather than recording a
+ * disturbance that never happened.
  */
 @Slf4j
 public class ChaosConductor {
@@ -329,7 +333,12 @@ public class ChaosConductor {
         if (target == null) return;
         // start() first: it can throw (the unexpected-failure-cause canary), in which case the
         // instance must stay STOPPED and untargetable rather than lying as RUNNING
-        target.start(pcExecutor);
+        if (!target.start(pcExecutor)) {
+            // an earlier restart is still queued behind its close-wait - leave it STOPPED and
+            // redrawable rather than double-submitting it (see ManagedPCInstance#startInFlight)
+            log.debug("[chaos] RESTART of instance {} refused - start still in flight", target.getInstanceId());
+            return;
+        }
         states.put(target.getInstanceId(), InstanceState.RUNNING);
         disturbanceCount.incrementAndGet();
         record("RESTART", target.getInstanceId());
