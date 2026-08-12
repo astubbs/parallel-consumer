@@ -1,9 +1,16 @@
-# Package rename: the legacy `io.confluent.csid.asyncconsumer` reference the sweep will hit
+# Package rename `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`
 
-Context for whoever runs the package rename. Nothing here blocks anything; it exists so a finding
-already made is not re-derived, or worse, mis-repaired.
+The package-rename project's entry. This copy holds one recorded finding, carried over from
+astubbs/parallel-consumer#289 - the change that cleared the legacy-token residue ahead of the rename.
+Other branches working the rename keep their own account of it at this same path, so when they
+converge git raises a conflict and whoever resolves it reads both and combines them into the single
+entry for the project. That is deliberate, and more reliable than a cross-reference someone has to
+remember to follow.
 
-## The reference
+Nothing below blocks anything; it exists so a finding already made is not re-derived, or worse,
+mis-repaired.
+
+## The one surviving legacy-token reference
 
 `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/KafkaSanityTests.java`,
 on the javadoc of `pausedConsumerStillLongPollsForNothing`:
@@ -48,7 +55,8 @@ The asymmetry is in the history: both tags arrived in `7b4f5a5dd`, but the `exam
 deleted in `e7146adf0` (2020, "post release of 0.1 to repo1") while the `exampleDep` includes were
 never removed.
 
-One genuine loose end, not acted on: `parallel-consumer-example-metrics/pom.xml` has an
-`exampleDep` region that no include names - the template documents the metrics module's `CoreApp`
-but never its dependency snippet. That is a missing include or a stray tag; decide which rather than
-assuming.
+The one region that genuinely was orphaned - `parallel-consumer-example-metrics/pom.xml`, whose
+`exampleDep` markers no include named - has had its markers removed by astubbs#289. The template
+documents the metrics module's `CoreApp` but never its dependency snippet; removal was chosen over
+adding the missing include, so if a metrics snippet is ever wanted in the README the markers come
+back with it.
