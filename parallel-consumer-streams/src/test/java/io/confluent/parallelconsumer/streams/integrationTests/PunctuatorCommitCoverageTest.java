@@ -225,7 +225,7 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
     }
 
     /**
-     * The discriminator, and the reason this class has three arms rather than two.
+     * The first discriminator: it keeps the stock control honest.
      * <p>
      * Stock's {@code commitNeeded()} override also sweeps the consumer position, which can set
      * {@code commitNeeded} for reasons that have nothing to do with punctuation - control records, most
@@ -248,8 +248,9 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
     }
 
     /**
-     * Drains the input, waits for the task to go genuinely idle, then measures {@code commit-total} across
-     * a window in which punctuation is the only activity.
+     * Drains the input, settles for a fixed period so the drain's own commits are done, then measures
+     * {@code commit-total} across a fixed window in which punctuation is the only activity. Every arm gets
+     * the same settle and the same window, so the arms are comparable.
      *
      * @param withPunctuator whether the processor registers a WALL_CLOCK_TIME punctuator
      * @return how much {@code commit-total} rose during the punctuate-only window
@@ -283,11 +284,24 @@ class PunctuatorCommitCoverageTest extends BrokerStreamsIntegrationTest {
             int punctuationsBefore = punctuationsFired.get();
 
             // Phase 3: the punctuate-only window. No new input; nothing in flight; nothing outstanding.
-            if (withPunctuator) {
-                await().atMost(Duration.ofSeconds(60))
-                        .until(() -> punctuationsFired.get() - punctuationsBefore >= PUNCTUATIONS_AWAITED);
-            }
+            //
+            // A FIXED window, identical for every arm, rather than "await N punctuations, then sleep".
+            // That earlier shape gave the punctuator arms a longer window than the no-punctuator arms -
+            // and the no-punctuator arms are the ones asserting ZERO, so the asymmetry handed them a
+            // shorter observation period in which to find the commits whose absence is their whole claim.
+            // A discriminator biased toward the result it asserts is not a discriminator.
             sleepThrough(IDLE_WINDOW);
+            int punctuationsDuring = punctuationsFired.get() - punctuationsBefore;
+
+            // The count the await used to guarantee is now checked rather than waited for: at one
+            // punctuation per PUNCTUATE_INTERVAL, IDLE_WINDOW holds many times PUNCTUATIONS_AWAITED, so a
+            // shortfall means punctuation is not running and the arm's premise is void.
+            if (withPunctuator) {
+                assertThat(punctuationsDuring)
+                        .as("premise of the %s arm: the punctuator must actually fire during the measured "
+                                + "window, or a zero commit count says nothing about punctuation", name)
+                        .isGreaterThanOrEqualTo(PUNCTUATIONS_AWAITED);
+            }
 
             double after = commitTotal(streams);
             log.info("=== [{}] idle window: commit-total {} -> {} over {} punctuations",
