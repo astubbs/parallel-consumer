@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.integrationTests.state;
+package bz.stub.parallelconsumer.integrationTests.state;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -6,15 +6,15 @@ package io.confluent.parallelconsumer.integrationTests.state;
  */
 
 import com.google.common.truth.StringSubject;
-import io.confluent.csid.utils.JavaUtils;
-import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.parallelconsumer.FakeRuntimeException;
-import io.confluent.parallelconsumer.ManagedTruth;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
+import bz.stub.parallelconsumer.internal.utils.JavaUtils;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ManagedTruth;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
 import lombok.NonNull;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -49,19 +49,19 @@ import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.csid.utils.JavaUtils.getLast;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.internal.utils.JavaUtils.getLast;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.kafka.clients.consumer.OffsetResetStrategy.NONE;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * Integration test versions of {@link io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest}, where
+ * Integration test versions of {@link bz.stub.parallelconsumer.state.PartitionStateCommittedOffsetTest}, where
  * committed offset gets moved around or deleted, or random offsets are removed.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.state.PartitionStateCommittedOffsetTest
+ * @see bz.stub.parallelconsumer.state.PartitionStateCommittedOffsetTest
  */
 @Slf4j
 class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, String> {

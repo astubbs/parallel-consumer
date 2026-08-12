@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */

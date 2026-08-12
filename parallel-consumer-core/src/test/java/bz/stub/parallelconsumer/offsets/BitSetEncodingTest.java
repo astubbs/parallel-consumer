@@ -1,7 +1,8 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.SneakyThrows;
@@ -11,8 +12,8 @@ import pl.tlinkowski.unij.api.UniSets;
 
 import java.nio.ByteBuffer;
 
-import static io.confluent.csid.utils.JavaUtils.toTreeSet;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
+import static bz.stub.parallelconsumer.internal.utils.JavaUtils.toTreeSet;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BitSetEncodingTest {

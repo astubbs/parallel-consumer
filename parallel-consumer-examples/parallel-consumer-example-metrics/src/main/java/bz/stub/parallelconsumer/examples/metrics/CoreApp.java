@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.examples.metrics;
+package bz.stub.parallelconsumer.examples.metrics;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
@@ -6,8 +6,8 @@ package io.confluent.parallelconsumer.examples.metrics;
  */
 
 import com.sun.net.httpserver.HttpServer;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelStreamProcessor;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.binder.kafka.KafkaClientMetrics;

@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -14,8 +14,8 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.concurrent.TimeUnit;
 
-import static io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest.FALLBACK_IMAGE;
-import static io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest.imageForClientVersion;
+import static bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest.FALLBACK_IMAGE;
+import static bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest.imageForClientVersion;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**

@@ -1,19 +1,20 @@
-package io.confluent.parallelconsumer.reactor;
+package bz.stub.parallelconsumer.reactor;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import reactor.core.publisher.Flux;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.stream.BaseStream;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 
 public class ReactorUnitTestBase extends ParallelEoSStreamProcessorTestBase {
 

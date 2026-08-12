@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.state.ModelUtils;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.state.ModelUtils;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.NonNull;
 import org.apache.kafka.clients.consumer.Consumer;

@@ -39,8 +39,8 @@ boundaries:
   - The input side of the callback, including batch access, is PollContext; see poll-context.yaml.
 references:
   - label: Produce-flow API
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelStreamProcessor.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelStreamProcessor.java
   - label: Streaming-results API
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/JStreamParallelStreamProcessor.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/JStreamParallelStreamProcessor.java
   - label: JStream deprecation and its reasoning
     url: https://github.com/astubbs/parallel-consumer/pull/116
