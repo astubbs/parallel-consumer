@@ -39,7 +39,10 @@ an older one has been superseded, absorbed by tooling, or is now stated twice.
   comment.
 - **Cite incidents, never retell them.** If the story behind a rule has no durable home yet, write
   it into `docs/solutions/` first and link it from there.
-- **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it.
+- **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it, and
+  **name the owner in the pointer**: "X owns this; what is here is the part that binds every
+  session". A pointer that only lists adjacent topics reads as *further detail*, so a reader who
+  found a complete-looking rule here stops - and then edits the copy instead of the original.
 - **Do not pre-empt misreadings.** A rule needing three paragraphs to defend it against
   misinterpretation is a rule that needs rewriting.
 - **Before you move or rename any labelled block, grep the whole repo for its text** -
@@ -441,5 +444,6 @@ updated **at every lifecycle transition of your own work, in the same commit tha
 Nothing automated checks the fork side of that mapping, so a stale entry passes every check and
 quietly rots. An upstream *issue*'s live status is owned by its fork mirror, never the manifest.
 
-The manifest schema, what it may cache about an upstream issue, the mirrors, the commit trailers
-and the upstream sweep are all in [`docs/upstream.md`](docs/upstream.md).
+[`docs/upstream.md`](docs/upstream.md) **owns this topic** - the manifest schema and what it may
+cache about an upstream issue, the mirrors, the commit trailers, the sweep. The above is only the
+part that binds every session; where the two disagree, that doc wins.
