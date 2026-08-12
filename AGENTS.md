@@ -72,6 +72,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
 | [`docs/issue-references.md`](docs/issue-references.md) | Writing any reference to an issue or PR - the full convention and the gate |
+| [`docs/citations.md`](docs/citations.md) | Repairing a citation that no longer resolves, in a plan or solution write-up you may not rewrite |
 | [`docs/copyright.md`](docs/copyright.md) | Adding, renaming or extracting a file: which header it gets and why |
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
@@ -98,26 +99,16 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
 
-### Cite by anchor, and repair a citation without rewriting the record
+### Cite by anchor, never by line number
 
 **Never cite a `file:line`.** An unrelated commit inserting lines above the target invalidates the
 citation while the file and the section are both intact, so it still reads as valid and nothing
 checks it. Cite the path plus the smallest distinctive greppable string - an identifier, a flag, a
-config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. The
-repo already applies this in `.github/workflows/pr-checklist.yml`, whose todo-index entries are
-"keyed by marker TEXT, not line number".
+config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. Run
+the grep before you commit the citation.
 
-Dated documents under `docs/plans/` and `docs/solutions/` are the record of what was known at the
-time, and that admits exactly one edit but requires the other:
-
-- **Rewriting their claims, findings or conclusions to match today's code is forbidden** - it
-  falsifies the record.
-- **Repairing a reference so it still finds what the document was pointing at is required.** The
-  document said "look here"; a citation that no longer resolves makes the record *less* faithful,
-  not more.
-- When the cited thing is gone entirely, point at the history holding it (`git log -S'<string>'
-  -- <path>`, `git log --diff-filter=D -- <path>`) rather than deleting the reference. When it still
-  exists but now *means* something different, that is not a repair: flag it and leave the claim alone.
+Repairing one that has already gone stale in a dated record is its own procedure, because those
+documents may not be rewritten to match today's code: [`docs/citations.md`](docs/citations.md).
 
 ## `gh` defaults to the WRONG repo here - fix it before your first command
 
