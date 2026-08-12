@@ -2,6 +2,7 @@ package io.confluent.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions;
@@ -74,6 +75,15 @@ public class ProcessingShard<K, V> {
 
     public void onFailure() {
         // increase available cnt first to let retry expired calculated later
+        availableWorkContainerCnt.incrementAndGet();
+    }
+
+    /**
+     * Work returned without a verdict. It never failed, so no retry is scheduled and no attempt is consumed -
+     * but it must become selectable again, so the awaiting-selection count has to come back up exactly as it
+     * would on a failure.
+     */
+    public void onAbandoned() {
         availableWorkContainerCnt.incrementAndGet();
     }
 

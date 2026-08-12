@@ -194,6 +194,31 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         numberRecordsOutForProcessing--;
     }
 
+    /**
+     * Work returned with no verdict at all - neither succeeded nor failed. Used by external engines when the
+     * process holding a record goes away before reporting on it: the record has to go back into scheduling
+     * without the return counting as a processing attempt.
+     * <p>
+     * Deliberately not {@link #onFailureResult}: that increments the failure counter, records failure history
+     * against the partition, and queues a retry the record never earned. The only thing shared is the in-flight
+     * bookkeeping, which must net out exactly - {@link #numberRecordsOutForProcessing} gates the broker poller,
+     * and drift in it stalls the consumer silently while it still looks alive.
+     */
+    public void onAbandonedResult(WorkContainer<K, V> wc) {
+        if (wc.isNotInFlight()) {
+            // A disconnect detected while a report was already in flight can return the same record twice.
+            // Decrementing again would drift the counter downwards and eventually stall the poller.
+            log.warn("Abandoned work returned more than once, ignoring the duplicate return {}", wc);
+            return;
+        }
+
+        log.debug("Work returned without a verdict, returning to scheduling {}", wc);
+
+        wc.endFlight();
+        sm.onAbandoned(wc);
+        numberRecordsOutForProcessing--;
+    }
+
     public long getNumberOfIncompleteOffsets() {
         return pm.getNumberOfIncompleteOffsets();
     }
@@ -291,6 +316,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 } else {
                     onFailureResult(wc);
                 }
+            } else if (wc.isAbandoned()) {
+                onAbandonedResult(wc);
             } else {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");
             }
