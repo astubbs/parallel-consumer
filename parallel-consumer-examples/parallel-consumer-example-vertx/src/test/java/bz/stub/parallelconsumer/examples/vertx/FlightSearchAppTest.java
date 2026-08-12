@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.examples.vertx;
+package bz.stub.parallelconsumer.examples.vertx;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -14,14 +14,14 @@ import com.github.tomakehurst.wiremock.http.QueryParameter;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.Response;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.parallelconsumer.examples.support.DemoRecords;
-import io.confluent.parallelconsumer.examples.support.ExampleMockConsumers;
-import io.confluent.parallelconsumer.examples.support.RunSummary;
-import io.confluent.parallelconsumer.examples.vertx.FlightSearchApp.FareProvider;
-import io.confluent.parallelconsumer.examples.vertx.FlightSearchApp.FareQuote;
-import io.confluent.parallelconsumer.examples.vertx.FlightSearchApp.FlightSearch;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.examples.support.DemoRecords;
+import bz.stub.parallelconsumer.examples.support.ExampleMockConsumers;
+import bz.stub.parallelconsumer.examples.support.RunSummary;
+import bz.stub.parallelconsumer.examples.vertx.FlightSearchApp.FareProvider;
+import bz.stub.parallelconsumer.examples.vertx.FlightSearchApp.FareQuote;
+import bz.stub.parallelconsumer.examples.vertx.FlightSearchApp.FlightSearch;
 import io.vertx.core.AsyncResult;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;

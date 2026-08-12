@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.examples.reactor;
+package bz.stub.parallelconsumer.examples.reactor;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -7,11 +7,11 @@ package io.confluent.parallelconsumer.examples.reactor;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.parallelconsumer.examples.support.DemoRecords;
-import io.confluent.parallelconsumer.examples.support.ExampleMockConsumers;
-import io.confluent.parallelconsumer.examples.support.RunSummary;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.examples.support.DemoRecords;
+import bz.stub.parallelconsumer.examples.support.ExampleMockConsumers;
+import bz.stub.parallelconsumer.examples.support.RunSummary;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.awaitility.Awaitility;
@@ -96,7 +96,7 @@ class MeterTelemetryAppTest {
     /**
      * The logger the app and Reactor's own {@code log()} trace both write under.
      */
-    private static final String APP_LOGGER = "io.confluent.parallelconsumer.examples.reactor";
+    private static final String APP_LOGGER = "bz.stub.parallelconsumer.examples.reactor";
 
     /**
      * Generous upper bound, not a timing assumption: on a healthy run the barrier trips in milliseconds.

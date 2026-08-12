@@ -57,7 +57,7 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 ====
 This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-It is a *drop-in replacement*: the Java API and package (`io.confluent.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+It is a *drop-in replacement*: the Java API and package (`bz.stub.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
 
 [source,xml]
 ----
@@ -315,7 +315,7 @@ The user just has to provide a function to extract from the message the HTTP cal
 
 === Illustrative Performance Example
 
-.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
+.(see link:./parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
 These performance comparison results below, even though are based on real performance measurement results, are for illustrative purposes.
 To see how the performance of the tool is related to instance counts, partition counts, key distribution and how it would relate to the vanilla client.
 Actual results will vary wildly depending upon the setup being deployed into.
@@ -529,7 +529,7 @@ This is the only thing you need to do, in order to get massively concurrent proc
                 log.info("Concurrently processing a record: {}", record)
         );
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[core example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[core example] project, and it's test.
 
 ==== Process and Produce a Response Message
 
@@ -620,7 +620,7 @@ These threads spend their lives blocked on a network call, and overlapping that 
 It comes from an example-support module that is never published to Maven Central, so a snippet that referenced it would not compile in your project.
 When it throws, Parallel Consumer retries the scan.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/ParcelTrackingApp.java[parcel tracking example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/test/java/io/confluent/parallelconsumer/examples/core/ParcelTrackingAppTest.java[test], which asserts that consignments really are geocoded concurrently while each consignment's own scans stay in order.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/ParcelTrackingApp.java[parcel tracking example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/test/java/bz/stub/parallelconsumer/examples/core/ParcelTrackingAppTest.java[test], which asserts that consignments really are geocoded concurrently while each consignment's own scans stay in order.
 
 [[batching]]
 === Batching
@@ -678,7 +678,7 @@ There is no guarantee that the messages will be retried again in the same batch.
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
 
 [[flight-search-example]]
 === Flight Search Fan-Out (Travel)
@@ -789,7 +789,7 @@ Use `Future.all(List)`, not the deprecated `CompositeFuture.all(List)`.
 
 `beginSearch` and `finishSearch` are this example's own logging and in-flight counting, and live outside the copied region on purpose - they come from an example-support module that is never published to Maven Central.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/FlightSearchApp.java[flight search example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/test/java/io/confluent/parallelconsumer/examples/vertx/FlightSearchAppTest.java[test], which asserts that the three provider calls really are issued together, that routes are priced concurrently, and that an unavailable provider does not fail the search.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/FlightSearchApp.java[flight search example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/test/java/bz/stub/parallelconsumer/examples/vertx/FlightSearchAppTest.java[test], which asserts that the three provider calls really are issued together, that routes are priced concurrently, and that an unavailable provider does not fail the search.
 
 [[project-reactor]]
 === Project Reactor
@@ -797,7 +797,7 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 As per the Vert.x support, there is also a Reactor module.
 This means you can use Reactor's non-blocking threading model to process your messages, allowing for orders of magnitudes higher concurrent processing than the core module's thread per worker module.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/ReactorApp.java[Reactor example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/bz/stub/parallelconsumer/examples/reactor/ReactorApp.java[Reactor example] project, and it's test.
 
 .Call any Reactor API for each message usage. This example uses a simple `Mono.just` to return a value, but you can use any Reactor API here.
 [source,java,indent=0]
@@ -904,7 +904,7 @@ Below `limitRate` the callback would report `request(unbounded)` forever - that 
 
 `openReading`, `recordDemand`, `ingestSample` and `finishReading` are this example's own logging and in-flight counting, and live outside the copied region on purpose - they come from an example-support module that is never published to Maven Central.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/MeterTelemetryApp.java[smart meter telemetry example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/test/java/io/confluent/parallelconsumer/examples/reactor/MeterTelemetryAppTest.java[test], which asserts on the demand signals themselves, so the `doOnRequest` placement above cannot silently regress.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/bz/stub/parallelconsumer/examples/reactor/MeterTelemetryApp.java[smart meter telemetry example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/test/java/bz/stub/parallelconsumer/examples/reactor/MeterTelemetryAppTest.java[test], which asserts on the demand signals themselves, so the `doOnRequest` placement above cannot silently regress.
 
 [[spring]]
 [[streams-usage-code]]
@@ -953,7 +953,7 @@ image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fb
 <1> Setup your Kafka Streams stage as per normal, performing any type of preprocessing in Kafka Streams
 <2> For the slow consumer part of your Topology, drop down into the parallel consumer, and use massive concurrency
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/io/confluent/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/bz/stub/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
 
 [[upgrading]]
 == Upgrading
@@ -1687,7 +1687,7 @@ Identifiers belong in logs and traces, which are indexed for exactly that.
 TIP: The latency timer publishes a percentile *histogram* rather than client-side percentiles, because only buckets can be aggregated.
 Client-side quantiles are computed per process, and cannot be averaged or summed afterwards, so a fleet's 99th percentile is simply not recoverable from them - which is what the `histogram_quantile` query above depends on.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/io/confluent/parallelconsumer/examples/metrics/OrderFulfilmentApp.java[order fulfilment example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/OrderFulfilmentAppMetricsTest.java[test], which scrapes the endpoint with a real Prometheus and asserts that the two in-flight meters agree while a cohort is held open with nothing waiting to be retried, that the latency series really are buckets, and that no order id ever became a tag value.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/bz/stub/parallelconsumer/examples/metrics/OrderFulfilmentApp.java[order fulfilment example] and its link:{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/bz/stub/parallelconsumer/examples/metrics/integrationTests/OrderFulfilmentAppMetricsTest.java[test], which scrapes the endpoint with a real Prometheus and asserts that the two in-flight meters agree while a cohort is held open with nothing waiting to be retried, that the latency series really are buckets, and that no order id ever became a tag value.
 
 [[roadmap]]
 == Roadmap

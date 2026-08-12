@@ -1,14 +1,15 @@
-package io.confluent.csid.utils;
+package bz.stub.parallelconsumer.internal.utils;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
-import io.confluent.parallelconsumer.state.WorkContainer;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;

@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.examples.metrics;
+package bz.stub.parallelconsumer.examples.metrics;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.sun.net.httpserver.HttpServer;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelStreamProcessor;
-import io.confluent.parallelconsumer.examples.support.ConcurrencyObserver;
-import io.confluent.parallelconsumer.examples.support.RunSummary;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.examples.support.ConcurrencyObserver;
+import bz.stub.parallelconsumer.examples.support.RunSummary;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.LongTaskTimer;
 import io.micrometer.core.instrument.Tag;
@@ -40,7 +40,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 
 /**
  * E-commerce order fulfilment: what a dashboard shows while orders are picked, packed and dispatched.

@@ -1,13 +1,13 @@
-package io.confluent.parallelconsumer.examples.core;
+package bz.stub.parallelconsumer.examples.core;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.parallelconsumer.examples.support.ExampleMockConsumers;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.examples.support.ExampleMockConsumers;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;

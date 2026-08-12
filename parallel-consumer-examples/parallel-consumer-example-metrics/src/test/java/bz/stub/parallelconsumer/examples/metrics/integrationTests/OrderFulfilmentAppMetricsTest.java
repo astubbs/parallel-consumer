@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer.examples.metrics.integrationTests;
+package bz.stub.parallelconsumer.examples.metrics.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.parallelconsumer.examples.metrics.FulfilmentService;
-import io.confluent.parallelconsumer.examples.metrics.OrderFulfilmentApp;
-import io.confluent.parallelconsumer.examples.support.DemoRecords;
-import io.confluent.parallelconsumer.examples.support.ExampleMockConsumers;
-import io.confluent.parallelconsumer.examples.support.RunSummary;
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.examples.metrics.FulfilmentService;
+import bz.stub.parallelconsumer.examples.metrics.OrderFulfilmentApp;
+import bz.stub.parallelconsumer.examples.support.DemoRecords;
+import bz.stub.parallelconsumer.examples.support.ExampleMockConsumers;
+import bz.stub.parallelconsumer.examples.support.RunSummary;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.LongTaskTimer;
 import lombok.extern.slf4j.Slf4j;
@@ -83,7 +83,7 @@ class OrderFulfilmentAppMetricsTest {
     private static final PrometheusContainer PROMETHEUS_CONTAINER = new PrometheusContainer();
 
     /**
-     * The port {@link io.confluent.parallelconsumer.examples.metrics.CoreApp} binds, as a literal because
+     * The port {@link bz.stub.parallelconsumer.examples.metrics.CoreApp} binds, as a literal because
      * that example hardcodes it and exposes no constant. Named here so the port-collision assertion says
      * what it is guarding.
      */

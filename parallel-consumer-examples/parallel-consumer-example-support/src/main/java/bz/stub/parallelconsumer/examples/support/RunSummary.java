@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.examples.support;
+package bz.stub.parallelconsumer.examples.support;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.Value;

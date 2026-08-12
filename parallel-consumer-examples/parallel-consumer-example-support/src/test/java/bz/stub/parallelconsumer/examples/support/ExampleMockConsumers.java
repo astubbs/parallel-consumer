@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.examples.support;
+package bz.stub.parallelconsumer.examples.support;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.mockito.Mockito;

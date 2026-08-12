@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.examples.core;
+package bz.stub.parallelconsumer.examples.core;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.examples.support.SimulatedService;
+import bz.stub.parallelconsumer.examples.support.SimulatedService;
 import lombok.extern.slf4j.Slf4j;
 import pl.tlinkowski.unij.api.UniLists;
 

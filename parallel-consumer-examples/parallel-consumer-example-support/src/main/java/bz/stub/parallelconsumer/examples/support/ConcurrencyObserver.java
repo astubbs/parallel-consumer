@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.examples.support;
+package bz.stub.parallelconsumer.examples.support;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors

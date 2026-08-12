@@ -1,13 +1,13 @@
-package io.confluent.parallelconsumer.examples.core;
+package bz.stub.parallelconsumer.examples.core;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelStreamProcessor;
-import io.confluent.parallelconsumer.examples.support.ConcurrencyObserver;
-import io.confluent.parallelconsumer.examples.support.RunSummary;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.examples.support.ConcurrencyObserver;
+import bz.stub.parallelconsumer.examples.support.RunSummary;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -28,7 +28,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 
 /**
  * Parcel logistics: a carrier's scan events, geocoded as they arrive.

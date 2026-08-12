@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.examples.vertx;
+package bz.stub.parallelconsumer.examples.vertx;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.examples.support.ConcurrencyObserver;
-import io.confluent.parallelconsumer.examples.support.RunSummary;
-import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.vertx.VertxParallelStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.examples.support.ConcurrencyObserver;
+import bz.stub.parallelconsumer.examples.support.RunSummary;
+import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.vertx.VertxParallelStreamProcessor;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -36,7 +36,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 
 /**
  * Travel retail: flight searches, each priced by asking every fare provider at once.

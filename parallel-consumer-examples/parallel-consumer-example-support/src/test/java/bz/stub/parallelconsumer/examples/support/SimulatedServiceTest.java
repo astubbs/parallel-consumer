@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.examples.support;
+package bz.stub.parallelconsumer.examples.support;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.examples.support.SimulatedService.SimulatedFailureException;
+import bz.stub.parallelconsumer.examples.support.SimulatedService.SimulatedFailureException;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

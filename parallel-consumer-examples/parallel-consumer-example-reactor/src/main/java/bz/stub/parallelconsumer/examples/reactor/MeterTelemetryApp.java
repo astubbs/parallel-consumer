@@ -1,13 +1,13 @@
-package io.confluent.parallelconsumer.examples.reactor;
+package bz.stub.parallelconsumer.examples.reactor;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.examples.support.ConcurrencyObserver;
-import io.confluent.parallelconsumer.examples.support.RunSummary;
-import io.confluent.parallelconsumer.reactor.ReactorProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.examples.support.ConcurrencyObserver;
+import bz.stub.parallelconsumer.examples.support.RunSummary;
+import bz.stub.parallelconsumer.reactor.ReactorProcessor;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -36,7 +36,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 
 /**
  * Smart-meter telemetry: a day of half-hourly meter readings, ingested into a reactive time-series
@@ -65,7 +65,7 @@ import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOr
  * throttling below is yours, inside one record's stream.
  * <p>
  * <b>A multi-element publisher must be reduced to exactly one element before it is returned.</b>
- * {@link io.confluent.parallelconsumer.reactor.ReactorProcessor#react} subscribes with
+ * {@link bz.stub.parallelconsumer.reactor.ReactorProcessor#react} subscribes with
  * {@code subscribe(onNext, onError)}, so it reads <em>every</em> {@code onNext} as "this record is done".
  * Return the 48-element {@code Flux} as it stands and one offset is reported succeeded 48 times: Parallel
  * Consumer's assertion in {@code PartitionState.onSuccess} trips and offsets stop committing. The
@@ -144,7 +144,7 @@ public class MeterTelemetryApp {
      * {@code request(n)}, {@code onNext}. A child of this package's logger, so a reader who turns the
      * package down to {@code warn} loses the trace with it.
      */
-    public static final String DEMAND_TRACE = "io.confluent.parallelconsumer.examples.reactor.demand";
+    public static final String DEMAND_TRACE = "bz.stub.parallelconsumer.examples.reactor.demand";
 
     /**
      * How {@code request(Long.MAX_VALUE)} appears in a demand log line - the same word Reactor's own
