@@ -73,9 +73,12 @@ skipped, bounded by the final commit round, with clean `close()` checkpointing r
 
 Still open from it:
 
-- **Whether a punctuator's own effects survive a crash on the PC path** - a store write, a forward.
-  Everything measured so far is commit *bookkeeping*. The direct experiment has not been run: punctuator
-  writes, `abortAllActive()`, restart, check what survived.
+- ~~Whether a punctuator's own effects survive a crash on the PC path.~~ **Measured: they do.**
+  `feats/ks-streams-punctuator-effect-survival` punctuates three times with the commit interval at
+  Kafka's 30s default and aborts ~600ms in, so no commit is possible in the window - all three forwards
+  reach the output topic and all three store writes reach the changelog. The producer carries them
+  without `flush()`. **Non-EOS only:** under exactly-once the forward sits in an open transaction, which
+  is the one configuration where this bites; EOS is refused (U11) and out of scope (KTD7).
 - **The re-fire-over-covered-event-time claim**, still unmeasured.
 - **WALL_CLOCK_TIME punctuators fire here unwarned**, where STREAM_TIME logs. Pre-existing, not
   introduced by U13.
