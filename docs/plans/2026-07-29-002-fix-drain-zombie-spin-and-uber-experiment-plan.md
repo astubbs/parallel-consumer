@@ -54,15 +54,31 @@ whether the combined fixes eliminate the residual stalls.
 ## Context & Research (session-verified facts)
 
 - Fix site: `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
-  — `drain()` L~225 calls `consumerManager.signalStop()`; `transitionToClosing()` L~295 **already calls
+  — `drain()` calls `consumerManager.signalStop()`; `transitionToClosing()` **already calls
   `signalStop()`**, so the fix is deleting the call in `drain()` (plus comment). `handlePoll()`'s comment
   ("if draining - subs will be paused, so use this to just sleep") states the design intent.
-- `shutdownRequested` blast radius (`ConsumerManager`): poll guard L77; commitSync retry loop L149
-  (`tryCount == 0 ||` — still gets first attempt); SASL `retryBackOff` abort L217; `close()` sets it
+- `shutdownRequested` blast radius (`ConsumerManager`): the poll guard; the commitSync retry loop
+  (`tryCount == 0 ||` — still gets first attempt); the SASL `retryBackOff` abort; `close()` sets it
   directly. Deferring the flag to CLOSING means drain-time commits/retries behave *normally* — arguably
   fixing a second subtle drain bug (commit retries aborting during drain).
 - Close-latency check needed at implementation: confirm the CLOSING transition wakes the consumer
-  (`consumerManager.wakeup()` guarded at L~342) so the blocking 2s poll doesn't add shutdown latency.
+  (`consumerManager.wakeup()`, guarded by `if (pollingBroker.get())`) so the blocking 2s poll doesn't
+  add shutdown latency.
+
+  (Citation repair, applying to all three bullets above, which cited `BrokerPollSystem`,
+  `ConsumerManager` and the wakeup guard by line number. None of those numbers resolves today, and the
+  two names the plan turns on - `signalStop` and `shutdownRequested` - are gone from the tree
+  entirely, removed by the very fix this plan proposed when it landed in `bd7172418` (PR astubbs#80).
+  For the pre-fix code as this plan read it: `git show
+  bd7172418^:parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
+  and the sibling `ConsumerManager.java`, grep `signalStop` and `shutdownRequested`. The method names
+  above are the durable anchors and all still exist; in today's code the flag's three read sites
+  survive under `closeInProgressSignal` - grep `while (!closeInProgressSignal.getAsBoolean())` for the
+  poll guard, `while (tryCount == 0 || !closeInProgressSignal.getAsBoolean())` for the commit retry
+  loop, and `private boolean retryBackOff(` for the SASL abort. The wakeup guard is
+  `if (pollingBroker.get())` in `ConsumerManager.wakeup()`; its cited line did not resolve to that
+  guard even before the fix, so which line the plan meant there is not recoverable - only what it
+  described.)
 - Test infra (reuse, DRY): `AbstractParallelEoSStreamProcessorTestBase` builds a PC over a Mockito
   **spy** of `LongPollingMockConsumer` (`consumerSpy`, realistic blocking poll) — poll invocations are
   countable via Mockito. No existing `BrokerPollSystem`/drain unit test exists (only `PCModuleTestEnv`

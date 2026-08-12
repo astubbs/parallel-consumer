@@ -122,8 +122,9 @@ entries:
         RESOLVED (2026-07-28, investigated the merged diff + fork tree). #892
         (priesus, MERGED 2025-10-27) hoists OffsetMapCodecManager to a single `om`
         field on PartitionState, created once in the ctor instead of `new` every
-        commit. That change is ALREADY IN THE FORK -- on master
-        (PartitionState.java ~L175 field, ~L199 ctor init) and therefore in PR
+        commit. That change is ALREADY IN THE FORK -- on master (PartitionState.java,
+        grep `private final OffsetMapCodecManager<K, V> om;` for the field and
+        `this.om = new OffsetMapCodecManager<>(pcModule);` for the ctor init) and therefore in PR
         #57's base. NO CONFLICT: our #859 fix is complementary and layered on top
         -- it USES #892's `om` field, and separately fixes the real leak source in
         PCMetrics.java (registeredMeters List -> LinkedHashSet to stop duplicate

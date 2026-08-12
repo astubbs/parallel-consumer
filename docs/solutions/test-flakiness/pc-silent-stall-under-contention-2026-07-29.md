@@ -287,13 +287,23 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
   rebalance touching a draining member runs revoke on the spinning poll thread, right where the CME/commit-
   lock races live.
   - **VERIFIED (2026-07-29): PR astubbs#29 does NOT fix the drain defect.** On its branch, `drain()` still calls
-    `consumerManager.signalStop()` first (`BrokerPollSystem` L235) and `ConsumerManager.poll()` still has
-    the `while (!shutdownRequested.get())` short-circuit (L92) - the ~10 kHz spin and zombie hold survive
-    unchanged. What it *does* fix is a **sibling** mechanism: `onPartitionsAssigned()` now resets
+    `consumerManager.signalStop()` first (in `BrokerPollSystem.drain()`) and `ConsumerManager.poll()`
+    still has the `while (!shutdownRequested.get())` short-circuit - the ~10 kHz spin and zombie hold
+    survive unchanged. What it *does* fix is a **sibling** mechanism: `onPartitionsAssigned()` now resets
     `pausedForThrottling` (a RUNNING-state throttle-pause stall on re-assignment - same "poller paused when
     it shouldn't be" family, different state). It even **adds trace logging inside the very loop that
     spins** (`handlePoll`: "Poll returned 0 records. assignment=..., paused=...") - instrumentation that
     would log through the 10 kHz spin without recognising it.
+    - (Citation repair: the two findings above each carried a line number, one into `BrokerPollSystem`
+      and one into `ConsumerManager`, both read against the
+      `bugs/857-paused-consumption-multi-consumers-bug` branch on 2026-07-29. That branch has since
+      merged master, which carries the fix this write-up called for (`bd7172418`, PR astubbs#80), so
+      `signalStop` and `shutdownRequested` no longer appear on it at all and both cited lines are now
+      blank. The method names are the durable anchors; for the code as verified, `git show
+      bd7172418^:parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
+      and the sibling `ConsumerManager.java`, grep `signalStop` and `shutdownRequested`. Re-running the
+      check on the branch today would find nothing - because the branch moved, not because the
+      2026-07-29 finding was wrong. The repair establishes where to look; it does not re-verify.)
   - **Residual-stall link:** astubbs#29 reports 10-20% of aggressive-chaos runs *still* stalling with its fixes
     applied. The chaos monkey's stop/start cycling is a drain-window factory, and the unfixed zombie-drain
     path is a prime candidate for exactly that residue - a testable prediction for the uber-branch
