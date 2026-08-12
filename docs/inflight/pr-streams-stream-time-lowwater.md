@@ -73,13 +73,19 @@ skipped, bounded by the final commit round, with clean `close()` checkpointing r
 
 Still open from it:
 
-- ~~Whether a punctuator's own effects survive a crash on the PC path.~~ **Measured: they do.**
-  `feats/ks-streams-punctuator-effect-survival` punctuates three times with the commit interval at
-  Kafka's 30s default and aborts ~600ms in, so no commit is possible in the window - all three forwards
-  reach the output topic and all three store writes reach the changelog. The producer carries them
-  without `flush()`. **Non-EOS only:** under exactly-once the forward sits in an open transaction, which
-  is the one configuration where this bites; EOS is refused (U11) and out of scope (KTD7).
-- **The re-fire-over-covered-event-time claim**, still unmeasured.
+- **Whether a punctuator's own effects survive an actual process death.** Still open. A previous
+  revision of this entry marked it measured; that was retracted -
+  `feats/ks-streams-punctuator-effect-survival` was reading the topics after `streams.close()`, whose
+  clean shutdown flushes the producer and commits, so it was measuring its own shutdown. Proven by
+  setting `linger.ms` to five minutes: the old shape still passed. The rebuilt test reads before close
+  with a negative control and establishes only the narrower claim that effects reach the broker on the
+  producer's own schedule, independently of any commit. It is not a process-death test:
+  `abortAllActive()` is `workerPool.shutdownNow()` and nothing more, and the punctuator runs through
+  stock `maybePunctuateSystemTime`, which never enters PC dispatch. A real answer needs a forked JVM
+  and a SIGKILL. **Non-EOS throughout**; under exactly-once the forward sits in an open transaction,
+  which is where this would bite - EOS is refused (U11) and out of scope (KTD7).
+- **The re-fire-over-covered-event-time claim**, still unmeasured - and this, not durability, is what
+  this entry ranked highest in the first place. No branch has touched it.
 - **WALL_CLOCK_TIME punctuators fire here unwarned**, where STREAM_TIME logs. Pre-existing, not
   introduced by U13.
 - **The `hasUncommittedWork() || commitNeeded` candidate cannot be evidenced through commit cadence.**
