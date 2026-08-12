@@ -219,6 +219,27 @@
 #    prints the work set. On your branch those sentences are master's to fix - the corrected wording
 #    reaches you at the merge in step 4.
 #
+#    IF IT REFUSES because `io.confluent.csid.asyncconsumer.BrokerPollSystem` has no rule, this is
+#    EXPECTED on your branch and it has one right answer. Your branch predates the fix, which lands on
+#    master as part of the rename itself - and you cannot merge master to get it, because that is step
+#    4 and it must come after the rename. So apply the fix locally, in
+#    `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/
+#     integrationTests/KafkaSanityTests.java`, replacing the `@link io.confluent.csid.asyncconsumer...`
+#    javadoc line with EXACTLY this:
+#
+#          /**
+#           * Exercises {@code pollBrokerForRecords} on
+#           * {@link io.confluent.parallelconsumer.internal.BrokerPollSystem}.
+#           */
+#
+#    Verbatim matters. It is character-for-character what master carries, so the step 4 merge sees
+#    identical content on both sides and raises no conflict. Improve the wording and you have made
+#    work for yourself.
+#
+#    Then commit it - the next run refuses on a dirty tree otherwise. If the copyright checker then
+#    reports that file missing a `Modifications Copyright ... Antony Stubbs and contributors` line, add
+#    it: you have just edited an upstream-derived file, and `./mvnw` fails without it.
+#
 #    Add `--skip-readme-regen` ONLY if you have no JDK. It excuses README.adoc from the completeness
 #    check, so the check stops being total; the run lists it under MANUAL FOLLOW-UPS. With a JDK,
 #    letting the regen run leaves your README.adoc agreeing with master's, which is one less conflict.
@@ -427,6 +448,11 @@ bin/test-check-copyright-headers.sh"
 #                       to bz.stub.*". They are NOT frozen, so a real package reference added to
 #                       either is still rewritten; this only silences the residue, and the check
 #                       prints it.
+# README.adoc is deliberately NOT here. It is generated, and the first instinct is to excuse it on the
+# grounds that its template is the checked artefact - but the generation step resolves `include::`
+# directives rather than rendering to HTML, so the freeze markers below survive into the generated file
+# and protect exactly the lines they protect in the template. Verified, not assumed. Excusing it would
+# have dropped a real check over ~1000 lines to save a mechanism that already works.
 SWEEP_EXCLUDE="\
 CHANGELOG.adoc
 docs/plans/
@@ -437,6 +463,50 @@ bin/test-check-copyright-headers.sh
 AGENTS.md
 .github/workflows/repo-hygiene.yml"
 
+# FREEZE REGIONS - the line-level exemption, for text that must deliberately name the OLD package
+# inside a file that is otherwise rewritten.
+#
+# The whole-file lists above cannot express this. Upgrade instructions are the case that forces it:
+# "the packages move FROM io.confluent.parallelconsumer TO bz.stub.parallelconsumer", and the sed
+# one-liner a reader runs, are only useful while they still say the old name. The bulk rewrite turns
+# both into a statement that a package moves to itself and a sed that does nothing - MEASURED, and it
+# passed the completeness check, the rename pairing and the copyright check, because the sweep hunts
+# old spellings that SHOULD have been rewritten and this is one that must NOT be. It is structurally
+# invisible to every gate this script has.
+#
+# Freezing README_TEMPLATE.adoc wholesale would be wrong: a real package reference added to it later
+# must still be rewritten. So the exemption is a REGION, not a file, and it is visible in the file it
+# applies to rather than in a list somewhere else.
+#
+#     // rename-packages: freeze-begin(<id>) - <why this text must keep the old spelling>
+#     ...
+#     // rename-packages: freeze-end(<id>)
+#
+# Any line-comment syntax works; the markers are matched as text. Both the rewrite and the
+# completeness check honour them.
+#
+# THE ID IS REQUIRED, AND COUNTING MARKERS IS NOT ENOUGH. An earlier version balanced markers with a
+# single open/closed flag, which is defeated by TWO INDEPENDENT authoring mistakes in one file: forget
+# one freeze-end, leave an unrelated stray freeze-end further down, and the sequence reads
+# begin/end/begin/end - perfectly balanced. Everything between the orphaned begin and the unrelated end
+# then joins the frozen set that BOTH the rewrite and the check consume, so a live io.confluent
+# reference in that span is never rewritten and never reported, while the run prints "every freeze
+# region opens and closes" and "no stale references outside the excluded set". MEASURED, on this script.
+#
+# So a freeze-end must name the region it closes. Two markers cannot pair unless they were written as a
+# pair, and an id that closes nothing, or closes the wrong region, is a hard refusal.
+#
+# A MARKER LINE MAY NOT CARRY A PACKAGE REFERENCE either. Both the line-set builder and the rewrite
+# treat the whole marker line as frozen, so a reference written as a trailing note on the freeze-end
+# line would be silently exempt with no region to audit it against.
+#
+# An unclosed region is refused for the original reason: it would exempt the rest of its file from both
+# the rewrite and the check, and the check would then report clean over text it never looked at - the
+# same class of quiet hole as a sweep pattern that matches nothing.
+FREEZE_BEGIN_ERE='rename-packages:[[:space:]]*freeze-begin'
+FREEZE_END_ERE='rename-packages:[[:space:]]*freeze-end'
+FREEZE_ID_ERE='freeze-(begin|end)\(([A-Za-z0-9_.-]+)\)'
+
 # Excluded from both the rewrite and the completeness check, because they must carry the old spelling
 # as DATA. Matched on BASENAME, not on a hardcoded path, so moving or renaming this script cannot
 # silently switch the exclusion off - the lesson bin/check-shell-sigpipe.sh already learned.
@@ -445,6 +515,15 @@ rename-packages.sh
 test-rename-packages.sh"
 
 # Claims a mechanical rewrite would turn into confident falsehoods: `path|ERE|what to write instead`.
+#
+# DELIBERATELY EMPTY, and that is not the same as the parser having drifted. All three original guards
+# are RETIRED: their sentences were corrected in the same change-set that landed the rename, using the
+# wording plan s8 pre-drafted, so there is no longer a false claim for them to catch. A guard that
+# matches nothing is not a passing check - this file says so about itself above - so retiring them was
+# the required move rather than an optional tidy-up.
+#
+# The MECHANISM stays. The next claim a mechanical rewrite would falsify goes here in the same
+# `path|ERE|what to write instead` form, and --defer-prose keeps working for it.
 PROSE_GUARDS="\
 src/docs/README_TEMPLATE.adoc|drop-in replacement.*package.*are unchanged|The drop-in claim stops being TRUE and must not merely be qualified. Plan s8 drafts the replacement: say the packages MOVE from io.confluent.parallelconsumer to bz.stub.parallelconsumer, that the API itself is unchanged, and give the one-line sed under == Upgrading.
 CHANGELOG.adoc|only required change is the Maven groupId|The rename adds a second required change - every import moves - so this becomes a factual error the moment it lands. AGENTS.md allows exactly one changelog edit in a PR: correcting an existing claim that is now false. Rewrite that sentence. Do NOT add a new entry - the 0.6.0.0 section is generated at release time from the commit log.
@@ -699,6 +778,81 @@ is_sweep_excluded() { # <path> - excluded from the COMPLETENESS CHECK. Deliberat
     is_self "$1"
 }
 
+frozen_lines() { # <file> -> line numbers inside a freeze region, markers included
+    awk -v b="$FREEZE_BEGIN_ERE" -v e="$FREEZE_END_ERE" '
+        $0 ~ b { f = 1; print NR; next }
+        $0 ~ e { f = 0; print NR; next }
+        f      { print NR }
+    ' "$1"
+}
+
+# The frozen-line set as an awk BEGIN block, shared verbatim by both filters below instead of being
+# copy-pasted into each. They differ only in which field carries the line number, and the thing that
+# must never happen is the rewrite and the completeness check disagreeing about what is frozen - so
+# they read the set from one place.
+AWK_FROZEN_SET='BEGIN { n = split(frozen, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") fz[a[i]] = 1 }'
+
+has_freeze_marker() { # <file> - cheap gate, so the line-set scan runs only where it can matter
+    grep -qE "$FREEZE_BEGIN_ERE" "$1" 2>/dev/null
+}
+
+# An unclosed freeze-begin exempts everything after it, and a stray freeze-end silently un-exempts the
+# text above it. Either way the file stops being checked and nothing says so - so this refuses rather
+# than reporting a clean sweep it did not actually perform.
+validate_freeze_markers() {
+    local f bad=0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        # is_self, for the same reason every other whole-tree scan in this file does it: this script
+        # documents the marker syntax and the self-test embeds deliberately malformed markers as fixture
+        # TEXT. Without the filter those literals are read as real regions, and the tree currently
+        # validates only because two unrelated fixtures happen to cancel out - luck, not design.
+        is_self "$f" && continue
+        awk -v b="$FREEZE_BEGIN_ERE" -v e="$FREEZE_END_ERE" -v idre="$FREEZE_ID_ERE" \
+            -v sweep="$SWEEP_ERE" -v path="$f" '
+            function id_of(line) {
+                if (match(line, idre)) {
+                    seg = substr(line, RSTART, RLENGTH)
+                    sub(/^freeze-(begin|end)\(/, "", seg)
+                    sub(/\)$/, "", seg)
+                    return seg
+                }
+                return ""
+            }
+            $0 ~ b || $0 ~ e {
+                # The marker line is frozen whole, by both the rewrite and the check, so a reference
+                # riding along on it would be exempt with nothing to audit it against.
+                if ($0 ~ sweep) {
+                    print "      " path ":" NR ": marker line also carries a package reference"; rc = 1
+                }
+            }
+            $0 ~ b {
+                this = id_of($0)
+                if (this == "") { print "      " path ":" NR ": freeze-begin must name its region, as freeze-begin(<id>)"; rc = 1 }
+                if (open) { print "      " path ":" NR ": freeze-begin(" this ") while (" openid ") is still open"; rc = 1 }
+                open = 1; openid = this; openline = NR
+                next
+            }
+            $0 ~ e {
+                this = id_of($0)
+                if (!open) { print "      " path ":" NR ": freeze-end(" this ") closes nothing"; rc = 1 }
+                else if (this != openid) {
+                    print "      " path ":" NR ": freeze-end(" this ") does not close freeze-begin(" openid ") from line " openline; rc = 1
+                }
+                open = 0; openid = ""
+                next
+            }
+            END { if (open) { print "      " path ":" openline ": freeze-begin(" openid ") is never closed"; rc = 1 } exit rc }
+        ' "$f" || bad=1
+    done < <(git grep -lIE "$FREEZE_BEGIN_ERE|$FREEZE_END_ERE" -- . || true)
+
+    if [ "$bad" -ne 0 ]; then
+        die "unbalanced freeze markers, listed above. A freeze region that is not closed exempts the
+     rest of its file from BOTH the rewrite and the completeness check, and the check would then
+     report clean over text it never looked at. Close the region, or delete the stray marker."
+    fi
+}
+
 # --------------------------------------------------------------------------------------------------
 # Discovery - always from the TREE, never from a manifest, so a PR's new files are picked up too
 # --------------------------------------------------------------------------------------------------
@@ -717,8 +871,22 @@ discover_rewrites() {
     while IFS= read -r f; do
         [ -n "$f" ] || continue
         is_frozen "$f" && continue
+        # A file whose ONLY matches sit in freeze regions has nothing rewritable in it, and counting it
+        # anyway is not cosmetic: on an already-renamed tree it keeps n_rewrites above zero, so the run
+        # skips the "already applied, nothing to do" exit, rewrites nothing, and then fails at `git
+        # commit` with nothing to commit. Re-running is the property the whole fan-out rests on, and it
+        # would have reported failure on every branch that carries migration prose.
+        has_rewritable_match "$f" || continue
         printf '%s\n' "$f" >> "$REWRITES"
     done < <(git grep -lIE "$SWEEP_ERE" -- . || true)
+}
+
+has_rewritable_match() { # <file> - true when at least one SWEEP_ERE match is OUTSIDE a freeze region
+    has_freeze_marker "$1" || return 0
+    awk -v frozen="$(frozen_lines "$1")" -v ere="$SWEEP_ERE" "$AWK_FROZEN_SET"'
+        $0 ~ ere && !(NR in fz) { found = 1; exit }
+        END { exit !found }
+    ' "$1"
 }
 
 # --------------------------------------------------------------------------------------------------
@@ -1039,7 +1207,16 @@ do_rewrite() {
     local n
     n=$(count_lines "$REWRITES")
     if [ "$n" -gt 0 ]; then
-        tr '\n' '\0' < "$REWRITES" | xargs -0 perl -i -pe "$PERL_PROG"
+        # Region-aware: the substitutions are gated on not being inside a freeze region, and the
+        # marker lines themselves are never rewritten. $FROZEN resets per FILE via $ARGV rather than
+        # per line, because `perl -i` keeps one interpreter across the whole argument list and state
+        # left set by one file would silently exempt the start of the next.
+        tr '\n' '\0' < "$REWRITES" | xargs -0 perl -i -pe "
+            if (\$ARGV ne \$PREV_FILE) { \$PREV_FILE = \$ARGV; \$FROZEN = 0 }
+            if (/${FREEZE_BEGIN_ERE}/) { \$FROZEN = 1 }
+            elsif (/${FREEZE_END_ERE}/) { \$FROZEN = 0 }
+            elsif (!\$FROZEN) { $PERL_PROG }
+        "
     fi
     echo "  rewrote references in ${n} file(s)"
 }
@@ -1306,8 +1483,10 @@ report_rename_limits() {
 completeness_check() {
     local f hits=0 skipped=0
     local live="$TMP/live-hits.txt" skipped_list="$TMP/skipped-hits.txt"
+    local one="$TMP/hits-one.txt" frozen_list="$TMP/frozen-hits.txt" frozen_files=0
     : > "$live"
     : > "$skipped_list"
+    : > "$frozen_list"
 
     while IFS= read -r f; do
         [ -n "$f" ] || continue
@@ -1319,8 +1498,35 @@ completeness_check() {
             skipped=$((skipped + 1))
             continue
         fi
-        git grep -nIE "$SWEEP_ERE" -- "$f" >> "$live" || true
-        hits=$((hits + 1))
+        git grep -nIE "$SWEEP_ERE" -- "$f" > "$one" || true
+
+        # Drop matches sitting inside a freeze region, and print what was dropped. Same rule as the
+        # excluded set above: an exemption that is not shown is a hole nobody can audit.
+        if has_freeze_marker "$f"; then
+            # Both files are created up front because awk only creates an output file it actually
+            # writes to, and the emptiness of each is what the caller tests. Named outputs rather than
+            # the shorter `print > "/dev/stderr"` trick: stderr is the error channel, and borrowing it
+            # to carry data means a real awk error lands in the frozen-hits list and gets reported as
+            # protected text - a malfunction presenting as a clean exemption.
+            : > "$one.frozen"
+            : > "$one.kept"
+            awk -v frozen="$(frozen_lines "$f")" -v froz="$one.frozen" -v kept="$one.kept" -F: "$AWK_FROZEN_SET"'
+                { if ($2 in fz) print > froz; else print > kept }
+            ' "$one"
+            if [ -s "$one.frozen" ]; then
+                {
+                    printf '      %s  (inside a freeze region)\n' "$f"
+                    sed 's/^/          /' "$one.frozen"
+                } >> "$frozen_list"
+                frozen_files=$((frozen_files + 1))
+            fi
+            mv "$one.kept" "$one"
+        fi
+
+        if [ -s "$one" ]; then
+            cat "$one" >> "$live"
+            hits=$((hits + 1))
+        fi
     done < <(git grep -lIE "$SWEEP_ERE" -- . || true)
 
     echo "  pattern            ${SWEEP_ERE}"
@@ -1334,7 +1540,15 @@ completeness_check() {
         echo "      (nothing matched inside the excluded set)"
     fi
     echo
+    echo "  FROZEN REGIONS, with everything each one held - text that must keep the old spelling:"
+    if [ -s "$frozen_list" ]; then
+        cat "$frozen_list"
+    else
+        echo "      (no freeze region matched)"
+    fi
+    echo
     echo "  excluded files with matches      ${skipped}"
+    echo "  files with frozen-region matches ${frozen_files}"
     echo "  NON-excluded files with matches  ${hits}"
 
     if [ "$hits" -gt 0 ]; then
@@ -1392,6 +1606,15 @@ EOF
 
 echo "== package rename: io.confluent.* -> bz.stub.*"
 echo "   branch $(git rev-parse --abbrev-ref HEAD)   tree $(pwd)"
+
+# BEFORE any path that can print a clean verdict, not just before the applying run. completeness_check
+# HONOURS freeze regions, so if it runs without this having run, an unclosed freeze-begin silently
+# freezes to end-of-file and the check reports "no stale references outside the excluded set" over text
+# it never examined. --verify-only and the "already applied, nothing to do" exit both used to reach that
+# state, because the only call site sat after both of them.
+section "preflight: are the freeze regions well formed?"
+validate_freeze_markers
+echo "  VERDICT            every freeze region opens and closes, and names what it closes"
 
 if [ "$VERIFY_ONLY" = true ]; then
     section "verification: completeness"
@@ -1462,6 +1685,7 @@ if [ "$DO_COMMIT" = true ] && [ -n "$(git status --porcelain)" ]; then
 fi
 
 MOVE_REV=""
+CONTENT_COMMITTED=false
 
 # BEFORE anything changes. After the rewrite these numbers cannot be recovered from the tree, and a
 # report with no "before" column cannot tell a clean sweep from a broken one.
@@ -1498,13 +1722,27 @@ if [ "$DO_COMMIT" != true ]; then
     echo "  expecting ${n_moves} R-entries and no A/D pairs."
 else
     git add -A
-    if [ "$SPLIT_COMMITS" = true ]; then
+    # A run that changed nothing is a successful no-op, not a failed check. Without this, re-running on
+    # a settled tree dies here: `git commit` refuses an empty commit and the script exits 1, so the
+    # per-branch instruction "any refusal, STOP and report" fires on a branch that is already correct.
+    #
+    # The "already applied, nothing to do" exit above does NOT catch this case on the real tree, and the
+    # self-test fixture cannot show why: AGENTS.md and .github/workflows/repo-hygiene.yml both DESCRIBE
+    # the rename, so they match the sweep pattern permanently while matching no rewrite rule. n_rewrites
+    # therefore never reaches zero here, however finished the rename is, and the fixture contains
+    # neither file.
+    if git diff --cached --quiet; then
+        echo "  nothing to commit - the tree already carries this change, so this run was a no-op."
+        echo "  Re-running is a no-op by design; see the idempotency note above."
+    elif [ "$SPLIT_COMMITS" = true ]; then
+        CONTENT_COMMITTED=true
         git commit -q -m "refactor: rename io.confluent.* references to bz.stub.* (content only)" \
             -m "Text edits only. No file moves in this commit, so it cannot dilute the rename
 detection in its parent.
 
 Generated by bin/rename-packages.sh."
     else
+        CONTENT_COMMITTED=true
         git commit -q -m "refactor: rename packages io.confluent.* to bz.stub.*" \
             -m "Moves the package directories and rewrites every reference in one atomic commit, so
 the tree compiles at every point in history and a PR branch has one commit to reconcile
@@ -1519,7 +1757,9 @@ logback logger names, and a misspelt variant.
 
 Generated by bin/rename-packages.sh."
     fi
-    echo "  committed $(git rev-parse --short HEAD)"
+    if [ "$CONTENT_COMMITTED" = true ]; then
+        echo "  committed $(git rev-parse --short HEAD)"
+    fi
 fi
 
 section "verification: did git record the moves as RENAMES?"
@@ -1529,6 +1769,14 @@ if [ "$DO_COMMIT" != true ]; then
     echo "  SKIPPED - nothing was committed (--no-commit). See the note above."
 elif [ "$n_moves" -eq 0 ]; then
     echo "  no files moved on this branch, so there is nothing to detect."
+elif [ -n "$MOVE_REV" ] && [ "$CONTENT_COMMITTED" != true ]; then
+    # Moves happened, but phase 2 staged nothing, so HEAD is still the MOVE commit. Verifying it as a
+    # "content only" commit asserts 0 renames against a commit that legitimately has n_moves of them,
+    # and dies with a diagnostic that is simply false - on a branch that was handled correctly.
+    echo "  [move commit]"
+    verify_renames "$MOVE_REV" "$n_moves" "pure move"
+    echo
+    echo "  [content commit]  none was needed - phase 2 changed nothing, so there is nothing to verify."
 elif [ -n "$MOVE_REV" ]; then
     echo "  [move commit]"
     verify_renames "$MOVE_REV" "$n_moves" "pure move"

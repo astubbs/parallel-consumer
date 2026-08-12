@@ -673,25 +673,59 @@ fi
 # 20-21. Prose guards
 # --------------------------------------------------------------------------------------------------
 
+# These test the MECHANISM, so they plant their own guard into the fixture's copy of the script rather
+# than borrowing whatever the production PROSE_GUARDS happens to hold. The production list is empty
+# once every guarded claim has been corrected, and coupling the mechanism's coverage to it meant that
+# retiring the last guard silently deleted the only proof the machinery still worked. Same technique
+# as the PKG_MAP control arm above: edit the fixture's script, commit, and verify the edit landed.
+plant_prose_guard() { # <dir> - aim one guard at the claim new_fixture already writes into the fixture
+    local s="$1/bin/rename-packages.sh"
+    # No-op when the production list already carries a guard for that claim. This file has to work on
+    # both bases: the tooling branch, where the three original guards are still live because the prose
+    # they name has not been corrected yet, and the rename change-set, where they are retired and
+    # PROSE_GUARDS is deliberately empty. Injecting over a populated list would be the drift.
+    grep -q '^src/docs/README_TEMPLATE.adoc|drop-in replacement' "$s" && return 0
+    awk '
+        /^PROSE_GUARDS=""$/ {
+            print "PROSE_GUARDS=\"\\"
+            print "src/docs/README_TEMPLATE.adoc|drop-in replacement.*package.*are unchanged|The drop-in claim stops being TRUE and must not merely be qualified. Say the packages MOVE.\""
+            next
+        }
+        { print }
+    ' "$s" > "$s.new" && mv "$s.new" "$s"
+    chmod +x "$s"
+}
+
 d="$TMP/prose"
 new_fixture "$d"
-ec="$(run_script "$d")"
-assert "a claim that the packages are unchanged BLOCKS the run" 1 "$ec"
-assert "and nothing was moved before it stopped" 0 \
-    "$(cd "$d" && git status --porcelain | wc -l | tr -d ' ')"
-if grep -q "drop-in claim stops being TRUE" "$TMP/out.txt"; then
-    echo "ok:   the block names the replacement wording rather than just refusing"
-else
-    echo "FAIL: the prose guard did not print what to write instead"
-    failures=$((failures + 1))
-fi
+plant_prose_guard "$d"
+(cd "$d" && git add -A && git commit -qm "aim a prose guard at this fixture's own claim")
 
-ec="$(run_script "$d" --defer-prose)"
-assert "--defer-prose proceeds" 0 "$ec"
-if grep -q "MANUAL FOLLOW-UPS" "$TMP/out.txt" && grep -q "prose in src/docs/README_TEMPLATE.adoc" "$TMP/out.txt"; then
-    echo "ok:   and carries the claim as a named manual follow-up"
+# Verify the injection, or an awk pattern that silently stopped matching would present as "the guard
+# did not fire" - which is the same output as the guard being broken, and the opposite diagnosis.
+if bash -n "$d/bin/rename-packages.sh" 2>/dev/null &&
+   grep -q '^src/docs/README_TEMPLATE.adoc|drop-in replacement' "$d/bin/rename-packages.sh"; then
+    ec="$(run_script "$d")"
+    assert "a claim that the packages are unchanged BLOCKS the run" 1 "$ec"
+    assert "and nothing was moved before it stopped" 0 \
+        "$(cd "$d" && git status --porcelain | wc -l | tr -d ' ')"
+    if grep -q "drop-in claim stops being TRUE" "$TMP/out.txt"; then
+        echo "ok:   the block names the replacement wording rather than just refusing"
+    else
+        echo "FAIL: the prose guard did not print what to write instead"
+        failures=$((failures + 1))
+    fi
+
+    ec="$(run_script "$d" --defer-prose)"
+    assert "--defer-prose proceeds" 0 "$ec"
+    if grep -q "MANUAL FOLLOW-UPS" "$TMP/out.txt" && grep -q "prose in src/docs/README_TEMPLATE.adoc" "$TMP/out.txt"; then
+        echo "ok:   and carries the claim as a named manual follow-up"
+    else
+        echo "FAIL: --defer-prose did not record the claim as a manual follow-up"
+        failures=$((failures + 1))
+    fi
 else
-    echo "FAIL: --defer-prose did not record the claim as a manual follow-up"
+    echo "FAIL: could not plant a prose guard in the fixture's copy - the mechanism was never tested"
     failures=$((failures + 1))
 fi
 
@@ -797,14 +831,33 @@ fi
 # When this fails, the guard is spent one way or the other: the sentence was REWORDED (re-point the
 # pattern) or it was CORRECTED (retire the guard). Both are edits to PROSE_GUARDS - neither is a
 # reason to relax this test.
+#
+# PROSE_GUARDS IS ALLOWED TO BE EMPTY, once every guarded claim has been corrected - which is what the
+# rename's own change-set does. But "empty" and "the parser drifted" must not look alike, and an empty
+# list must not make this whole section pass by iterating zero times: that is the vacuous pass this
+# suite exists to refuse. So the empty state is asserted explicitly, and a retired guard is replaced by
+# a regression check that its false claim has not come BACK - see RETIRED_PROSE_CLAIMS.
 
 repo_root="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
-guards="$(awk '
-    /^PROSE_GUARDS="/ { f = 1; next }
-    f { line = $0; sub(/"$/, "", line); print line; if ($0 ~ /"$/) exit }
-' "$SCRIPT")"
 
-if [ -z "$guards" ]; then
+parse_pipe_list() { # <var-name> -> the heredoc lines of a `NAME="\` ... `"` block in the script
+    awk -v want="^$1=\"" '
+        $0 ~ want { f = 1; if ($0 ~ /^[A-Z_]+=""$/) exit; next }
+        f { line = $0; sub(/"$/, "", line); print line; if ($0 ~ /"$/) exit }
+    ' "$SCRIPT"
+}
+
+guards="$(parse_pipe_list PROSE_GUARDS)"
+retired="$(parse_pipe_list RETIRED_PROSE_CLAIMS)"
+
+if grep -q '^PROSE_GUARDS=""$' "$SCRIPT"; then
+    echo "ok:   PROSE_GUARDS is deliberately empty - every guarded claim has been corrected"
+    if [ -z "$retired" ]; then
+        echo "FAIL: PROSE_GUARDS is empty and RETIRED_PROSE_CLAIMS is too, so this section now checks"
+        echo "      NOTHING. A retired guard becomes a regression check; it does not just disappear."
+        failures=$((failures + 1))
+    fi
+elif [ -z "$guards" ]; then
     echo "FAIL: could not read PROSE_GUARDS out of $SCRIPT - the parser above has drifted from it"
     failures=$((failures + 1))
 fi
@@ -823,6 +876,24 @@ while IFS='|' read -r gpath gere _; do
     fi
 done <<EOF
 $guards
+EOF
+
+# The other direction, for guards already retired: the corrected sentence must STAY corrected. Without
+# this, deleting a spent guard quietly re-opens the hole it was closing.
+while IFS='|' read -r rpath rere; do
+    [ -n "$rpath" ] || continue
+    if [ ! -f "$repo_root/$rpath" ]; then
+        echo "FAIL: retired prose claim names $rpath, which does not exist"
+        failures=$((failures + 1))
+    elif grep -qE "$rere" "$repo_root/$rpath"; then
+        echo "FAIL: a RETIRED false claim has come back in $rpath (pattern: $rere) - it was corrected"
+        echo "      once and something reinstated it. Re-correct it, or re-add it to PROSE_GUARDS."
+        failures=$((failures + 1))
+    else
+        echo "ok:   retired claim stays corrected in $rpath ($rere)"
+    fi
+done <<EOF
+$retired
 EOF
 
 # --------------------------------------------------------------------------------------------------
@@ -912,6 +983,169 @@ new_fixture "$DFIX"
     && git add -A && git commit -qm "the two copies have diverged")
 assert "step 1 reports STALE when the tooling EXISTS but differs - the case 'test -f' misses" 1 \
     "$(staleness_ec "$DFIX" pretend-master)"
+
+# --------------------------------------------------------------------------------------------------
+# Freeze regions - the line-level exemption for text that must keep the OLD spelling
+# --------------------------------------------------------------------------------------------------
+#
+# The case that forces this: upgrade instructions. "the packages move FROM io.confluent.parallelconsumer
+# TO bz.stub.parallelconsumer" and the sed a reader runs are only useful while they still say the old
+# name, and the bulk rewrite turns them into a package moving to itself and a sed that does nothing.
+# MEASURED, and it passed every gate this script has - the sweep hunts old spellings that SHOULD have
+# been rewritten, so one that must NOT be is invisible to it.
+#
+# Two directions matter equally. The region must hold, AND it must not leak: an exemption that swallowed
+# the rest of the file would present as a clean sweep over text nobody checked.
+
+FZ="$TMP/freeze"
+new_fixture "$FZ"
+mkdir -p "$FZ/docs"
+cat > "$FZ/docs/upgrade-notes.adoc" <<'ADOC'
+// rename-packages: freeze-begin(migration) - migration instructions must name the old package
+Move from io.confluent.parallelconsumer to the new package.
+Run: sed -i 's/io\.confluent\.parallelconsumer/NEW/g'
+// rename-packages: freeze-end(migration)
+See io.confluent.parallelconsumer.ParallelConsumer, an ordinary reference that MUST be rewritten.
+ADOC
+(cd "$FZ" && git add -A && git commit -qm "a doc with a freeze region")
+
+ec="$(run_script "$FZ" --defer-prose)"
+assert "a tree containing a freeze region applies cleanly" 0 "$ec"
+assert_contains "the frozen dotted form keeps the OLD spelling" "$FZ/docs/upgrade-notes.adoc" \
+    "from io.confluent.parallelconsumer to the new package"
+assert_contains "the frozen ESCAPED-REGEX form is untouched too" "$FZ/docs/upgrade-notes.adoc" \
+    's/io\.confluent\.parallelconsumer/NEW/g'
+assert_contains "NEGATIVE CONTROL: a reference OUTSIDE the region is still rewritten" \
+    "$FZ/docs/upgrade-notes.adoc" "bz.stub.parallelconsumer.ParallelConsumer"
+assert_absent "so the exemption does not leak past freeze-end" \
+    "$FZ/docs/upgrade-notes.adoc" "io.confluent.parallelconsumer.ParallelConsumer"
+
+ec="$(run_script "$FZ" --verify-only)"
+assert "the completeness check tolerates a frozen region" 0 "$ec"
+if grep -q "FROZEN REGIONS" "$TMP/out.txt" && grep -q "docs/upgrade-notes.adoc" "$TMP/out.txt"; then
+    echo "ok:   and PRINTS what the region held, so the exemption is auditable"
+else
+    echo "FAIL: the frozen region was tolerated SILENTLY - an exemption nobody can audit"
+    failures=$((failures + 1))
+fi
+
+# An unbalanced marker is the quiet-hole case: everything after an unclosed freeze-begin stops being
+# rewritten and stops being checked, and the check still says clean.
+UB="$TMP/freeze-unclosed"
+new_fixture "$UB"
+mkdir -p "$UB/docs"
+printf '%s\n%s\n' '// rename-packages: freeze-begin(unclosed) - deliberately never closed' \
+    'io.confluent.parallelconsumer would be silently exempt from here down' > "$UB/docs/bad.adoc"
+(cd "$UB" && git add -A && git commit -qm "unclosed freeze region")
+ec="$(run_script "$UB" --defer-prose)"
+assert "NEGATIVE CONTROL: an UNCLOSED freeze region makes the run REFUSE" 1 "$ec"
+assert "  ... and nothing moved before it refused" 0 \
+    "$(cd "$UB" && git status --porcelain | wc -l | tr -d ' ')"
+
+# A SETTLED tree must re-run as a successful no-op. This fixture reproduces what the real tree has and
+# the original fixture did not: a file that DESCRIBES the rename, so it matches the sweep pattern
+# permanently while matching no rewrite rule. n_rewrites therefore never reaches zero, the
+# "already applied, nothing to do" exit never fires however finished the rename is, and the run used to
+# die at `git commit` with nothing to commit - exit 1 on a branch that was already correct, which the
+# per-branch procedure turns into "any refusal, STOP and report".
+SETTLED="$TMP/settled"
+new_fixture "$SETTLED"
+printf '%s\n' 'The fork is moving io.confluent.* to bz.stub.*, and quotes grep -rn "io\.confluent" as a trap.' \
+    > "$SETTLED/AGENTS.md"
+(cd "$SETTLED" && git add -A && git commit -qm "AGENTS.md describes the rename, as the real one does")
+ec="$(run_script "$SETTLED" --defer-prose)"
+assert "a tree whose AGENTS.md describes the rename applies cleanly" 0 "$ec"
+ec="$(run_script "$SETTLED" --defer-prose)"
+assert "and a SETTLED tree re-runs as a successful NO-OP, not a failed empty commit" 0 "$ec"
+if grep -q "nothing to commit" "$TMP/out.txt"; then
+    echo "ok:   and says so, rather than reporting a commit it did not make"
+else
+    echo "FAIL: the no-op run did not report that there was nothing to commit"
+    failures=$((failures + 1))
+fi
+
+UB2="$TMP/freeze-stray-end"
+new_fixture "$UB2"
+mkdir -p "$UB2/docs"
+printf '%s\n%s\n' 'io.confluent.parallelconsumer sits above a marker that closes nothing' \
+    '// rename-packages: freeze-end(orphan)' > "$UB2/docs/bad2.adoc"
+(cd "$UB2" && git add -A && git commit -qm "stray freeze-end")
+ec="$(run_script "$UB2" --defer-prose)"
+assert "NEGATIVE CONTROL: a STRAY freeze-end makes the run REFUSE" 1 "$ec"
+
+# --------------------------------------------------------------------------------------------------
+# Freeze regions, part 2: the guards a code review found missing
+# --------------------------------------------------------------------------------------------------
+#
+# Every control below was observed FAILING with its guard removed. Three of them exist because the
+# first version of this mechanism shipped without them and a review reproduced the consequences.
+
+# has_rewritable_match's own effect. Re-running a settled tree whose ONLY remaining matches are frozen
+# must reach the "already applied, nothing to do" exit. Without the guard the frozen-only file stays in
+# the rewrite set, so the run proceeds and lands on the empty-commit no-op path instead - a different
+# message, and the reason removing the guard used to leave this suite entirely green.
+ec="$(run_script "$FZ" --defer-prose)"
+assert "a settled tree whose only matches are FROZEN re-runs cleanly" 0 "$ec"
+if grep -q "already applied, nothing to do" "$TMP/out.txt"; then
+    echo "ok:   and a frozen-only file is not counted as rewritable work"
+else
+    echo "FAIL: a frozen-only file still counted as rewritable - has_rewritable_match did not filter it"
+    failures=$((failures + 1))
+fi
+
+# The P0: two independent authoring mistakes in ONE file that cancel out under marker counting. A
+# forgotten freeze-end plus an unrelated stray freeze-end read as begin/end/begin/end - balanced - and
+# everything between the orphan and the stray joins the frozen set, so a live reference is neither
+# rewritten nor reported while both VERDICTs print clean. Ids are what make this refusable.
+MIS="$TMP/freeze-mispaired"
+new_fixture "$MIS"
+mkdir -p "$MIS/docs"
+printf '%s\n' '// rename-packages: freeze-begin(real) - a legitimate, correctly closed region' \
+    'Move from io.confluent.parallelconsumer to the new package.' \
+    '// rename-packages: freeze-end(real)' \
+    '' \
+    '// rename-packages: freeze-begin(oops) - MISTAKE: this one is never closed' \
+    'body text' \
+    'An ORDINARY io.confluent.parallelconsumer.ParallelConsumer reference that MUST be rewritten.' \
+    '' \
+    '// rename-packages: freeze-end(real)' > "$MIS/docs/mispaired.adoc"
+(cd "$MIS" && git add -A && git commit -qm "two independent marker mistakes in one file")
+ec="$(run_script "$MIS" --defer-prose)"
+assert "NEGATIVE CONTROL: a freeze-end that closes the WRONG region refuses" 1 "$ec"
+assert_contains "  ... and names both ids rather than just saying unbalanced" "$TMP/out.txt" \
+    "does not close freeze-begin(oops)"
+assert_absent "  ... and the live reference was NOT silently frozen and left behind" \
+    "$TMP/out.txt" "no stale references outside the excluded set"
+
+# An unnamed region cannot be paired by identity at all, so it is refused rather than accepted.
+NOID="$TMP/freeze-noid"
+new_fixture "$NOID"
+mkdir -p "$NOID/docs"
+printf '%s\n' '// rename-packages: freeze-begin - no id, so nothing can close it by name' \
+    'io.confluent.parallelconsumer stays here' \
+    '// rename-packages: freeze-end' > "$NOID/docs/noid.adoc"
+(cd "$NOID" && git add -A && git commit -qm "markers without ids")
+ec="$(run_script "$NOID" --defer-prose)"
+assert "NEGATIVE CONTROL: a freeze-begin with no id refuses" 1 "$ec"
+
+# A reference riding on the marker line itself: the whole marker line is frozen by both the line-set
+# builder and the rewrite, so this would be exempt with no region to audit it against.
+SAME="$TMP/freeze-sameline"
+new_fixture "$SAME"
+mkdir -p "$SAME/docs"
+printf '%s\n' '// rename-packages: freeze-begin(x) - fine' \
+    'frozen body' \
+    '// rename-packages: freeze-end(x) trailing io.confluent.parallelconsumer.Sneaky' > "$SAME/docs/sameline.adoc"
+(cd "$SAME" && git add -A && git commit -qm "package reference on the marker line")
+ec="$(run_script "$SAME" --defer-prose)"
+assert "NEGATIVE CONTROL: a package reference ON the marker line refuses" 1 "$ec"
+
+# The other P0: --verify-only HONOURS freeze regions, so it must also validate them. Its only call site
+# used to sit after this entry point's early exit, so a malformed region reported a clean sweep.
+ec="$(run_script "$MIS" --verify-only)"
+assert "NEGATIVE CONTROL: --verify-only refuses a malformed region instead of reporting clean" 1 "$ec"
+assert_absent "  ... and does not print a clean completeness verdict" "$TMP/out.txt" \
+    "no stale references outside the excluded set"
 
 # --------------------------------------------------------------------------------------------------
 
