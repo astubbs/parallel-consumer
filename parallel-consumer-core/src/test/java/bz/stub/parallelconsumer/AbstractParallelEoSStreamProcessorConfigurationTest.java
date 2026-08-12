@@ -1,17 +1,18 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
-import io.confluent.parallelconsumer.internal.TestParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
-import io.confluent.parallelconsumer.state.ModelUtils;
-import io.confluent.parallelconsumer.state.PartitionState;
-import io.confluent.parallelconsumer.state.WorkContainer;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.internal.TestParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.state.ModelUtils;
+import bz.stub.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
@@ -30,7 +31,7 @@ import java.util.function.Function;
 
 /**
  * Tests to verify the protected and internal methods of
- * {@link io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor} work as expected.
+ * {@link bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor} work as expected.
  * <p>
  *
  * @author Jonathon Koyle
@@ -60,7 +61,7 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
     }
 
     /**
-     * Test that the {@link io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor#getQueueTargetLoaded}
+     * Test that the {@link bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor#getQueueTargetLoaded}
      */
     @Test
     void queueTargetLoad() {

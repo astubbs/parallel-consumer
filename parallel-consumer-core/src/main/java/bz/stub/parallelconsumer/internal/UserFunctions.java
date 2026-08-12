@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ExceptionInUserFunctionException;
+import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import lombok.experimental.UtilityClass;
 
 import java.util.function.BiFunction;

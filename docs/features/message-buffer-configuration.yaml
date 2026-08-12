@@ -28,4 +28,4 @@ boundaries:
   - Setting this option changes how the load factor is computed, so review existing dynamic-load-factor configuration.
 references:
   - label: Message-buffer option
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
