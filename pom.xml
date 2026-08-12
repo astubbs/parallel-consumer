@@ -604,8 +604,10 @@
                          actually returned findings, because nothing else will. Clear the client's
                          on-disk report cache first, or a warm cache will answer for it.
 
-                         Why `fail` cannot police this, both traps in full, and what the first
-                         authenticated run found: docs/inflight/ci-ossindex-audit-dead.md -->
+                         Why `fail` cannot police this, and both traps in full:
+                         docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md
+                         What the first authenticated run found, and this scanner's false-positive
+                         rate: docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md -->
                     <authId>ossindex</authId>
                     <skip>${ossindex.skip}</skip>
                     <fail>${ossindex.fail}</fail>

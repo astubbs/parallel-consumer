@@ -55,7 +55,7 @@
 #
 # The cost is a false positive blocking unrelated work, and it is real: OSS Index produced two false
 # positives and one CVE id with no public record in a single run against this repo
-# (docs/inflight/ci-ossindex-audit-dead.md). The escape hatch is the same one the backlog used -
+# (docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md). The escape hatch is the same one the backlog used -
 # add the id to `excludeVulnerabilityIds` in the root pom with a reason and a retirement condition -
 # which is a deliberate, reviewable act rather than a flag flip.
 #

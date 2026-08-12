@@ -3,11 +3,14 @@
 # WHAT THIS COVERS THAT NOTHING ELSE DOES
 #
 # `deps: vulnerabilities` (maven.yml, actions/dependency-review-action) gates PRs, but only on the
-# dependencies a PR *changes*. Dependabot alerts cover the standing tree, but miss transitive
-# components entirely - `netty-codec-http`, `lz4-java` and `HdrHistogram` all carry advisories here
-# and have no Dependabot alert in any state. The gap is a **whole-tree scan, on a schedule**, which
-# is what the `schedule:` trigger below is for: an unchanged tree acquires new advisories, and
-# nothing else in this repo would ever notice.
+# dependencies a PR *changes*. Dependabot alerts cover the standing tree, but read from GitHub's
+# dependency graph, which holds what the poms DECLARE rather than what Maven resolves - so a purely
+# transitive component can carry a published advisory and never produce an alert. `lz4-java` is the
+# measured case here: GHSA-xx22-p4ch-683r exists and nothing fired. (One confirmed miss, not three -
+# the wider claim was checked and withdrawn; see
+# docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md.) The
+# gap is a **whole-tree scan, on a schedule**, which is what the `schedule:` trigger below is for:
+# an unchanged tree acquires new advisories, and nothing else in this repo would ever notice.
 #
 # This is the one exception to docs/ci.md's "there is no scheduled build, deliberately". That rule
 # rejects cron lanes that RE-RUN suites the PR gate already covers. This lane covers something the
@@ -47,10 +50,12 @@
 # earns its place for what no PR can see - time passing - but it is the second channel, not the
 # first.
 #
-# The escape hatch for a false positive (and this scanner produces them - see
-# docs/inflight/ci-ossindex-audit-dead.md) is the same one the backlog uses: add the id to
-# `excludeVulnerabilityIds` with a reason and a retirement condition. The guard honours that list and
-# states the suppression count on every run, including green ones. See bin/check-ossindex-audit.sh.
+# The escape hatch for a false positive - and this scanner produces them, measured: two false
+# positives and one phantom CVE id in a single run
+# (docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md) - is
+# the same one the backlog uses: add the id to `excludeVulnerabilityIds` with a reason and a
+# retirement condition. The guard honours that list and states the suppression count on every run,
+# including green ones. See bin/check-ossindex-audit.sh.
 #
 # Required repo secrets: OSSINDEX_USERNAME (the account email), OSSINDEX_TOKEN (API token from
 # ossindex.sonatype.org -> account settings). Both already exist.
