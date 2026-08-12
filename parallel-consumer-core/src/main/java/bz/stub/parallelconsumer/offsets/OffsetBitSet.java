@@ -1,11 +1,12 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
@@ -13,7 +14,7 @@ import java.util.BitSet;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
-import static io.confluent.csid.utils.Range.range;
+import static bz.stub.parallelconsumer.internal.utils.Range.range;
 
 /**
  * Deserialization tools for {@link BitSetEncoder}.

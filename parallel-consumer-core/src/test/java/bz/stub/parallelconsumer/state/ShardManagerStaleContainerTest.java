@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;

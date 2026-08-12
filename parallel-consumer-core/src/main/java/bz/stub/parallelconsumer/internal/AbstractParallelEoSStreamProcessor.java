@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.SupplierUtils;
-import io.confluent.csid.utils.TimeUtils;
-import io.confluent.parallelconsumer.*;
-import io.confluent.parallelconsumer.metrics.PCMetrics;
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
-import io.confluent.parallelconsumer.state.WorkContainer;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.internal.utils.SupplierUtils;
+import bz.stub.parallelconsumer.internal.utils.TimeUtils;
+import bz.stub.parallelconsumer.*;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import lombok.*;
@@ -40,11 +40,11 @@ import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static io.confluent.csid.utils.BackportUtils.isEmpty;
-import static io.confluent.csid.utils.BackportUtils.toSeconds;
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.internal.State.*;
-import static io.confluent.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
+import static bz.stub.parallelconsumer.internal.utils.BackportUtils.isEmpty;
+import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.State.*;
+import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;

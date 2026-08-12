@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 /*-
  * Copyright (C) 2020-2026 Antony Stubbs and contributors
  */
@@ -43,7 +43,7 @@ public class TestConventionRules {
     static final ArchRule integration_tests_must_live_in_an_integrationTest_package =
             noClasses()
                     .that().resideOutsideOfPackages("..integrationTest..", "..integrationTests..")
-                    .should().beAssignableTo("io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest")
+                    .should().beAssignableTo("bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest")
                     .orShould().dependOnClassesThat().resideInAnyPackage("org.testcontainers.containers..", "org.testcontainers.junit..")
                     .because("integration tests (extend BrokerIntegrationTest or use Testcontainers) must live in "
                             + "an 'integrationTest' package so failsafe runs them (with Docker), not surefire");

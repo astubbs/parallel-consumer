@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -14,8 +14,8 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v1;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v1;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
 
 /**
  * Offset encoding MagicNumbers to {@link OffsetEncoder}.

@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -12,7 +12,7 @@ import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
 import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
-import io.confluent.parallelconsumer.internal.ConsumerManager;
+import bz.stub.parallelconsumer.internal.ConsumerManager;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 
@@ -32,7 +32,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
  * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>.
  */
 @AnalyzeClasses(
-        packages = "io.confluent.parallelconsumer",
+        packages = "bz.stub.parallelconsumer",
         importOptions = ImportOption.DoNotIncludeTests.class
 )
 class ArchitectureTest {
@@ -41,7 +41,7 @@ class ArchitectureTest {
     // ThreadConfinedConsumer is package-private so we reference it by name.
     private static final Set<String> ALLOWED_CONSUMER_HOLDERS = new HashSet<>(Arrays.asList(
             ConsumerManager.class.getName(),
-            "io.confluent.parallelconsumer.internal.ThreadConfinedConsumer",
+            "bz.stub.parallelconsumer.internal.ThreadConfinedConsumer",
             ParallelConsumerOptions.class.getName(),
             // Lombok @Builder generates this inner class which also holds the consumer field
             ParallelConsumerOptions.class.getName() + "$ParallelConsumerOptionsBuilder"
@@ -70,7 +70,7 @@ class ArchitectureTest {
                     .that().haveRawType("org.apache.kafka.clients.producer.Producer")
                     .or().haveRawType("org.apache.kafka.clients.producer.KafkaProducer")
                     .should(beInAllowedClasses(new HashSet<>(Arrays.asList(
-                            "io.confluent.parallelconsumer.internal.ProducerWrapper",
+                            "bz.stub.parallelconsumer.internal.ProducerWrapper",
                             ParallelConsumerOptions.class.getName(),
                             ParallelConsumerOptions.class.getName() + "$ParallelConsumerOptionsBuilder"
                     ))))

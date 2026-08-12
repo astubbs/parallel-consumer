@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.awaitility.Awaitility;
@@ -17,7 +18,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 import static com.google.common.truth.Truth.assertThat;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 
 /**
  * Test for pause/resume feature of the parallel consumer (see {@code GH#193}).

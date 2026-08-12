@@ -1,15 +1,15 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.TimeUtils;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.metrics.PCMetrics;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.internal.utils.TimeUtils;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Setter;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;

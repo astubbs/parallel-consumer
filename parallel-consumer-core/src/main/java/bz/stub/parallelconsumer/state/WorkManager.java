@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.*;
-import io.confluent.parallelconsumer.metrics.PCMetrics;
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.*;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;

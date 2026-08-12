@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
