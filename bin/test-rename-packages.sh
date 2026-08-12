@@ -67,9 +67,10 @@
 #                                                       fallback rule to absorb it any more, and
 #                                                       that refusal is what replaced the fallback
 #   27. the run prints a residue report over EVERY tracked file, with its patterns proven live
-#   28. NEGATIVE CONTROL: a residue pattern that matches nothing - a \b in a POSIX ERE, the exact
-#                                                       shape that published a false clean result -
-#                                                       aborts the run instead of reporting clean
+#   28. NEGATIVE CONTROL: a residue pattern that matches nothing - a PCRE-ism in a POSIX ERE, the
+#                                                       exact shape that published a false clean
+#                                                       result - aborts the run instead of
+#                                                       reporting clean
 #   29. CONTROL ARM: reversing PKG_MAP produces a byte-identical tree. The rules are disjoint
 #                                                       prefixes now, so order no longer decides the
 #                                                       outcome; it did while the fallback existed
@@ -566,17 +567,27 @@ for needle in "migration residue report" "pattern liveness" "TOTAL FINDINGS" "ev
     fi
 done
 
-# The control. One term changed: a \b is spliced into one residue pattern, which git grep accepts
-# and then matches nothing with. Note that plain `grep -E` MATCHES \b on both GNU and BSD, so a
-# liveness check written with the wrong engine would certify this pattern as live - which is why
-# the script proves its patterns with git grep and why this control is worth having.
+# The control. One term changed: a PCRE-ism is spliced into one residue pattern, which git grep
+# accepts as a pattern and then matches nothing with.
+#
+# The construct is \d, NOT the \b that caused the original false clean result, and the difference
+# matters because \b's deadness is PLATFORM-DEPENDENT. GNU regex - which is what git grep -E gets
+# on a glibc box, and so what it gets on the ubuntu-latest runner this job runs on - implements \b
+# as a word boundary, so `git grep -E '\bcsid\b'` MATCHES here and the "dead" pattern is alive.
+# The control built on it therefore passed on the author's BSD machine and failed on CI. \d is in
+# no POSIX class and is not a GNU regex extension either, so it degrades to a literal 'd' on every
+# engine in play: `\dcsid` is "dcsid", which matches nothing, everywhere.
+#
+# What the control proves is unchanged - a pattern matching nothing must abort the run rather than
+# read as a clean tree - and so is the reason the script proves patterns with git grep rather than
+# grep: prove with the engine you sweep with, or you certify a pattern the sweep cannot run.
 d="$TMP/deadpattern"
 new_fixture "$d"
-perl -i -pe "s/general-utils-token\\|csid\\|/general-utils-token|\\\\bcsid\\\\b|/" "$d/bin/rename-packages.sh"
+perl -i -pe "s/general-utils-token\\|csid\\|/general-utils-token|\\\\dcsid|/" "$d/bin/rename-packages.sh"
 # The guard tests THE PATTERN LINE, not the file. Testing the file passes on a prose mention of the
 # same construct in a comment - which is exactly how this control first reported itself as built
 # while the splice had silently matched nothing.
-if grep -qE "^RESIDUE_PATTERNS='general-utils-token\|\\\\bcsid\\\\b\|" "$d/bin/rename-packages.sh"; then
+if grep -qE "^RESIDUE_PATTERNS='general-utils-token\|\\\\dcsid\|" "$d/bin/rename-packages.sh"; then
     # Committed, or the script refuses to start on a dirty tree and the run exits 2 for a reason
     # that has nothing to do with the pattern under test.
     (cd "$d" && git add -A && git commit -qm "splice a dead residue pattern")

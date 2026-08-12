@@ -735,11 +735,14 @@ RESIDUE_PRE="$TMP/residue-pre.tsv"
 # evidence of what the tree used to contain has already been rewritten.
 #
 # PROVEN WITH `git grep`, NOT WITH `grep`, AND THAT IS NOT PEDANTRY. They are different regex
-# engines and they disagree about exactly the construct that caused the false clean result: on this
-# machine `grep -qE '\bcsid\b'` MATCHES (BSD grep takes \b as a GNU-style word boundary) while
-# `git grep -cE '\bcsid\b'` over the same tree returns NOTHING and exits 1. Proving the pattern with
-# the wrong engine would have certified the broken pattern as live and then swept with the engine
-# that cannot run it - a liveness check that manufactures the false negative it exists to catch.
+# engines, and whether they agree about a given construct depends on the machine. \b is the case
+# that caused the false clean result: on a BSD box `grep -qE '\bcsid\b'` MATCHES while
+# `git grep -cE '\bcsid\b'` over the same tree returns NOTHING and exits 1 - so proving the pattern
+# with grep certifies it live and then the sweep runs on the engine that cannot match it, a
+# liveness check that manufactures the false negative it exists to catch. On glibc the two agree
+# (both match), which is why that specific disagreement cannot be relied on to demonstrate the
+# hazard - see the \d control in the self-test - but the rule survives the platform difference:
+# prove each pattern with the engine that will sweep with it.
 # The sample is written to a scratch file so `git grep --no-index` can be pointed at it, which is
 # the only way to reach that engine without a tracked file.
 residue_prove_patterns() {
