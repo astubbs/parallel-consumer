@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -19,17 +19,17 @@ import java.util.Comparator;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE;
 
-import static io.confluent.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrap;
-import static io.confluent.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrapToIncompletes;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v1;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
-import static io.confluent.parallelconsumer.offsets.OffsetRunLength.*;
-import static io.confluent.parallelconsumer.offsets.OffsetSimpleSerialisation.decompressZstd;
-import static io.confluent.parallelconsumer.offsets.OffsetSimpleSerialisation.deserialiseByteArrayToBitMapString;
+import static bz.stub.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrap;
+import static bz.stub.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrapToIncompletes;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.*;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v1;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
+import static bz.stub.parallelconsumer.offsets.OffsetRunLength.*;
+import static bz.stub.parallelconsumer.offsets.OffsetSimpleSerialisation.decompressZstd;
+import static bz.stub.parallelconsumer.offsets.OffsetSimpleSerialisation.deserialiseByteArrayToBitMapString;
 
 /**
  * Encapsulates the encoding type, and the actual encoded data, when creating an offset map encoding. Central place for
@@ -150,7 +150,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      * @param baseOffset the committed offset, which is the <b>next</b> offset expected to be polled - so the highest
      *                   offset we can claim to have seen is the one BELOW it. Getting this wrong loses a record:
      *                   {@code of(baseOffset)} would mark the committed offset itself as succeeded, so
-     *                   {@link io.confluent.parallelconsumer.state.PartitionState#isRecordPreviouslyCompleted} would
+     *                   {@link bz.stub.parallelconsumer.state.PartitionState#isRecordPreviouslyCompleted} would
      *                   skip that record and the next commit would be {@code baseOffset + 1}. Matches the
      *                   no-metadata-at-all branch of {@link OffsetMapCodecManager#decodeCompressedOffsets}, which is
      *                   the same situation - we have a committed offset and no readable map to go with it.

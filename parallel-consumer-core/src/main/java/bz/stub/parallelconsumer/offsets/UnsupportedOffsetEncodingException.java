@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -6,7 +6,7 @@ package io.confluent.parallelconsumer.offsets;
 
 import lombok.Getter;
 
-import static io.confluent.csid.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * Thrown when a commit's offset metadata carries an {@link OffsetEncoding} this build recognises, but has no decoder
@@ -14,8 +14,8 @@ import static io.confluent.csid.utils.StringUtils.msg;
  * <p>
  * Replaces a bare {@link UnsupportedOperationException}, so that the failure is typed like the rest of the offsets
  * package and can be routed through
- * {@link io.confluent.parallelconsumer.ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()} - under
- * {@link io.confluent.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy#IGNORE} the
+ * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()} - under
+ * {@link bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy#IGNORE} the
  * metadata is discarded with a warning instead, and processing resumes from the committed offset.
  *
  * @author Antony Stubbs

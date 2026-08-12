@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.InternalException;
+import bz.stub.parallelconsumer.internal.InternalException;
 
 /**
  * Parent of the exceptions for when the {@link OffsetEncoder} cannot encode the given data, and of those for when the

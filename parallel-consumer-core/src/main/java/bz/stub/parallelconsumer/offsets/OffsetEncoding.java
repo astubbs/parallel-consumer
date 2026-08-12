@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -16,8 +16,8 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v1;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v1;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
 
 /**
  * Offset encoding MagicNumbers to {@link OffsetEncoder}.
@@ -68,7 +68,7 @@ public enum OffsetEncoding {
      * <p>
      * An empty result is the forward-compatibility case: metadata written by a newer version of Parallel Consumer,
      * using an encoding that did not exist when this version was built. The caller is the one that knows the
-     * configured {@link io.confluent.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy},
+     * configured {@link bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy},
      * so the caller - not this method - decides whether that is fatal.
      *
      * @param magic the leading byte of an offset metadata payload

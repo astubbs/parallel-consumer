@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.PollContextInternal;
-import io.confluent.parallelconsumer.RecordContext;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.RecordContext;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.ProducerManager;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NonNull;
@@ -26,7 +26,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
 
-import static io.confluent.csid.utils.KafkaUtils.toTopicPartition;
+import static bz.stub.parallelconsumer.internal.utils.KafkaUtils.toTopicPartition;
 import static java.util.Optional.of;
 
 /**

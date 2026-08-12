@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -6,7 +6,7 @@ package io.confluent.parallelconsumer.offsets;
 
 import lombok.Getter;
 
-import static io.confluent.csid.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * Thrown when the leading magic byte of a commit's offset metadata matches no {@link OffsetEncoding} known to this
@@ -17,8 +17,8 @@ import static io.confluent.csid.utils.StringUtils.msg;
  * carries metadata from an unrelated application, or that the payload is corrupt.
  * <p>
  * Whether this is thrown at all is governed by
- * {@link io.confluent.parallelconsumer.ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()} - under
- * {@link io.confluent.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy#IGNORE} the
+ * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()} - under
+ * {@link bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy#IGNORE} the
  * unreadable metadata is discarded with a warning instead, and processing resumes from the committed offset.
  *
  * @author Antony Stubbs
