@@ -1,14 +1,15 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import io.confluent.parallelconsumer.metrics.PCMetrics;
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
 import lombok.Getter;
 import lombok.Setter;
@@ -25,10 +26,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.*;
 
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
-import static io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
-import static io.confluent.parallelconsumer.internal.State.*;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
+import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
+import static bz.stub.parallelconsumer.internal.State.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -47,7 +48,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
 
     /**
-     * While {@link io.confluent.parallelconsumer.internal.State#PAUSED paused} is an externally controlled state that
+     * While {@link bz.stub.parallelconsumer.internal.State#PAUSED paused} is an externally controlled state that
      * temporarily stops polling and work registration, the {@code paused} flag is used internally to pause
      * subscriptions if polling needs to be throttled.
      */
@@ -372,7 +373,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Pause polling from the underlying Kafka Broker.
      * <p>
      * Note: If the poll system is currently not in state
-     * {@link io.confluent.parallelconsumer.internal.State#RUNNING running}, calling this method will be a no-op.
+     * {@link bz.stub.parallelconsumer.internal.State#RUNNING running}, calling this method will be a no-op.
      * </p>
      */
     public void pausePollingAndWorkRegistrationIfRunning() {
@@ -388,7 +389,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Resume polling from the underlying Kafka Broker.
      * <p>
      * Note: If the poll system is currently not in state
-     * {@link io.confluent.parallelconsumer.internal.State#PAUSED paused}, calling this method will be a no-op.
+     * {@link bz.stub.parallelconsumer.internal.State#PAUSED paused}, calling this method will be a no-op.
      * </p>
      */
     public void resumePollingAndWorkRegistrationIfPaused() {

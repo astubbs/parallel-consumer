@@ -430,7 +430,7 @@ all are pre-existing job/gate problems. Only three checks actually gate merge (r
     (huge — stops re-running Docker integration tests per mutant), and/or (b) mutate only classes changed vs
     base on PRs (pitest SCM / `+GIT`), keeping the full sweep for push/nightly. `-Dthreads=$(nproc)` is moot
     for speed here (nproc=2 on the gate = current 2).
-  - **DONE (PR #69): implemented (a).** Added `-DexcludedTestClasses="io.confluent.parallelconsumer.integrationTests.*"`
+  - **DONE (PR #69): implemented (a).** Added `-DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*"`
     to the PIT step, so per-mutant runs no longer re-run the slow TestContainers integration tests (they live in
     `integrationTests` packages, enforced by #69's ArchUnit rule). Mutations on `internal.*` are exercised by the
     fast unit tests. Trade-off: a mutation only an integration test could kill now shows as *survived* — acceptable

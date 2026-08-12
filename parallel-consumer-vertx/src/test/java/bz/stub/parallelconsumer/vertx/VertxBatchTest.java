@@ -1,16 +1,17 @@
-package io.confluent.parallelconsumer.vertx;
+package bz.stub.parallelconsumer.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.parallelconsumer.BatchTestBase;
-import io.confluent.parallelconsumer.BatchTestMethods;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.RateLimiter;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.BatchTestBase;
+import bz.stub.parallelconsumer.BatchTestMethods;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.RateLimiter;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
@@ -27,7 +28,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.csid.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 @Slf4j
 @ExtendWith(VertxExtension.class)

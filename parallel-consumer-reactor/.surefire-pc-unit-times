@@ -1,13 +1,13 @@
-4,1,io.confluent.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-4,3,io.confluent.parallelconsumer.reactor.ReactorTest,subscribeOn
-4,7,io.confluent.parallelconsumer.reactor.ReactorTest,publishOn
-4,221,io.confluent.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[3]
-4,226,io.confluent.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[1]
-4,1190,io.confluent.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-4,4586,io.confluent.parallelconsumer.reactor.ReactorPCTest,kickTires
-4,5120,io.confluent.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[2]
-4,8088,io.confluent.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[3]
-4,8165,io.confluent.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[2]
-4,8690,io.confluent.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[1]
-4,13020,io.confluent.parallelconsumer.reactor.ReactorBatchTest,averageBatchSizeTest
-4,18347,io.confluent.parallelconsumer.reactor.ReactorPCTest,concurrencyTest
+4,1,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+4,3,bz.stub.parallelconsumer.reactor.ReactorTest,subscribeOn
+4,7,bz.stub.parallelconsumer.reactor.ReactorTest,publishOn
+4,221,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[3]
+4,226,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[1]
+4,1190,bz.stub.parallelconsumer.reactor.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+4,4586,bz.stub.parallelconsumer.reactor.ReactorPCTest,kickTires
+4,5120,bz.stub.parallelconsumer.reactor.ReactorBatchTest,simpleBatchTest(ProcessingOrder)[2]
+4,8088,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[3]
+4,8165,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[2]
+4,8690,bz.stub.parallelconsumer.reactor.ReactorBatchTest,batchFailureTest(ProcessingOrder)[1]
+4,13020,bz.stub.parallelconsumer.reactor.ReactorBatchTest,averageBatchSizeTest
+4,18347,bz.stub.parallelconsumer.reactor.ReactorPCTest,concurrencyTest

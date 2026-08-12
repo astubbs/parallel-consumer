@@ -1,2 +1,2 @@
-2,1,io.confluent.parallelconsumer.examples.streams.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-2,1451,io.confluent.parallelconsumer.examples.streams.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+2,1,bz.stub.parallelconsumer.examples.streams.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+2,1451,bz.stub.parallelconsumer.examples.streams.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package

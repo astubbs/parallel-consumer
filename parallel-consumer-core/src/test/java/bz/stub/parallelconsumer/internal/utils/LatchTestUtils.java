@@ -1,7 +1,8 @@
-package io.confluent.csid.utils;
+package bz.stub.parallelconsumer.internal.utils;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -12,9 +13,9 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeoutException;
 
-import static io.confluent.csid.utils.BackportUtils.toSeconds;
-import static io.confluent.csid.utils.Range.range;
-import static io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase.defaultTimeoutSeconds;
+import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
+import static bz.stub.parallelconsumer.internal.utils.Range.range;
+import static bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase.defaultTimeoutSeconds;
 import static java.time.Duration.between;
 import static java.time.Instant.now;
 import static java.util.concurrent.TimeUnit.SECONDS;

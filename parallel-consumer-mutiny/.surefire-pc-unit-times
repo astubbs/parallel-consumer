@@ -1,13 +1,13 @@
-4,1,io.confluent.parallelconsumer.mutiny.MutinyTest,runSubscriptionOnExample
-4,2,io.confluent.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
-4,10,io.confluent.parallelconsumer.mutiny.MutinyTest,emitOnExample
-4,227,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[3]
-4,245,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[1]
-4,1406,io.confluent.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
-4,4083,io.confluent.parallelconsumer.mutiny.MutinyPCTest,kickTires
-4,5101,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[2]
-4,8094,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[3]
-4,8309,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[2]
-4,8603,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[1]
-4,11734,io.confluent.parallelconsumer.mutiny.MutinyBatchTest,averageBatchSizeTest
-4,17283,io.confluent.parallelconsumer.mutiny.MutinyPCTest,concurrencyTest
+4,1,bz.stub.parallelconsumer.mutiny.MutinyTest,runSubscriptionOnExample
+4,2,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > tests_must_not_use_shaded_libraries
+4,10,bz.stub.parallelconsumer.mutiny.MutinyTest,emitOnExample
+4,227,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[3]
+4,245,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[1]
+4,1406,bz.stub.parallelconsumer.mutiny.TestConventionsArchTest,TestConventionRules > integration_tests_must_live_in_an_integrationTest_package
+4,4083,bz.stub.parallelconsumer.mutiny.MutinyPCTest,kickTires
+4,5101,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,simpleBatchTest(ProcessingOrder)[2]
+4,8094,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[3]
+4,8309,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[2]
+4,8603,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,batchFailureTest(ProcessingOrder)[1]
+4,11734,bz.stub.parallelconsumer.mutiny.MutinyBatchTest,averageBatchSizeTest
+4,17283,bz.stub.parallelconsumer.mutiny.MutinyPCTest,concurrencyTest

@@ -1,13 +1,14 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.MathUtils;
-import io.confluent.csid.utils.StringUtils;
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import io.confluent.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.internal.utils.MathUtils;
+import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.state.PartitionState;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
@@ -17,7 +18,7 @@ import java.nio.ByteBuffer;
 import java.util.BitSet;
 import java.util.Optional;
 
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.*;
 
 /**
  * Encodes a range of offsets, from an incompletes collection into a BitSet.

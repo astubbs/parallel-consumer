@@ -1,18 +1,18 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.ProgressBarUtils;
-import io.confluent.csid.utils.Range;
-import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.parallelconsumer.FakeRuntimeException;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
+import bz.stub.parallelconsumer.internal.utils.Range;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
@@ -32,10 +32,10 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 
-import static io.confluent.csid.utils.GeneralTestUtils.time;
-import static io.confluent.csid.utils.Range.range;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
+import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
+import static bz.stub.parallelconsumer.internal.utils.Range.range;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
 import static java.util.Comparator.comparing;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;

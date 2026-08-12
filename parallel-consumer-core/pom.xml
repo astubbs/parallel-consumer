@@ -2,6 +2,7 @@
 <!--
 
     Copyright (C) 2020-2025 Confluent, Inc.
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -130,15 +131,15 @@
                     <useGetterForLegacyClasses>true</useGetterForLegacyClasses>
                     <releaseTarget>8</releaseTarget>
                     <classes>
-                        <class>io.confluent.parallelconsumer.PollContext</class>
-                        <class>io.confluent.parallelconsumer.ParallelEoSStreamProcessor</class>
-                        <class>io.confluent.parallelconsumer.internal.ProducerManager</class>
-                        <class>io.confluent.parallelconsumer.state.WorkContainer</class>
-                        <class>io.confluent.parallelconsumer.state.WorkManager</class>
-                        <class>io.confluent.parallelconsumer.state.PartitionState</class>
-                        <class>io.confluent.parallelconsumer.state.ProcessingShard</class>
-                        <class>io.confluent.parallelconsumer.state.ShardKey</class>
-                        <class>io.confluent.parallelconsumer.offsets.OffsetEncoding</class>
+                        <class>bz.stub.parallelconsumer.PollContext</class>
+                        <class>bz.stub.parallelconsumer.ParallelEoSStreamProcessor</class>
+                        <class>bz.stub.parallelconsumer.internal.ProducerManager</class>
+                        <class>bz.stub.parallelconsumer.state.WorkContainer</class>
+                        <class>bz.stub.parallelconsumer.state.WorkManager</class>
+                        <class>bz.stub.parallelconsumer.state.PartitionState</class>
+                        <class>bz.stub.parallelconsumer.state.ProcessingShard</class>
+                        <class>bz.stub.parallelconsumer.state.ShardKey</class>
+                        <class>bz.stub.parallelconsumer.offsets.OffsetEncoding</class>
                     </classes>
                     <legacyClasses>
                         <!-- todo check legacy is recursive -->
@@ -150,7 +151,7 @@
                         <class>org.apache.kafka.clients.producer.ProducerRecord</class>
                         <class>org.apache.kafka.clients.producer.Producer</class>
                     </legacyClasses>
-                    <entryPointClassPackage>io.confluent.parallelconsumer</entryPointClassPackage>
+                    <entryPointClassPackage>bz.stub.parallelconsumer</entryPointClassPackage>
                 </configuration>
                 <executions>
                     <execution>

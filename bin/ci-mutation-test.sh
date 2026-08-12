@@ -35,7 +35,7 @@ BASE_REF="${PIT_BASE_REF:-${GITHUB_BASE_REF:-}}"
 # Explicit full-sweep override: PIT_FULL_SWEEP=true ignores the PR base ref and mutates all of
 # internal.* (the "Mutation (PIT, full)" highcpu job uses this; PR runs are otherwise scoped).
 if [ "${PIT_FULL_SWEEP:-}" = "true" ]; then BASE_REF=""; fi
-TARGET_CLASSES="io.confluent.parallelconsumer.internal.*"
+TARGET_CLASSES="bz.stub.parallelconsumer.internal.*"
 if [ -n "$BASE_REF" ]; then
   git fetch --no-tags -q origin "$BASE_REF" 2>/dev/null || true
 fi
@@ -52,7 +52,7 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
   # failWhenNoMutations (default true) would then fail the goal outright instead of the "nothing to mutate" skip.
   CHANGED=$(git diff --name-only --diff-filter=d "origin/${BASE_REF}" HEAD -- parallel-consumer-core/src/main/java/ 2>/dev/null \
     | sed -E 's#.*/src/main/java/##; s#/#.#g; s#\.java$##' \
-    | { grep -E '^io\.confluent\.parallelconsumer\.' || true; } | sed 's/.*/&,&$*/' | paste -sd, -)
+    | { grep -E '^bz\.stub\.parallelconsumer\.' || true; } | sed 's/.*/&,&$*/' | paste -sd, -)
   if [ -z "$CHANGED" ]; then
     echo "PIT: no core main-source classes changed vs origin/${BASE_REF} - nothing to mutate, skipping."
     exit 0
@@ -70,8 +70,8 @@ fi
   -Dlicense.skip \
   -Djacoco.skip=true \
   -DtargetClasses="${TARGET_CLASSES}" \
-  -DtargetTests="io.confluent.parallelconsumer.*" \
-  -DexcludedTestClasses="io.confluent.parallelconsumer.integrationTests.*" \
+  -DtargetTests="bz.stub.parallelconsumer.*" \
+  -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*" \
   -DjvmArgs=-Xmx2g \
   -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
   -Dthreads="${THREADS}" \
