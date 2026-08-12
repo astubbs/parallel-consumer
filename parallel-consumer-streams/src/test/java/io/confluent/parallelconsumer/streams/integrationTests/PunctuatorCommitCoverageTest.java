@@ -43,9 +43,18 @@ import static org.awaitility.Awaitility.await;
  * {@code commit-total} as the observable, and reported that the PC arms committed offsets "by a route that
  * does not go through {@code StreamThread.maybeCommit()}" which it could not identify. <b>Both halves were
  * wrong, and code review caught it.</b> The route IS {@code maybeCommit()}. The sensor is what cannot see
- * it, and the reason makes {@code commit-total} structurally incapable of rising on the PC path - so the
- * original arms asserted a value that could never have been anything else. A test whose assertion cannot
- * fail proves nothing, which is the defect class this module has recorded against itself repeatedly.
+ * it, and on an <b>idle</b> task - which is the condition every arm here constructs - that makes
+ * {@code commit-total} unable to rise, so the original arms asserted a value that could never have been
+ * anything else. A test whose assertion cannot fail proves nothing, which is the defect class this module
+ * has recorded against itself repeatedly.
+ * <p>
+ * <b>"Idle" is load-bearing, and an earlier draft of this javadoc dropped it.</b> That draft said the
+ * sensor was structurally incapable of rising on the PC path at all. It is not:
+ * {@code PostCommitCheckpointGapTest} drives 12,000 records through the seam and shows
+ * {@code postCommit} running normally, because {@code hasUncommittedWork()} goes true <em>again</em>
+ * between the commit and loop 2 whenever more records finish in that window. Under continuous load loop 2
+ * sees a task that genuinely needs another commit. The zero below is a property of an idle task, not of
+ * the PC path.
  *
  * <h2>The actual mechanism, which is the thing worth pinning</h2>
  * {@code TaskExecutor.commitTasksAndMaybeUpdateCommittableOffsets} walks its task list <b>twice</b>:
@@ -64,9 +73,12 @@ import static org.awaitility.Awaitility.await;
  * broker; the sensor never counted them.
  * <p>
  * <b>The same second loop also skips {@code postCommit(false)}, and therefore
- * {@code maybeCheckpoint()}, on every successful PC-path commit.</b> That is a production consequence
- * rather than a test artifact, it is not what this class was written to find, and no implementation unit
- * currently owns it. Recorded here because this is where the evidence lives.
+ * {@code maybeCheckpoint()} - but only in that idle window.</b> An earlier version of this note claimed it
+ * happened on <em>every</em> successful PC-path commit; {@code PostCommitCheckpointGapTest} refuted that
+ * by measurement. What survives is narrow: when no work completes between the commit and loop 2, that
+ * round's checkpoint refresh is skipped, leaving an un-checkpointed tail bounded by the final commit
+ * round. Clean close checkpoints regardless, so the cost is a little extra changelog replay after a crash
+ * landing in an idle window.
  *
  * <h2>What each arm is entitled to claim</h2>
  * The stock arms are unchanged and still sound: punctuation alone drives commits on stock, and the same
