@@ -1,13 +1,14 @@
-package io.confluent.parallelconsumer.examples.vertx;
+package bz.stub.parallelconsumer.examples.vertx;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.csid.utils.WireMockUtils;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.internal.utils.WireMockUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;

@@ -1,9 +1,10 @@
-package io.confluent.csid.utils;
+package bz.stub.parallelconsumer.internal.utils;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
 import lombok.Getter;
 
 import java.time.Duration;
@@ -11,8 +12,8 @@ import java.time.Instant;
 import java.time.temporal.Temporal;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase.defaultTimeout;
 
 /**
  * Used to check that progress has been made in some activity.

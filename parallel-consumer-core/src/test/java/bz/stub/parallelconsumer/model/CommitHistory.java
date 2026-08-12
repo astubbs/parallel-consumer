@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer.model;
+package bz.stub.parallelconsumer.model;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.CollectionUtils;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.internal.utils.CollectionUtils;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.NonNull;
 import lombok.SneakyThrows;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;

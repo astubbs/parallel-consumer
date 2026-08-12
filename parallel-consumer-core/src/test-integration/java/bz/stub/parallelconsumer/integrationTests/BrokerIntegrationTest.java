@@ -1,15 +1,16 @@
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
  */
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
-import io.confluent.csid.testcontainers.FilteredTestContainerSlf4jLogConsumer;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.internal.testcontainers.FilteredTestContainerSlf4jLogConsumer;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.SneakyThrows;

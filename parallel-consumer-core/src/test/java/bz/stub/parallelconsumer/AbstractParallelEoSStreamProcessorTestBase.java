@@ -1,20 +1,21 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.model.CommitHistory;
-import io.confluent.parallelconsumer.state.WorkContainer;
-import io.confluent.parallelconsumer.state.WorkManager;
-import io.confluent.parallelconsumer.truth.CommitHistorySubject;
-import io.confluent.parallelconsumer.truth.LongPollingMockConsumerSubject;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.model.CommitHistory;
+import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.truth.CommitHistorySubject;
+import bz.stub.parallelconsumer.truth.LongPollingMockConsumerSubject;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
@@ -36,10 +37,10 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
-import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.*;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.*;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;

@@ -1,14 +1,15 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.FakeRuntimeException;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.offsets.OffsetSimultaneousEncoder;
-import io.confluent.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.offsets.OffsetSimultaneousEncoder;
+import bz.stub.parallelconsumer.state.PartitionState;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
@@ -28,9 +29,9 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.google.common.truth.Truth.assertThat;
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.NOT_TRANSACTIONAL;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.NOT_TRANSACTIONAL;
 import static java.lang.Integer.MAX_VALUE;
 import static org.testcontainers.shaded.org.awaitility.Awaitility.await;
 

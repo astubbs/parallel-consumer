@@ -147,4 +147,4 @@ Deferred to a separate brainstorm when the core 0.7.x is stable.
 - [KIP-1124: Clear Kafka Client upgrade path for 4.x](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1124:+Providing+a+clear+Kafka+Client+upgrade+path+for+4.x)
 - [Spring for Apache Kafka 4.0 GA](https://spring.io/blog/2025/11/18/spring-kafka-4/)
 - Failing CI run: `https://github.com/astubbs/parallel-consumer/actions/runs/24811153191` (Kafka Compat experimental 4.x job log, 2026-04-23)
-- PC's current exception base: `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/InternalRuntimeException.java`
+- PC's current exception base: `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/InternalRuntimeException.java`

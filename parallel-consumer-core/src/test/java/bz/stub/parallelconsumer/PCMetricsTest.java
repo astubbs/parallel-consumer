@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.simple.SimpleConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -23,8 +24,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.parallelconsumer.internal.State.PAUSED;
-import static io.confluent.parallelconsumer.internal.State.RUNNING;
+import static bz.stub.parallelconsumer.internal.State.PAUSED;
+import static bz.stub.parallelconsumer.internal.State.RUNNING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;

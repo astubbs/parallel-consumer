@@ -55,7 +55,6 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 
 IMPORTANT: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates (`io.github.astubbs.parallelconsumer`). The original upstream project is no longer actively maintained.
 
-Confluent's https://www.confluent.io/confluent-accelerators/#parallel-consumer[product page for the original project is here].
 
 TIP: If you like this project, please ⭐ Star it in GitHub to show your appreciation, help us gauge popularity of the project and allocate resources.
 
@@ -298,7 +297,7 @@ The user just has to provide a function to extract from the message the HTTP cal
 
 === Illustrative Performance Example
 
-.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
+.(see link:./parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
 These performance comparison results below, even though are based on real performance measurement results, are for illustrative purposes.
 To see how the performance of the tool is related to instance counts, partition counts, key distribution and how it would relate to the vanilla client.
 Actual results will vary wildly depending upon the setup being deployed into.
@@ -511,7 +510,7 @@ This is the only thing you need to do, in order to get massively concurrent proc
                 log.info("Concurrently processing a record: {}", record)
         );
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[core example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[core example] project, and it's test.
 
 ==== Process and Produce a Response Message
 
@@ -596,7 +595,7 @@ There is no guarantee that the messages will be retried again in the same batch.
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
 
 [[project-reactor]]
 === Project Reactor
@@ -604,7 +603,7 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 As per the Vert.x support, there is also a Reactor module.
 This means you can use Reactor's non-blocking threading model to process your messages, allowing for orders of magnitudes higher concurrent processing than the core module's thread per worker module.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/ReactorApp.java[Reactor example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/bz/stub/parallelconsumer/examples/reactor/ReactorApp.java[Reactor example] project, and it's test.
 
 .Call any Reactor API for each message usage. This example uses a simple `Mono.just` to return a value, but you can use any Reactor API here.
 [source,java,indent=0]
@@ -664,7 +663,7 @@ image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fb
 <1> Setup your Kafka Streams stage as per normal, performing any type of preprocessing in Kafka Streams
 <2> For the slow consumer part of your Topology, drop down into the parallel consumer, and use massive concurrency
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/io/confluent/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/bz/stub/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
 
 [[upgrading]]
 == Upgrading
