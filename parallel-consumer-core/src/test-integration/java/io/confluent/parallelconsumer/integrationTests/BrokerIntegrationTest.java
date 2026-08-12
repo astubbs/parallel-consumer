@@ -27,8 +27,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
 
 import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -65,53 +66,88 @@ public abstract class BrokerIntegrationTest<K, V> {
     String topic;
 
     /**
-     * https://www.testcontainers.org/test_framework_integration/manual_lifecycle_control/#singleton-containers
-     * https://github.com/testcontainers/testcontainers-java/pull/1781
+     * The broker image, used when the client version cannot be parsed. Its tag is the Apache Kafka
+     * release it ships, so it can be read against {@code <kafka.version>} in the root pom directly.
+     * <p>
+     * <b>Declared above {@link #kafkaContainer}, and it has to stay there.</b> Static initialisers run in
+     * source order, so the container field - which calls {@link #deriveKafkaImage()} - sees any constant
+     * declared below it as {@code null}. That was already latent when the fallback was only reachable from
+     * a {@code catch} block that never fired; a fallback that NPEs on the one path it exists for is not a
+     * fallback.
      */
-    public static KafkaContainer kafkaContainer = createKafkaContainer(null);
+    static final String FALLBACK_IMAGE = "apache/kafka:3.9.2";
 
     /**
-     * Derives the Confluent Platform version from the Apache Kafka client version so that
-     * the broker under test matches the client. The CI matrix overrides {@code kafka.version}
-     * via {@code -Dkafka.version=X.Y.Z}, so we read it at runtime from the client jar.
-     * <p>
-     * Mapping: CP major = AK major + 4 (e.g., AK 3.1 → CP 7.1, AK 3.9 → CP 7.9).
+     * The lowest Apache Kafka release published as an {@code apache/kafka} image. Below it there is
+     * no image to pull, and the failure would otherwise arrive as an opaque registry error.
      */
-    private static final String FALLBACK_CP_IMAGE = "confluentinc/cp-kafka:7.9.0";
+    private static final String OLDEST_PUBLISHED_IMAGE = "3.7.0";
 
-    static String deriveCpKafkaImage() {
+    private static final Pattern RELEASE_VERSION = Pattern.compile("\\d+\\.\\d+\\.\\d+");
+
+    /**
+     * Derives the broker image from the Apache Kafka client version, so the broker under test matches
+     * the client. The CI matrix overrides {@code kafka.version} via {@code -Dkafka.version=X.Y.Z}, so
+     * we read it at runtime from the client jar rather than from the build.
+     */
+    static String deriveKafkaImage() {
         String akVersion = org.apache.kafka.common.utils.AppInfoParser.getVersion();
         log.info("Kafka client version detected: {}", akVersion);
+        String image = imageForClientVersion(akVersion);
+        log.info("Using Kafka broker image: {} (derived from AK {})", image, akVersion);
+        return image;
+    }
 
-        try {
-            // Strip pre-release suffixes (e.g. "4.0.0-SNAPSHOT" -> "4.0.0")
-            String cleanVersion = akVersion.split("-")[0];
-            String[] parts = cleanVersion.split("\\.");
-            int akMajor = Integer.parseInt(parts[0]);
-            int akMinor = Integer.parseInt(parts[1]);
+    /**
+     * The whole mapping: <b>the image tag IS the Kafka version</b>. The Confluent Platform images
+     * this replaced needed a translation - CP major = AK major + 4, so AK 3.9 meant {@code cp-kafka:7.9} -
+     * and that translation is gone rather than reimplemented. It also forced the patch to {@code .0},
+     * because CP patch numbering is its own; {@code apache/kafka} publishes one image per Kafka release,
+     * so the exact client patch version is now testable.
+     *
+     * @param akVersion the Apache Kafka client version, possibly with a pre-release suffix
+     * @return the broker image to run, or {@link #FALLBACK_IMAGE} if the version is not a release version
+     */
+    static String imageForClientVersion(String akVersion) {
+        // Strip pre-release suffixes (e.g. "4.0.0-SNAPSHOT" -> "4.0.0")
+        String tag = StringUtils.defaultString(akVersion).split("-")[0];
 
-            // CP major = AK major + 4, CP minor = AK minor
-            int cpMajor = akMajor + 4;
-            int cpMinor = akMinor;
-
-            String cpImage = "confluentinc/cp-kafka:" + cpMajor + "." + cpMinor + ".0";
-            log.info("Using CP Kafka image: {} (derived from AK {})", cpImage, akVersion);
-            return cpImage;
-        } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
-            log.warn("Could not parse Kafka version '{}', falling back to {}", akVersion, FALLBACK_CP_IMAGE, e);
-            return FALLBACK_CP_IMAGE;
+        if (!RELEASE_VERSION.matcher(tag).matches()) {
+            log.warn("Could not parse Kafka version '{}', falling back to {}", akVersion, FALLBACK_IMAGE);
+            return FALLBACK_IMAGE;
         }
+        if (isOlderThanOldestPublishedImage(tag)) {
+            log.warn("Kafka {} predates the first published apache/kafka image ({}), falling back to {}. " +
+                            "The broker will NOT match the client - treat any version-sensitive result with suspicion.",
+                    tag, OLDEST_PUBLISHED_IMAGE, FALLBACK_IMAGE);
+            return FALLBACK_IMAGE;
+        }
+        return "apache/kafka:" + tag;
+    }
+
+    private static boolean isOlderThanOldestPublishedImage(String tag) {
+        String[] candidate = tag.split("\\.");
+        String[] floor = OLDEST_PUBLISHED_IMAGE.split("\\.");
+        for (int i = 0; i < floor.length; i++) {
+            int difference = Integer.parseInt(candidate[i]) - Integer.parseInt(floor[i]);
+            if (difference != 0) {
+                return difference < 0;
+            }
+        }
+        return false;
     }
 
     public static KafkaContainer createKafkaContainer(String logSegmentSize) {
-        KafkaContainer base = new KafkaContainer(DockerImageName.parse(deriveCpKafkaImage()))
-                .withEnv("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1") //transaction.state.log.replication.factor
-                .withEnv("KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "1") //transaction.state.log.min.isr
+        // The container already defaults transaction.state.log replication factor and min ISR to 1, and
+        // group.initial.rebalance.delay.ms to 0. Only settings it does NOT cover are set here - and the
+        // rebalance delay is pinned to the value the Confluent image was configured with, so that moving
+        // image does not also silently retune consumer-group formation.
+        KafkaContainer base = new KafkaContainer(DockerImageName.parse(deriveKafkaImage()))
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS", "1") //transaction.state.log.num.partitions
                 //todo need to customise this for this test
                 // default produce batch size is - must be at least higher than it: 16KB
                 // try to speed up initial consumer group formation
-                .withEnv("KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS", "500") // group.initial.rebalance.delay.ms default: 3000
+                .withEnv("KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS", "500") // group.initial.rebalance.delay.ms
                 .withReuse(true);
 
         if (StringUtils.isNotBlank(logSegmentSize)) {
@@ -120,6 +156,12 @@ public abstract class BrokerIntegrationTest<K, V> {
 
         return base;
     }
+
+    /**
+     * https://www.testcontainers.org/test_framework_integration/manual_lifecycle_control/#singleton-containers
+     * https://github.com/testcontainers/testcontainers-java/pull/1781
+     */
+    public static KafkaContainer kafkaContainer = createKafkaContainer(null);
 
     static {
         kafkaContainer.start();

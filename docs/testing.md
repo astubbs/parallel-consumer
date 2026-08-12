@@ -10,11 +10,17 @@ you have read this file.
 - **Unit tests**: surefire, sources in `src/test/java/`. Run with `bin/ci-unit-test.sh` (no Docker
   needed).
 - **Integration tests**: failsafe (`mvn verify`), sources in `src/test-integration/java/`. Uses
-  TestContainers with the `confluentinc/cp-kafka` Docker image. Run with
-  `bin/ci-integration-test.sh`.
+  TestContainers with the official `apache/kafka` Docker image (KRaft, no ZooKeeper), via
+  `org.testcontainers.kafka.KafkaContainer`. Run with `bin/ci-integration-test.sh`.
 - **Exclusion patterns**: `**/integrationTest*/**/*.java` and `**/*IT.java` are excluded from
   surefire and included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
+  The broker follows automatically: `BrokerIntegrationTest` reads the client version off the
+  classpath at runtime and pulls the image of the same name, so **there is no version mapping to
+  keep in step** - the tag *is* the Kafka version. Images exist from 3.7.0 onwards; an older client
+  falls back to a pinned image and says so loudly, because the pairing it claims to test no longer
+  holds. `BrokerImageTest` asserts against the container that actually started, so an image change
+  that failed to take effect cannot pass as one that worked.
 
 ## The ambient probe: contention artifact, or genuine bug?
 
@@ -108,3 +114,10 @@ extend them. Duplicating an existing helper is how bugs get reintroduced - a cop
 logic once drifted to a 1-second timeout and became a flaky-CI source (see
 [`docs/solutions/test-issues/`](solutions/test-issues/)). When you must add a helper, put it in the
 shared util, not the test.
+
+`KafkaClientUtils#createTopic` in particular carries a readiness contract you would have to
+rediscover: it returns only once every partition can serve a leader-only request, because a topic the
+broker has *accepted* is not yet a topic you can *produce to*, and producing into that window expires
+an idempotent producer two minutes later under an unrelated error code. The write-up, with the control
+arm and the weaker check that was not enough, is
+[`docs/solutions/test-flakiness/topic-created-is-not-topic-writable-kraft-2026-08-12.md`](solutions/test-flakiness/topic-created-is-not-topic-writable-kraft-2026-08-12.md).

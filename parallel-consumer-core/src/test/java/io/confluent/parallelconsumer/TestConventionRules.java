@@ -44,7 +44,11 @@ public class TestConventionRules {
             noClasses()
                     .that().resideOutsideOfPackages("..integrationTest..", "..integrationTests..")
                     .should().beAssignableTo("io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest")
-                    .orShould().dependOnClassesThat().resideInAnyPackage("org.testcontainers.containers..", "org.testcontainers.junit..")
+                    // org.testcontainers.kafka is where the modern module-specific containers live
+                    // (KafkaContainer for apache/kafka, ConfluentKafkaContainer for the vendor images);
+                    // org.testcontainers.containers holds GenericContainer and the deprecated originals.
+                    // Both need naming, or a test can reach Docker from the unit suite through the new package.
+                    .orShould().dependOnClassesThat().resideInAnyPackage("org.testcontainers.containers..", "org.testcontainers.kafka..", "org.testcontainers.junit..")
                     .because("integration tests (extend BrokerIntegrationTest or use Testcontainers) must live in "
                             + "an 'integrationTest' package so failsafe runs them (with Docker), not surefire");
 

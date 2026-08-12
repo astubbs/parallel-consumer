@@ -18,19 +18,24 @@ import one.util.streamex.IntStreamEx;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.IsolationLevel;
+import org.apache.kafka.common.TopicCollection;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.testcontainers.containers.KafkaContainer;
+import org.testcontainers.kafka.KafkaContainer;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -41,11 +46,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.NOT_TRANSACTIONAL;
 import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.TRANSACTIONAL;
+import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static java.util.Optional.empty;
 import static org.apache.commons.lang3.RandomUtils.nextInt;
@@ -337,7 +344,66 @@ public class KafkaClientUtils implements AutoCloseable {
             }
             // topic already exists — idempotent create, fine
         }
+        awaitPartitionLeaders(newTopics.stream().map(NewTopic::name).collect(Collectors.toList()));
         return result;
+    }
+
+    /**
+     * Blocks until every partition of every named topic has an elected leader.
+     * <p>
+     * <b>Topic creation completing does not mean the topic is writable.</b> {@code createTopics(..).all()}
+     * resolves when the controller has accepted the topic; electing a leader per partition, and making that
+     * leadership known to the broker serving produce requests, happens afterwards. Produce into that window
+     * and the broker answers {@code NOT_LEADER_OR_FOLLOWER} - which is retriable, so it looks harmless.
+     * <p>
+     * It is not harmless for an <b>idempotent</b> producer, which every test here uses by default. The
+     * rejected in-flight batches come back out of order, the producer's sequence numbers desynchronise from
+     * the broker's, and it spins on {@code OUT_OF_ORDER_SEQUENCE_NUMBER} until {@code delivery.timeout.ms}
+     * expires - surfacing two minutes later as {@code TimeoutException: Expiring N record(s)}, with the real
+     * cause scrolled far off the top of the log.
+     * <p>
+     * The window is wider under KRaft than it was under ZooKeeper, which is how this arrived with the move to
+     * the {@code apache/kafka} image - but nothing about the race was ever ZooKeeper-specific, and closing it
+     * here removes it for every broker. Fixed in the shared helper, not in the tests that happened to lose
+     * the race, because any test creating a topic and producing to it can lose it.
+     * <p>
+     * Measurements, the control arm, and the traps this failure sets:
+     * {@code docs/solutions/test-flakiness/topic-created-is-not-topic-writable-kraft-2026-08-12.md}.
+     */
+    private void awaitPartitionLeaders(List<String> topicNames) {
+        Awaitility.await("partition leaders serving for " + topicNames)
+                .atMost(ofSeconds(TOPIC_CREATE_TIMEOUT_SECONDS))
+                .pollInterval(ofMillis(50))
+                .pollDelay(Duration.ZERO)
+                .until(() -> everyPartitionServesALeaderOnlyRequest(topicNames));
+    }
+
+    /**
+     * Asks each partition for its end offset - a request only its leader can answer - rather than asking the
+     * cluster who the leader is.
+     * <p>
+     * <b>Metadata naming a leader is not the same as that leader serving.</b> The broker learns the assignment
+     * from the metadata log and can report it through {@code describeTopics} before it has finished
+     * transitioning the local replica into the leader role, so a describe-only check still leaves a window
+     * open - measured, not assumed: it cut the trigger from 25 occurrences per suite run to 2, not to zero.
+     * Serving a leader-only request is the property the producer actually needs, so that is what is asserted.
+     */
+    private boolean everyPartitionServesALeaderOnlyRequest(List<String> topicNames) throws Exception {
+        var partitions = getAdmin()
+                .describeTopics(TopicCollection.ofTopicNames(topicNames))
+                .allTopicNames().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .values().stream()
+                .flatMap(topic -> topic.partitions().stream()
+                        .map(partition -> new TopicPartition(topic.name(), partition.partition())))
+                .collect(Collectors.toMap(tp -> tp, tp -> OffsetSpec.latest()));
+
+        try {
+            getAdmin().listOffsets(partitions).all().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            return true;
+        } catch (ExecutionException notReadyYet) {
+            log.debug("Partitions of {} not yet serving as leader, retrying", topicNames, notReadyYet);
+            return false;
+        }
     }
 
     public List<String> produceMessages(String topicName, long numberToSend) throws InterruptedException, ExecutionException {
