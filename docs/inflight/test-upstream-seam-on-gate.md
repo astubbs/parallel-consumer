@@ -35,17 +35,37 @@ Two things in that table are new.
 Before this run the module's entire seam-on evidence was one class out of four, and this is the first
 positive evidence the U11 gate has ever had to work with.
 
-**`StreamThreadTest` has 37 seam-on failures and nobody has ever looked at them.** That is a *larger*
-gap than `StreamTaskTest`'s 30, which is the one every document discusses. `StreamThread` was added to
-the patched set with wake-on-work; its seam-off arm was added at the same time, but its seam-on arm never
-was. At least some of the 37 are the EOS refusal firing correctly - `UnsupportedOperationException` from
-`PcUnsupportedConstruct` is the mechanism working, not a defect - but the split has not been done.
+**`StreamThreadTest`'s 37 had never been looked at - and once triaged, only 11 are divergence.**
+`StreamThread` joined the patched set with wake-on-work and got a seam-off arm at the same time; its
+seam-on arm never existed. The split:
+
+| Bucket | Count | What it is |
+|---|---|---|
+| EOS refusal | **25** | `PcSupportedEnvelope.checkTask` throwing on `processing.guarantee`. The envelope working, not a divergence. Pile E, out of scope by KTD7. |
+| Known flake | **1** | `shouldLogAndRecordSkippedRecordsForInvalidTimestamps[3]` - the ~2-in-5 flake the handover already names. |
+| **Real divergence** | **11** | Five distinct cases, below. |
+
+An earlier revision of this file called it "a larger gap than `StreamTaskTest`'s 30". That was written
+before the triage and is wrong: 11 is smaller. The raw count was 60% envelope.
+
+### The five cases
+
+| Case | Symptom | First guess at owner |
+|---|---|---|
+| `shouldReinitializeRevivedTasksInAnyState` [1][2][3] | `Expected TaskCorruptedException to be thrown, but nothing was thrown` | **U10** - `revive()` is already one of the PR review threads mapped to it |
+| `shouldRecoverFromInvalidOffsetExceptionOnRestoreAndFinishRestore` [1][2][3] | `Assertion failed with an exception after 15000 ms` - a timeout, not a wrong value | Restore path; unowned |
+| `shouldRespectNumIterationsInMainLoopWithoutProcessingThreads` [1][2] | `AssertionError` on the main loop's iteration count | Wake-on-work changed what an iteration is |
+| `shouldRespectPollTimeInPartitionsAssignedStateWithStateUpdater` [2][3] | `expected: <true> but was: <false>` | Wake-on-work changed poll timing |
+| `shouldLogAndRecordSkippedMetricForDeserializationException` [3] | `AssertionError` | Unowned |
+
+Two of the five point at wake-on-work, which is a branch that has never been measured this way, and one
+points at `revive()`, which U10 already owns from a different direction.
 
 ## What this owes
 
-1. **Triage `StreamThreadTest`'s 37.** Same three piles as the `StreamTaskTest` triage: plumbing, PC's
-   home turf, semantics. Separate the EOS-refusal errors first - those are the envelope working and
-   should not be counted as divergence.
+1. **Classify the five cases above into the plan's piles** - plumbing, PC's home turf, semantics - and
+   assign each to a unit or record it as deferred with a reason. The counting is done; the ownership is
+   not. Two of them belong with wake-on-work, which has no seam-on measurement of its own.
 2. **Re-derive `StreamTaskTest`'s number wherever it is quoted.** This run says 30 failing. Documents in
    this repo variously say 33, 36 and "65/101". The counts move with the branch; the habit of copying
    them is what makes them wrong.
