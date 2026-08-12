@@ -9,3 +9,29 @@
 self-hosted-runner:
   labels:
     - highcpu
+
+# actionlint type-checks action outputs against a metadata snapshot BAKED INTO THE BINARY, not
+# against the action it is linting. Its snapshot of `anthropics/claude-code-action` predates the
+# `conclusion` output, so it reports
+#
+#   property "conclusion" is not defined in object type {branch_name; execution_file;
+#   github_token; session_id; structured_output}
+#
+# for a property the action does declare - `outputs.conclusion`, "Execution status of Claude Code
+# ('success' or 'failure')", present at the pinned v1 (SHA 5ef2e55) and read by
+# claude-code-review-dispatch.yml to tell a review that ran from one that silently did not.
+#
+# This is scoped to that one message in the two files that read the output ON PURPOSE. A blanket
+# ignore, or an ignore on the whole expression rule, would hide real typos in output names - the
+# exact class of bug this rule is worth having for. If a future actionlint release learns the
+# output, DELETE THIS: a suppression outliving its cause is how the next false positive gets
+# waved through.
+paths:
+  .github/workflows/claude-code-review-dispatch.yml:
+    ignore:
+      - 'property "conclusion" is not defined in object type'
+  # Same false positive, same reason: the comment route's `refresh-gate` gates on the action's
+  # own conclusion rather than the step's outcome, for the reason given in that file.
+  .github/workflows/claude.yml:
+    ignore:
+      - 'property "conclusion" is not defined in object type'

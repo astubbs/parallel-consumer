@@ -25,5 +25,4 @@ fi
   -Pci \
   clean verify \
   ${KAFKA_VERSION_ARG:+"$KAFKA_VERSION_ARG"} \
-  -Dexcluded.groups=performance,chaos,quarantined \
-  -Dsurefire.rerunFailingTestsCount=2
+  -Dexcluded.groups=performance,chaos,quarantined

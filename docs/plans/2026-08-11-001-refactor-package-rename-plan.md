@@ -1,10 +1,15 @@
 # Package rename: `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`
 
-**Status:** **decision open, nothing performed.** This document records a go/no-go and the evidence
-behind it. No rename has been executed on any branch; the one measurement that required actually
-doing it was run in a throwaway clone and thrown away with it.
+**Status:** **decided go, and executed - the rename landed on master in astubbs#294**, carried out by
+the re-runnable `bin/rename-packages.sh` rather than by hand, for the merge reason set out in §4.6.
+Everything below is the *pre-execution* record: the go/no-go, the evidence behind it, and the survey of
+what would have to move. Read it as what was known on 2026-08-11, not as an open task list - the
+inventory in §5 has since been worked, and `bin/rename-packages.sh --verify-only` is now the authority
+on what is left rather than any checkbox here. The one measurement that required actually performing
+the rename was run in a throwaway clone and thrown away with it; the real run confirmed it.
 **Written:** 2026-08-11
-**Expires:** when `0.6.0.0` ships. After that the decision is made by default, and made the expensive way.
+**Expires:** expired on execution. Kept because the licence analysis (§2), the wire-format finding
+(§4.1) and the traps in §5 are the reasoning behind the tool, not a plan anyone still has to follow.
 **Ledger entry:** [`docs/inflight/branch-package-rename.md`](../inflight/branch-package-rename.md)
 **Release gate:** [`docs/inflight/release-0600-blockers.md`](../inflight/release-0600-blockers.md)
 **Prior art:** none. `docs/plans/`, `docs/solutions/`, `docs/inflight/`,

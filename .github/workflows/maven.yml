@@ -147,7 +147,7 @@ jobs:
   # claims are real, actionable errors that turn it red. It does NOT run any tests (that is
   # the Quarantine Lane workflow: every PR push + every merge to master + dispatch) so the PR checks list gets its verdict in seconds.
   # Discipline: no quarantine without diagnosis; quarantine is master-state, not PR-state. See the
-  # @Quarantined javadoc (parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/Quarantined.java).
+  # @Quarantined javadoc (parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/Quarantined.java).
   quarantine-audit:
     if: github.event_name == 'pull_request'
     name: "quarantine: audit"
@@ -161,6 +161,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bin/check-quarantine-owners.sh
+
+  # Documentation-data AUDIT: structure only. docs/features/*.yaml and docs/data/*.yaml are
+  # hand-written and a documentation generator reads them, so a malformed file or a missing required
+  # field produces a broken generated page rather than a loud error. This checks that each file
+  # parses, declares its kind, carries what that kind requires, and points at README anchors that
+  # exist. It deliberately does NOT check whether the claims are true - nothing can, and a check that
+  # implied otherwise would be worse than none.
+  docs-data-audit:
+    if: github.event_name == 'pull_request'
+    name: "docs data: audit"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the YAML parser the check needs
+        run: python3 -m pip install --quiet pyyaml
+      # Self-test first, same as the copyright and sigpipe scanners: this guard has twice shipped
+      # green on a failure it was written to catch, so the cases that pin those gaps have to run
+      # where a regression is visible. It mutates the corpus one way at a time and restores it, so
+      # the guard step below still sees an untouched tree.
+      - name: Self-test the guard (each case is a gap it once had)
+        run: bash bin/test-check-docs-data.sh
+      - name: Validate release-documentation data structure
+        run: bin/check-docs-data.sh
 
   # Experimental Kafka 4.x compatibility check. Non-blocking.
   # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds

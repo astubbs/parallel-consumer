@@ -1,0 +1,19 @@
+package bz.stub.parallelconsumer.internal.utils;
+
+/*-
+ * Copyright (C) 2020-2021 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import lombok.experimental.UtilityClass;
+import org.assertj.core.presentation.StandardRepresentation;
+
+@UtilityClass
+public class StringTestUtils {
+
+    public static final StandardRepresentation STANDARD_REPRESENTATION = new StandardRepresentation();
+
+    public static String pretty(Object properties) {
+        return STANDARD_REPRESENTATION.toStringOf(properties);
+    }
+}

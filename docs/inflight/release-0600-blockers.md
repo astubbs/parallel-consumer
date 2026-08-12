@@ -5,21 +5,33 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 
 ## Still open
 
-- **The package rename `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*` must land
-  before 0.6.0.0 ships.** Decided: it goes ahead in v6. Nothing is published under the fork's groupId
-  yet, so today it costs downstream users nothing; the moment v6 is on Central it costs every adopter
-  a second migration, and there is no third moment. The evidence, the Apache 2.0 analysis and the
-  task inventory are in
+- **The package rename landed, so what is left is keeping the release notes honest about it.**
+  `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*` went in with astubbs#294, and the
+  README and the `== 0.6.0.0` changelog section now both describe a namespace that exists - the docs
+  are no longer ahead of the code. The release-day risk is regeneration: that changelog section is
+  rebuilt from the commit log when the tag is cut, and generation reads commits, so it will not notice
+  that it has dropped a claim the current text makes. After regenerating, confirm the opening
+  paragraph and the `=== Breaking` bullet still name **both** changes - the Maven `groupId` and the
+  Java packages every import names - rather than reverting to "the only required change is the Maven
+  groupId". Reasoning, Apache 2.0 analysis and task inventory:
   [`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`](../plans/2026-08-11-001-refactor-package-rename-plan.md);
-  the cross-branch note is [`branch-package-rename.md`](branch-package-rename.md).
-  **The README already describes the new namespace**, so it is now ahead of the code: if the rename
-  slips out of v6 the `== Upgrading` section and the drop-in paragraph have to be reverted in the
-  same breath, or we publish an artefact that documents imports nobody can use. Two passages in the
-  `== 0.6.0.0` changelog section still assert the packages are unchanged - the opening "only required
-  change is the Maven groupId" paragraph, and the `=== Breaking` bullet's "the library API is
-  otherwise unchanged from upstream" - and must be corrected at release-note generation, which reads
-  commits and will not notice a stale claim. And the real work is the copyright-provenance model, not
-  the rename itself.
+  the project entry is [`branch-package-rename.md`](branch-package-rename.md).
+- **Recheck the documentation data before the tag, and again after the critical fixes land.** The
+  published claim is now "every known **critical** defect resolved and evidenced", not "all known
+  defects" - the earlier wording was a promise the project cannot keep. Nothing verifies that claim
+  automatically; `bin/check-docs-data.sh` checks structure only, on purpose. So at release:
+  - Confirm no known critical defect is open in scope. The `confluentinc#857` deadlock is the live
+    one, and a module cannot honestly be described as fit for production use while a known defect can
+    lock up a consumer. If it is still open, amend the claim rather than the standard.
+  - Move the staged content up as its modules land: the Streams and Connect rows in
+    `docs/data/staging/module-maturity-rows.yaml`, and the record in `docs/features/staging/`. Each
+    move belongs to the PR that lands the thing, not to a later sweep - astubbs#271 for Streams,
+    astubbs#269 for Connect, both open and neither touching the data yet.
+  - **A third module has no row at all.** astubbs#268 adds `parallel-consumer-dashboard`, which is
+    also the 1.0 gate the roadmap calls a running-instance view. It needs a staged row and a feature
+    record before it lands, or it ships undocumented.
+  - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
+    replacement, `production-use`, is only as good as the critical-defect gate holding.
 - **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
   two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
   fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when
@@ -35,7 +47,7 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   is whatever `pom.xml` says - now `3.9.2`. **Fixed in astubbs#272**, which moved that text into
   `docs/ci.md` and dropped the version entirely, so it names no number that can go stale again.
   The other two are `bin/ci-build.sh 3.9.1` command examples - one in `AGENTS.md` under *How to
-  Build*, and `src/docs/README_TEMPLATE.adoc:1133`, which does reach the published `README.adoc`. Being
+  Build*, and the `bin/ci-build.sh 3.9.1` line in `src/docs/README_TEMPLATE.adoc`, which does reach the published `README.adoc`. Being
   inside a published artefact does not make that one an error: it demonstrates that the script *takes*
   a version argument and asserts nothing about which version CI defaults to, so it stays correct
   whatever the pom says. Do not "fix" either of them.
