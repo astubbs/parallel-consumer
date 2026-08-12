@@ -573,7 +573,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
      * exception type.</b> What a user reports is "it stopped after a while"; a change that swapped one exception for
      * another would still be that bug, and this test would still fail, which is the point.
      *
-     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/252">#252 - the same defect class in
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/252">astubbs#252 - the same defect class in
      *         PartitionStateManager, where a plain HashMap of partition state was streamed while another thread
      *         mutated it. Fixed there by making the collection concurrent; this field was missed.</a>
      */
