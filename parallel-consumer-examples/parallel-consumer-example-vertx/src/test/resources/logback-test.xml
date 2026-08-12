@@ -1,6 +1,7 @@
 <!--
 
     Copyright (C) 2020-2021 Confluent, Inc.
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <configuration packagingData="true" scan="true" scanPeriod="5 seconds">
@@ -18,8 +19,8 @@
 
 
     <!-- containers -->
-    <logger name="io.confluent.parallelconsumer.integrationTests.DbTest" level="debug"/>
-    <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="debug"/>
+    <logger name="bz.stub.parallelconsumer.integrationTests.DbTest" level="debug"/>
+    <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="debug"/>
 
     <!-- related -->
     <logger name="org.apache.kafka.clients" level="warn"/>
