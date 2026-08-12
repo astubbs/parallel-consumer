@@ -4,6 +4,11 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ChaosScenarios;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.MembershipAction;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioTick;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.SeededPlanSource;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -11,10 +16,14 @@ import java.util.List;
 import static com.google.common.truth.Truth.assertThat;
 
 /**
- * Seed-determinism regression for {@link ChaosConductor}: same seed must produce the same COMPLETE
- * draw sequence - tick, bias roll, action AND target roll - through the real draw path
- * ({@code ChaosConductor.drawTick}, the exact function the live loop consumes each tick), which is the
+ * Seed-determinism regression for the conductor's plan: same seed must produce the same COMPLETE draw
+ * sequence - tick, bias roll, action AND target roll - through the real draw path
+ * ({@link SeededPlanSource#drawTick}, the exact function the live loop consumes each tick), which is the
  * replayability contract of {@code -Dchaos.seed}. Different seeds must diverge.
+ * <p>
+ * Self-consistency only: this test says the stream is stable WITHIN a build. That the stream is the same
+ * one recorded seeds were drawn from ACROSS builds is guarded by the golden values in
+ * {@code scenario.PlanSourceSeedStabilityTest}, captured from the pre-generalisation implementation.
  * <p>
  * Pure function, no broker - and deliberately NOT tagged {@code chaos}: this test gates every default
  * integration build, guarding the contract the on-demand chaos runs rely on.
@@ -26,25 +35,25 @@ class ChaosConductorPlanIT {
 
     @Test
     void sameSeedDrawsIdenticalSequence() {
-        var weights = ChaosConductor.defaultW1Weights();
-        List<ChaosConductor.TickDraws> planA = ChaosConductor.planTicks(42L, 200, MIN_TICK, MAX_TICK, weights);
-        List<ChaosConductor.TickDraws> planB = ChaosConductor.planTicks(42L, 200, MIN_TICK, MAX_TICK, weights);
+        var weights = ChaosScenarios.w1Weights();
+        List<ScenarioTick> planA = SeededPlanSource.plan(42L, 200, MIN_TICK, MAX_TICK, weights);
+        List<ScenarioTick> planB = SeededPlanSource.plan(42L, 200, MIN_TICK, MAX_TICK, weights);
         assertThat(planA).isEqualTo(planB);
     }
 
     @Test
     void differentSeedsDiverge() {
-        var weights = ChaosConductor.defaultW1Weights();
-        List<ChaosConductor.TickDraws> planA = ChaosConductor.planTicks(42L, 200, MIN_TICK, MAX_TICK, weights);
-        List<ChaosConductor.TickDraws> planB = ChaosConductor.planTicks(43L, 200, MIN_TICK, MAX_TICK, weights);
+        var weights = ChaosScenarios.w1Weights();
+        List<ScenarioTick> planA = SeededPlanSource.plan(42L, 200, MIN_TICK, MAX_TICK, weights);
+        List<ScenarioTick> planB = SeededPlanSource.plan(43L, 200, MIN_TICK, MAX_TICK, weights);
         assertThat(planA).isNotEqualTo(planB);
     }
 
     @Test
     void w4SameSeedDrawsIdenticalSequence() {
-        var weights = ChaosConductor.defaultW4Weights();
-        List<ChaosConductor.TickDraws> planA = ChaosConductor.planTicks(42L, 200, MIN_TICK, MAX_TICK, weights);
-        List<ChaosConductor.TickDraws> planB = ChaosConductor.planTicks(42L, 200, MIN_TICK, MAX_TICK, weights);
+        var weights = ChaosScenarios.w4Weights();
+        List<ScenarioTick> planA = SeededPlanSource.plan(42L, 200, MIN_TICK, MAX_TICK, weights);
+        List<ScenarioTick> planB = SeededPlanSource.plan(42L, 200, MIN_TICK, MAX_TICK, weights);
         assertThat(planA).isEqualTo(planB);
     }
 
@@ -54,11 +63,11 @@ class ChaosConductorPlanIT {
      */
     @Test
     void w4NeverPlansStopDrain() {
-        var weights = ChaosConductor.defaultW4Weights();
+        var weights = ChaosScenarios.w4Weights();
         for (long seed = 0; seed < 10; seed++) {
-            List<ChaosConductor.ChaosAction> actions = ChaosConductor.planTicks(seed, 500, MIN_TICK, MAX_TICK, weights)
-                    .stream().map(ChaosConductor.TickDraws::getAction).collect(java.util.stream.Collectors.toList());
-            assertThat(actions).doesNotContain(ChaosConductor.ChaosAction.STOP_DRAIN);
+            List<ScenarioAction> actions = SeededPlanSource.plan(seed, 500, MIN_TICK, MAX_TICK, weights)
+                    .stream().map(ScenarioTick::getAction).collect(java.util.stream.Collectors.toList());
+            assertThat(actions).doesNotContain(MembershipAction.STOP_DRAIN);
         }
     }
 }

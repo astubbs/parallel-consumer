@@ -214,7 +214,13 @@ bin/ci-integration-test.sh   # integration tests only (requires Docker)
 bin/ci-build.sh              # full CI build, Kafka version matrix (push-to-master CI)
 bin/ci-build.sh 3.9.1        # full CI build against one Kafka version
 bin/performance-test.sh      # performance tests (substantial hardware)
+bin/dashboard-demo.sh        # the embedded web dashboard, live, against a misbehaving workload
 ```
+
+`bin/dashboard-demo.sh` needs Docker, opens a browser on the URL and loops until Ctrl-C. `--once` runs
+a single sweep, opens nothing, and exits non-zero if a scenario phase failed to produce what it
+declared. Maven runs only when the compiled output is out of date; `--rebuild` forces it, `--no-open`
+suppresses the browser.
 
 ## Module Structure
 
@@ -224,6 +230,7 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 | `parallel-consumer-vertx` | Vert.x integration for async HTTP |
 | `parallel-consumer-reactor` | Project Reactor integration |
 | `parallel-consumer-mutiny` | SmallRye Mutiny integration (Quarkus) |
+| `parallel-consumer-dashboard` | Embedded read-only web dashboard - opt-in, experimental, off until started |
 | `parallel-consumer-examples` | Example implementations for each module |
 
 ## Key Architecture Decisions

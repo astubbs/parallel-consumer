@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
@@ -120,12 +121,15 @@ public class ManagedPCInstance implements Runnable {
             }
             KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
 
-            this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
+            var pcOptions = ParallelConsumerOptions.<String, String>builder()
                     .ordering(config.order)
                     .consumer(newConsumer)
                     .commitMode(config.commitMode)
-                    .maxConcurrency(config.maxConcurrency)
-                    .build());
+                    .maxConcurrency(config.maxConcurrency);
+            if (config.meterRegistry != null) {
+                pcOptions.meterRegistry(config.meterRegistry);
+            }
+            this.parallelConsumer = new ParallelEoSStreamProcessor<>(pcOptions.build());
 
             this.parallelConsumer.setTimeBetweenCommits(Duration.ofSeconds(1));
             this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));
@@ -254,5 +258,12 @@ public class ManagedPCInstance implements Runnable {
         @Builder.Default private final boolean useCooperativeAssignor = false;
         /** Scenario-specific consumer property overrides, applied last (e.g. a low max.poll.interval.ms). */
         private final Properties extraConsumerProps;
+        /**
+         * Where this instance publishes its Micrometer meters, or null for PC's no-op default. Needed by
+         * anything that reads state THROUGH the meters rather than from PC internals - the dashboard's
+         * snapshot sampler is the reason this exists. A fresh PC is built on every {@link #run()}, so a
+         * restart re-registers the same registry rather than losing instrumentation.
+         */
+        private final MeterRegistry meterRegistry;
     }
 }

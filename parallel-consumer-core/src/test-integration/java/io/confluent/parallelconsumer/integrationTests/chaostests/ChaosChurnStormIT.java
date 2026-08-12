@@ -6,6 +6,7 @@ package io.confluent.parallelconsumer.integrationTests.chaostests;
 
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ChaosScenarios;
 import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
@@ -100,11 +101,11 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         Set<String> expectedKeys = fleet.getExpectedKeys();
         ProgressProbe probe = fleet.getProbe();
 
+        // chaos SHAPE (weights, tick range, join-after-drain bias) is declared in ChaosScenarios.churnStorm()
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
                 .seed(seed)
-                .minTick(Duration.ofMillis(500))
-                .maxTick(Duration.ofMillis(1500))
-                .joinAfterDrainBias(0.9)
+                .replayCommand(replayCmd)
+                .scenario(ChaosScenarios.churnStorm())
                 .build();
 
         startRun(probe, conductor);

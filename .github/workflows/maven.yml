@@ -237,7 +237,7 @@ jobs:
       - uses: astubbs/duplicate-code-cross-check@d3140ef6e9a4adf68c9f729a789e8b7ec8d058f7 # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src'
+          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src parallel-consumer-dashboard/src'
           cpd-max-duplication: '5'
           # Absolute cap set to 5% (matching PMD CPD). The repo baseline is already ~4.2% jscpd,
           # so a 4% cap fails on every PR (including the base branch itself) regardless of the change.
@@ -257,7 +257,7 @@ jobs:
       - uses: astubbs/duplicate-code-detection-tool@74adf74b65b6a288b21ba957d7d7bef43831ee65 # master: base-vs-PR comparison + ce-review fixes
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src'
+          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src,parallel-consumer-dashboard/src'
           file_extensions: 'java'
           ignore_below: 30
           fail_above: 80

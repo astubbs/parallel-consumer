@@ -74,7 +74,8 @@ with `bin/quarantined-test.sh`.
 ## Chaos Pain Suite (on-demand bug detector - never gates)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
-`ChaosScenarioBase`, plus scenarios `ChaosChurnStormIT` W1 and `ChaosRevokeUnderWorkIT` W4) that
+`ChaosScenarioBase`, the `scenario` framework, plus scenarios `ChaosChurnStormIT` W1 and
+`ChaosRevokeUnderWorkIT` W4) that
 hunts the "alive but not progressing" bug class: rebalance-dwell zombies, protocol-invisible
 per-partition lag stagnation (Class 2, W4's prey), drain overruns, and record loss or duplication.
 Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
@@ -98,6 +99,31 @@ Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.
 - **A RED run is investigation food, not flake noise.** The probes are calibrated against the real
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
+
+## Scenario framework (`integrationTests.chaostests.scenario`)
+
+The conductor is a general scenario driver, not a chaos-only one. A `Scenario` is an ordered list of
+`ScenarioPhase`s; the phase list is the script, and the draws within a phase come from the seed.
+`ChaosConductor` supplies the fleet control surface (`FleetControl`), `ScenarioRunner` walks the
+phases (`LOOP` repeats until stopped; `ONCE` does one pass and reports any failed phase
+postcondition), and W1/W4 are single-phase scenarios in `ChaosScenarios`. Write a new scenario by
+declaring it - actions (`ScenarioAction`), phases and postconditions - without touching the
+framework; `ExternallyDeclaredScenarioIT` is the worked example.
+
+- **Never change the seeded draw stream.** `SeededPlanSource.drawTick` consumes exactly four draws
+  per tick in a fixed order, and the weight maps' totals and iteration order (`EnumMap` over
+  `MembershipAction`) are part of the contract. Change any of it and every recorded chaos seed
+  silently replays a *different* schedule, voiding the probe calibration - and nothing goes red for
+  it. `PlanSourceSeedStabilityTest` holds golden values captured from the pre-generalisation
+  implementation and is the guard; if it fails, revert the change, do not update the goldens.
+
+## Adding an enum to test code? Compile twice before believing the build
+
+The Truth subject generator scans the *previously compiled* test classes, so a new test-code enum
+cannot break the first `test-compile` - it breaks the second. A private nested enum in a
+package-private test class generates an uncompilable subject, and you will see that only after a
+clean build or on the next run, looking like an unrelated regression. Found 2026-08-07 while
+generalising the chaos conductor; the fix there was to use instances rather than an enum.
 
 ## Reusing test utilities
 

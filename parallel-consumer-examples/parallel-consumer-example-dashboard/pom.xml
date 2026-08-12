@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-examples</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-example-dashboard</artifactId>
+    <name>Kafka Parallel Consumer Example - Dashboard</name>
+
+    <dependencies>
+        <!-- tag::exampleDep[] -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-dashboard</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- end::exampleDep[] -->
+        <!-- Declared explicitly, though the dashboard module already brings it in at compile scope:
+             this example imports the core API directly, and a direct import should not rest on
+             somebody else's transitive dependency. Outside the exampleDep tag because the README
+             documents one module per block. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+    </dependencies>
+
+</project>

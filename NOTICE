@@ -8,3 +8,17 @@ Apache License, Version 2.0.
 
 This fork is maintained independently at:
   https://github.com/astubbs/parallel-consumer
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+The optional parallel-consumer-dashboard module serves the following third-party
+browser asset. It is taken as an ordinary, versioned Maven dependency
+(org.webjars.npm:uplot) and served straight off the classpath; no copy of it is
+committed to this repository.
+
+  uPlot
+  Copyright (c) Leon Sorokin
+  Licensed under the MIT License.
+  https://github.com/leeoniya/uPlot

@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static io.confluent.csid.utils.GeneralTestUtils.time;
@@ -1084,6 +1085,66 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         var sequenceSize = Math.max(total / keySetSize, 1); // if we have more keys than records, then we'll have a sequence size of 1, so round up
         log.debug("Testing...");
         checkExactOrdering(results, records);
+    }
+
+    /**
+     * {@link AbstractParallelEoSStreamProcessor#addLoopEndCallBack(Runnable)} is public API and is called against LIVE
+     * processors - the dashboard's snapshot publisher registers one after the instance is already running. The control
+     * loop iterates the hook list on every pass, so a registration landing during that iteration must not raise a
+     * {@link java.util.ConcurrentModificationException}: the control thread's generic handler treats any exception from
+     * the loop as fatal, records it as the failure reason, closes the instance and rethrows, so a CME here kills the
+     * user's consumer.
+     * <p>
+     * The race is made DETERMINISTIC rather than hammered at: one hook blocks the control thread part-way through the
+     * iteration, a second thread registers while it is blocked, and the hook is then released. Against an
+     * {@code ArrayList} that is a guaranteed CME - {@code ArrayList.forEach} re-checks {@code modCount} after the loop
+     * as well as inside it - so this fails every time on the defect and costs nothing on the fix. A spin-and-hope
+     * version would be both slower and weaker.
+     */
+    @Test
+    @SneakyThrows
+    void loopEndCallBackCanBeRegisteredWhileControlLoopIsRunning() {
+        var insideTheHookIteration = new CountDownLatch(1);
+        var registrationFinished = new CountDownLatch(1);
+        var lateHookRan = new AtomicBoolean();
+        var registrarFailure = new AtomicReference<Throwable>();
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            insideTheHookIteration.countDown();
+            try {
+                // hold the control thread INSIDE the iteration while the other thread registers
+                registrationFinished.await(30, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        parallelConsumer.poll(ignore -> log.trace("Consumed {}", ignore));
+
+        var registrar = new Thread(() -> {
+            try {
+                assertThat(insideTheHookIteration.await(60, java.util.concurrent.TimeUnit.SECONDS))
+                        .as("the control loop must have reached the hook iteration").isTrue();
+                parallelConsumer.addLoopEndCallBack(() -> lateHookRan.set(true));
+            } catch (Throwable t) {
+                registrarFailure.set(t);
+            } finally {
+                registrationFinished.countDown();
+            }
+        }, "loop-hook-registrar");
+        registrar.setDaemon(true);
+        registrar.start();
+        registrar.join(ofSeconds(90).toMillis());
+
+        assertThat(registrarFailure.get()).as("registering from the application thread must not throw").isNull();
+
+        // the loop has to survive the registration and keep running the hooks, including the new one
+        await().untilAsserted(() -> assertThat(lateHookRan.get())
+                .as("a hook registered mid-iteration must run on a subsequent pass")
+                .isTrue());
+
+        // a CME escaping the hook forEach is recorded as the failure reason and rethrown from close
+        assertThatNoException().isThrownBy(() -> parallelConsumer.closeDrainFirst(ofSeconds(30)));
     }
 
 }

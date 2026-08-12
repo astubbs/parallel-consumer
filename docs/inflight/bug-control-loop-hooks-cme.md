@@ -1,0 +1,63 @@
+# `controlLoopHooks` is an unsynchronised `ArrayList` behind a public API - HIGH PRIORITY, v6
+
+**DONE - extracted as astubbs/parallel-consumer#267**, off `master`, labelled `0.6.0.0`, with an
+exposure test that fails without the fix. This branch still has to rebase onto it and drop its own
+copy of the line once that PR merges.
+
+The fix used to exist only as one line on this branch (`feats/web-gui`,
+astubbs/parallel-consumer#215), where it was invisible to everyone else and gated on a large feature
+landing. Every other in-flight branch was exposed to the same defect in the meantime, and the fix was
+worth roughly nothing until it reached `master`.
+
+## The defect
+
+`AbstractParallelEoSStreamProcessor:170` declares `controlLoopHooks` as a plain `ArrayList`. The
+control thread iterates it on **every** pass at `:897` (`this.controlLoopHooks.forEach(Runnable::run)`),
+while `addLoopEndCallBack(Runnable)` at `:1473` is **public, unsynchronised, and callable from any
+thread at any time** - including against an already-running processor.
+
+A registration that interleaves with an iteration throws `ConcurrentModificationException` out of
+`controlLoop`. Nothing near the hook catches it; it lands in the control thread's generic handler at
+`:849-856`, which records it as `failureReason`, calls `doClose(shutdownTimeout)` and rethrows. So the
+outcome is not a logged warning - **the instance shuts down**.
+
+This is pre-existing on `master`, not something the dashboard introduced. What the dashboard did was
+supply the first *production* caller: `SnapshotPublisher.createAndRegister` registers against a live
+processor. Until now every caller was a test that registered during setup, single-threaded, before the
+control loop was running - which is why nothing has ever hit it.
+
+## What the fix PR owes
+
+- **An exposure test that fails on today's `master`.** A registration racing the control loop, driven
+  hard enough to be reliable rather than incidental - and asserting the *observable* outcome (the
+  instance closed / `failureReason` set), not merely that the exception type was thrown. A test that
+  only passes because it happened not to race is the failure mode to avoid here.
+- **The fix:** `CopyOnWriteArrayList`. Registration is rare, iteration is once per control-loop pass,
+  so copy-on-write is the right shape and the read path stays allocation-free.
+- **Javadoc on the field saying why**, since the next reader will otherwise "simplify" it back. The
+  wording on `feats/web-gui` is already good - lift it rather than rewrite it.
+
+## Second-instance check before merging
+
+The defect class is *unsynchronised mutable state reachable from a public API while the control thread
+reads it*. `controlLoopHooks` is the instance we know about; look for siblings on the same class
+before closing this out, and report what was checked and cleared, not only what was found.
+
+**Done, and it found a second live instance.** `WorkManager.successfulWorkListeners` had the same
+shape and is fixed in the same PR. It hid because a Lombok `@Getter(PUBLIC)` handed out the live
+list, so the mutation is spelled `getSuccessfulWorkListeners().add(..)` - searching the field name
+finds the declaration and the iteration but never a write, and it reads as dead code. That getter is
+now a real `addSuccessfulWorkListener(..)` method, so the next such search finds its callers.
+
+Cleared, with reasons: `partitionStates` (already concurrent plus a snapshot - the
+astubbs/parallel-consumer#252 fix); `slowWorkCounters`, `succeededRecordsCounters`,
+`failedRecordsCounters` (never iterated, only point lookups, so no traversal to break);
+`RetryQueue.unique` and `.sorted` (package-private test-only accessors nothing calls);
+`OffsetSimultaneousEncoder.sortedEncodings` (getter never called, encoder built per commit).
+
+## Knock-ons
+
+- **`feats/web-gui` (astubbs/parallel-consumer#215) drops the line** when
+  astubbs/parallel-consumer#267 lands, and rebases onto it.
+- It earns its own `CHANGELOG` line at release time. It is a user-visible stability fix, not an
+  internal tidy-up, and it should not arrive buried inside a dashboard feature entry.
