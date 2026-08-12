@@ -1,17 +1,18 @@
 # astubbs#263 + astubbs#264 - the inactive-test stack
 
-Two stacked PRs. **#264 is based on `chore/audit-inactive-tests`, not `master`** - merge #263 first,
-then #264. `Check PR Dependencies` fails on #264 by design while #263 is open; that is not a defect.
+Two stacked PRs. **astubbs#264 is based on `chore/audit-inactive-tests`, not `master`** - merge
+astubbs#263 first, then astubbs#264. `Check PR Dependencies` fails on astubbs#264 by design while
+astubbs#263 is open; that is not a defect.
 
-Both branches had `master` merged into them on 2026-08-13 (merge commits `f5e72f41` on #263,
-`0e625866` on #264). Both were `DIRTY`/stale before that.
+Both branches had `master` merged into them on 2026-08-13 (merge commits `f5e72f41` on
+astubbs#263, `0e625866` on astubbs#264). Both were `DIRTY`/stale before that.
 
 ## What each PR is
 
-- **#263 `chore/audit-inactive-tests`** - records only. The audit
+- **astubbs#263 `chore/audit-inactive-tests`** - records only. The audit
   (`docs/test-hardening/inactive-tests-audit-2026-08-08.md`), its plan, and two ledger corrections.
   No test behaviour changes.
-- **#264 `test/inactive-test-remediation`** - acts on the audit. The real change is
+- **astubbs#264 `test/inactive-test-remediation`** - acts on the audit. The real change is
   `OffsetEncodingTests`: five `OffsetEncoding` values that `assumeWorkingCodec` was branching around
   now assert the degraded contract (*work is repeated, nothing is lost*). Plus four dead tests
   deleted, the last JUnit 4 usage off the test compile path, and a `PartitionStateManager`
@@ -22,9 +23,9 @@ Both branches had `master` merged into them on 2026-08-13 (merge commits `f5e72f
 `master` rewrote the `AGENTS.md` documentation-map table and renamed `docs/TODO_INDEX.md` →
 `docs/todo-index.md` and `docs/QUARANTINED_TESTS.md` → `docs/quarantined-tests.md`.
 
-- #263 took master's table wholesale and re-inserted one `docs/test-hardening/` row after
+- astubbs#263 took master's table wholesale and re-inserted one `docs/test-hardening/` row after
   `docs/quarantined-tests.md`.
-- #264 inherited that resolution, and its edit to the old uppercase `docs/TODO_INDEX.md` was
+- astubbs#264 inherited that resolution, and its edit to the old uppercase `docs/TODO_INDEX.md` was
   re-sited onto `docs/todo-index.md` (a rename/modify conflict).
 - Stale path references inside both branches' own docs were repaired **address-only**, per
   `docs/citations.md`: a dated record's claims are not rewritten, but a reference that no longer
@@ -46,7 +47,7 @@ Both branches had `master` merged into them on 2026-08-13 (merge commits `f5e72f
 - **Local Java verification after the merge was not completed.** The merge, the four repo gates
   (`todo-index --check`, copyright, docs-data, quarantine registry) and a conflict-marker sweep all
   passed; the core unit suite was **not** re-run locally afterwards. CI on the pushed head covers it.
-- **Undecided: the plan documents.** #263 and #264 together add ~2,400 lines of markdown against
-  ~150 lines of added Java. Two of those files are plan documents totalling ~1,210 lines
-  (`docs/plans/2026-08-08-001-*` and `-002-*`). `AGENTS.md` says a plan goes stale once its work
-  lands. Whether they ship with the code or are cut before merge is an open call.
+- **Undecided: the plan documents.** astubbs#263 and astubbs#264 together add ~2,400 lines of
+  markdown against ~150 lines of added Java. Two of those files are plan documents totalling ~1,210
+  lines (`docs/plans/2026-08-08-001-*` and `-002-*`). `AGENTS.md` says a plan goes stale once its
+  work lands. Whether they ship with the code or are cut before merge is an open call.
