@@ -218,7 +218,8 @@ run's log, e.g. run
 checkout --force -B master refs/remotes/origin/master` in "Checkout repository", then `Switched to a
 new branch 'ci/ossindex-audit-job'` inside "Run Claude Code". So a `bin/` script run here is the
 PR's. What does **not** come from the PR is the workflow file, and therefore the allowlist - see
-"Editing the reviewer".
+"Editing the reviewer". Both routes grant `git rev-parse` so a reviewer can settle which tree it is
+standing in by looking, rather than inferring it from the workflow and getting it backwards.
 
 **On a fork PR this route answers but does not run anything** - and "answers" needs one
 qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put
