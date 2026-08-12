@@ -85,7 +85,16 @@ public class ManagedPCInstance implements Runnable {
      * Set by a stop, cleared by a start. A {@code run()} still queued from an earlier start reads it
      * after the close-wait loop and aborts, rather than bringing up a PC the conductor believes is
      * stopped and will therefore never close.
+     * <p>
+     * This is the logical negation of {@link #started} at every write site except a rejected
+     * submission's rollback - harmless there, because no {@code run()} is in flight to abort. It is
+     * kept as its own field deliberately: {@code run()}'s abort then reads as a positive
+     * ("a stop happened") rather than a double negative, and the two names keep the toggle protocol
+     * and the queued-start abort separable. Do not "simplify" it away by folding it into
+     * {@code started} - getting that polarity backwards silently restores the double-submission race
+     * this class exists to prevent.
      */
+    @Getter(AccessLevel.NONE) // internal signal, like the two guards above and below
     private volatile boolean stopRequested = false;
 
     @ToString.Exclude
@@ -197,8 +206,21 @@ public class ManagedPCInstance implements Runnable {
         log.info("Stopping instance {}", instanceId);
         stopRequested = true;
         started = false;
-        if (parallelConsumer != null) {
-            parallelConsumer.close();
+        var pcToClose = parallelConsumer;
+        if (pcToClose == null) {
+            return;
+        }
+        // the same one-closer-per-PC rule stopAsync() enforces: a synchronous close racing the
+        // background one would put two threads inside the same KafkaConsumer, which is the
+        // ConcurrentModificationException this class was hardened against
+        if (!closePending.compareAndSet(false, true)) {
+            log.info("Instance {} stop skipped - close already in progress", instanceId);
+            return;
+        }
+        try {
+            pcToClose.close();
+        } finally {
+            closePending.set(false);
         }
     }
 
@@ -223,7 +245,7 @@ public class ManagedPCInstance implements Runnable {
             return;
         }
         log.info("Async stopping instance {}", instanceId);
-        new Thread(() -> {
+        Thread closer = new Thread(() -> {
             try {
                 pcToClose.close();
             } catch (Exception e) {
@@ -231,7 +253,11 @@ public class ManagedPCInstance implements Runnable {
             } finally {
                 closePending.set(false);
             }
-        }, "pc-close-" + instanceId).start();
+        }, "pc-close-" + instanceId);
+        // daemon, like chaos-conductor and chaos-drain-N: a close() that hangs under an injected
+        // broker failure must not keep the forked test JVM alive after the run has finished
+        closer.setDaemon(true);
+        closer.start();
     }
 
     /**

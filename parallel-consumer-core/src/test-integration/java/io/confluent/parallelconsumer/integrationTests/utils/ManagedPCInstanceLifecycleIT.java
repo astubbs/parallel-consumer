@@ -45,6 +45,14 @@ class ManagedPCInstanceLifecycleIT {
 
     private static final int CLOSE_ENTRY_TIMEOUT_MS = 5_000;
 
+    /**
+     * How long to keep watching for a second closer that must never appear. This is the reliability
+     * knob for that negative assertion: a wrongly-spawned closer is started synchronously inside
+     * {@code stopAsync()}, so it only has to be scheduled and reach the mocked {@code close()} - but
+     * under CI contention thread-start latency alone can run into the hundreds of milliseconds.
+     */
+    private static final int SECOND_CLOSER_WATCH_MS = 1_000;
+
     private ManagedPCInstance newInstance() {
         ManagedPCInstance.Config config = ManagedPCInstance.Config.builder()
                 .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
@@ -118,9 +126,17 @@ class ManagedPCInstanceLifecycleIT {
                 .untilAsserted(() -> assertThat(closesEntered.get()).isEqualTo(1));
 
         instance.stopAsync(); // must be refused while the first close is still running
-        Thread.sleep(200); // give a (wrongly) spawned second closer time to enter close()
 
-        assertThat(closesEntered.get()).isEqualTo(1);
+        // A negative assertion: nothing must happen. Sampling once after a fixed sleep would pass
+        // whenever a wrongly-spawned closer simply had not been scheduled yet - a silent green on a
+        // loaded box, which is the failure this test exists to catch. Poll instead, so a second
+        // closer fails the test the moment it enters close(), and hold the window long enough that
+        // thread-start latency cannot hide one.
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SECOND_CLOSER_WATCH_MS);
+        while (System.nanoTime() < deadline) {
+            assertThat(closesEntered.get()).isEqualTo(1);
+            Thread.sleep(10);
+        }
         assertThat(instance.isClosePending()).isTrue();
 
         releaseClose.countDown();
