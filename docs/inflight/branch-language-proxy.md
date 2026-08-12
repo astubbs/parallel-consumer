@@ -5,6 +5,61 @@ application's worker processes over loopback. Plan lives at
 `docs/plans/2026-08-12-001-feat-language-proxy-plan.md`. No module exists yet — this branch is the
 contract, not the build.
 
+## U1 gate outcomes: gRPC cleared both, and one hint is not optional
+
+Both gates KTD1 owed are cleared, measured on a throwaway probe (gRPC 1.73.0, protobuf-java 3.25.5,
+GraalVM CE 25.0.2), not desk research. The probe is discarded; these outcomes are its only output.
+U2 may author a schema against gRPC.
+
+**R29 — declarable authority: CLEARED.** A `ServerInterceptor` reads the connection's declared
+`:authority` from `ServerCall.getAuthority()` and rejects an unlisted one with `PERMISSION_DENIED`.
+The rejection lands *before* application handling: closing the call in `interceptCall` and returning
+a no-op listener means the service method never runs. Proven by counters rather than by inspection —
+across a rejected connection both the service-invocation count and the application-message count
+were unchanged. A connection declaring no authority is accepted, which is the default R29 asks for.
+Behaves identically on the JVM and in the native image, so U6's allowlist has a real seam to enforce
+on.
+
+**R25 — native image: CLEARED.** The bidirectional-streaming hand-out loop builds with
+`--no-fallback` and runs as a 45MB ELF binary under Substrate VM, completing the full
+credit/record/outcome cycle. Build takes 33–52s.
+
+### The protobuf hints, and the one that fails silently
+
+Where the metadata actually comes from, since almost none of it is protobuf's:
+
+- **`protobuf-java` 3.25.5 ships no native-image metadata at all.** Verified in the jar.
+- **`grpc-netty-shaded` ships its own** — 19 `native-image.properties`, mostly Netty
+  `--initialize-at-run-time`. Automatic, nothing to do. It warns that these sit under a
+  non-recommended layout; harmless.
+- **The GraalVM reachability metadata repository** (`native-maven-plugin`,
+  `<metadataRepository><enabled>true</enabled>`) contributes exactly **one** entry:
+  `java.time.Instant` with `allDeclaredMethods`, conditional on
+  `io.grpc.internal.InstantTimeProvider`. It carries no entry for gRPC 1.73.0 and silently resolves
+  to the `1.69.0` directory.
+
+**Direct generated-API use needs no protobuf hints.** `setRecordId`/`getRecord` and the generated
+parser are plain Java. That is the entire hand-out path, and it is why the first native build passed
+without any hand-written config.
+
+**Descriptor-driven reflection does need hints, and its absence is invisible until runtime.**
+`getDescriptorForType`, `getField`, `TextFormat`, `JsonFormat` and `DynamicMessage` all go through
+`GeneratedMessageV3.FieldAccessorTable`, which reflects on the generated accessors. Unregistered,
+the build stays green, the binary runs, and the call fails only when that path is first exercised:
+
+```
+IllegalStateException: Generated message class "probe.gen.Record" missing method "getRecordId"
+```
+
+The fix, verified by rebuilding and re-running rather than assumed: a `reflect-config.json` under
+`META-INF/native-image/` registering **each generated message class and its `$Builder`** with
+`allDeclaredMethods` and `allDeclaredFields`. That moved the image from 3,209 to 3,214 reflective
+types and from 2,279 to 2,821 methods, and the descriptor path then worked natively.
+
+This is the same failure shape as the `release.target` trap below — compiles happily, fails at
+runtime, build cannot detect it. So U2 should decide deliberately whether the schema's consumers may
+touch the descriptor path at all, rather than discovering it in U7 when the sidecar is packaged.
+
 ## Owed: the data records, and not before the module exists
 
 A new user-visible module needs three YAML records, and all three must land in the PR that lands
@@ -51,6 +106,11 @@ Collected because missing one is the failure mode here, and two of them are easy
 - **`gh` resolves to confluentinc unless `gh repo set-default astubbs/parallel-consumer` has run in
   the clone.** The config is local and uncommitted, so every fresh worktree and sandbox starts
   without it.
+- **`native-image` needs a C toolchain, and its absence reads like a compile error.** It never links
+  anything itself — it shells out to `gcc` — so a missing compiler surfaces at the link step and
+  looks like a fault in the code being built. `build-essential` and `zlib1g-dev` are now in the
+  Ansible workstation role. `gcc-14-base` alone is only runtime support files, so `command -v gcc`
+  is precisely the check that misleads here. The image links `dl`, `pthread`, `rt` and `z`.
 
 ## What collides
 
@@ -59,9 +119,13 @@ same two workflow lists, `AGENTS.md`, and `NOTICE`. It also carries the `control
 `CopyOnWriteArrayList` fix and the whole chaos scenario framework, both of which this work would
 want. Whichever lands second resolves; nothing here depends on that branch by construction.
 
-## Blocked on
+## Still open — none of it blocks a start
 
-Three values nobody has set, all recorded in the plan's `Resolve Before Planning`: the Go client's
-effort budget, the latency multiple the first success criterion is judged against, and — the one
-that changes the product rather than the plan — whether the users who asked for a Python client
-need key-ordered concurrency or the parallel consumption Share Groups now supply.
+ASM3 — whether the users who asked for a Python client need key-ordered concurrency or the parallel
+consumption Share Groups now supply — is **settled**: conversations with requesting users confirm
+the narrower claim is what they need. The plan's Problem Frame records it. It is not an open risk
+and should not be reopened as one.
+
+Two values remain unset, and the plan carries them as explicit assumptions in its Planning Contract
+rather than as blockers: ASM1, the Go client's effort budget, and ASM2, the latency multiple the
+first success criterion is judged against. Each names what would falsify it.
