@@ -729,6 +729,40 @@ else
     failures=$((failures + 1))
 fi
 
+# A guard matching NEITHER spelling. On master that is the guard's whole reason to exist - a reworded
+# sentence makes it match nothing and report "none found", which reads like a clean tree. On a BRANCH
+# it usually means the branch predates the sentence, and refusing there blocks a tree that has nothing
+# to guard. MEASURED on astubbs#38: every package mapped, and it still could not run, because the
+# orphan refusal sat BEFORE the --defer-prose check and so the one flag meaning "prose is master's
+# problem" could not reach it. Both arms are asserted, because widening the second must not soften
+# the first.
+ORPH="$TMP/prose-orphan"
+new_fixture "$ORPH"
+plant_prose_guard "$ORPH"
+# Delete the guarded sentence outright - the shape of a branch cut before the sentence was written.
+sed -i '/drop-in replacement/d' "$ORPH/src/docs/README_TEMPLATE.adoc"
+(cd "$ORPH" && git add -A && git commit -qm "a branch that never had the guarded sentence")
+
+if grep -q '^src/docs/README_TEMPLATE.adoc|drop-in replacement' "$ORPH/bin/rename-packages.sh"; then
+    ec="$(run_script "$ORPH")"
+    # 1, not 2, matching the live-claim guard above. The header calls 2 "refused to start"; the prose
+    # guards refuse with 1. Recorded here rather than changed - the exit code is part of the contract
+    # the 38 branches are already running against.
+    assert "NEGATIVE CONTROL: a guard matching NEITHER spelling still refuses without --defer-prose" 1 "$ec"
+    assert_contains "  ... and says the sentence was reworded, not that nothing was found" \
+        "$TMP/out.txt" "reworded rather than corrected"
+    assert "  ... and nothing moved before it refused" 0 \
+        "$(cd "$ORPH" && git status --porcelain | wc -l | tr -d ' ')"
+
+    ec="$(run_script "$ORPH" --defer-prose)"
+    assert "--defer-prose proceeds past an ABSENT guarded sentence, as a branch must" 0 "$ec"
+    assert_contains "  ... and carries it as a follow-up rather than swallowing it" \
+        "$TMP/out.txt" "absent prose guard"
+else
+    echo "FAIL: could not plant the orphan-guard fixture - the absent-sentence case was never tested"
+    failures=$((failures + 1))
+fi
+
 # --------------------------------------------------------------------------------------------------
 # 22-23. The commit-shape measurement, encoded as a regression test
 # --------------------------------------------------------------------------------------------------
