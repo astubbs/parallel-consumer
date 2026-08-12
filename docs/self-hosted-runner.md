@@ -1,7 +1,9 @@
 # Self-Hosted Runner Setup (Proxmox Linux VM)
 
 Self-hosted runners give the heavy suites real hardware **and** let them run
-concurrently. This document walks through the one-time setup on a Linux VM.
+concurrently. This doc owns setting up and operating them: the one-time setup on a Linux VM, the
+labels, and the service. AGENTS.md carries only the pointer; which lanes are pinned to the
+`highcpu` label, and why, belongs to [`ci.md`](ci.md).
 
 Workflows that use them:
 [`pr-highcpu-fast-feedback.yml`](../.github/workflows/pr-highcpu-fast-feedback.yml)
