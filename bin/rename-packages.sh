@@ -5,6 +5,19 @@
 
 # Performs the fork's package rename - io.confluent.* -> bz.stub.* - on whatever branch it is run in.
 #
+# READ THE PROJECT'S IN-FLIGHT ENTRY BEFORE YOU RUN THIS: `docs/inflight/branch-package-rename.md`.
+# It is the canonical entry for the whole package-rename project and it records findings this run
+# NEEDS - references deliberately left for the rename to fix rather than fixed in place, and the
+# reasoning for each. This script cannot infer any of that from the tree, and the sweeps below will
+# not tell you which survivors were a decision and which were an oversight.
+#
+# WHILE THE BRANCHES ARE STILL APART, some of those carry-over findings sit in a sibling file named
+# `branch-package-rename-*` rather than in the canonical entry - the entry and the carry-over notes
+# were written on different unmerged branches. If the canonical file is not on your branch yet, or
+# looks thinner than the work implies, `ls docs/inflight/` and read every `branch-package-rename*`
+# file before concluding anything is missing. They collapse into the one entry as the branches
+# converge, and the whole entry is deleted when the rename lands.
+#
 # WHY THIS IS A SCRIPT AND NOT A ONE-OFF `sed`
 #
 # The rename has to land on master AND on every open PR branch. Done by hand, once, on master, the
