@@ -361,8 +361,11 @@ budget on a box that cannot boot a broker in 15 minutes will trip regardless of 
 
 This is exactly the confluentinc#857-family behaviour the Class 2 probe was built to catch, and `docs/inflight.md`
 records the probe as "a calibrated TRIPWIRE - RED-side awaiting a real-world/CI occurrence" (`git
-show 0de96fc^:docs/inflight.md`, grep `calibrated TRIPWIRE`; the successor carries the same stance -
-grep `calibrated tripwire` in [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md)). If the
+show 0de96fc^:docs/inflight.md`, grep `calibrated TRIPWIRE`). That was the stance when this was
+written and no live note inherits it: the RED side has since had a real occurrence, recorded in
+[`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md), so the same wording surviving in
+[`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md) is stale rather than a
+successor. If the
 load hypotheses are falsified, H2 is the live explanation and this is PC's first RED-side hit - a
 significantly more valuable outcome than a CI-scheduling fix. Treat it as a PC bug then, not a test
 bug. Note the astubbs#87 correlation does not rule H2 out: if the second scenario simply makes the fleet
@@ -389,11 +392,13 @@ fleet-size, `maxConcurrency`, commit-mode or consumer-property default that chan
 > superseded; the "decide the classification question" item in step 4 is still open and now lives in
 > the follow-ups list in `docs/inflight.md`.
 >
-> **Pointer repair.** That list is the section `Open follow-ups from the W4 revoke-under-work
-> investigation` - `git show 0de96fc^:docs/inflight.md` and grep the heading. It did **not** carry
-> into `docs/inflight/` when the file was split, so the history above is the record of it; the
-> nearest live note is [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md).
-> Whether the classification item is still open today is not a question this repair answers.
+> **Pointer repair.** The list meant here is the section `Open follow-ups from the W4
+> revoke-under-work investigation` - `git show 0de96fc^:docs/inflight.md` and grep the heading. Two
+> things about it: it did **not** carry into `docs/inflight/` when the file was split, and as it
+> stood at the deletion it held only the misreported timeout-message task and the highcpu-runner
+> concurrency task - **no classification item**. No ledger entry for the classification question can
+> therefore be produced, in history or live; step 4 below is the durable record of it. Whether it is
+> still open today is not a question this repair answers.
 
 1. **Replay a captured seed on an idle machine, at `192d32bc`.** This one step separates every
    hypothesis. Both of these failed in CI:

@@ -393,8 +393,13 @@ masking):
 - `docs/inflight.md` - existing `committedOffsetRemoved` and `MultiInstanceMetricsTest` flake entries.
   (Pointer repair: that single file became the directory [`docs/inflight/`](../../inflight/) on
   2026-08-04, deleted in `0de96fc` - `git show 0de96fc^:docs/inflight.md` for the entries as this
-  report read them. Both are now rows in
-  [`docs/inflight/test-load-tightness-flakes.md`](../../inflight/test-load-tightness-flakes.md).)
+  report read them. Of the two, only `MultiInstanceMetricsTest` is still a row in
+  [`docs/inflight/test-load-tightness-flakes.md`](../../inflight/test-load-tightness-flakes.md). The
+  `committedOffsetRemoved` entry read here is the `[latest]` nudge race, since solved and written up
+  in
+  [`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`](latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md);
+  the `committedOffsetRemoved[3] none` row in that live file is a different and later
+  `RebalanceInProgressException` sighting, not a successor to this one.)
 - `docs/BUG_857_INVESTIGATION.md` (on `bugs/857-paused-consumption-multi-consumers-bug`).
 - Code: `parallel-consumer-core/.../integrationTests/state/PartitionStateCommittedOffsetIT.java`;
   `.../internal/AbstractParallelEoSStreamProcessor.java` (`innerDoClose` - drain-then-await sequencing;
