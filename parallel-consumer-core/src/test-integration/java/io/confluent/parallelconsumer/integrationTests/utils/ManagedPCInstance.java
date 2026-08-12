@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
@@ -77,6 +78,7 @@ public class ManagedPCInstance implements Runnable {
      * plus {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED}.
      */
     @ToString.Exclude
+    @Getter(AccessLevel.NONE) // class-level @Getter would hand out the mutable guard itself
     private final AtomicBoolean startInFlight = new AtomicBoolean(false);
 
     /**
@@ -180,6 +182,7 @@ public class ManagedPCInstance implements Runnable {
 
     /** True while a background close is in progress — prevents toggle from restarting prematurely */
     @ToString.Exclude
+    @Getter(AccessLevel.NONE) // callers get the isClosePending() snapshot below, not the guard itself
     private final AtomicBoolean closePending = new AtomicBoolean(false);
 
     /** True while a background close is in progress. */
