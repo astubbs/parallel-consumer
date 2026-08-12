@@ -72,27 +72,36 @@ HEADER_WINDOW=8 # lines from the top of the file searched for copyright notices
 # next file to move under a moved package would silently not be in it. Derived, this needs no
 # maintenance.
 #
-# THE FIRST LINE IS A NESTED SPECIAL CASE AND MUST STAY FIRST. `io/confluent/csid/utils` folds into
-# `bz/stub/parallelconsumer/internal/utils` rather than the general `bz/stub/csid`, because those
-# files are the project's general-purpose utilities (see bin/rename-packages.sh for the reasoning).
-# Its bz/stub half sits INSIDE the general `bz/stub/parallelconsumer` prefix on the next line, and
+# THE NESTED ENTRIES MUST STAY ABOVE THE GENERAL ONE. Both packages under the second upstream-owned
+# prefix fold INTO the library's internals - `io/confluent/csid/utils` to
+# `bz/stub/parallelconsumer/internal/utils` and `io/confluent/csid/testcontainers` to
+# `bz/stub/parallelconsumer/internal/testcontainers` (see bin/rename-packages.sh for the reasoning).
+# Their bz/stub halves sit INSIDE the general `bz/stub/parallelconsumer` prefix on the last line, and
 # fork_point_path() below returns on the FIRST prefix match it finds - so if the general rule were
-# checked first, every file the special case actually moved would match it too and resolve to a
-# fork-point path under parallelconsumer that Confluent never owned.
+# checked first, every file the nested rules actually moved would match it too and resolve to a
+# fork-point path under parallelconsumer that upstream never owned. That is not a near miss: the
+# resulting path holds no blob at the fork point, so the file is judged fork-original and its
+# REQUIRED upstream header is reported as a violation. bin/test-check-copyright-headers.sh runs that
+# reordering as a control arm and asserts the extra violations appear, so the ordering is measured
+# rather than asserted in a comment.
+#
+# THERE IS NO GENERAL RULE FOR THE SECOND PREFIX ANY MORE. It used to map onto a same-named prefix
+# under bz/stub, which carried upstream's mark into the new namespace; bin/rename-packages.sh
+# deleted the equivalent rule and now REFUSES to run on a package no rule names. Both tables list
+# every package explicitly, and that is the invariant the drift guard below protects.
 #
 # NOT SHARED WITH bin/rename-packages.sh, DELIBERATELY. That script is a migration tool and is
 # deleted once the rename has landed on every branch; this table describes the fork point, which is
 # immutable history, so it must outlive it. Wiring a permanent gate - one bound to maven's validate
 # phase - into a disposable script buys DRY at the cost of the gate breaking when the tool goes.
-# bin/test-check-copyright-headers.sh cross-checks the two-segment (package.package) rules against
-# bin/rename-packages.sh's PKG_MAP while both exist - the nested special case above does not fit
-# that shape and is exercised directly by Fixture D instead - so the only real drift risk (someone
-# changing a target package before the rename lands) fails loudly. It reads this one with an
-# anchored grep, which is why entries sit flush against the opening quote.
+# bin/test-check-copyright-headers.sh cross-checks EVERY rule here against bin/rename-packages.sh's
+# PKG_MAP while both exist, so the only real drift risk (someone changing a target package before
+# the rename lands) fails loudly. It reads this one with an anchored grep, which is why entries sit
+# flush against the opening quote.
 PACKAGE_MOVES="
 bz/stub/parallelconsumer/internal/utils|io/confluent/csid/utils
-bz/stub/parallelconsumer|io/confluent/parallelconsumer
-bz/stub/csid|io/confluent/csid"
+bz/stub/parallelconsumer/internal/testcontainers|io/confluent/csid/testcontainers
+bz/stub/parallelconsumer|io/confluent/parallelconsumer"
 
 # Sets FP_PATH rather than echoing it: this runs once per java file, and a command substitution
 # would fork a subshell each time on a script that maven runs at the start of every build.

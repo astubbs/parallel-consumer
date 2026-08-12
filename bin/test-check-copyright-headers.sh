@@ -42,10 +42,12 @@
 #   17. upstream file MOVED and edited, no modifications line      -> FAIL, as an upstream file
 #   18. upstream file MOVED and edited, dual header                -> pass
 #   19. upstream file MOVED with its header removed                -> FAIL (upstream, not fork-original)
-#   20. io.confluent.csid.utils file MOVED and edited, dual header -> pass, through the NESTED
-#       special case (bz/stub/parallelconsumer/internal/utils), not the general bz/stub/csid
-#   21. io.confluent.csid.testcontainers file MOVED, dual header   -> pass, through the GENERAL csid
-#       rule - proves the special case above did not swallow the rest of the prefix
+#   20. io.confluent.csid.utils file MOVED and edited, dual header -> pass, through the NESTED rule
+#       (bz/stub/parallelconsumer/internal/utils)
+#   21. io.confluent.csid.testcontainers file MOVED, dual header   -> pass, through the SECOND
+#       nested rule (bz/stub/parallelconsumer/internal/testcontainers). There is no general rule for
+#       this prefix any more: the one that used to catch it mapped onto a same-named prefix under
+#       bz/stub, carrying upstream's mark into the new namespace
 #   22. registered rename whose newpath was RETARGETED to bz/stub  -> FAIL without the mods line
 #   23. registered rename still written in the OLD spelling while
 #       the file has already moved (the half-renamed tree that
@@ -53,7 +55,11 @@
 #   24. fork-original file under the NEW package claiming
 #       Confluent                                                  -> FAIL (the rule must not
 #       classify everything under bz/stub as upstream-derived)
-#   25. the scanner's PACKAGE_MOVES agrees with bin/rename-packages.sh's PKG_MAP (drift guard)
+#   25. the scanner's PACKAGE_MOVES agrees with bin/rename-packages.sh's PKG_MAP (drift guard) -
+#       EVERY rule, not just the two-segment ones, so a nested rule cannot drift unwatched
+#   26. CONTROL ARM: put the general rule ABOVE the nested ones and the moved files under them are
+#       misjudged as fork-original, turning their required upstream headers into violations. The
+#       ordering constraint is therefore measured, not asserted in a comment
 #
 # Run: bin/test-check-copyright-headers.sh   (CI runs it before the real scan)
 
@@ -206,19 +212,20 @@ repoD="$WORK/d"
 new_repo "$repoD"
 oldmain="$repoD/parallel-consumer-core/src/main/java/io/confluent/parallelconsumer"
 newmain="$repoD/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer"
-# The NESTED special case: io/confluent/csid/utils folds into bz/stub/parallelconsumer/internal/utils.
+# The NESTED rules: BOTH packages under the second upstream-owned prefix fold into the library's
+# internals. There is no general rule for that prefix, so a file under it that no rule names does
+# not quietly land somewhere - bin/rename-packages.sh refuses to run at all.
 oldcsidutils="$repoD/parallel-consumer-core/src/main/java/io/confluent/csid/utils"
 newcsidutils="$repoD/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils"
-# Everything else under io/confluent/csid still takes the GENERAL rule, to bz/stub/csid.
 oldcsidgeneral="$repoD/parallel-consumer-core/src/main/java/io/confluent/csid/testcontainers"
-newcsidgeneral="$repoD/parallel-consumer-core/src/main/java/bz/stub/csid/testcontainers"
+newcsidgeneral="$repoD/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/testcontainers"
 mkdir -p "$oldmain" "$oldcsidutils" "$oldcsidgeneral"
 confluent_file "$oldmain/MovedVerbatim.java"           # 16
 confluent_file "$oldmain/MovedEdited.java"             # 17
 confluent_file "$oldmain/MovedEditedDual.java"         # 18
 confluent_file "$oldmain/MovedLostHeader.java"         # 19
-confluent_file "$oldcsidutils/MovedCsidUtils.java"     # 20: the NESTED special case
-confluent_file "$oldcsidgeneral/MovedCsidGeneral.java" # 21: the GENERAL csid rule (non-utils)
+confluent_file "$oldcsidutils/MovedCsidUtils.java"     # 20: the first nested rule
+confluent_file "$oldcsidgeneral/MovedCsidGeneral.java" # 21: the second nested rule
 confluent_file "$oldmain/RetargetedOld.java"           # 22: renamed AND moved
 confluent_file "$oldmain/StaleEntryOld.java"           # 23: renamed AND moved, entry not retargeted
 git -C "$repoD" add -A && git -C "$repoD" commit -qm upstream
@@ -234,7 +241,7 @@ done
 git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/csid/utils/MovedCsidUtils.java \
                    parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils/MovedCsidUtils.java
 git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/csid/testcontainers/MovedCsidGeneral.java \
-                   parallel-consumer-core/src/main/java/bz/stub/csid/testcontainers/MovedCsidGeneral.java
+                   parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/testcontainers/MovedCsidGeneral.java
 git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/RetargetedOld.java \
                    parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/Retargeted.java
 git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/StaleEntryOld.java \
@@ -242,8 +249,8 @@ git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/parallelcon
 confluent_file      "$newmain/MovedEdited.java" "int changed;"      # 17: no mods line -> violation
 dual_file           "$newmain/MovedEditedDual.java" "int changed;"  # 18: conformant
 headerless_file     "$newmain/MovedLostHeader.java"                 # 19: violation
-dual_file           "$newcsidutils/MovedCsidUtils.java" "int changed;"     # 20: conformant, via the nested rule
-dual_file           "$newcsidgeneral/MovedCsidGeneral.java" "int changed;" # 21: conformant, via the general rule
+dual_file           "$newcsidutils/MovedCsidUtils.java" "int changed;"     # 20: conformant, first nested rule
+dual_file           "$newcsidgeneral/MovedCsidGeneral.java" "int changed;" # 21: conformant, second nested rule
 confluent_file      "$newmain/Retargeted.java" "int changed;"       # 22: violation
 confluent_file      "$newmain/StaleEntry.java" "int changed;"       # 23: violation
 fork_file           "$newmain/ForkUnderNewPackage.java"             # conformant: fork-original, moved-package path
@@ -280,22 +287,78 @@ case "$out" in
     *"MovedVerbatim.java"*|*"MovedEditedDual.java"*|*"MovedCsidUtils.java"*|*"MovedCsidGeneral.java"*|*"ForkUnderNewPackage.java"*)
         echo "FAIL: moved-but-conformant files were flagged (provenance lost across the package move)"
         failures=$((failures + 1)) ;;
-    *) echo "ok:   moved upstream files keep their provenance (verbatim, dual-header, nested csid/utils, general csid, fork-original)" ;;
+    *) echo "ok:   moved upstream files keep their provenance (verbatim, dual-header, both nested rules, fork-original)" ;;
 esac
+
+# --- Control arm for the ORDERING constraint (rule 26) ------------------------------
+# One term changed, everything else identical: the general bz/stub/parallelconsumer rule is moved
+# ABOVE the two nested ones in a copy of the scanner, and the SAME fixture is re-run.
+#
+# fork_point_path() returns on the FIRST prefix match, and both nested destinations sit inside the
+# general prefix, so with the general rule first the two moved files resolve to fork-point paths
+# under .../parallelconsumer/internal/... that hold no blob. They are then judged fork-original,
+# and their retained upstream headers - which the licence requires - are reported as violations.
+#
+# PREDICTION, stated before the run: violations rise from 5 to 7, and the two new ones are exactly
+# MovedCsidUtils.java and MovedCsidGeneral.java, reported as "fork-original file claims Confluent
+# copyright". Without this arm, "the nested rules are listed first" is a comment nobody can falsify.
+reordered="$WORK/scanner-reordered.sh"
+# The closing quote travels with whichever rule ends up last, so strip it from every extracted rule
+# and re-attach it once - otherwise moving the general rule up would move the quote with it and the
+# "control arm" would be testing a syntax error.
+all_rules=$(grep -E '^bz/stub/parallelconsumer' "$SCANNER" | tr -d '"')
+general_rule=$(grep -E '^bz/stub/parallelconsumer\|' <<<"$all_rules")
+nested_rules=$(grep -E '^bz/stub/parallelconsumer/internal/' <<<"$all_rules")
+# Through a FILE rather than `awk -v`: BSD awk rejects a newline inside a -v assignment outright
+# ("newline in string"), so the same command that works on a CI runner dies on a maintainer's Mac.
+printf '%s\n%s"\n' "$general_rule" "$nested_rules" > "$WORK/moves-block.txt"
+awk -v blockfile="$WORK/moves-block.txt" '
+    /^PACKAGE_MOVES="$/ {
+        print
+        while ((getline line < blockfile) > 0) print line
+        close(blockfile)
+        next
+    }
+    /^bz\/stub\/parallelconsumer/  { next }
+    { print }
+' "$SCANNER" > "$reordered"
+# A control arm that was not actually built is worse than none: it would pass by testing the
+# original file. Demand that the general rule now comes FIRST among the rules in the rewritten copy.
+first_rule=$(grep -E '^bz/stub/parallelconsumer' "$reordered" | sed -n '1p')
+if [ "$first_rule" != "$general_rule" ] || ! bash -n "$reordered"; then
+    echo "FAIL: the ordering control arm could not rebuild PACKAGE_MOVES (first rule: '$first_rule') - a control that cannot be built proves nothing"
+    failures=$((failures + 1))
+else
+    out=$( (cd "$repoD" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_d" \
+            COPYRIGHT_CHECK_EXTRA_RENAMES="$renames_d" \
+            bash "$reordered") 2>&1 ) && rc=0 || rc=$?
+    assert          "CONTROL ARM: general-rule-first still exits 1"  1 "$rc"
+    assert_contains "CONTROL ARM: general-rule-first adds exactly two violations" "7 violation(s)" "$out"
+    assert_contains "CONTROL ARM: the first nested rule's file is misjudged as fork-original" \
+        "fork-original file claims Confluent copyright): parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils/MovedCsidUtils.java" "$out"
+    assert_contains "CONTROL ARM: the second nested rule's file is misjudged as fork-original" \
+        "fork-original file claims Confluent copyright): parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/testcontainers/MovedCsidGeneral.java" "$out"
+fi
 
 # --- Drift guard: PACKAGE_MOVES vs bin/rename-packages.sh's PKG_MAP (rule 25) --------
 # The two tables are deliberately NOT shared: the rename script is a migration tool and gets
 # deleted once the rename has landed everywhere, while the scanner's table describes the fork
 # point, which is permanent. This is what stops them disagreeing while both exist - if the target
 # package is ever changed in one, this goes red rather than the copyright gate quietly inverting.
+#
+# EVERY rule, at any depth. This used to read only two-segment rules, which was fine while the
+# nested ones were a lone special case carved out in prose - but once the general fallback was
+# deleted and every package became an explicit rule, a depth-limited guard would have been checking
+# a shrinking minority of the table while still reporting a pass. `{2,}` rather than a fixed count,
+# so adding a rule at any depth is covered without touching this.
 RENAME_SCRIPT="$(dirname "$SCANNER")/rename-packages.sh"
 if [ ! -f "$RENAME_SCRIPT" ]; then
     echo "ok:   drift guard skipped - bin/rename-packages.sh is gone (the rename has landed)"
 else
     # dot form `old|new` -> path form `new|old`, which is how the scanner writes it
-    from_rename=$(grep -E '^io\.[a-z]+\.[a-z]+\|bz\.[a-z]+\.[a-z]+"?$' "$RENAME_SCRIPT" \
+    from_rename=$(grep -E '^io(\.[a-z0-9]+){2,}\|bz(\.[a-z0-9]+){2,}"?$' "$RENAME_SCRIPT" \
         | tr -d '"' | tr '.' '/' | awk -F'|' '{ print $2 "|" $1 }' | sort)
-    from_scanner=$(grep -E '^bz/[a-z]+/[a-z]+\|io/[a-z]+/[a-z]+"?$' "$SCANNER" | tr -d '"' | sort)
+    from_scanner=$(grep -E '^bz(/[a-z0-9]+){2,}\|io(/[a-z0-9]+){2,}"?$' "$SCANNER" | tr -d '"' | sort)
     if [ -z "$from_rename" ] || [ -z "$from_scanner" ]; then
         echo "FAIL: drift guard could not read one of the tables (rename script: '$from_rename', scanner: '$from_scanner') - a guard that cannot see its subject passes for the wrong reason"
         failures=$((failures + 1))

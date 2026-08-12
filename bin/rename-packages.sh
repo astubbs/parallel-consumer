@@ -36,13 +36,37 @@
 #
 # WHAT IT DOES, IN ORDER
 #
-#   preflight  - refuse to run on a dirty tree (the commit would sweep in unrelated work)
-#   moves      - `git mv` every file under */io/confluent/{parallelconsumer,csid}/ to */bz/stub/...
+#   preflight  - refuse to run on a dirty tree (the commit would sweep in unrelated work), and
+#                refuse if any legacy package is UNMAPPED - see NO FALLBACK RULE below
+#   moves      - `git mv` every file under a mapped legacy package directory to its new home
 #   rewrite    - every textual form, in every tracked text file, minus an explicit frozen list
 #   headers    - Apache 2.0 s4(c): add the Modifications Copyright line to modified upstream files
 #   regenerate - docs/todo-index.md and README.adoc, both of which must never be hand-edited
 #   commit     - see COMMIT SHAPE below
 #   verify     - assert git recorded the moves as RENAMES, then run the completeness check
+#   residue    - a ONE-OFF report over every tracked file, for a human to judge. Not a gate.
+#
+# NO FALLBACK RULE, AND THE REFUSAL THAT REPLACES IT
+#
+# PKG_MAP used to end with a catch-all mapping the second upstream-owned prefix onto a same-named
+# prefix under bz.stub. That is a rename that preserves the string it is renaming away from: every
+# package the catch-all caught came out still carrying upstream's mark, one level down. It has been
+# deleted, every legacy package is now named explicitly, and anything that STILL matches the legacy
+# prefix once the table has been applied stops the run and is named.
+#
+# The two are not interchangeable, and the difference is the whole point. A fallback answers "I have
+# no rule for this" by inventing one and carrying on, which is how a package nobody decided about
+# acquires a permanent home - silently, in a commit of several hundred mechanical edits, where no
+# reviewer will find it. Refusing puts the decision back in the table, in a diff, with a name on it.
+# Do not re-introduce a quieter version of the fallback to make the refusal go away.
+#
+# THE RESIDUE REPORT IS DELIBERATELY NOT A `bin/check-*.sh`
+#
+# The sweep at the end reports, for judgement, and does not gate. Two reasons, and the second is
+# the load-bearing one. First, this is a one-off migration: a standing checker outlives its subject
+# and becomes a file nobody can explain. Second, a permanent checker forbidding a token would have
+# to CONTAIN that token to test for it - a check that is itself the last instance of what it
+# forbids, which cannot be satisfied and would have to be excused, at which point it is decoration.
 #
 # COMMIT SHAPE, AND WHY THE DEFAULT IS TWO COMMITS
 #
@@ -154,30 +178,39 @@ set -euo pipefail
 # moves, the scan patterns - is DERIVED from this table, so what is on disk and what is written in
 # the files cannot drift apart.
 #
-# `io.confluent.csid` is in the table on purpose. It is a DIFFERENT Confluent-owned prefix from
-# `io.confluent.parallelconsumer`, and every automation scoped to the latter misses it - which is how
-# `META-INF/services/org.junit.platform.launcher.TestExecutionListener` gets left behind naming
-# `io.confluent.csid.utils.MyRunListener`, a resource no compiler and no IDE refactor will ever
-# touch. Leaving `csid` also defeats the reason for the rename, since it is still Confluent's mark in
-# our namespace. So it moves, and the plan records that as the decision.
+# THE SECOND UPSTREAM-OWNED PREFIX IS IN THE TABLE ON PURPOSE, PACKAGE BY PACKAGE. It is a DIFFERENT
+# prefix from `io.confluent.parallelconsumer`, and every automation scoped to the latter misses it -
+# which is how `META-INF/services/org.junit.platform.launcher.TestExecutionListener` gets left behind
+# naming a listener under it, a resource no compiler and no IDE refactor will ever touch. Leaving it
+# also defeats the reason for the rename, since it is still upstream's mark inside our namespace.
 #
-# `io.confluent.csid.utils` IS A SPECIAL CASE WITHIN THAT MOVE, AND MUST STAY ABOVE THE GENERAL
-# `io.confluent.csid` LINE. Those classes (JavaUtils, KafkaUtils, StringUtils, ...) are the project's
-# general-purpose utilities, not a second product surface, so instead of landing at a parallel
-# `bz.stub.csid.utils` they fold into the internal utils package: `bz.stub.parallelconsumer.internal.utils`.
-# Everything else under `io.confluent.csid` (e.g. `.testcontainers`) still takes the general rule.
+# BOTH of its packages fold INTO the library's internals rather than landing beside them:
 #
-# ORDER MATTERS HERE BECAUSE PKG_MAP IS A PROGRAM, APPLIED TOP TO BOTTOM AGAINST THE SAME TEXT. A
-# general prefix rule that runs first CONSUMES the string a later, more specific rule is looking for:
-# once `io.confluent.csid` has already become `bz.stub.csid`, a rule still hunting for the literal
-# `io.confluent.csid.utils` matches nothing and the special case is silently shadowed by the general
-# one. So the `.utils` line sits ABOVE the general `io.confluent.csid` line, and the self-test's
-# assertions on the actual destination (bin/test-rename-packages.sh) are what catch a re-ordering
-# that shadows it, rather than a bare completeness check that would still pass either way.
+#   ...csid.utils           -> bz.stub.parallelconsumer.internal.utils
+#                              JavaUtils, KafkaUtils, StringUtils, ... - shared plumbing, not a
+#                              second product surface, so they belong inside the library.
+#   ...csid.testcontainers  -> bz.stub.parallelconsumer.internal.testcontainers
+#                              test-only, one class (FilteredTestContainerSlf4jLogConsumer), same
+#                              reasoning. It used to take the deleted catch-all, which would have
+#                              parked it at a top-level bz.stub.<legacy-token>.testcontainers.
+#
+# THOSE TWO ARE THE WHOLE OF THAT PREFIX IN THIS TREE, and that is verified rather than asserted:
+# `git ls-files | grep -oE '(^|/)io/confluent/csid/[^/]+' | sort -u` returns exactly `utils` and
+# `testcontainers`, with no files directly in the parent. Nothing is left for a fallback to catch,
+# which is what makes deleting the fallback possible rather than merely desirable.
+#
+# ORDER. The three rules are mutually DISJOINT prefixes, so this table is order-independent as it
+# stands - measured, with a control arm, by reversing it and diffing the result: byte-identical
+# (bin/test-rename-packages.sh asserts the same property on the fixture). It was NOT order-
+# independent while the catch-all existed, because PKG_MAP is a program applied top to bottom
+# against the same text: the general rule ran first, turned the string into its new spelling, and
+# every later rule still hunting for the old spelling matched nothing and was silently shadowed.
+# Keep writing specific rules above general ones anyway, and keep asserting DESTINATIONS in the
+# self-test - a completeness check passes either way, so it cannot see a shadowed rule.
 PKG_MAP="\
 io.confluent.parallelconsumer|bz.stub.parallelconsumer
 io.confluent.csid.utils|bz.stub.parallelconsumer.internal.utils
-io.confluent.csid|bz.stub.csid"
+io.confluent.csid.testcontainers|bz.stub.parallelconsumer.internal.testcontainers"
 
 MODS_HOLDER="Antony Stubbs and contributors"
 MODS_YEAR="${RENAME_MODS_YEAR:-$(date +%Y)}"
@@ -186,6 +219,56 @@ MODS_YEAR="${RENAME_MODS_YEAR:-$(date +%Y)}"
 # it stops at `conflu` so that a misspelling further along cannot hide from it. The habitual
 # `io\.confluent` cannot see the backslash form at all, which is the trap this exists to avoid.
 SWEEP_ERE='io[\\./]*conflu'
+
+# --------------------------------------------------------------------------------------------------
+# The one-off residue report (see THE RESIDUE REPORT IS DELIBERATELY NOT A `bin/check-*.sh` above)
+# --------------------------------------------------------------------------------------------------
+#
+# `name|ERE|a string the pattern MUST match|full or summary`.
+#
+# POSIX ERE ONLY, AND THE THIRD COLUMN IS WHY. `\b` is not a word boundary here. `git grep -E`
+# accepts a pattern containing it, matches NOTHING, and exits 1 - which is byte-for-byte what a
+# clean tree looks like. That is not a hypothetical: a sibling branch published a false clean result
+# from exactly this. So every pattern is first proven against a string it MUST match; only then is
+# the tree swept, and only then does "no hits" mean anything at all.
+#
+# The fourth column is how much to print. `full` lists every surviving occurrence - these are the
+# migration's own targets and there should be almost nothing left. `summary` is for the deliberately
+# broad final pattern, which matches every retained copyright notice in the tree; listing those in
+# full would bury the findings under several hundred lines the licence REQUIRES us to keep.
+RESIDUE_PATTERNS='general-utils-token|csid|io.confluent.csid.utils.StringUtils|full
+pre-rename-project-name|asyncconsumer|io.confluent.csid.asyncconsumer.WorkManager|full
+upstream-package-prefix|io[\\./]*confluent|import io.confluent.parallelconsumer.ParallelConsumer;|full
+upstream-maven-repository|packages[.]confluent[.]io|https://packages.confluent.io/maven/|full
+any-upstream-mention|[Cc]onfluent|Copyright (C) 2020-2022 Confluent, Inc.|summary'
+
+# A surviving mention of the upstream organisation is LEGITIMATE in exactly two shapes. Both are
+# recognised by PATTERN rather than by a file allow-list, so a file added tomorrow gets the same
+# answer as one that exists today:
+#
+#   a retained copyright notice - Apache 2.0 s4(b) REQUIRES these to stay. Removing one is a licence
+#                                 violation dressed up as tidying.
+#   a reference to upstream's repository, issues or PRs - those name history, and history stays true.
+#                                 Matched on the ORGANISATION name rather than on `org/repo` or
+#                                 `org#123`, because this repo's own citation rule (AGENTS.md, the
+#                                 issue-reference gate) writes them as `confluentinc PR #548` and
+#                                 `confluentinc issue #857` - the two forms a punctuation-anchored
+#                                 pattern would have filed as findings, burying the real ones.
+#
+# Anything else is a FINDING: printed, counted, and left for a human. NOT an error - the vendor's
+# name legitimately appears in prose, in links to its blog and documentation, and in a module that
+# still resolves against its package repository. The report does not gate the run; the completeness
+# check above it is the gate.
+RESIDUE_EXPECTED_ERE='Copyright \(C\).*Confluent|Confluent, Inc|confluentinc'
+
+# `substring|why` - occurrences a human has already decided to keep, named individually so they read
+# as decisions rather than as noise the report failed to classify. Justify every addition here.
+#
+#   confluentinc/cp-kafka   the LIVE integration-test broker image. Swapping it for another vendor's
+#                           image is a testing-infrastructure change with its own risk, tracked
+#                           separately; bundling it into a mechanical rename would put the
+#                           integration suite at risk inside a refactor.
+RESIDUE_KNOWN='confluentinc/cp-kafka|the live integration-test broker image, tracked separately - not part of a mechanical rename'
 
 # TWO LISTS, AND THEY ARE NOT THE SAME LIST. Conflating them is how a generated file gets quietly
 # excused from the check that would have caught it being stale.
@@ -432,6 +515,39 @@ EOF
 
 PATH_SCAN_ERE="$(build_path_scan_ere)"
 
+# The legacy prefix the refusal below is written against: the longest dotted prefix that EVERY
+# old-side entry shares. Derived, not spelt out again - PATH_SCAN_ERE only knows the packages the
+# table names, so it is structurally incapable of noticing one the table has MISSED, and a second
+# hardcoded copy of the prefix would be the thing that goes stale when a rule is added.
+build_legacy_prefix() {
+    local old common="" seen=0
+    while IFS='|' read -r old _; do
+        [ -n "$old" ] || continue
+        if [ "$seen" -eq 0 ]; then common="$old"; seen=1; continue; fi
+        # Shorten the candidate a segment at a time until it is a prefix of this entry too. The
+        # trailing dot on both sides stops `io.confluentx` counting as a match for `io.confluent`.
+        while [ -n "$common" ]; do
+            case "${old}." in "${common}".*) break ;; esac
+            case "$common" in
+                *.*) common="${common%.*}" ;;
+                *)   common="" ;;
+            esac
+        done
+    done <<EOF
+$PKG_MAP
+EOF
+    printf '%s' "$common"
+}
+
+LEGACY_DOT_PREFIX="$(build_legacy_prefix)"
+[ -n "$LEGACY_DOT_PREFIX" ] || { echo "PKG_MAP entries share no common prefix - cannot derive the legacy prefix" >&2; exit 2; }
+LEGACY_PATH_PREFIX="$(tr '.' '/' <<<"$LEGACY_DOT_PREFIX")"
+# Every separator becomes the same permissive class SWEEP_ERE uses, so the one pattern sees the
+# dotted form, the path form AND the escaped-regex form - the three spellings the rewrite itself
+# handles. Anything this matches after the rewrite has run is, by definition, unmapped.
+LEGACY_SCAN_ERE="$(sed 's#\.#[\\\\./]*#g' <<<"$LEGACY_DOT_PREFIX")"
+LEGACY_TOKEN_ERE="${LEGACY_SCAN_ERE}"'([\\./]+[A-Za-z0-9_]+)*'
+
 is_self() { # <path> - matched on BASENAME so a move cannot disable the exclusion
     local b base
     b="$(basename "$1")"
@@ -488,6 +604,283 @@ discover_rewrites() {
         is_frozen "$f" && continue
         printf '%s\n' "$f" >> "$REWRITES"
     done < <(git grep -lIE "$SWEEP_ERE" -- . || true)
+}
+
+# --------------------------------------------------------------------------------------------------
+# Preflight: is every legacy package actually MAPPED?
+# --------------------------------------------------------------------------------------------------
+#
+# This is the refusal that replaced the deleted catch-all rule. It runs BEFORE anything moves,
+# because the alternative - discovering it afterwards - means a few hundred files have already been
+# moved and committed around the package nobody had a rule for.
+#
+# TWO ARMS, BECAUSE THE TWO FAILURES LOOK NOTHING ALIKE.
+#
+#   paths       An unmapped package DIRECTORY is invisible to discover_moves(), which globs by the
+#               table: its files simply do not move, and no counter goes down. The tree ends up with
+#               a live package under the old root that nothing reports.
+#   references  An unmapped package NAME in text (a logger name, an ArchUnit string, a services
+#               resource) is not rewritten. The completeness check does catch this one - but only
+#               after the run, and it names the FILE. This arm predicts it beforehand and names the
+#               PACKAGE, which is the thing a human has to make a decision about.
+#
+# The reference arm predicts by construction rather than by reasoning: it takes the lines that
+# mention the legacy prefix, runs the SAME substitution program the rewrite will run, and asks what
+# still matches. There is no second model of the rename to drift from the first one.
+check_unmapped_legacy() {
+    local n_paths n_refs f
+
+    git ls-files | { grep -E "(^|/)${LEGACY_PATH_PREFIX}/" || true; } > "$TMP/legacy-paths.txt"
+    : > "$TMP/unmapped-paths.txt"
+    if [ -s "$TMP/legacy-paths.txt" ]; then
+        perl -pe "$PERL_PROG" < "$TMP/legacy-paths.txt" > "$TMP/legacy-paths-mapped.txt"
+        paste "$TMP/legacy-paths.txt" "$TMP/legacy-paths-mapped.txt" |
+            awk -F'\t' -v ere="(^|/)${LEGACY_PATH_PREFIX}/" '$2 ~ ere { print $1 }' \
+            > "$TMP/unmapped-paths.txt"
+    fi
+
+    # Only files that WILL be rewritten and ARE policed afterwards. A file the completeness check
+    # excuses - a dated plan, the changelog, this script, the provenance manifest - is supposed to
+    # keep the old spelling, so predicting a survivor there would be a false alarm, and a guard that
+    # cries wolf gets bypassed.
+    : > "$TMP/predict-set.txt"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        is_sweep_excluded "$f" && continue
+        printf '%s\n' "$f" >> "$TMP/predict-set.txt"
+    done < "$REWRITES"
+
+    : > "$TMP/unmapped-refs.txt"
+    if [ -s "$TMP/predict-set.txt" ]; then
+        : > "$TMP/legacy-refs.txt"
+        tr '\n' '\0' < "$TMP/predict-set.txt" |
+            xargs -0 git grep -nIE "$LEGACY_SCAN_ERE" -- >> "$TMP/legacy-refs.txt" || true
+        # Split each `path:line:text` hit, rewrite the TEXT ONLY, and keep the hit only if the TEXT
+        # still names the legacy prefix afterwards.
+        #
+        # The split is load-bearing, and getting it wrong fails in the direction that looks like
+        # working code: the PATH of a hit is itself full of the legacy prefix (that is where these
+        # files live), so testing the whole `path:line:text` line reports every mapped reference in
+        # a moved file as unmapped. The address is kept in its ORIGINAL spelling on purpose - it is
+        # where the operator has to go and look, and that file has not moved yet.
+        LEGACY_ERE="$LEGACY_SCAN_ERE" perl -ne '
+            chomp;
+            if (/^(.*?):([0-9]+):(.*)$/) {
+                my ($p, $l) = ($1, $2);
+                $_ = $3;
+                '"$PERL_PROG"'
+                print "$p:$l:$_\n" if /$ENV{LEGACY_ERE}/;
+            }
+        ' < "$TMP/legacy-refs.txt" > "$TMP/unmapped-refs.txt"
+    fi
+
+    n_paths=$(count_lines "$TMP/unmapped-paths.txt")
+    n_refs=$(count_lines "$TMP/unmapped-refs.txt")
+
+    if [ "$n_paths" -eq 0 ] && [ "$n_refs" -eq 0 ]; then
+        echo "  legacy prefix      ${LEGACY_DOT_PREFIX}   (derived from PKG_MAP, not hardcoded)"
+        echo "  VERDICT            every legacy package in this tree is named by a rule"
+        return 0
+    fi
+
+    echo "  legacy prefix      ${LEGACY_DOT_PREFIX}   (derived from PKG_MAP, not hardcoded)"
+    echo
+    echo "  PACKAGES WITH NO RULE:"
+    # The DIRECTORY of an unmapped file, and the TEXT of an unmapped reference. Not the reference's
+    # address - a hit's own path is full of the legacy prefix, and feeding it in here would name the
+    # file's package as if it were the thing with no rule.
+    : > "$TMP/unmapped-subjects.txt"
+    if [ "$n_paths" -gt 0 ]; then
+        sed 's#/[^/]*$##' "$TMP/unmapped-paths.txt" >> "$TMP/unmapped-subjects.txt"
+    fi
+    sed 's#^[^:]*:[0-9]*:##' "$TMP/unmapped-refs.txt" >> "$TMP/unmapped-subjects.txt"
+    { grep -oE "$LEGACY_TOKEN_ERE" "$TMP/unmapped-subjects.txt" || true; } |
+        sort -u | sed 's/^/      /'
+
+    if [ "$n_paths" -gt 0 ]; then
+        echo
+        echo "  unmapped FILES (they would not have moved at all):"
+        sed 's/^/      /' "$TMP/unmapped-paths.txt"
+    fi
+    if [ "$n_refs" -gt 0 ]; then
+        echo
+        echo "  unmapped REFERENCES (shown at their address, with the text as it would survive):"
+        sed 's/^/      /' "$TMP/unmapped-refs.txt"
+    fi
+
+    die "the packages named above match the legacy prefix and NO rule in PKG_MAP maps them.
+     There is no catch-all any more, on purpose: the one that used to absorb these mapped them
+     onto a same-named prefix under the new root, so the token the rename exists to remove
+     survived the rename by design. Decide what each package should become and add an explicit
+     rule - or, where the reference is configuration naming a package that will no longer exist,
+     delete the reference rather than carrying dead configuration into the new namespace.
+     Do NOT add a general fallback to make this message go away."
+}
+
+# --------------------------------------------------------------------------------------------------
+# The residue report - a one-off, for judgement. NOT a gate, and NOT a standing check.
+# --------------------------------------------------------------------------------------------------
+
+RESIDUE_LIVENESS="$TMP/residue-liveness.txt"
+RESIDUE_PRE="$TMP/residue-pre.tsv"
+
+# Proven ONCE, early, and recorded - the report at the end prints the recording. Running it early is
+# the point: a dead pattern is discovered before the tree is transformed, not after, when the only
+# evidence of what the tree used to contain has already been rewritten.
+#
+# PROVEN WITH `git grep`, NOT WITH `grep`, AND THAT IS NOT PEDANTRY. They are different regex
+# engines and they disagree about exactly the construct that caused the false clean result: on this
+# machine `grep -qE '\bcsid\b'` MATCHES (BSD grep takes \b as a GNU-style word boundary) while
+# `git grep -cE '\bcsid\b'` over the same tree returns NOTHING and exits 1. Proving the pattern with
+# the wrong engine would have certified the broken pattern as live and then swept with the engine
+# that cannot run it - a liveness check that manufactures the false negative it exists to catch.
+# The sample is written to a scratch file so `git grep --no-index` can be pointed at it, which is
+# the only way to reach that engine without a tracked file.
+residue_prove_patterns() {
+    local name ere sample _mode dead=0
+    : > "$RESIDUE_LIVENESS"
+    while IFS='|' read -r name ere sample _mode; do
+        [ -n "$name" ] || continue
+        printf '%s\n' "$sample" > "$TMP/residue-sample.txt"
+        if git -C "$TMP" grep --no-index -qE "$ere" -- residue-sample.txt; then
+            printf '      %-26s %-26s live\n' "$name" "$ere" >> "$RESIDUE_LIVENESS"
+        else
+            printf '      %-26s %-26s DEAD - it does not even match its own sample\n' \
+                "$name" "$ere" >> "$RESIDUE_LIVENESS"
+            dead=$((dead + 1))
+        fi
+    done <<EOF
+$RESIDUE_PATTERNS
+EOF
+    if [ "$dead" -gt 0 ]; then
+        cat "$RESIDUE_LIVENESS" >&2
+        die "${dead} residue pattern(s) match nothing at all, so a sweep with them would report a
+     clean tree no matter what is in it. The usual cause is a PCRE-ism in a POSIX ERE - \\b in
+     particular is NOT a word boundary to git grep; it accepts the pattern, matches nothing, and
+     exits 1, which is indistinguishable from a tree that has nothing left to find. Note that
+     plain grep -E may well MATCH the same pattern, so testing it in a shell proves nothing."
+    fi
+}
+
+# Captured BEFORE anything is transformed. A pattern is allowed to be at zero here - that is the
+# goal state for a package already cleaned up - but the TOTAL is not, because a total of zero means
+# the sweep as a whole is measuring nothing, and "nothing to find" is indistinguishable from
+# "cannot find anything".
+residue_capture_pre_counts() {
+    local name ere _sample _mode n total=0
+    residue_prove_patterns
+    : > "$RESIDUE_PRE"
+    while IFS='|' read -r name ere _sample _mode; do
+        [ -n "$name" ] || continue
+        n=$( { git grep -cIE "$ere" -- . || true; } | awk -F: '{ s += $NF } END { print s + 0 }')
+        printf '%s\t%s\n' "$name" "$n" >> "$RESIDUE_PRE"
+        total=$((total + n))
+    done <<EOF
+$RESIDUE_PATTERNS
+EOF
+    if [ "$total" -eq 0 ]; then
+        die "every residue pattern found zero matching lines in the tree BEFORE the transformation.
+     A sweep that starts at zero cannot demonstrate anything afterwards, so this is treated as a
+     broken sweep rather than a clean tree. Check the patterns in RESIDUE_PATTERNS."
+    fi
+}
+
+residue_pre_count_of() { # <name>
+    awk -F'\t' -v n="$1" '$1 == n { print $2; exit }' "$RESIDUE_PRE"
+}
+
+# Which bucket does one `path:line:text` hit belong in? Printed in this order of precedence, and the
+# order matters: a named decision should read as a decision even when it would also have matched the
+# general "legitimate mention" pattern.
+#
+# Sets RESIDUE_CLASS rather than echoing it, and tests with bash's own matching rather than a grep:
+# the broadest pattern here matches every retained copyright notice in the tree, so this runs
+# thousands of times in one sweep and a command substitution plus a grep per line would be thousands
+# of process spawns.
+RESIDUE_CLASS=""
+residue_classify() { # <hit line> -> sets RESIDUE_CLASS to known|expected|finding
+    local hit="$1" sub _why path
+    while IFS='|' read -r sub _why; do
+        [ -n "$sub" ] || continue
+        case "$hit" in *"$sub"*) RESIDUE_CLASS=known; return 0 ;; esac
+    done <<EOF
+$RESIDUE_KNOWN
+EOF
+    path="${hit%%:*}"
+    # A file the completeness check excuses carries the old spelling as DATA or as a dated record.
+    if is_sweep_excluded "$path"; then RESIDUE_CLASS=expected; return 0; fi
+    if [[ "$hit" =~ $RESIDUE_EXPECTED_ERE ]]; then RESIDUE_CLASS=expected; return 0; fi
+    RESIDUE_CLASS=finding
+}
+
+residue_report() {
+    local name ere _sample mode pre known expected finding hit
+    local total_findings=0
+
+    echo "  A ONE-OFF MIGRATION REPORT, NOT A CHECK THAT WILL RUN AGAIN. It does not gate this run:"
+    echo "  the completeness check above is the gate. Read the findings and decide."
+    echo
+    echo "  pattern liveness (proven against a sample BEFORE the tree was transformed):"
+    cat "$RESIDUE_LIVENESS"
+    echo
+    echo "  sweep scope        every tracked text file - not just *.java. The silent survivors live"
+    echo "                     in logback*.xml, junit-platform.properties and META-INF/services/..."
+    echo
+
+    while IFS='|' read -r name ere _sample mode; do
+        [ -n "$name" ] || continue
+        pre="$(residue_pre_count_of "$name")"
+        : > "$TMP/res-hits.txt"
+        { git grep -nIE "$ere" -- . || true; } > "$TMP/res-hits.txt"
+
+        known=0; expected=0; finding=0
+        : > "$TMP/res-known.txt"; : > "$TMP/res-expected.txt"; : > "$TMP/res-finding.txt"
+        while IFS= read -r hit; do
+            [ -n "$hit" ] || continue
+            residue_classify "$hit"
+            case "$RESIDUE_CLASS" in
+                known)    printf '%s\n' "$hit" >> "$TMP/res-known.txt";    known=$((known + 1)) ;;
+                expected) printf '%s\n' "$hit" >> "$TMP/res-expected.txt"; expected=$((expected + 1)) ;;
+                *)        printf '%s\n' "$hit" >> "$TMP/res-finding.txt";  finding=$((finding + 1)) ;;
+            esac
+        done < "$TMP/res-hits.txt"
+        total_findings=$((total_findings + finding))
+
+        echo "  ${name}   (${ere})"
+        echo "      before ${pre} line(s)   after $((known + expected + finding)) line(s)   ->   ${known} known, ${expected} expected, ${finding} FINDING(S)"
+        if [ "$mode" = full ]; then
+            if [ "$known" -gt 0 ]; then
+                echo "      known:"
+                sed 's/^/          /' "$TMP/res-known.txt"
+            fi
+            if [ "$expected" -gt 0 ]; then
+                echo "      expected:"
+                sed 's/^/          /' "$TMP/res-expected.txt"
+            fi
+        fi
+        if [ "$finding" -gt 0 ]; then
+            echo "      FINDINGS:"
+            sed 's/^/          /' "$TMP/res-finding.txt"
+        fi
+        echo
+    done <<EOF
+$RESIDUE_PATTERNS
+EOF
+
+    echo "  known exclusions, each a decision someone made:"
+    sed 's/^/      /' <<EOF
+$RESIDUE_KNOWN
+EOF
+    echo
+    echo "  TOTAL FINDINGS     ${total_findings}"
+    if [ "$total_findings" -eq 0 ]; then
+        echo "  Every survivor is either a retained copyright notice, a reference to upstream's own"
+        echo "  issues or repository, a file that carries the old spelling as data, or a named"
+        echo "  exclusion above."
+    else
+        echo "  Each finding is a survivor that is NOT a retained copyright notice, NOT a reference to"
+        echo "  upstream's issues or repository, and NOT a named exclusion. Judge them individually."
+    fi
 }
 
 # --------------------------------------------------------------------------------------------------
@@ -921,6 +1314,9 @@ sed 's/^/      /' <<EOF
 $SWEEP_EXCLUDE
 EOF
 
+section "preflight: is every legacy package actually MAPPED?"
+check_unmapped_legacy
+
 section "prose that a mechanical rewrite would falsify"
 check_prose_guards
 
@@ -948,6 +1344,10 @@ if [ "$DO_COMMIT" = true ] && [ -n "$(git status --porcelain)" ]; then
 fi
 
 MOVE_REV=""
+
+# BEFORE anything changes. After the rewrite these numbers cannot be recovered from the tree, and a
+# report with no "before" column cannot tell a clean sweep from a broken one.
+residue_capture_pre_counts
 
 section "phase 1: move"
 do_moves
@@ -1023,6 +1423,9 @@ fi
 
 section "verification: completeness"
 completeness_check
+
+section "migration residue report (one-off - read it, it does not gate this run)"
+residue_report
 
 section "summary"
 echo "  moved              ${n_moves} file(s)"

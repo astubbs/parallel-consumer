@@ -27,9 +27,14 @@
 #                                                       find-and-replace on the dotted form misses
 #                                                       and the habitual grep cannot even see
 #    7. a MISSPELT reference is normalised            - parallalconsumer, from All_examples.xml
-#   7a. io.confluent.csid.utils folds into the internal utils package, NOT the general bz.stub.csid
-#                                                       a plain prefix rule would give it - and the
-#                                                       general csid rule stays shadow-free elsewhere
+#   7a. the general-utilities package folds into the internal utils package
+#   7b. the test-container package folds into the internal testcontainers package - it used to ride
+#                                                       the DELETED general fallback, so this is the
+#                                                       case that proves its own rule fires
+#   7c. NOTHING in the renamed tree carries the legacy token into the new namespace, as a path or as
+#                                                       a string. The deleted fallback minted exactly
+#                                                       that by design, and a completeness check on
+#                                                       the OLD spelling passes right through it
 #    8. java gets ` * Modifications Copyright ...`    - block-comment continuation
 #    9. XML gets it INSIDE the <!-- --> block         - and NEVER a `//`
 #   10. YAML gets a `#` prefix                        - and NEVER a `//`
@@ -56,6 +61,18 @@
 #   24. every prose guard still MATCHES its sentence in the real tree - a guard whose prose was
 #                                                       reworded or corrected matches nothing and
 #                                                       reports "none found", which reads as a pass
+#   25. NEGATIVE CONTROL: an unmapped package DIRECTORY makes the run refuse, before it moves
+#                                                       anything, and names the package
+#   26. NEGATIVE CONTROL: an unmapped package REFERENCE in configuration does the same. There is no
+#                                                       fallback rule to absorb it any more, and
+#                                                       that refusal is what replaced the fallback
+#   27. the run prints a residue report over EVERY tracked file, with its patterns proven live
+#   28. NEGATIVE CONTROL: a residue pattern that matches nothing - a \b in a POSIX ERE, the exact
+#                                                       shape that published a false clean result -
+#                                                       aborts the run instead of reporting clean
+#   29. CONTROL ARM: reversing PKG_MAP produces a byte-identical tree. The rules are disjoint
+#                                                       prefixes now, so order no longer decides the
+#                                                       outcome; it did while the fallback existed
 #
 # Cases 17-19 are the ones worth keeping honest about. A checker nobody has seen fail is decoration,
 # and these three are the shapes that fail GREEN in production: the mutation lane exits 0 when its
@@ -176,6 +193,21 @@ public class Bar {
 }
 JAVA
 
+        # The other package under that prefix. It used to ride the general fallback rule and land at
+        # a top-level bz.stub.<legacy-token>.testcontainers; it now has a rule of its own, and this
+        # file is what proves the rule fires rather than the fallback that no longer exists.
+        mkdir -p parallel-consumer-core/src/test/java/io/confluent/csid/testcontainers
+        cat > parallel-consumer-core/src/test/java/io/confluent/csid/testcontainers/FilteredLog.java <<JAVA
+package io.confluent.csid.testcontainers;
+
+/*-
+ * Copyright (C) ${CONFLUENT_YEARS} Confluent, Inc.
+ */
+
+public class FilteredLog {
+}
+JAVA
+
         # A fork-original java file: no Confluent notice, so it must NOT be given a modifications
         # line - that would claim a derivation that does not exist.
         mkdir -p parallel-consumer-core/src/test/java/io/confluent/parallelconsumer
@@ -186,7 +218,10 @@ package io.confluent.parallelconsumer;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.confluent.csid.testcontainers.FilteredLog;
+
 public class ForkOnly {
+    private FilteredLog log;
 }
 JAVA
 
@@ -200,7 +235,7 @@ JAVA
 -->
 <configuration>
     <logger name="io.confluent.parallelconsumer" level="info"/>
-    <logger name="io.confluent.csid" level="info"/>
+    <logger name="io.confluent.csid.testcontainers" level="info"/>
 </configuration>
 XML
 
@@ -332,30 +367,46 @@ assert_absent ".properties never gets a // comment" "$propfile" "// ${MODS}"
 assert_absent "a fork-original file gets NO modifications line" \
     "$FIX/parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ForkOnly.java" "$MODS"
 
-# --- 7a: the io.confluent.csid.utils special case: it folds into the internal utils package, NOT
-# the general bz.stub.csid path a plain prefix rule would give it ---
+# --- 7a: the general-utilities package folds into the internal utils package ---
 utilsfile="$FIX/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils/Bar.java"
-assert_contains "io.confluent.csid.utils moves under the directory the special case names" \
+assert_contains "the general-utilities package moves under the directory its rule names" \
     "$utilsfile" "class Bar"
 assert_contains "its package declaration is rewritten to bz.stub.parallelconsumer.internal.utils" \
     "$utilsfile" "package bz.stub.parallelconsumer.internal.utils;"
-if [ -f "$FIX/parallel-consumer-core/src/main/java/bz/stub/csid/utils/Bar.java" ]; then
-    echo "FAIL: the general bz.stub.csid.utils path was used - the special case was shadowed"
-    failures=$((failures + 1))
-else
-    echo "ok:   the general bz.stub.csid.utils path is NOT used (the special case is not shadowed)"
-fi
 assert_contains "the import of the folded class is rewritten to its new package" \
     "$javafile" "import bz.stub.parallelconsumer.internal.utils.Bar;"
-assert_absent "no io.confluent.csid.utils spelling survives in the importing file" \
+assert_absent "no old spelling of the folded utils package survives in the importing file" \
     "$javafile" "io.confluent.csid.utils"
 
-# --- the general io.confluent.csid rule still applies OUTSIDE .utils, unaffected by the special
-# case above (this is the ordering check: a bug that let the specific rule swallow the general
-# prefix, or vice versa, would show up here) ---
-assert_contains "io.confluent.csid (non-utils) still takes the general csid rule" \
-    "$xmlfile" 'name="bz.stub.csid"'
-assert_absent "the old io.confluent.csid spelling does not survive" "$xmlfile" "io.confluent.csid"
+# --- 7b: the test-container package folds into the internal testcontainers package. It used to
+# take the DELETED general fallback, so this is the case that proves the new explicit rule fires ---
+tcfile="$FIX/parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/testcontainers/FilteredLog.java"
+assert_contains "the test-container package moves under the directory its rule names" \
+    "$tcfile" "class FilteredLog"
+assert_contains "its package declaration is rewritten to bz.stub.parallelconsumer.internal.testcontainers" \
+    "$tcfile" "package bz.stub.parallelconsumer.internal.testcontainers;"
+assert_contains "a logger name for it is rewritten to the same destination" \
+    "$xmlfile" 'name="bz.stub.parallelconsumer.internal.testcontainers"'
+assert_contains "an import of it is rewritten too" \
+    "$FIX/parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ForkOnly.java" \
+    "import bz.stub.parallelconsumer.internal.testcontainers.FilteredLog;"
+
+# --- 7c: THE POINT OF DELETING THE FALLBACK. Nothing anywhere in the renamed tree may carry the
+# legacy token into the new namespace - not as a directory, not as a string. The old fallback
+# produced bz.stub.<legacy-token>.* by design, so a completeness check on the OLD spelling would
+# have passed while the token lived on under the new root. Assert the new spelling's absence. ---
+if [ -n "$(cd "$FIX" && git ls-files | grep -E '(^|/)bz/stub/csid/' || true)" ]; then
+    echo "FAIL: a bz/stub/csid/... path exists - the legacy token survived into the new namespace"
+    failures=$((failures + 1))
+else
+    echo "ok:   no bz/stub/csid/... path exists (the legacy token did not survive the rename)"
+fi
+if [ -n "$(cd "$FIX" && git grep -lF 'bz.stub.csid' -- . || true)" ]; then
+    echo "FAIL: the string bz.stub.csid appears in the renamed tree - the legacy token survived"
+    failures=$((failures + 1))
+else
+    echo "ok:   the string bz.stub.csid appears nowhere (no fallback minted a legacy-token package)"
+fi
 
 # --- 13: historical documents ---
 assert_contains "historical docs/plans/ prose is left exactly as written" \
@@ -438,6 +489,174 @@ new_fixture "$d"
 run_script "$d" --defer-prose > /dev/null
 assert "POSITIVE CONTROL: with nothing planted the completeness check passes" 0 \
     "$(run_script "$d" --verify-only)"
+
+# --------------------------------------------------------------------------------------------------
+# 25-26. NEGATIVE CONTROLS - an UNMAPPED legacy package must stop the run and be named
+# --------------------------------------------------------------------------------------------------
+#
+# These two are the control arm for deleting the general fallback rule. With the fallback in place
+# both of these cases pass SILENTLY and produce a package under the new root still carrying the
+# legacy token - which is the failure the deletion exists to prevent, and it is invisible to a
+# completeness check because the check looks for the OLD spelling and the fallback has already
+# rewritten it.
+#
+# Each asserts three things, and the third is the one that makes the refusal useful rather than
+# merely loud: exit 1, nothing moved, and the offending PACKAGE named in the output. A refusal that
+# says only "something is wrong" leaves the operator to find it.
+
+assert_refuses_unmapped() { # <description> <fixture-mutation as a shell snippet> <package to name>
+    local desc="$1" mutate="$2" pkg="$3"
+    local d="$TMP/unmapped$RANDOM$RANDOM"
+    new_fixture "$d"
+    ( cd "$d" && eval "$mutate" && git add -A && git commit -qm "add an unmapped legacy package" )
+    local ec
+    ec="$(run_script "$d" --defer-prose)"
+    assert "$desc" 1 "$ec"
+    assert "  ... and nothing moved before it refused" "" "$(cd "$d" && git status --porcelain)"
+    if grep -q "PACKAGES WITH NO RULE" "$TMP/out.txt" && grep -qF "$pkg" "$TMP/out.txt"; then
+        echo "ok:     ... and the offending package is named ($pkg)"
+    else
+        echo "FAIL:   ... but the output did not name the offending package ($pkg)"
+        failures=$((failures + 1))
+        cat "$TMP/out.txt"
+    fi
+}
+
+assert_refuses_unmapped \
+    "NEGATIVE CONTROL: an unmapped package DIRECTORY makes the run refuse" \
+    'mkdir -p parallel-consumer-core/src/main/java/io/confluent/csid/orphan
+     printf "package io.confluent.csid.orphan;\n\npublic class Orphan {\n}\n" \
+        > parallel-consumer-core/src/main/java/io/confluent/csid/orphan/Orphan.java' \
+    "io/confluent/csid/orphan"
+
+assert_refuses_unmapped \
+    "NEGATIVE CONTROL: an unmapped package REFERENCE in configuration makes the run refuse" \
+    'printf "%s\n" "    <logger name=\"io.confluent.csid\" level=\"info\"/>" \
+        >> parallel-consumer-core/src/test/resources/logback-test.xml' \
+    "io.confluent.csid"
+
+# POSITIVE CONTROL for the pair above: the unmutated fixture has every package mapped, so the same
+# preflight must PASS. Without this, both assertions would hold even if the guard simply always
+# refused.
+d="$TMP/mapped"
+new_fixture "$d"
+ec="$(run_script "$d" --defer-prose)"
+assert "POSITIVE CONTROL: with every package mapped the preflight passes" 0 "$ec"
+if grep -q "every legacy package in this tree is named by a rule" "$TMP/out.txt"; then
+    echo "ok:     ... and says so explicitly"
+else
+    echo "FAIL:   ... but did not report the preflight verdict"
+    failures=$((failures + 1))
+fi
+
+# --------------------------------------------------------------------------------------------------
+# 27-28. The residue report, and the dead-pattern control
+# --------------------------------------------------------------------------------------------------
+#
+# The report itself is advisory - it does not gate the run - so the thing worth testing is the one
+# part of it that CAN fail: the liveness proof. A pattern that matches nothing produces a report
+# indistinguishable from a clean tree, which is how a sibling branch published a false clean result.
+
+for needle in "migration residue report" "pattern liveness" "TOTAL FINDINGS" "every tracked text file"; do
+    if grep -qF "$needle" "$TMP/out.txt"; then
+        echo "ok:   the run prints the residue report ($needle)"
+    else
+        echo "FAIL: the residue report is missing '$needle'"
+        failures=$((failures + 1))
+    fi
+done
+
+# The control. One term changed: a \b is spliced into one residue pattern, which git grep accepts
+# and then matches nothing with. Note that plain `grep -E` MATCHES \b on both GNU and BSD, so a
+# liveness check written with the wrong engine would certify this pattern as live - which is why
+# the script proves its patterns with git grep and why this control is worth having.
+d="$TMP/deadpattern"
+new_fixture "$d"
+perl -i -pe "s/general-utils-token\\|csid\\|/general-utils-token|\\\\bcsid\\\\b|/" "$d/bin/rename-packages.sh"
+# The guard tests THE PATTERN LINE, not the file. Testing the file passes on a prose mention of the
+# same construct in a comment - which is exactly how this control first reported itself as built
+# while the splice had silently matched nothing.
+if grep -qE "^RESIDUE_PATTERNS='general-utils-token\|\\\\bcsid\\\\b\|" "$d/bin/rename-packages.sh"; then
+    # Committed, or the script refuses to start on a dirty tree and the run exits 2 for a reason
+    # that has nothing to do with the pattern under test.
+    (cd "$d" && git add -A && git commit -qm "splice a dead residue pattern")
+    ec="$(run_script "$d" --defer-prose)"
+    assert "NEGATIVE CONTROL: a residue pattern that matches nothing aborts the run" 1 "$ec"
+    if grep -q "DEAD - it does not even match its own sample" "$TMP/out.txt"; then
+        echo "ok:     ... and names the dead pattern rather than reporting a clean sweep"
+    else
+        echo "FAIL:   ... but did not name the dead pattern"
+        failures=$((failures + 1))
+        cat "$TMP/out.txt"
+    fi
+else
+    echo "FAIL: could not splice a dead pattern into the fixture's copy of the script - the control was never built"
+    failures=$((failures + 1))
+fi
+
+# --------------------------------------------------------------------------------------------------
+# 29. CONTROL ARM: PKG_MAP is order-independent now, and was not before
+# --------------------------------------------------------------------------------------------------
+#
+# The rules are mutually disjoint prefixes once the general fallback is gone, so the table should
+# produce the same tree whichever order it is applied in. Stated as a prediction before running:
+# reversing PKG_MAP changes nothing, and `git diff` between the two renamed trees is empty.
+#
+# This is NOT a licence to stop writing specific rules first. It is a measurement of today's table,
+# kept runnable so that adding a rule which DOES overlap another shows up here as a difference
+# instead of as a package quietly landing in the wrong place.
+
+reverse_pkg_map() { # <dir> - rewrite the fixture's copy of the script with PKG_MAP reversed
+    # Two statements, NOT `local d="$1" s="$d/bin/..."`. Bash expands every argument to `local`
+    # before the builtin runs, so the second `$d` there is the GLOBAL d - which this file happens to
+    # have set from an earlier case, so the mis-scoped version silently rewrites a different
+    # fixture's script and the control arm quietly stops being a control.
+    local d="$1"
+    local s="$d/bin/rename-packages.sh"
+    awk '
+        /^PKG_MAP="/ { print; inmap = 1; next }
+        inmap {
+            line = $0
+            last = (line ~ /"$/)
+            sub(/"$/, "", line)
+            rules[++n] = line
+            if (last) {
+                for (i = n; i >= 1; i--) print rules[i] (i == 1 ? "\"" : "")
+                inmap = 0
+            }
+            next
+        }
+        { print }
+    ' "$s" > "$s.new" && mv "$s.new" "$s"
+}
+
+d_fwd="$TMP/order-forward"
+d_rev="$TMP/order-reversed"
+new_fixture "$d_fwd"
+new_fixture "$d_rev"
+reverse_pkg_map "$d_rev"
+# Committed, or the script refuses to start on a dirty tree - which would look like the reversed
+# order failing when in fact it was never run.
+(cd "$d_rev" && git add -A && git commit -qm "reverse PKG_MAP")
+if bash -n "$d_rev/bin/rename-packages.sh" 2>/dev/null &&
+   [ "$(grep -c '^io\.confluent' "$d_rev/bin/rename-packages.sh")" = "$(grep -c '^io\.confluent' "$d_fwd/bin/rename-packages.sh")" ] &&
+   [ "$(grep -m1 '^io\.confluent' "$d_rev/bin/rename-packages.sh")" != "$(grep -m1 '^io\.confluent' "$d_fwd/bin/rename-packages.sh")" ]; then
+    ec_fwd="$(run_script "$d_fwd" --defer-prose)"
+    ec_rev="$(run_script "$d_rev" --defer-prose)"
+    assert "CONTROL ARM: the forward order applies cleanly"  0 "$ec_fwd"
+    assert "CONTROL ARM: the reversed order applies cleanly" 0 "$ec_rev"
+    # Compare the TREES, not the logs: the two runs differ only in the order of the rules, and the
+    # question is whether any file landed anywhere different.
+    fwd_tree="$(cd "$d_fwd" && git ls-files | sort)"
+    rev_tree="$(cd "$d_rev" && git ls-files | sort)"
+    assert "CONTROL ARM: reversing PKG_MAP moves every file to the same place" "$fwd_tree" "$rev_tree"
+    fwd_hash="$(cd "$d_fwd" && git ls-files -s -- . | grep -v 'bin/rename-packages.sh' | sort)"
+    rev_hash="$(cd "$d_rev" && git ls-files -s -- . | grep -v 'bin/rename-packages.sh' | sort)"
+    assert "CONTROL ARM: and every file's CONTENT is byte-identical too" "$fwd_hash" "$rev_hash"
+else
+    echo "FAIL: could not reverse PKG_MAP in the fixture's copy - the control arm was never built"
+    failures=$((failures + 1))
+fi
 
 # --------------------------------------------------------------------------------------------------
 # 20-21. Prose guards
