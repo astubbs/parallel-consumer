@@ -194,7 +194,7 @@ class DashboardServerTest {
             assertThat(response.body)
                     .doesNotContain("internal detail")
                     .doesNotContain("IllegalStateException")
-                    .doesNotContain("io.confluent");
+                    .doesNotContain("bz.stub");
 
             // and the server is still serving - one bad handler must not take the event loop with it
             assertThat(RawHttp.get(server.getPort(), "/").statusCode).isEqualTo(200);
