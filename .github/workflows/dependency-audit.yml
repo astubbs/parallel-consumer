@@ -86,10 +86,29 @@ jobs:
     # difference. Job names are an API here, referenced by repo rulesets (see repo-hygiene.yml's
     # header): renaming is free only while this check is not yet required and not on master.
     name: "deps: whole-tree CVE scan"
-    # Fork PRs receive no secrets, so the audit would 401 and the guard would correctly go red on
-    # every one of them - a permanent false alarm that teaches people to ignore the check. Skip
-    # instead. Same test the self-hosted lanes use.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # TWO WAYS A PR ARRIVES WITHOUT THE OSS INDEX CREDENTIALS, AND BOTH MUST SKIP RATHER THAN GO RED.
+    # The preflight below turns a missing secret into a red check on purpose - it is the right answer
+    # when the secret is missing by accident. On these two it would be missing by design, every time,
+    # which is a permanent false alarm that teaches people to ignore the check.
+    #
+    #   1. FORK PRs receive no secrets at all. Same test the self-hosted lanes use.
+    #   2. DEPENDABOT PRs. The branch is in THIS repository, so the fork test above passes it - but
+    #      GitHub swaps the secret store for a Dependabot-triggered run: `secrets.*` resolves against
+    #      Dependabot secrets, not Actions secrets, so OSSINDEX_USERNAME/OSSINDEX_TOKEN come back
+    #      empty and the preflight fails deterministically. Every dependency-update PR would carry a
+    #      red whole-tree audit, on the PRs least likely to be read line by line.
+    #
+    # Gated on `github.actor` rather than the PR author because the actor is what actually selects
+    # the secret store: when a human pushes to a Dependabot branch the run is theirs, Actions secrets
+    # ARE present, and the scan should run normally.
+    #
+    # The alternative - mirroring the two secrets into the Dependabot secret store - was rejected. It
+    # would put the OSS Index token in a second store, reachable by a job that runs `test-compile`
+    # over a dependency set an automated process just changed. The scheduled whole-tree scan covers
+    # what those PRs merge anyway, one channel later and without handing the credential around.
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
