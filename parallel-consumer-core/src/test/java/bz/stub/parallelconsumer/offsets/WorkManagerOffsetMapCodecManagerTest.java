@@ -1,14 +1,15 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
-import io.confluent.parallelconsumer.state.PartitionState;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -36,10 +37,10 @@ import java.nio.ByteBuffer;
 import java.util.*;
 
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.csid.utils.Range.range;
-import static io.confluent.parallelconsumer.offsets.OffsetCodecTestUtils.bitmapStringToIncomplete;
-import static io.confluent.parallelconsumer.offsets.OffsetCodecTestUtils.incompletesToBitmapString;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
+import static bz.stub.parallelconsumer.internal.utils.Range.range;
+import static bz.stub.parallelconsumer.offsets.OffsetCodecTestUtils.bitmapStringToIncomplete;
+import static bz.stub.parallelconsumer.offsets.OffsetCodecTestUtils.incompletesToBitmapString;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Optional.of;
 import static org.assertj.core.api.Assertions.assertThat;

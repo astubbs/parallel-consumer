@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.Range;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.state.PartitionState;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.internal.utils.Range;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.ToString;
@@ -18,11 +18,11 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static io.confluent.csid.utils.Range.range;
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v1;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
-import static io.confluent.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
+import static bz.stub.parallelconsumer.internal.utils.Range.range;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v1;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
+import static bz.stub.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
 
 /**
  * Encode with multiple strategies at the same time.

@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.MathUtils;
-import io.confluent.csid.utils.Range;
+import bz.stub.parallelconsumer.internal.utils.MathUtils;
+import bz.stub.parallelconsumer.internal.utils.Range;
 import lombok.Getter;
 import lombok.ToString;
 
@@ -15,9 +15,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.*;
-import static io.confluent.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.*;
+import static bz.stub.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
 
 /**
  * RunLength encoder that leverages the nature of this system.

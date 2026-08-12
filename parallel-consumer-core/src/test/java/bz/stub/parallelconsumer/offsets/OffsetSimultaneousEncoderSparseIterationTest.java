@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -18,8 +18,8 @@ import java.util.Random;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
-import static io.confluent.parallelconsumer.offsets.OffsetSimultaneousEncoder.COMPRESSION_FORCED_RESOURCE_LOCK;
-import static io.confluent.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
+import static bz.stub.parallelconsumer.offsets.OffsetSimultaneousEncoder.COMPRESSION_FORCED_RESOURCE_LOCK;
+import static bz.stub.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
 import static org.junit.jupiter.api.parallel.ResourceAccessMode.READ;
 
 /**
@@ -120,7 +120,7 @@ class OffsetSimultaneousEncoderSparseIterationTest {
      * Deliberately covers: empty and single-offset ranges, no/all incompletes, incompletes at the very first and very
      * last offset of the range (the two positions the sparse construction has to clamp), consecutive blocks, long
      * alternating runs, and randomised sparse/dense patterns at a variety of range sizes and base offsets - including
-     * the {@link io.confluent.parallelconsumer.state.PartitionState#KAFKA_OFFSET_ABSENCE} base used elsewhere in these
+     * the {@link bz.stub.parallelconsumer.state.PartitionState#KAFKA_OFFSET_ABSENCE} base used elsewhere in these
      * tests.
      */
     static List<Scenario> scenarios() {
