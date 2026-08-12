@@ -1,6 +1,7 @@
 <!--
 
     Copyright (C) 2020-2022 Confluent, Inc.
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <configuration packagingData="true" scan="true" scanPeriod="5 seconds" debug="false">
@@ -28,21 +29,21 @@
 
 
     <!-- current -->
-    <!--    <logger name="io.confluent.parallelconsumer.integrationTests.state.PartitionStateCommittedOffsetIT" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.integrationTests.state.PartitionStateCommittedOffsetIT" level="debug"/>-->
 
 
     <!-- primary -->
-    <logger name="io.confluent.parallelconsumer" level="info"/>
+    <logger name="bz.stub.parallelconsumer" level="info"/>
 
     <!-- #857 silent-stall investigation: uncomment to trace the "asked for work / got none / but work is in
          the queues" condition and the broker poller pause/resume state under contention. Off by default (these
          are verbose and perturb stall timing). See
          docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md -->
-    <!--    <logger name="io.confluent.parallelconsumer.state.ShardManager" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.state.WorkManager" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.state.ShardManager" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.state.WorkManager" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer" level="trace"/>-->
 
 
     <logger name="org.apache.kafka" level="warn"/>
@@ -64,67 +65,67 @@
     <!--    <logger name="org.apache.kafka.clients.Metadata" level="debug"/>-->
 
     <!-- docker logs -->
-    <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
+    <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
 
 
-    <!--    <logger name="io.confluent.csid.utils.LatchTestUtils" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.internal.utils.LatchTestUtils" level="trace"/>-->
 
-    <!--    <logger name="io.confluent.parallelconsumer.internal.DynamicLoadFactor" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.internal.DynamicLoadFactor" level="debug"/>-->
 
 
-    <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer" level="debug"/>-->
 
     <!-- Key classes -->
-    <!--        <logger name="io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="debug"/>-->
-    <!-- <logger name="io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="trace"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.state.PartitionStateManager" level="trace"/> -->
-    <!--        <logger name="io.confluent.parallelconsumer.state" level="trace"/>-->
+    <!--        <logger name="bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="debug"/>-->
+    <!-- <logger name="bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.state.PartitionStateManager" level="trace"/> -->
+    <!--        <logger name="bz.stub.parallelconsumer.state" level="trace"/>-->
 
     <!-- Offset committing-->
-    <!--    <logger name="io.confluent.parallelconsumer.internal.AbstractOffsetCommitter" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.offsets" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.offsets.OffsetSimultaneousEncoder" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.internal.AbstractOffsetCommitter" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.offsets" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.offsets.OffsetSimultaneousEncoder" level="debug"/>-->
 
     <!-- Broker polling -->
-    <!--    <logger name="io.confluent.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.internal.BrokerPollSystem" level="trace"/>-->
-    <!--            <logger name="io.confluent.parallelconsumer.internal" level="debug"/>-->
-    <!--            <logger name="io.confluent.parallelconsumer.state.WorkManager" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem" level="trace"/>-->
+    <!--            <logger name="bz.stub.parallelconsumer.internal" level="debug"/>-->
+    <!--            <logger name="bz.stub.parallelconsumer.state.WorkManager" level="debug"/>-->
 
 
-    <!--    <logger name="io.confluent.parallelconsumer.BatchTestMethods" level="trace"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.state.RemovedPartitionState" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.BatchTestMethods" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.state.RemovedPartitionState" level="trace"/>-->
 
-    <!--    <logger name="io.confluent.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase" level="debug"/>-->
-    <!--    <logger name="io.confluent.csid.utils.LongPollingMockConsumer" level="trace"/>-->
-
-
-    <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
-    <!--        <logger name="io.confluent.parallelconsumer" level="trace"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer" level="error"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.ParallelEoSStreamProcessorPauseResumeTest" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer" level="trace"/>-->
 
 
-    <!--            <logger name="io.confluent.parallelconsumer" level="trace" />-->
+    <!--    <logger name="bz.stub.parallelconsumer" level="debug"/>-->
+    <!--        <logger name="bz.stub.parallelconsumer" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer" level="error"/>-->
+
+
+    <!--            <logger name="bz.stub.parallelconsumer" level="trace" />-->
 
     <!-- notable specifics -->
-    <!--    <logger name="io.confluent.parallelconsumer.offsets.OffsetMapCodecManager" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.offsets.OffsetRunLength" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.offsets.OffsetMapCodecManager" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.offsets.OffsetRunLength" level="trace"/>-->
 
     <!-- Tests    -->
-    <!--    <logger name="io.confluent.parallelconsumer.BatchTestMethods" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.ParallelEoSStreamProcessorTest" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.integrationTests" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.integrationTests.LargeVolumeInMemoryTests" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.ParallelConsumerTestBase" level="trace"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.BatchTestMethods" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.ParallelEoSStreamProcessorTest" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.integrationTests" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.integrationTests.LargeVolumeInMemoryTests" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.ParallelConsumerTestBase" level="trace"/>-->
 
-    <!--    <logger name="io.confluent.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest" level="debug"/>-->
 
 
     <!-- containers -->
-    <!--    <logger name="io.confluent.parallelconsumer.integrationTests.DbTest" level="debug"/>-->
-    <!--    <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.integrationTests.DbTest" level="debug"/>-->
+    <!--    <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="debug"/>-->
 
     <!-- related -->
     <!--    <logger name="org.apache.kafka.clients" level="info"/>-->

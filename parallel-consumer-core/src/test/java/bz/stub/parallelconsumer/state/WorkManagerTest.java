@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
@@ -6,16 +6,16 @@ package io.confluent.parallelconsumer.state;
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.csid.utils.Range;
-import io.confluent.parallelconsumer.FakeRuntimeException;
-import io.confluent.parallelconsumer.ManagedTruth;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
-import io.confluent.parallelconsumer.truth.CommitHistorySubject;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.internal.utils.Range;
+import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ManagedTruth;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.truth.CommitHistorySubject;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -42,7 +42,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;

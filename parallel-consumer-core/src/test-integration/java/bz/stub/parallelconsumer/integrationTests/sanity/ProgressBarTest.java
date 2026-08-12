@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer.integrationTests.sanity;
+package bz.stub.parallelconsumer.integrationTests.sanity;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.ProgressBarUtils;
+import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;

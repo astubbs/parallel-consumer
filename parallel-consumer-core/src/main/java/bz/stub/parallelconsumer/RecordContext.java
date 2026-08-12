@@ -1,11 +1,12 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.state.ConsumerRecordId;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.ConsumerRecordId;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.*;
 import lombok.experimental.Delegate;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
