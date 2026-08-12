@@ -39,7 +39,11 @@ an older one has been superseded, absorbed by tooling, or is now stated twice.
   comment.
 - **Cite incidents, never retell them.** If the story behind a rule has no durable home yet, write
   it into `docs/solutions/` first and link it from there.
-- **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it.
+- **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it, and
+  **name the owner in the pointer**: "X owns this; what is here is the part that binds every
+  session". A pointer that only lists adjacent topics reads as *further detail*, so a reader who
+  found a complete-looking rule here stops - and then edits the copy instead of the original. The
+  doc it routes to states the same contract from its side, so either entrance reveals the owner.
 - **Do not pre-empt misreadings.** A rule needing three paragraphs to defend it against
   misinterpretation is a rule that needs rewriting.
 - **Before you move or rename any labelled block, grep the whole repo for its text** -
@@ -72,6 +76,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
 | [`docs/issue-references.md`](docs/issue-references.md) | Writing any reference to an issue or PR - the full convention and the gate |
+| [`docs/citations.md`](docs/citations.md) | Repairing a citation that no longer resolves, in a plan or solution write-up you may not rewrite |
 | [`docs/copyright.md`](docs/copyright.md) | Adding, renaming or extracting a file: which header it gets and why |
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
@@ -87,16 +92,28 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
-| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires a diagnosis, or a recorded owner-granted exception |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
-| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status | Editorial opinion, and upstream **issues** - those live in the fork mirrors |
+| **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status; plus a cache of *frozen* upstream **issue** facts | Editorial opinion, and the live state of an upstream issue - that belongs to its fork mirror |
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
 Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
 **already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
+### Cite by anchor, never by line number
+
+**Never cite a `file:line`.** An unrelated commit inserting lines above the target invalidates the
+citation while the file and the section are both intact, so it still reads as valid and nothing
+checks it. Cite the path plus the smallest distinctive greppable string - an identifier, a flag, a
+config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. Run
+the grep before you commit the citation.
+
+Repairing one that has already gone stale in a dated record is its own procedure, because those
+documents may not be rewritten to match today's code - [`docs/citations.md`](docs/citations.md)
+**owns that procedure**.
 
 ## `gh` defaults to the WRONG repo here - fix it before your first command
 
@@ -247,8 +264,8 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 
 ## Testing
 
-Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are in
-[`docs/testing.md`](docs/testing.md). Three rules bind regardless:
+[`docs/testing.md`](docs/testing.md) **owns this topic** - suite mechanics, the quarantine lane, the
+chaos suite, the ambient probe - and wins where the two disagree. Four rules bind regardless:
 
 - **⚠️ Be EXTREMELY careful modifying tests to make them pass, especially under
   parallelism/stress.** A test failing under concurrent load may be exposing a **real main-code bug
@@ -260,6 +277,15 @@ Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are 
   hides exactly the bugs this library exists to prevent. **When a broker integration test fails,
   read its `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing by hand** - and check the
   probe's thresholds before believing a clean one.
+- **A flake fails the build - there is no retry, deliberately.** The CI scripts no longer pass
+  `-Dsurefire.rerunFailingTestsCount=2`: it retried failures into green runs and hid three flakes no
+  ledger knew about, one of them a regression of an already-fixed one. **Do not restore it to get a
+  build green** - the lever is `@Quarantined` with a diagnosis
+  ([`docs/testing.md`](docs/testing.md)), which relocates the signal where a retry destroys it, and
+  nothing enforces this. Background:
+  [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md);
+  the flakes it uncovered are open in
+  [`docs/inflight/test-untracked-ci-flakes.md`](docs/inflight/test-untracked-ci-flakes.md).
 - **Reuse test utilities - search before you add.** Extend the shared helpers rather than writing a
   parallel one; a drifted copy of topic-creation logic once became a flaky-CI source. Where they
   live and what they cover: [`docs/testing.md`](docs/testing.md). Check `docs/solutions/` before
@@ -278,7 +304,8 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 - **Google Truth** for test assertions, with JUnit 5 and Mockito.
 - **License headers** are enforced by `bin/check-copyright-headers.sh`, and there is no tool that
   writes them - which header a new, modified, renamed or extracted file gets depends on its
-  provenance: [`docs/copyright.md`](docs/copyright.md). Two rules bind before you get there: do not
+  provenance, and [`docs/copyright.md`](docs/copyright.md) **owns that call**. Two rules bind
+  before you get there: do not
   touch an existing file's header unless that commit also changes the file substantively, and never
   bump a copyright year as an incidental or standalone change.
 
@@ -294,8 +321,9 @@ the model: an entry claimed a dependency version the pom had moved past). The te
 are *changing an existing claim to be true* (allowed) or *adding information about a change* (the
 generator's job).
 
-Write commit messages that can feed that generator - see [Commits](#commits). How generation works,
-and the state of each section: [`docs/releasing.md`](docs/releasing.md).
+Write commit messages that can feed that generator - see [Commits](#commits).
+[`docs/releasing.md`](docs/releasing.md) **owns the rest** - how generation works, the state of each
+section - and wins where the two disagree.
 
 ## Issue references
 
@@ -312,7 +340,8 @@ flip - `#29` and `#114` mean different things in each repo.
 - **Run `bin/check-issue-refs.sh` before you push.** It calls the same gate module CI does, so the
   rule cannot drift; a red run is always real. CI additionally scans the PR body.
 
-The threshold, the exemptions, and the reasoning: [`docs/issue-references.md`](docs/issue-references.md).
+[`docs/issue-references.md`](docs/issue-references.md) **owns this topic** - the threshold, the
+exemptions, the reasoning - and wins where the two disagree.
 
 ## Commits
 
@@ -378,6 +407,16 @@ Nothing lints commit messages, so all of this is on you.
   every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` gate fails a
   human-authored PR when the checklist is missing entirely *or* any box is left unchecked without an
   `N/A`, so dropping the template is not a bypass. Only real bot authors are exempt.
+- **Ask for the automated review when the PR is ready - it does not run on push.** Two routes, and
+  they are not interchangeable: comment **`@claude review this`** when you want findings that
+  mechanically block the merge (only that route can open inline review threads), or dispatch
+  `claude-code-review-dispatch.yml --ref master -f pr=<number> -f focus="<steer>"` when you want a
+  steer or the packaged review procedure. Enforced by the required `claude-review` check, so
+  **a red `claude-review` on a PR nobody has reviewed yet is the expected state, not a fault**,
+  and never something to fix by editing the gate. What exactly satisfies that check is stated in
+  one place only - [`docs/ci.md`](docs/ci.md), "The gate asks..." - along with which route to
+  reach for and why `--ref master` is required. Do not restate the rule here; it has drifted
+  before.
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the
   specific review comment, NOT as a separate top-level PR comment - a summary comment leaves the
   original conversation unresolved and can block merge on "unresolved conversations". When a finding
@@ -435,8 +474,8 @@ actually start it; if it maps to an upstream issue, link it rather than duplicat
 Work that maps to an upstream PR must have an entry in `src/docs/development/upstream-map.yaml`,
 updated **at every lifecycle transition of your own work, in the same commit that causes it**.
 Nothing automated checks the fork side of that mapping, so a stale entry passes every check and
-quietly rots. Work that maps to an upstream *issue* goes on the fork mirror instead - the manifest
-tracks upstream PRs only.
+quietly rots. An upstream *issue*'s live status is owned by its fork mirror, never the manifest.
 
-The manifest schema, the mirrors, the commit trailers and the upstream sweep are all in
-[`docs/upstream.md`](docs/upstream.md).
+[`docs/upstream.md`](docs/upstream.md) **owns this topic** - the manifest schema and what it may
+cache about an upstream issue, the mirrors, the commit trailers, the sweep. The above is only the
+part that binds every session; where the two disagree, that doc wins.

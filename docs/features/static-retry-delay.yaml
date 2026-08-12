@@ -1,0 +1,39 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Static retry delay
+category: processing
+module: parallel-consumer-core
+maturity: deprecated
+availability:
+  status: published
+  since: 0.3.0.0
+  evidence:
+    tag: 0.3.0.0
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    basis: defaultMessageRetryDelay is present as an option in this file at the 0.3.0.0 tag; the 0.3.0.0 release notes do not name it.
+  milestones:
+    - release: 0.3.2.0
+      basis: retryDelayProvider added, superseding the static delay for dynamic policies.
+    - release: 0.5.2.3
+      basis: The default was extracted to DEFAULT_STATIC_RETRY_DELAY and the option was marked @Deprecated pending a rename.
+summary: Wait one fixed delay before retrying any record whose user function threw.
+use_this_when:
+  - Every failure should back off by the same amount and no per-record policy is needed.
+setup:
+  option: ParallelConsumerOptions.defaultMessageRetryDelay
+  values:
+    - DEFAULT_STATIC_RETRY_DELAY is 1 second.
+opt_in:
+  mechanism: Set defaultMessageRetryDelay when building ParallelConsumerOptions; the default applies otherwise.
+  isolated_from_stable_modules: false
+boundaries:
+  - The option is @Deprecated; its Javadoc says it will be renamed to a static retry delay. Migrate to retryDelayProvider where a policy is needed, or expect the rename.
+  - retryDelayProvider overrides this option even when both are set, so a retained value can hide which policy is active.
+  - The delay is a target, not an exact scheduling guarantee.
+references:
+  - label: Retry-delay options
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+  - label: Custom retry delays
+    path: docs/features/custom-retry-delay.yaml

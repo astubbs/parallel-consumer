@@ -25,18 +25,28 @@ every PR by the Quarantine Audit job, and again before every lane run):
 
 **Machine-parsed format** (the checks depend on it): each entry is an unchecked checkbox line, `- [ ]`,
 immediately followed by the backticked test reference (`Class.method`), and its text must contain
-`Owner: PR #NN` (omit only for diagnosed-but-unowned entries, which the checks flag as advisory).
+`Owner: PR astubbs#NN` (omit only for diagnosed-but-unowned entries, which the checks flag as
+advisory). A bare `Owner: PR #NN` still parses, so older entries keep working, but prefer the
+qualified form: `bin/check-issue-refs.sh` rejects a bare `#NN` on an added line because the
+fork's numbers sit inside confluentinc's range, and before the qualifier was accepted this file
+could not satisfy both gates at once. `Owner: PR astubbs/parallel-consumer#NN` parses too.
 Unreliable tests carry `flapping = true` on the annotation itself (compile-checked, read by the lane
 reporter).
 
 Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@Quarantined` javadoc):
 
-1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose.
+1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose. The
+   repository owner can grant an explicit exception when the blocking cost outweighs the pressure;
+   the entry must say so ("rule-1 exception"), keep the failure signature as its reason, and carry
+   the diagnosis as its open task.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **Re-enable = the owning fix PR deletes the annotation AND this entry in the same commit**, after
    merging master - atomically restoring the test to the gating lane.
-4. Every entry needs an owning fix PR. An entry without one is diagnosed-but-unowned: flag it, find it
-   an owner.
+4. An owning fix PR is the goal, not a precondition. An entry without one is unowned and legal - the
+   audit flags it as an advisory, not an error, and the lane report on every PR plus the release
+   guard keep it loud until someone owns it. What the checks *hard-fail* is an owner claim that is
+   wrong: a closed-unmerged owner (orphaned entry), or a merged owner with the test still
+   quarantined (re-enable overdue).
 5. **A release is blocked while this list is non-empty** (`release.yml` guard; dry runs warn instead) -
    a release must not ship while tests are held out of the gates. Snapshots still publish (dev
    artifacts, master is always `-SNAPSHOT`).
@@ -49,5 +59,37 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-(none - both astubbs#80-family quarantines were re-enabled when PR astubbs#80 landed its drain-zombie and
-nudge-race fixes)
+Every entry below is a timing flake rather than a deterministic failure, so all carry
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
+were hidden by the surefire retry until astubbs#224 removed it.
+
+- [ ] `PCMetricsTest.metricsRegisterBinding` - compares a registry gauge against an expectation built
+  from a test-side counter snapshot taken earlier in the method, so two independently-advancing
+  values are read at different instants with nothing holding processing still between them. Seen as
+  `PARTITION_HIGHEST_COMPLETED_OFFSET` expected 203.0 but was 207.0 - four more records completed in
+  the gap, so the metric was *more* current than the expectation testing it. Diagnosis in
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+  Owner: PR astubbs#265, which replaces the `Thread.sleep(1000)` above the assertions with an
+  `await().untilAsserted(...)` on the trailing meters.
+
+- [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
+  the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
+  assertions, so the same signature can surface from any test that uses it. The unblocker is
+  scheduled *before* the elapsed clock starts, so the measured window begins later than the delay it
+  is compared against and is systematically short by however long arming the scheduler takes;
+  `isAtLeast(unblocksAfter)` then fails by a millisecond or two under load. Seen as `getElapsed()
+  expected to be at least PT20S but was PT19.998S` - 2ms short on a 20s bound - on a PR whose diff
+  contained no Java at all, which is what rules out PR-state under rule 2. Diagnosis in
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+  Owner: PR astubbs#262, which anchors the measurement to a nanos stamp taken just before
+  `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
+
+- [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
+  **UNDIAGNOSED, quarantined as an explicit rule-1 exception by owner decision**: at 4/45 it is the
+  most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
+  `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
+  `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier
+  quarantine attributed it to the retry-delay sleep and was reverted: that code runs *after* the
+  failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
+  unverified hypothesis and its falsification path are in
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).

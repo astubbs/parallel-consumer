@@ -15,23 +15,13 @@ deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub rel
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
 None of these has an issue of its own - they were found by reading code to diagnose something else.
-The first two are wrong *statements* in artefacts the release itself publishes, so they should not
-survive the release.
 
-1. **`CHANGELOG.adoc` says the Kafka client "stays on 3.9.1"; `pom.xml:121` says `3.9.2`.** The
-   release notes for an unreleased release are factually wrong. Decide which is intended and make
-   them agree.
-2. **The README's Roadmap sends readers to the *upstream* tracker** and refers to this repo in the
-   third person: *"have a look at the confluentinc/parallel-consumer GitHub issues, and clone
-   Antony's fork"* (`src/docs/README_TEMPLATE.adoc:1011-1012`). That is pre-fork text, it is the
-   section someone reads to answer "is this maintained?" (astubbs#195), and it is now doubly wrong because
-   all 78 upstream issues are mirrored *here*. Edit the template, not `README.adoc`.
-3. **`PCModule:127-129` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
+1. **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
    `messageBufferSize` is set, so `isMaxReached()` is true from startup and
-   `AbstractParallelEoSStreamProcessor:1130` logs *"Max loading factor steps reached"* at WARN on
+   `AbstractParallelEoSStreamProcessor` logs *"Max loading factor steps reached"* at WARN on
    every control-loop pass. Anyone following the README's buffer-tuning advice gets permanent log
    noise reporting a non-problem. Related: astubbs#155.
-4. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
+2. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
    but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a
    caller's `trace_id` is lost crossing into the worker threads and the vert.x event loop. Raised by
    a user in the `confluentinc#907` thread (astubbs#195).
@@ -46,9 +36,96 @@ survive the release.
   that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
   `README.adoc` regenerated.
 
+## Release gate: no disabled tests
+
+**0.6.0.0 does not ship while any test is disabled.** Tests currently carrying `@Disabled`:
+`VertxTest`, `ParallelEoSStreamProcessorTest` (two), and `MultiInstanceRebalanceTest`. All four
+predate the fork - they were added in 2021 and 2022, before this repo had a rule against muting or the
+`@Quarantined` mechanism that replaced it - so this is inherited debt rather than a rule being broken.
+One is not a muted test at all: `VertxTest.handleHttpResponseCodes`'s entire body is
+`assertThat(true).isFalse()`, a stub that was never written.
+
+Each needs the same decision: fix it, delete it, or quarantine it with a diagnosis under
+`@Quarantined`. Quarantining does not satisfy this gate on its own, because a release is separately
+blocked while the quarantine registry is non-empty - so it defers the same gate by another route.
+AGENTS.md already gives the reasoning for why muting is the wrong answer: it "loses the signal - a
+'known flake' can be a real product bug".
+
+This matters to the release rather than only to the codebase, because `docs/data/testing-evidence.yaml`
+asserts flake discipline as evidence, and a reader who greps for `@Disabled` a minute later is exactly
+the reader that data is written for.
+
+## This release is a stability release, and that is the point
+
+0.6.0.0 clears the known-defect scope and makes the evidence for that conclusion inspectable. Resolving
+known defects, and improving the machinery that finds and proves them, is a first-class outcome here
+rather than background maintenance behind a feature release.
+
+**Release condition.** 0.6.0.0 is cut only when every known **critical** defect in scope is resolved
+and each resolution has a named guard that passes. Critical is the line, deliberately: claiming "all
+known defects" would be a promise this project cannot keep, and non-critical defects are not claimed
+to be fixed. Unknown defects remain possible and must not be denied.
+Evidence is in `docs/data/testing-evidence.yaml`; the checks to run are in
+`docs/data/module-maturity.yaml` under `release_validation`. If a check fails, amend the claim rather
+than waive the item.
+
+**Deliberately not in this release:** virtual threads, micro-batching and the dead letter queue. These
+are new capabilities rather than known-defect exceptions, so deferring them does not weaken the gate.
+They carry horizons in `docs/data/roadmap.yaml`.
+
+**Not a 1.0 attempt.** Expect one or two more major 0.x releases first. What 1.0 waits on is in the
+roadmap data.
+
+## Say plainly that the experimental modules cannot affect plain PC
+
+If 0.6.0.0 ships new experimental modules - the Kafka Streams one (astubbs#255) and the Connect one -
+the release notes, README and any announcement must make it **obvious to an existing PC user that
+these have no bearing on their usage**. The failure mode to design against is someone reading
+"parallel-consumer now patches Kafka Streams internals at build time" and concluding *my plain PC
+setup just got riskier*. Nothing about that inference is true, and left uncorrected it costs the
+release trust it has not spent.
+
+The claim is provable, not reassurance - state it as a fact with its reason:
+
+- The experimental modules are **leaves**. They depend on `parallel-consumer-core`; nothing depends
+  on them. Core's pom does not reference them, and adding them changed no shipped code in any
+  existing module - verified on the spike branch against `origin/master`.
+- The patched Apache Kafka classes ship **only inside the experimental module's own jar**. A user who
+  does not depend on that artifact never has them on the classpath.
+- The experimental seam **cannot be reached** from the core, vert.x or reactor modules. It is not a
+  flag those modules read.
+
+So: **depending on the experimental artifact is the entire opt-in.** Not depending on it is a
+complete opt-out, requiring no configuration and no action.
+
+Two things to get right in the wording:
+
+- **Per-module maturity, not global.** The project ships a stable 0.6.0.0 *and* an alpha module at the
+  same time; that is a normal state, not a contradiction. Do not let one alpha module downgrade how
+  the release describes itself.
+- **Do not overcorrect into burying it.** The alpha is promotional material worth having - it should
+  be easy to find and try. The goal is an accurate blast radius, not a quiet one.
+
+## Promotional material wanted
+
+All four now exist as data. Each keeps its planning note, which holds the reasoning the data does not:
+
+- **The test suite presented as evidence** - `docs/data/testing-evidence.yaml`. The strongest available
+  answer to "this fork just added features". Reasoning: `docs/plans/2026-08-10-001-docs-testing-evidence-plan.md`.
+- **Per-module maturity** - `docs/data/module-maturity.yaml`, with reliability and API stability as
+  independent axes. Note that "pre-1.0 reserves the API surface, not reliability" is false: 1.0 also
+  waits on functionality still intended for the release, and on confidence reaching beyond the defects
+  already known. Reasoning: `docs/plans/2026-08-10-002-docs-module-maturity-plan.md`.
+- **A roadmap** of big-picture entries anchored on stated 1.0 exit criteria rather than dates -
+  `docs/data/roadmap.yaml`. Reasoning: `docs/plans/2026-08-10-003-docs-roadmap-plan.md`.
+- **A record per feature** - `docs/features/`, so capabilities stop being undocumented. Reasoning:
+  `docs/plans/2026-08-10-004-docs-feature-catalogue-plan.md`.
+
+What does not exist yet is the rendered documentation an agent generates from all of it.
+
 ## Do at release: one sweep over the upstream mirrors
 
-All 78 upstream issues are mirrored here (astubbs#44, astubbs#117-astubbs#195), and each carries a **Fork status** section
+The upstream issues are mirrored here, labelled `upstream-mirror`, and each carries a **Fork status** section
 written on 2026-08-05. Roughly **11 of them name `0.6.0.0`** in the future tense - "ships in", "is set
 to ship", "answered by the fork" - and those statements only become true when the release goes out.
 
