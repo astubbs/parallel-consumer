@@ -82,10 +82,14 @@ replacing with a repo-owned submission workflow that builds the reactor first).
 **Until it succeeds at least once on `master`, the dependency graph will not repopulate**, and the
 re-measurement below would read as "no change" for the wrong reason.
 
-### Turned back OFF on 2026-08-11 - re-enable after the v6 release
+### Turned back OFF on 2026-08-11 - and it stays off
 
 Rather than leave a permanently red check on every PR, the *Automatic dependency submission* setting
-was switched off again. **Re-enable it after 0.6.0.0 ships**, then re-run the trigger below.
+was switched off again. **Do not simply switch it back on**, at the v6 release or any other point:
+the root cause below is a property of the managed workflow, not of anything a release changes, so
+re-enabling it restores a permanently failing check and nothing else. The first draft of this note
+did say "re-enable after 0.6.0.0 ships", which was written before the root cause was understood and
+is contradicted by the next two paragraphs; the trigger at the bottom is the version that survived.
 
 Root cause, and it is neither "we have never published" nor anything about repositories: **GitHub's
 managed submission workflow probes with a bare `mvn validate` at the repo root.** `validate` builds
