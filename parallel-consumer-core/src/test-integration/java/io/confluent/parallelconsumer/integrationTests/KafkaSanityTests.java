@@ -1,7 +1,6 @@
 package io.confluent.parallelconsumer.integrationTests;
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
- * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
@@ -32,8 +31,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class KafkaSanityTests extends BrokerIntegrationTest<String, String> {
 
     /**
-     * Covers the long-polling assumption that
-     * {@link io.confluent.parallelconsumer.internal.BrokerPollSystem}'s {@code pollBrokerForRecords} depends on.
+     * @link io.confluent.csid.asyncconsumer.BrokerPollSystem#pollBrokerForRecords
      */
     @Timeout(value = 20) // includes docker broker startup time, can be slow on CI machines
     @Test

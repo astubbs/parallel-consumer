@@ -475,7 +475,7 @@ This library is copyright Confluent, Inc. and contributors, and licensed under t
 
 === Maven
 
-This project is available in Maven Central, https://repo1.maven.org/maven2/io/github/astubbs/parallelconsumer/[repo1].
+This project is available in Maven Central, https://repo1.maven.org/maven2/bz/stub/parallelconsumer/[repo1].
 
 Latest version can be seen https://search.maven.org/artifact/bz.stub.parallelconsumer/parallel-consumer-core[here].
 
