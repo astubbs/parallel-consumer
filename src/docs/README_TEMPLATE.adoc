@@ -1311,8 +1311,11 @@ YourKit supports open source projects with innovative and intelligent tools for 
 YourKit is the creator of https://www.google.com/url?q=https://www.yourkit.com/java/profiler/&source=gmail-imap&ust=1670918364000000&usg=AOvVaw3kaQak_H7lmT_plCEzxvde[YourKit Java Profiler],
 https://www.google.com/url?q=https://www.yourkit.com/.net/profiler/&source=gmail-imap&ust=1670918364000000&usg=AOvVaw1ZgQhyH2rIOHTuqtTjFAsA[YourKit .NET Profiler], and https://www.google.com/url?q=https://www.yourkit.com/youmonitor/&source=gmail-imap&ust=1670918364000000&usg=AOvVaw13UzOhGkJLEn-Md3-GNjYB[YourKit YouMonitor].
 
-:leveloffset: +1
-include::{project_root}/CHANGELOG.adoc[]
-//:leveloffset: -1 - Duplicate key leveloffset (attempted merging values +1 and -1): https://github.com/whelk-io/asciidoc-template-maven-plugin/issues/118
+// The changelog is deliberately NOT embedded here - it used to be `include::`d in full, which put
+// every release note (build and CI detail included) into the README, and made every changelog edit a
+// two-file change: CHANGELOG.adoc plus the generated README.adoc.
+== Change Log
+
+Release notes for every version live in link:CHANGELOG.adoc[CHANGELOG.adoc].
 
 
