@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -30,7 +30,7 @@ import java.util.Optional;
  * nothing to read - still reports {@link State#RUNNING} and still reports healthy.
  * <p>
  * To observe progress, use the {@code pc.*} Micrometer meters instead (see
- * {@link io.confluent.parallelconsumer.metrics.PCMetricsDef}): the processed-record and offset-commit meters move when
+ * {@link bz.stub.parallelconsumer.metrics.PCMetricsDef}): the processed-record and offset-commit meters move when
  * work is being done, and a rate derived from them is the signal a progress check needs. This snapshot deliberately
  * does not attempt to derive one.
  *

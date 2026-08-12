@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -13,7 +13,7 @@ import java.lang.reflect.Modifier;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Guards the encapsulation and thread-visibility of the fields {@link io.confluent.parallelconsumer.PCHealth} is built
+ * Guards the encapsulation and thread-visibility of the fields {@link bz.stub.parallelconsumer.PCHealth} is built
  * from.
  * <p>
  * Reflection rather than ArchUnit: the shared convention suite is declared with
@@ -26,13 +26,13 @@ class ControllerStateEncapsulationTest {
 
     /**
      * Lombok's bare {@code @Setter} generates a public setter. On the run state that would let any caller holding the
-     * concrete type drive the instance to {@link io.confluent.parallelconsumer.State#CLOSED}, which is not something a
+     * concrete type drive the instance to {@link bz.stub.parallelconsumer.State#CLOSED}, which is not something a
      * library user should be able to do - least of all now that the state is readable as public API.
      */
     @Test
     void setStateIsNotPubliclyAccessible() throws NoSuchMethodException {
         Method setState = AbstractParallelEoSStreamProcessor.class
-                .getDeclaredMethod("setState", io.confluent.parallelconsumer.State.class);
+                .getDeclaredMethod("setState", bz.stub.parallelconsumer.State.class);
 
         int modifiers = setState.getModifiers();
         // protected is not good enough: ParallelEoSStreamProcessor is a public subclass in another package, so a
