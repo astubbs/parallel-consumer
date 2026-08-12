@@ -63,11 +63,16 @@ document. This section is the detail behind it.
   small fixture and surfaces only in production. shellcheck does not detect it, and the full
   mechanism is in the script's own header and in
   [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
-  `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows. Self-tests run first. **Two of the
-  three are required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
-  the job names are an API. They exist because the failures they catch are invisible rather than
-  loud, and they gate precisely so those failures cannot be skimmed past.
+  `rename` runs `bin/test-rename-packages.sh`, the self-test for the
+  package-rename tool (`bin/rename-packages.sh`) - a tool run by hand once per branch, which is
+  exactly the shape that rots unnoticed between the day it is written and the day the whole rename
+  depends on it. `actions` runs `bin/check-action-versions.sh`, keeping every
+  GitHub Action pinned to one version across all workflows. Self-tests run first. **`shell: sigpipe`
+  and `workflows: action versions` are required status checks** - which is exactly why the job names
+  are an API. They exist because the failures they catch are invisible rather than loud, and they
+  gate precisely so those failures cannot be skimmed past. `tooling: package rename` is not in the
+  ruleset yet: a required context no run produces blocks every PR whose base predates it, so it can
+  only be added once the job is on master.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
     exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the

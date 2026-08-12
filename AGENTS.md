@@ -192,6 +192,33 @@ costs seconds.
 Worked example and method:
 [`docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md`](docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md).
 
+## IN FLIGHT: rename your branch BEFORE you merge master
+
+One such inherited instruction, live now: the fork is moving `io.confluent.*` to `bz.stub.*` with
+`bin/rename-packages.sh`, branch by branch. It binds **any** agent merging **any** branch until no
+open branch predates the rename - then delete this section. Reasoning, measurements and the task
+inventory are in the script's own header and in
+`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`, which arrives with
+astubbs/parallel-consumer#277 - the tooling merges first, so on master the plan lands after this
+section does.
+
+- **Run `bin/rename-packages.sh` on your branch, then merge master.** Both sides then agree on where
+  every file lives and what it is called, so the merge is ordinary.
+- **A clean merge is not evidence you were safe to skip it.** Merging renamed master into an
+  un-renamed branch reported **zero conflicts** and silently applied the streams module's ArchUnit
+  edit into the *mutiny* module's file - git paired the five near-identical
+  `TestConventionsArchTest.java` files across modules. Renamed on both sides, that case surfaces as
+  a rename/rename conflict on the right file, for a human to resolve.
+- **Sweep with `grep -rnE 'io[\\./]*conflu'`, never `grep -rn "io\.confluent"`.** Three files encode
+  the package as an escaped regex and one misspells it, so the habitual sweep reports success
+  without `bin/lib/quarantine-common.sh` even appearing in its output.
+- **Assert the renames git RECORDED *and* their pairing - a bare R-count reads a mis-paired rename
+  as healthy.** `bin/rename-packages.sh` asserts both; if you moved anything by hand, do both by
+  hand.
+- **Confirm the mutation lane scored mutants rather than trusting its tick.**
+  `bin/ci-mutation-test.sh` exits **0** printing "nothing to mutate, skipping" when its package
+  regex is stale, which is indistinguishable from a pass in the job summary.
+
 ## Overview
 
 Parallel Consumer is a Java library for concurrent message processing from Apache Kafka with a

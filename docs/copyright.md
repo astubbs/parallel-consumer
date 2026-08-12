@@ -36,3 +36,9 @@ worktrees.
   `RENAMED_FROM_UPSTREAM` (`newpath|oldpath` lines) and extractions in `EXTRACTED_FROM_UPSTREAM`,
   both inside `bin/check-copyright-headers.sh`. Renames with content changes, and all extractions,
   also require the modifications line.
+- **A whole-package MOVE is a rule, not ~200 rename entries.** `PACKAGE_MOVES`, in the same script,
+  maps a current path back to its fork-point path before every lookup, so provenance survives the
+  fork's package rename (`bin/rename-packages.sh`). Without it the verdict *inverts*: every
+  upstream-derived file misses the fork-point lookup, is judged fork-original, and its required
+  Confluent header becomes a violation - measured at 0 → 197, in maven's `validate` phase, so every
+  `./mvnw` on the tree dies before it starts. The script's header carries the reasoning.
