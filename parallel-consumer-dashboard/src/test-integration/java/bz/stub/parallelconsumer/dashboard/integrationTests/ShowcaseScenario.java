@@ -1,15 +1,15 @@
-package io.confluent.parallelconsumer.dashboard.integrationTests;
+package bz.stub.parallelconsumer.dashboard.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.MembershipAction;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioContext;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioPhase;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.WorkloadActions;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.MembershipAction;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioContext;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioPhase;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.WorkloadActions;
 
 import java.time.Duration;
 import java.util.ArrayList;

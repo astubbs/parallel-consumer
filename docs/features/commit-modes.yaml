@@ -33,4 +33,4 @@ boundaries:
   - Synchronous and transactional modes change latency and failure behaviour; choose them deliberately rather than as a retry shortcut.
 references:
   - label: CommitMode implementation
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java

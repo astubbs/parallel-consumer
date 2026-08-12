@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.dashboard.server;
+package bz.stub.parallelconsumer.dashboard.server;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -6,11 +6,11 @@ package io.confluent.parallelconsumer.dashboard.server;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import io.confluent.parallelconsumer.dashboard.DashboardOptions;
-import io.confluent.parallelconsumer.dashboard.snapshot.PcMeterFixture;
-import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
-import io.confluent.parallelconsumer.dashboard.snapshot.StateSampler;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.dashboard.DashboardOptions;
+import bz.stub.parallelconsumer.dashboard.snapshot.PcMeterFixture;
+import bz.stub.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
+import bz.stub.parallelconsumer.dashboard.snapshot.StateSampler;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;

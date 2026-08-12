@@ -1,9 +1,9 @@
-package io.confluent.parallelconsumer.dashboard.snapshot;
+package bz.stub.parallelconsumer.dashboard.snapshot;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;

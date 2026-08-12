@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer.dashboard.server;
+package bz.stub.parallelconsumer.dashboard.server;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.DashboardOptions;
-import io.confluent.parallelconsumer.dashboard.json.SnapshotJson;
-import io.confluent.parallelconsumer.dashboard.snapshot.PcSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
+import bz.stub.parallelconsumer.dashboard.DashboardOptions;
+import bz.stub.parallelconsumer.dashboard.json.SnapshotJson;
+import bz.stub.parallelconsumer.dashboard.snapshot.PcSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
 import io.vertx.core.Context;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;

@@ -44,7 +44,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 MODULE="parallel-consumer-dashboard"
-MAIN_CLASS="io.confluent.parallelconsumer.dashboard.integrationTests.DemoMain"
+MAIN_CLASS="bz.stub.parallelconsumer.dashboard.integrationTests.DemoMain"
 # Pinned, and matched to the version the root pom manages - an unpinned goal invocation would
 # silently float to whatever is newest on Central the day someone runs the demo.
 DEPENDENCY_PLUGIN="org.apache.maven.plugins:maven-dependency-plugin:3.11.0"

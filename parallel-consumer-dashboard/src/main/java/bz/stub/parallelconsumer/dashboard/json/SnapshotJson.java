@@ -1,13 +1,13 @@
-package io.confluent.parallelconsumer.dashboard.json;
+package bz.stub.parallelconsumer.dashboard.json;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.snapshot.EncodingSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.LifecycleSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.PcSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.WorkSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.EncodingSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.LifecycleSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PcSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.WorkSnapshot;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.apache.kafka.common.annotation.InterfaceStability;

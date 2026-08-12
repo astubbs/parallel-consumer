@@ -34,8 +34,8 @@ boundaries:
   - Buffer sizing is not a throughput control on its own; the README section referenced below pairs it with Consumer-side fetch tuning.
 references:
   - label: Load-factor options
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
   - label: PARTITION-order buffer tuning guidance
     path: README.adoc#ordering-guarantees
   - label: Step-up policy and default factors
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/DynamicLoadFactor.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/DynamicLoadFactor.java

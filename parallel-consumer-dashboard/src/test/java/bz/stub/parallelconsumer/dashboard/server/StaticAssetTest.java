@@ -1,9 +1,9 @@
-package io.confluent.parallelconsumer.dashboard.server;
+package bz.stub.parallelconsumer.dashboard.server;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.DashboardServer;
+import bz.stub.parallelconsumer.dashboard.DashboardServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -154,7 +154,7 @@ class StaticAssetTest {
     void thePageAssetsAreServedFromThePackageQualifiedRoot() throws IOException {
         assertThat(DashboardServer.PAGE_CLASSPATH_ROOT)
                 .as("an unqualified root shares a namespace with every other jar on the classpath")
-                .isEqualTo("io/confluent/parallelconsumer/dashboard/web");
+                .isEqualTo("bz/stub/parallelconsumer/dashboard/web");
 
         RawHttp.Response response = RawHttp.get(server.getPort(), DashboardServer.ASSETS_PREFIX + "/app.js");
 

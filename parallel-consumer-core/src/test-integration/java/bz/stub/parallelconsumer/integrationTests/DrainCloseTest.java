@@ -3,9 +3,9 @@
  * Copyright (C) 2020-2023 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,7 +15,7 @@ import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static java.lang.Thread.sleep;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.awaitility.Awaitility.await;

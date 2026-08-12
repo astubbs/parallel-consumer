@@ -29,4 +29,4 @@ boundaries:
   - A close request is honoured during the backoff rather than waiting it out; the mechanism is in the option's Javadoc.
 references:
   - label: SASL retry options
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java

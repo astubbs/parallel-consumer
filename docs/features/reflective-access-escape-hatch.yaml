@@ -31,6 +31,6 @@ boundaries:
   - With the flag set, the outcome is a WARN rather than a ParallelConsumerException, so an application that really does have auto-commit on can start and double-commit offsets.
 references:
   - label: Option and its Javadoc
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
   - label: The check itself
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java

@@ -1,24 +1,24 @@
-package io.confluent.parallelconsumer.dashboard.integrationTests;
+package bz.stub.parallelconsumer.dashboard.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.dashboard.DashboardOptions;
-import io.confluent.parallelconsumer.dashboard.DashboardServer;
-import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
-import io.confluent.parallelconsumer.integrationTests.chaostests.ChaosConductor;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioRunner;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScriptedFunction;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScriptedWorkload;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.WorkloadPublisher;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.dashboard.DashboardOptions;
+import bz.stub.parallelconsumer.dashboard.DashboardServer;
+import bz.stub.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosConductor;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioRunner;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScriptedFunction;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScriptedWorkload;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.WorkloadPublisher;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.extern.slf4j.Slf4j;

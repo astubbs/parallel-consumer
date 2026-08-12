@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.dashboard.server;
+package bz.stub.parallelconsumer.dashboard.server;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */

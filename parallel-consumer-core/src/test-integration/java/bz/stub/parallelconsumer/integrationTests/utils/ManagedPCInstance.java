@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.integrationTests.utils;
+package bz.stub.parallelconsumer.integrationTests.utils;
 
 /*-
  * Copyright (C) 2020-2026 Confluent, Inc. and contributors
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.Builder;
 import lombok.Getter;
@@ -30,7 +30,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
-import static io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
+import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
@@ -48,7 +48,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *   <li>Unexpected exceptions → thrown as RuntimeException (fails the test — acts as a canary for real bugs)</li>
  * </ul>
  *
- * @see io.confluent.parallelconsumer.integrationTests.MultiInstanceRebalanceTest
+ * @see bz.stub.parallelconsumer.integrationTests.MultiInstanceRebalanceTest
  */
 @Slf4j
 @Getter

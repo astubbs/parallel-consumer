@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer.dashboard.integrationTests;
+package bz.stub.parallelconsumer.dashboard.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.PcSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.WorkSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PcSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.WorkSnapshot;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;

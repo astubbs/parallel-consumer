@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.dashboard;
+package bz.stub.parallelconsumer.dashboard;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -20,7 +20,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
  * class ships unmarked, acquires users, and quietly acquires the compatibility obligations the module has not agreed
  * to.
  */
-@AnalyzeClasses(packages = "io.confluent.parallelconsumer.dashboard",
+@AnalyzeClasses(packages = "bz.stub.parallelconsumer.dashboard",
         importOptions = ImportOption.DoNotIncludeTests.class)
 class ExperimentalApiArchTest {
 

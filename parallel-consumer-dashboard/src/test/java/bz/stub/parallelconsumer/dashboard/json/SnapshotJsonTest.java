@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.dashboard.json;
+package bz.stub.parallelconsumer.dashboard.json;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -6,13 +6,13 @@ package io.confluent.parallelconsumer.dashboard.json;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
-import io.confluent.parallelconsumer.dashboard.snapshot.EncodingSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.LifecycleSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.PcMeterFixture;
-import io.confluent.parallelconsumer.dashboard.snapshot.PcSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.StateSampler;
-import io.confluent.parallelconsumer.dashboard.snapshot.WorkSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.EncodingSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.LifecycleSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PcMeterFixture;
+import bz.stub.parallelconsumer.dashboard.snapshot.PcSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.StateSampler;
+import bz.stub.parallelconsumer.dashboard.snapshot.WorkSnapshot;
 import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.Test;
 

@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.integrationTests.chaostests.scenario;
+package bz.stub.parallelconsumer.integrationTests.chaostests.scenario;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors

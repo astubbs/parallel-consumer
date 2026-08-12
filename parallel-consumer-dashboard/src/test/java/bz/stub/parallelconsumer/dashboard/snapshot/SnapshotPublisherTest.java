@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.dashboard.snapshot;
+package bz.stub.parallelconsumer.dashboard.snapshot;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -7,7 +7,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

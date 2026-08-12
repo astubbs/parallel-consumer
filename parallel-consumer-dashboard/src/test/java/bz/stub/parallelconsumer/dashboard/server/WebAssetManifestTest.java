@@ -1,9 +1,9 @@
-package io.confluent.parallelconsumer.dashboard.server;
+package bz.stub.parallelconsumer.dashboard.server;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.DashboardServer;
+import bz.stub.parallelconsumer.dashboard.DashboardServer;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

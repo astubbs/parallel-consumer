@@ -1,9 +1,9 @@
-package io.confluent.parallelconsumer.dashboard.server;
+package bz.stub.parallelconsumer.dashboard.server;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.DashboardOptions;
+import bz.stub.parallelconsumer.dashboard.DashboardOptions;
 import io.vertx.core.Handler;
 import io.vertx.ext.web.RoutingContext;
 import org.apache.kafka.common.annotation.InterfaceStability;

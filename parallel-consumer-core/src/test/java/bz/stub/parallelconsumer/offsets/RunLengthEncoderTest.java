@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -6,7 +6,7 @@ package io.confluent.parallelconsumer.offsets;
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.SneakyThrows;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
@@ -23,9 +23,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static io.confluent.csid.utils.JavaUtils.toTreeSet;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.Version.v2;
-import static io.confluent.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
+import static bz.stub.parallelconsumer.internal.utils.JavaUtils.toTreeSet;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
+import static bz.stub.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
 import static javax.lang.model.type.TypeKind.INT;
 import static javax.lang.model.type.TypeKind.SHORT;
 import static org.assertj.core.api.Assertions.assertThat;

@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.integrationTests.chaostests;
+package bz.stub.parallelconsumer.integrationTests.chaostests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioContext;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioPhase;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioRunner;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioContext;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioPhase;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioRunner;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

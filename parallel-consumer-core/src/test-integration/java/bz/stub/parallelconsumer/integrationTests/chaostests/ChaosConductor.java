@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer.integrationTests.chaostests;
+package bz.stub.parallelconsumer.integrationTests.chaostests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.FleetControl;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.MembershipAction;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioContext;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.ScenarioRunner;
-import io.confluent.parallelconsumer.integrationTests.chaostests.scenario.WorkloadControl;
-import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.FleetControl;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.MembershipAction;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.Scenario;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioAction;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioContext;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.ScenarioRunner;
+import bz.stub.parallelconsumer.integrationTests.chaostests.scenario.WorkloadControl;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;

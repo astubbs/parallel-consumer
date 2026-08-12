@@ -34,4 +34,4 @@ boundaries:
   - Meter names and tags are an observability interface; verify the exact set for the release you deploy.
 references:
   - label: Metric definitions
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/metrics/PCMetricsDef.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java

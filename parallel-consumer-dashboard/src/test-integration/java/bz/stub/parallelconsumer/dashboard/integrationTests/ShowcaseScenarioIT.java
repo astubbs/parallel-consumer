@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.dashboard.integrationTests;
+package bz.stub.parallelconsumer.dashboard.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors

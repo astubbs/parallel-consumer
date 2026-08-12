@@ -30,6 +30,6 @@ boundaries:
   - The factory supplies threads; it does not size the pool. Core sizes the pool from maxConcurrency, and the external engines (Vert.x, Reactor) override it to a single thread.
 references:
   - label: Managed thread factory option
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
   - label: Worker pool construction and JNDI fallback
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java

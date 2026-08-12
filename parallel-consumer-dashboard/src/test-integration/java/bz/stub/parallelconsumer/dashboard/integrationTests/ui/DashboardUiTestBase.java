@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer.dashboard.integrationTests.ui;
+package bz.stub.parallelconsumer.dashboard.integrationTests.ui;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.DashboardServer;
-import io.confluent.parallelconsumer.dashboard.server.DashboardTestSupport;
-import io.confluent.parallelconsumer.dashboard.snapshot.LifecycleSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.PcSnapshot;
-import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
-import io.confluent.parallelconsumer.dashboard.snapshot.StateSampler;
-import io.confluent.parallelconsumer.dashboard.snapshot.WorkSnapshot;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.dashboard.DashboardServer;
+import bz.stub.parallelconsumer.dashboard.server.DashboardTestSupport;
+import bz.stub.parallelconsumer.dashboard.snapshot.LifecycleSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PartitionSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.PcSnapshot;
+import bz.stub.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
+import bz.stub.parallelconsumer.dashboard.snapshot.StateSampler;
+import bz.stub.parallelconsumer.dashboard.snapshot.WorkSnapshot;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.vertx.core.json.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
@@ -47,7 +47,7 @@ import java.util.function.BooleanSupplier;
  *
  * <h2>Why a browser at all, when the model already has a unit suite</h2>
  * <p>
- * The page's arithmetic is gated without a browser by {@code io.confluent.parallelconsumer.dashboard.ui} on the unit
+ * The page's arithmetic is gated without a browser by {@code bz.stub.parallelconsumer.dashboard.ui} on the unit
  * side. What that cannot see is the DOM: whether a panel is present, whether the value the model computed reached
  * the element a reader looks at, and whether the page's state classes - idle, stale, error - are actually applied.
  * Those are the assertions that catch a renderer that stopped rendering, and there is no way to make them without

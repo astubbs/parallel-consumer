@@ -22,7 +22,7 @@ setup:
   maven:
     group_id: bz.stub.parallelconsumer
     artifact_id: parallel-consumer-reactor
-  example: parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/ReactorApp.java
+  example: parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/bz/stub/parallelconsumer/examples/reactor/ReactorApp.java
 opt_in:
   mechanism: Add the Reactor module and use its processor API.
   isolated_from_stable_modules: false

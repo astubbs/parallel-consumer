@@ -1,9 +1,9 @@
-package io.confluent.parallelconsumer.dashboard.ui;
+package bz.stub.parallelconsumer.dashboard.ui;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.DashboardServer;
+import bz.stub.parallelconsumer.dashboard.DashboardServer;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;

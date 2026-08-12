@@ -1,17 +1,18 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.PartitionState;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Set;
 import java.util.TreeSet;
 
-import static io.confluent.csid.utils.Range.range;
+import static bz.stub.parallelconsumer.internal.utils.Range.range;
 
 @Slf4j
 @UtilityClass

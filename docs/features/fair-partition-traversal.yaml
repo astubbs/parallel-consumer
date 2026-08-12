@@ -28,4 +28,4 @@ boundaries:
   - Buffer and fetch settings still determine how much work can be held before backpressure applies.
 references:
   - label: ShardManager fairness implementation
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ShardManager.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java

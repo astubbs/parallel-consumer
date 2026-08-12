@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.dashboard.snapshot;
+package bz.stub.parallelconsumer.dashboard.snapshot;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -12,7 +12,7 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * instance.
  * <p>
  * The two states arrive as numbers ({@code pc.status} and {@code pc.poller.status} carry
- * {@code io.confluent.parallelconsumer.internal.State#getValue()}), and are mapped back to the enum name here so the
+ * {@code bz.stub.parallelconsumer.internal.State#getValue()}), and are mapped back to the enum name here so the
  * page never has to know the numeric mapping. Both the name and the raw number are carried: the number is what a
  * step-function chart plots, the name is what a human reads. If the number does not correspond to any known state -
  * which happens if core adds a state this module has not been rebuilt against - the name is left absent rather than

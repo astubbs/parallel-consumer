@@ -1,13 +1,13 @@
-package io.confluent.parallelconsumer.examples.dashboard;
+package bz.stub.parallelconsumer.examples.dashboard;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.dashboard.DashboardOptions;
-import io.confluent.parallelconsumer.dashboard.DashboardServer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.dashboard.DashboardOptions;
+import bz.stub.parallelconsumer.dashboard.DashboardServer;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.extern.slf4j.Slf4j;

@@ -1,15 +1,15 @@
-package io.confluent.parallelconsumer.dashboard;
+package bz.stub.parallelconsumer.dashboard;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.dashboard.server.HostAllowlist;
-import io.confluent.parallelconsumer.dashboard.server.StateRoute;
-import io.confluent.parallelconsumer.dashboard.server.StatusRoute;
-import io.confluent.parallelconsumer.dashboard.server.StreamRoute;
-import io.confluent.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
-import io.confluent.parallelconsumer.dashboard.snapshot.StateSampler;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.dashboard.server.HostAllowlist;
+import bz.stub.parallelconsumer.dashboard.server.StateRoute;
+import bz.stub.parallelconsumer.dashboard.server.StatusRoute;
+import bz.stub.parallelconsumer.dashboard.server.StreamRoute;
+import bz.stub.parallelconsumer.dashboard.snapshot.SnapshotPublisher;
+import bz.stub.parallelconsumer.dashboard.snapshot.StateSampler;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -121,7 +121,7 @@ public class DashboardServer implements AutoCloseable {
      * The public URL prefix is unchanged: {@link #ASSETS_PREFIX} is what the browser asks for, and this is only where
      * the bytes are found.
      */
-    public static final String PAGE_CLASSPATH_ROOT = "io/confluent/parallelconsumer/dashboard/web";
+    public static final String PAGE_CLASSPATH_ROOT = "bz/stub/parallelconsumer/dashboard/web";
 
     /**
      * How long to wait for a bind or a shutdown before deciding the event loop is wedged. Generous; it only exists so
