@@ -504,10 +504,47 @@ default branch's copy, so a PR cannot rewrite its own reviewer. Two consequences
 - **So new `bin/` guards are granted by pattern, not one at a time.** Both allowlists carry
   `Bash(bin/check-*.sh:*)` and `Bash(bin/test-check-*.sh:*)` (each in the bare and `./` spelling),
   which means **a new `bin/check-*.sh` needs no allowlist change at all** - it is covered the
-  moment it exists on the default branch. Adding a guard under some other name still needs its
-  grant landed in an earlier PR than the script. The reasoning, and what the pattern deliberately
+  moment it exists on the default branch. The reasoning, and what the pattern deliberately
   accepts, is in
   [`claude-code-review-dispatch.yml`](../.github/workflows/claude-code-review-dispatch.yml).
+
+#### What the allowlist is for, and what it is not for
+
+Two boundaries meet here, and mistaking one for the other is how the list gets widened. *Whose* code
+runs beside the credential is settled by the fork refusal; what the job's **token** can reach is
+settled by splitting `review` from `refresh-gate`. Neither touches the third question: **what that
+code can talk the reviewer into running.** An in-repo head does not make the diff, the PR body and
+the comments trustworthy - they are still attacker-influencable text being fed to a model that can
+call Bash. Keeping the grants to this repo's own read-only scripts, rather than `Bash(*)` or
+`Bash(bin/*.sh:*)`, is the margin against injection-into-execution.
+
+So: **grant a script when it is read-only and lets the reviewer check a claim rather than infer it.
+Do not grant anything that writes, publishes, or reaches the network beyond `gh` reads.**
+
+**The pattern grants turn that rule into a naming convention, and the convention is now the
+boundary.** Nobody approves a new `bin/check-foo.sh`; naming it is what grants it. The two prefixes
+were chosen to keep `deploy.sh`, `chaos-test.sh`, `soak-test.sh`, `performance-test.sh`,
+`quarantined-test.sh` and `quarantine-lane-report.sh` outside the grant, so a script that writes must
+not be named `check-*` or `test-check-*` - a misnamed one defeats the scoping silently and nothing
+will flag it. ([`bin/AGENTS.md`](../bin/AGENTS.md) carries that one rule at the point someone would
+break it.) `bin/test-check-docs-data.sh` is the single granted script that writes: a considered
+exception, argued in the workflow comment, not a precedent.
+
+#### Adding a grant that no pattern covers
+
+For anything outside those two prefixes - the `ci-*-test.sh` wrappers, `./mvnw`, `actionlint`,
+`bin/todo-index.sh`, the `node .github/scripts/*.test.js` entries - all three of these apply:
+
+- **Both spellings.** Rules match the command as written, so `Bash(bin/foo.sh:*)` does **not** match
+  `./bin/foo.sh`. A half-added grant is worse than none: the invocation fails in a way that reads
+  like the script is broken, which is how the review on astubbs/parallel-consumer#108 logged ten
+  permission denials, gave up, and still reported success.
+- **Both files.** `claude-code-review-dispatch.yml` and `claude.yml` carry the same list and nothing
+  mechanical keeps them in step.
+- **An earlier PR than the script.** Per the bullet above, a grant never applies to the PR that adds
+  it. That discipline is the one nobody keeps - four check scripts arrived with
+  astubbs/parallel-consumer#279, all four granted in that same PR, and its reviewer could run none of
+  them - which is exactly why the two `bin/` families became patterns instead.
 
 ## Self-hosted lanes
 
