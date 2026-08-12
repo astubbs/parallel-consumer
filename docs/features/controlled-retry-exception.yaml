@@ -27,4 +27,4 @@ boundaries:
   - Do not classify programmer errors or permanent data errors as retriable merely to suppress logs.
 references:
   - label: PCRetriableException source
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/PCRetriableException.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/PCRetriableException.java

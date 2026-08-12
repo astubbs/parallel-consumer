@@ -27,4 +27,4 @@ boundaries:
   - An absent value is normal when no prior failure has been recorded for that work item.
 references:
   - label: RecordContext source
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/RecordContext.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/RecordContext.java

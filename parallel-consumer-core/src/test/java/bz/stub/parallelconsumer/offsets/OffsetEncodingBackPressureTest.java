@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -7,15 +7,15 @@ package io.confluent.parallelconsumer.offsets;
 
 import com.google.common.truth.Truth;
 import com.google.common.truth.Truth8;
-import io.confluent.parallelconsumer.FakeRuntimeException;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.Quarantined;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
-import io.confluent.parallelconsumer.state.PartitionState;
-import io.confluent.parallelconsumer.state.PartitionStateManager;
-import io.confluent.parallelconsumer.state.ShardManager;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.Quarantined;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.PartitionStateManager;
+import bz.stub.parallelconsumer.state.ShardManager;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -35,13 +35,13 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.confluent.csid.utils.JavaUtils.getLast;
-import static io.confluent.csid.utils.JavaUtils.getOnlyOne;
-import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
-import static io.confluent.csid.utils.ThreadUtils.sleepQuietly;
-import static io.confluent.parallelconsumer.ManagedTruth.assertTruth;
-import static io.confluent.parallelconsumer.ManagedTruth.assertWithMessage;
-import static io.confluent.parallelconsumer.state.PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT;
+import static bz.stub.parallelconsumer.internal.utils.JavaUtils.getLast;
+import static bz.stub.parallelconsumer.internal.utils.JavaUtils.getOnlyOne;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
+import static bz.stub.parallelconsumer.internal.utils.ThreadUtils.sleepQuietly;
+import static bz.stub.parallelconsumer.ManagedTruth.assertTruth;
+import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
+import static bz.stub.parallelconsumer.state.PartitionStateManager.USED_PAYLOAD_THRESHOLD_MULTIPLIER_DEFAULT;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;

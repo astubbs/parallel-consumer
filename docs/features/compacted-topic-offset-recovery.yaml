@@ -27,4 +27,4 @@ boundaries:
   - Compaction can remove records, so application semantics must not depend on replaying every historical tombstone or superseded value.
 references:
   - label: Offset-state implementation
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/PartitionState.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java

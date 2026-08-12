@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.metrics.PCMetrics;
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Tag;
-import io.confluent.parallelconsumer.state.PartitionState;
+import bz.stub.parallelconsumer.state.PartitionState;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Timer;
 import lombok.Value;
@@ -24,7 +24,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.*;
 
-import static io.confluent.csid.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
@@ -76,7 +76,7 @@ public class OffsetMapCodecManager<K, V> {
     private final PCMetrics pcMetrics;
 
     /**
-     * Per-instance: two {@link io.confluent.parallelconsumer.ParallelConsumer}s in one JVM may be configured with
+     * Per-instance: two {@link bz.stub.parallelconsumer.ParallelConsumer}s in one JVM may be configured with
      * different policies, and previously the last one constructed silently set it for all of them.
      */
     private ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy errorPolicy = ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;

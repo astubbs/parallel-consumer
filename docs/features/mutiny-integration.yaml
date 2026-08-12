@@ -24,7 +24,7 @@ setup:
     artifact_id: parallel-consumer-mutiny
     version: 0.6.0.0
   api:
-    type: io.confluent.parallelconsumer.mutiny.MutinyProcessor
+    type: bz.stub.parallelconsumer.mutiny.MutinyProcessor
     completion: Return a Uni from onRecord; its success or failure drives record completion.
 opt_in:
   mechanism: Add the parallel-consumer-mutiny artifact.
