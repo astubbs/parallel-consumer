@@ -80,12 +80,12 @@ hypothesis.
 | **R1** | The experiment reproduces the real landing sequence in the real order, on clean branches from the correct base, with no shortcut reality will not take. |
 | **R2** | The rename is performed as two commits and its rename detection is verified: detected equals moved, zero mis-paired, no stray add/delete pairs. |
 | **R3** | `bin/rename-packages.sh` carries the complete per-branch procedure in its own header and `--help`, sufficient for a branch author who was not part of this work. |
-| **R4** | The rehearsal follows that written procedure **verbatim**. Every improvisation is recorded as a defect in the procedure and fixed there. |
+| **R4** | The rehearsal works from the written procedure, and anything that turns out to be missing or unclear is fixed in the procedure rather than worked around in the operator's head. |
 | **R5** | astubbs#260 brings itself across, then exercises **both** merge directions: update-from-master, then merge-to-master. |
 | **R6** | astubbs#260's four test-file edits are proven present, intact, and in the correct module after the merges — the direct check against §4.6's silent cross-module corruption. |
 | **R7** | Completeness is established by the permissive sweep (§6a) plus an occurrence-by-occurrence residue pass (§7) — never by an exit code or a habitual grep. |
 | **R8** | Every verification this machine cannot perform is named as an open gap, not skipped silently. |
-| **R9** | The audit produces a go/no-go for the remaining 40 PRs, with the per-branch cost stated as a number. |
+| **R9** | The audit records what actually happened — conflicts, their kind, and the effort each took — in enough detail that whoever reads it can judge whether to fan out to the remaining 40 PRs. No pre-set thresholds; the reader decides from the output. |
 
 ---
 
@@ -509,10 +509,9 @@ Divergence from those *is* the finding. Expect 234 now (U1).
 **Dependencies:** U3
 **Files:** `bin/rename-packages.sh`, `bin/check-copyright-headers.sh` (acquired, not authored)
 
-**Execution note:** **follow U7's block literally, and keep a log of every deviation.** If a command
-does not work as written, if a step is ambiguous, if the operator reaches for knowledge the block does
-not contain — that is a defect in U7, and fixing U7 is the output. Do not silently do the right thing;
-the whole point is that 40 people who cannot ask will do exactly what it says.
+**Execution note:** work from U7's block rather than from memory. Where a command does not work as
+written or a step is unclear, fix U7 — the readers who come next cannot ask. No formal isolation or
+deviation log; just do not paper over a gap you had to fill yourself.
 
 **Approach:**
 
@@ -597,11 +596,20 @@ conflicts *by construction* — an empty inventory that reads as a clean result 
 untested direction. So: tag `260-rename` immediately after U5 as `260-rename-preupdate`, and merge
 that tag into `rename-stage` here. Record the same inventory as U6a.
 
+**The tree-wide gate, which is what actually catches §4.6.** After each merge, every path in the
+merged tree is mechanically predictable, so run `git diff` between the merged branch and the other
+side: it must list **exactly** astubbs#260's four files plus the KTD7 prose lines, and nothing else.
+Any other differing path is a stop-everything finding. This matters because a wrongly-relocated file
+contains no surviving `io.confluent` spelling, so it is invisible to the completeness sweep and the
+residue pass alike — without this gate the entire detection surface for a silent, tree-wide failure is
+four hand-read paths.
+
 **Patterns to follow:** origin §4.6 — with both sides renamed, the expected shape of any collision is
 a loud `CONFLICT (rename/delete)` plus `CONFLICT (add/add)` **on the correct path with the edit
 intact**. Loud and correct is the trade being bought.
 
 **Test scenarios:**
+- The tree-wide diff after each merge lists only the expected paths. Anything else stops the run.
 - Both merges complete; every conflict recorded by path and kind.
 - The KTD7 prose-line conflicts appear as predicted in U6a, and **master's corrected §8 wording wins**
   — the deferred rewrite from the astubbs#260 side must not survive.
@@ -672,6 +680,7 @@ that has been executed by someone following it rather than writing it.
 | Rename pairing: detected = moved, mis-paired = 0, no add/delete | U3, U5 | yes |
 | Completeness sweep run with the permissive pattern, pattern stated | U3, U5 | yes |
 | The written procedure was followed verbatim, deviations logged and folded back | U4, U8 | yes |
+| Tree-wide diff after each merge lists only the expected paths | U6 | yes |
 | astubbs#260's four edits intact and in the correct module | U8 | yes |
 | Residue pass, occurrence by occurrence, misses attributed | U8 | yes |
 | `git log --follow` traverses the rename | U8 | no — records whether the two-commit shape paid off |
@@ -685,8 +694,8 @@ exit from `bin/ci-mutation-test.sh` (it exits 0 while matching nothing), and a c
 
 ## Definition of Done
 
-- `bin/rename-packages.sh` carries a per-branch procedure that a stranger can execute, and it has been
-  executed by following it rather than by knowing it.
+- `bin/rename-packages.sh` carries a per-branch procedure that a stranger can execute, and U4 worked
+  from it rather than around it.
 - The **fan-out paste line** exists and is recorded in the ledger — a single
   instruction that can be handed to an agent in a fresh checkout of any of the remaining branches,
   with the scope boundary (rename and update the branch; do **not** land the PR) inside the block it
@@ -769,7 +778,8 @@ question, explicitly not to be merged into this one).
 | Risk | Effect | Mitigation |
 |---|---|---|
 | A transformation rule changes without the rename being re-run on master | Branches taking the newest script get rules that disagree with master's actual layout — the §4.6 failure delivered by the tool built to prevent it, silently | KTD10's rule: the change re-runs the rename on master in the same change-set, two-commit shape. Enforced by nothing today — Open Question 6. Recovery depends on the change class: re-running the branch fixes an old-side addition or an exclusion removal, and does **nothing** for a destination change or an exclusion addition, where the script exits 0 as `already applied` |
-| The procedure is written by someone who already knows the answer | It reads fine and is unexecutable by anyone else — the exact failure it exists to prevent | R4: U4 follows it verbatim and logs every deviation; U8 folds them back. An empty log must be *confirmed*, not assumed |
+| The procedure is written by someone who already knows the answer | It reads fine and is unexecutable by anyone else | U4 works from the text rather than from memory, and U8 folds back whatever needed filling in |
+| Master moves while the rename PR is open | The landing merge then has a renamed side meeting edits at the old paths. Normally git pairs these correctly; the narrow bad case is the five near-identical `TestConventionsArchTest.java` files, where §4.5 measured mis-pairing — and a mis-pair is silent, so PR review and a green CI run do not catch it | Land the rename PR promptly, and confirm it is 0 behind master immediately before merging. Four open PRs touch those files (astubbs#266/268/269/271), so watch for one of them landing while the rename PR is open |
 | The rename PR gets squash-merged out of habit | Four invented cross-module renames land on master permanently; history corrupted, unfixable in place | KTD4. The exception covers one PR and nothing enforces it — agree the method with whoever merges **before** the PR is opened |
 | Only `bin/rename-packages.sh` is checked out, not the copyright checker | 197 spurious copyright violations on the branch until master merges in; looks like the rename broke something | KTD3 names both files and says why; U5 tests for it deliberately |
 | astubbs#260 exercises no mis-pairing-prone file | A clean run reads as "the rename is safe" when the dangerous case was never touched | Stated in Scope Boundaries; the four dangerous branches are named |
