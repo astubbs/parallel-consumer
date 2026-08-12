@@ -35,6 +35,6 @@ validation:
   - See ParallelConsumerOptions.transactionsValidation for the transactional-mode rejection rules.
 references:
   - label: Lock behaviour and failure modes, in the CommitMode Javadoc
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java#transactionalJavadoc
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java#transactionalJavadoc
   - label: Transaction system
     path: README.adoc#transaction-system

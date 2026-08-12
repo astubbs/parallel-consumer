@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer.truth;
+package bz.stub.parallelconsumer.truth;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.PodamUtils;
+import bz.stub.parallelconsumer.internal.utils.PodamUtils;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -13,7 +14,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniMaps;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertTruth;
+import static bz.stub.parallelconsumer.ManagedTruth.assertTruth;
 
 /**
  * Basic tests of simple usage of the Truth Generator maven plugin

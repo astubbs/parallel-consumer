@@ -3,11 +3,11 @@
     <useClassPathOnly />
     <extension name="coverage">
       <pattern>
-        <option name="PATTERN" value="io.confluent.parallalconsumer.examples.core.*" />
+        <option name="PATTERN" value="bz.stub.parallelconsumer.examples.core.*" />
         <option name="ENABLED" value="true" />
       </pattern>
     </extension>
-    <option name="PACKAGE_NAME" value="io.confluent.parallelconsumer.examples" />
+    <option name="PACKAGE_NAME" value="bz.stub.parallelconsumer.examples" />
     <option name="MAIN_CLASS_NAME" value="" />
     <option name="METHOD_NAME" value="" />
     <option name="TEST_OBJECT" value="package" />

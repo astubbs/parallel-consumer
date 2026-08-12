@@ -37,10 +37,10 @@ Test hangs/crashes with OOM while closing `ParallelEoSStreamProcessor` after pro
 java.util.concurrent.ExecutionException: java.lang.OutOfMemoryError: Java heap space
     at java.base/java.util.concurrent.FutureTask.report(FutureTask.java:122) ~[na:na]
     at java.base/java.util.concurrent.FutureTask.get(FutureTask.java:205) ~[na:na]
-    at io.confluent.parallelconsumer.internal.BrokerPollSystem.closeAndWait(BrokerPollSystem.java:278) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
-    at io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.innerDoClose(AbstractParallelEoSStreamProcessor.java:731) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
-    at io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.doClose(AbstractParallelEoSStreamProcessor.java:658) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
-    at io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.lambda$supervisorLoop$9(AbstractParallelEoSStreamProcessor.java:855) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
+    at bz.stub.parallelconsumer.internal.BrokerPollSystem.closeAndWait(BrokerPollSystem.java:278) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
+    at bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.innerDoClose(AbstractParallelEoSStreamProcessor.java:731) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
+    at bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.doClose(AbstractParallelEoSStreamProcessor.java:658) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
+    at bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.lambda$supervisorLoop$9(AbstractParallelEoSStreamProcessor.java:855) ~[parallel-consumer-core-0.6.0.0-SNAPSHOT.jar:na]
     at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:264) ~[na:na]
     at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136) ~[na:na]
     at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635) ~[na:na]
@@ -53,7 +53,7 @@ Caused by: java.lang.OutOfMemoryError: Java heap space
 
 ## Location
 
-`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/LargeVolumeInMemoryTests.java:62`
+`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/LargeVolumeInMemoryTests.java:62`
 
 ```java
 int quantityOfMessagesToProduce = 1_000_000;  // OOMs on ubuntu-latest with default heap

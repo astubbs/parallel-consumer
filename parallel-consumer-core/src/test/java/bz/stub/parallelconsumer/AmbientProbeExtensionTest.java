@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -8,10 +8,10 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import io.confluent.parallelconsumer.integrationTests.AmbientProbeExtension;
-import io.confluent.parallelconsumer.integrationTests.NoAmbientProbe;
-import io.confluent.parallelconsumer.integrationTests.chaostests.ProgressProbe;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension;
+import bz.stub.parallelconsumer.integrationTests.NoAmbientProbe;
+import bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;

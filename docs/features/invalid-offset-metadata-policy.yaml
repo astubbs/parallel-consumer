@@ -30,4 +30,4 @@ boundaries:
   - Unrecognizable metadata follows the library's recovery path and is not made fatal by this option.
 references:
   - label: Offset-metadata policy
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java

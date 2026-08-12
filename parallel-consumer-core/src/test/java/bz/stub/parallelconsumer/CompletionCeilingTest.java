@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.CompletionCeiling;
+import bz.stub.parallelconsumer.integrationTests.CompletionCeiling;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

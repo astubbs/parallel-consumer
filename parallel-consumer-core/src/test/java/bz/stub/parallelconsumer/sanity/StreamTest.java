@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.sanity;
+package bz.stub.parallelconsumer.sanity;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.

@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.examples.metrics.integrationTests;
+package bz.stub.parallelconsumer.examples.metrics.integrationTests;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
@@ -6,8 +6,8 @@ package io.confluent.parallelconsumer.examples.metrics.integrationTests;
  */
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.confluent.csid.utils.LongPollingMockConsumer;
-import io.confluent.parallelconsumer.examples.metrics.CoreApp;
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.examples.metrics.CoreApp;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
