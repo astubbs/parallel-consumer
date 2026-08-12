@@ -505,7 +505,15 @@ AGENTS.md
 # same class of quiet hole as a sweep pattern that matches nothing.
 FREEZE_BEGIN_ERE='rename-packages:[[:space:]]*freeze-begin'
 FREEZE_END_ERE='rename-packages:[[:space:]]*freeze-end'
-FREEZE_ID_ERE='freeze-(begin|end)\(([A-Za-z0-9_.-]+)\)'
+# The parens are bracket expressions, NOT `\(` `\)`, and that is not style. This regex reaches awk
+# through `-v`, which runs C-string escape processing over the value first, and `\(` is not a defined
+# escape - POSIX leaves it implementation-defined. mawk 1.3.4 keeps the backslash, so the regex arrives
+# intact; gawk drops it, so the literal parens become GROUPS, `match()` never fires, every region's id
+# reads as empty, and a correctly written freeze region is refused with "must name its region". That is
+# eight self-test failures on a machine whose only difference is which awk is installed - the whole
+# freeze feature, dead, on an environment the author never sees. A bracket expression carries no
+# backslash, so nothing is left for -v to eat.
+FREEZE_ID_ERE='freeze-(begin|end)[(]([A-Za-z0-9_.-]+)[)]'
 
 # Excluded from both the rewrite and the completeness check, because they must carry the old spelling
 # as DATA. Matched on BASENAME, not on a hardcoded path, so moving or renaming this script cannot
@@ -826,8 +834,8 @@ validate_freeze_markers() {
             function id_of(line) {
                 if (match(line, idre)) {
                     seg = substr(line, RSTART, RLENGTH)
-                    sub(/^freeze-(begin|end)\(/, "", seg)
-                    sub(/\)$/, "", seg)
+                    sub(/^freeze-(begin|end)[(]/, "", seg)
+                    sub(/[)]$/, "", seg)
                     return seg
                 }
                 return ""

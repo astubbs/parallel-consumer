@@ -975,6 +975,22 @@ assert "step 1 reports STALE when the tooling EXISTS but differs - the case 'tes
 # Two directions matter equally. The region must hold, AND it must not leak: an exemption that swallowed
 # the rest of the file would present as a clean sweep over text nobody checked.
 
+# Before any fixture: the marker-id regex must survive the trip through `awk -v`, on an awk that is not
+# this one. -v runs C-string escape processing over its value, and `\(` is not a defined escape - mawk
+# keeps the backslash, gawk drops it. Under the dropping awk the literal parens become groups, match()
+# never fires, every id reads as empty and a VALID region is refused as unnamed. MEASURED: eight
+# failures in this suite, all green locally, because the two machines differ only in which awk is
+# installed. So the value is asserted here directly, both as written and after the mangling - the
+# second arm is what makes the control independent of whichever awk happens to be running it.
+ID_ERE="$(sed -n "s/^FREEZE_ID_ERE='\(.*\)'\$/\1/p" "$SCRIPT")"
+id_matches() { # <regex> - 1 when it finds the id in a real marker line, 0 when it does not
+    printf '%s\n' '// rename-packages: freeze-begin(migration) - a marker as actually written' \
+        | awk -v idre="$1" '{ print (match($0, idre) ? 1 : 0) }'
+}
+assert "the marker-id regex finds the id in a marker line" 1 "$(id_matches "$ID_ERE")"
+assert "  ... and still does with its backslashes eaten, as awk -v may do on another awk" 1 \
+    "$(id_matches "$(printf '%s' "$ID_ERE" | tr -d '\\')")"
+
 FZ="$TMP/freeze"
 new_fixture "$FZ"
 mkdir -p "$FZ/docs"
