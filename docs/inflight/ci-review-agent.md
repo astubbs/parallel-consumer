@@ -90,17 +90,29 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   for the life of the PR rather than only until the next push. That is why fork heads are refused
   by the gate outright rather than left to the comment rules. It dissolves if the reviewer ever
   stamps the reviewed SHA into a check run; see the entry above.
-- **The OSS Index audit grants must be carried across at merge.** `bin/check-ossindex-audit.sh` and
-  `bin/test-check-ossindex-audit.sh` are granted on astubbs/parallel-consumer#279, in
-  `claude-code-review.yml` - the file the reviewer no longer lives in. **Whichever of
-  astubbs/parallel-consumer#279 and the on-demand split merges second must carry those two grants
-  into BOTH `claude-code-review-dispatch.yml` and `claude.yml`** - there are two allowlists now,
-  and this entry is the first live instance of the drift the entry above warns about - or they are
-  silently dropped and the reviewer will report, as it already did once, that it could not run the
-  scripts. They cannot be added ahead of
-  astubbs/parallel-consumer#279: a grant for a script that does not exist on master is inert, which
-  is worse than no grant (see `bin/AGENTS.md`). `actionlint` was the third of that set and is now
-  granted on the reviewer, since it ships with the runner and can never be inert.
+- **SETTLED, and there is no second approval layer: the OSS Index audit grants were simply not in
+  the copy that was running.** astubbs/parallel-consumer#279 carried `bin/check-ossindex-audit.sh`,
+  `bin/test-check-ossindex-audit.sh`, `bin/check-cve-exclusions.sh` and
+  `bin/test-check-cve-exclusions.sh` - bare and `./` forms - into BOTH allowlists, and the reviewer
+  on run [`31547154463`](https://github.com/astubbs/parallel-consumer/actions/runs/31547154463)
+  still got `this command requires approval` for every spelling of both self-tests. An earlier
+  revision of this entry recorded that as an unexplained approval layer *beyond* `--allowedTools`.
+  There is no such layer. That run was an `issue_comment`, which GitHub runs from the **default
+  branch**, so the list in force was master's `REVIEW_TOOL_ALLOWLIST` - which does not contain those
+  four grants. The action prints the resolved list twice (the step's `claude_args`, and the SDK's
+  `allowedTools` array) and they are absent from both. The reviewer's contrary self-check cited
+  `claude.yml:60` and `claude-code-review-dispatch.yml:394` - the same line numbers in both copies -
+  after reading the **PR's** copy over `gh pr diff`, not the copy underneath it. The rule it ran
+  into is stated once, canonically, in [`docs/ci.md`](../ci.md) -> "Editing the reviewer"; this
+  entry does not restate it.
+
+  **What is left open is only that the grants remain unexercised**, which is the general condition
+  of the bullet above rather than anything specific to these four: a grant a PR adds can never apply
+  to that PR, on any route. The enumeration has since been replaced by `Bash(bin/check-*.sh:*)` and
+  `Bash(bin/test-check-*.sh:*)` so that the *convention* is granted once instead of each script
+  separately - but the patterns land unverified for the same reason, and the confirming step is the
+  `--ref master` dispatch already named above, prompted to run a `bin/check-*.sh` and quote its
+  output.
 - **Credential exposure is unresolved, not cleared.** The reviewer runs PR-authored Maven/test code
   in the same job that holds `secrets.CLAUDE_CODE_OAUTH_TOKEN`, with `pull-requests: write`. The
   move to `workflow_dispatch` bounds *who can start it* - dispatching requires write access to the

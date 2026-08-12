@@ -72,7 +72,7 @@ findings even against a bogus base URL and an expired token. The experiment was 
 configuration cannot reach the service"; the run came back with a complete report; and the obvious
 reading - "so it *can* reach it" - was wrong twice before anyone noticed. The paths, the `rm`, and why
 CI must never cache that directory are in the sibling doc and in
-`docs/inflight/ci-ossindex-audit-dead.md`.
+[`../security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md`](../security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md).
 
 The transferable part is the shape. **Before running any experiment whose expected outcome is
 failure, ask what is stored between your command and the thing you are testing.** A cache does not

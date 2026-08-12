@@ -1,6 +1,6 @@
 # Workflows - one line each
 
-What each file is, so you can pick the right one without opening all fifteen. The detail lives in
+What each file is, so you can pick the right one without opening every one of them. The detail lives in
 [`docs/ci.md`](../../docs/ci.md); each workflow's own header carries the reasoning behind it.
 
 **The three `claude*` files are the confusing ones**, because the names do not separate them and
@@ -26,6 +26,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `claude-code-review.yml` | The review gate. Invokes no Claude and costs nothing. What satisfies it: [`docs/ci.md`](../../docs/ci.md), stated once there. |
 | `claude.yml` | Answers `@claude` comments, and reviews when asked to - the only route that can raise inline review threads. |
 | `copyright.yml` | Checks source headers against the fork policy on every push and PR. |
+| `dependency-audit.yml` | Scans the **whole** resolved dependency tree for CVEs - the only place OSS Index is switched on. Per-PR, on demand, and weekly, because a new advisory needs no push to arrive. |
 | `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, dependency scanning. |
 | `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep, on demand - too slow for a PR. Self-hosted high-CPU lane. |
 | `pr-checklist.yml` | Makes the PR template binding: the checklist must be present and every box resolved. |
@@ -33,7 +34,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `publish.yml` | Publishes to Maven Central on every push to `master`; the pom version decides snapshot or release. |
 | `quarantine-lane.yml` | Runs the quarantined tests separately, so known-flaky tests neither block nor disappear. |
 | `release.yml` | Cuts a release. `workflow_dispatch`, and deliberately the most dangerous button here. |
-| `repo-hygiene.yml` | Small always-on repo checks - shell sigpipe traps, and one pinned version per GitHub Action. |
+| `repo-hygiene.yml` | Small always-on repo checks - shell sigpipe traps, one pinned version per GitHub Action, and expiring the pom's temporary CVE exclusions. |
 
 ## Two conventions that will bite you
 

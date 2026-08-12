@@ -64,10 +64,30 @@ document. This section is the detail behind it.
   mechanism is in the script's own header and in
   [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
   `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows. Self-tests run first. **Both are
-  required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
+  GitHub Action pinned to one version across all workflows. Self-tests run first. **Two of the
+  three are required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
   the job names are an API. They exist because the failures they catch are invisible rather than
   loud, and they gate precisely so those failures cannot be skimmed past.
+  - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
+    exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
+    (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
+    upstream fix is merged, and the entry exists only because no release carries it yet). A
+    temporary entry is marked `TEMPORARY-SINCE: YYYY-MM-DD` in the comment above it, and the check
+    fails once it is more than **90 days** old - one quarter, anchored on jackson-databind 2.18.x's
+    observed patch cadence (median gap ~65 days), since the upstream patch line, not our own
+    release cycle, is what actually retires these entries. Undated, unparseable and future-dated
+    markers **fail** rather than reading as "not expired yet", and so does an id with no rationale
+    comment, because an unclassified entry silently means standing-forever - the rule from
+    [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md),
+    applied to the audit's own escape hatch: ask what the check does when it cannot decide, and make
+    that state distinguishable from pass. **Exit 3**, deliberately
+    not 1 or 2: those belong to `bin/check-ossindex-audit.sh` (broken lane / real finding) and this
+    is neither - the scan and the tree are fine, the bookkeeping has rotted. The red is always
+    clearable in one reviewable line: retire the entry if the fix shipped, or re-date / reclassify
+    it having re-checked upstream. It lives here rather than in the audit job because that job is
+    skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
+    when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
+    status check** - adding it to the master ruleset is a separate, deliberate act.
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
@@ -100,6 +120,35 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   See [`docs/testing.md`](testing.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
+- **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
+  `deps: vulnerabilities` (`maven.yml`), which reviews only the dependencies a PR *changes*; this one
+  scans the whole resolved tree. The **only** place `ossindex-maven-plugin` is switched on
+  (`-Dossindex.skip=false`); it binds to `validate`, so enabling it globally would mean six-plus
+  scans per PR from one account. Runs on every in-repo PR, on dispatch, and **weekly on a schedule**
+  - the schedule catches what no PR can, an unchanged tree acquiring a new advisory. (The one
+  deliberate exception to "there is no scheduled build" below; it re-runs no suite the gate already
+  covers.) Skipped for fork PRs, which receive no secrets and would 401 forever.
+  - **Findings fail it.** astubbs/parallel-consumer#281 retired the standing backlog into
+    `excludeVulnerabilityIds` entries in the root pom, each carrying a stated retirement condition,
+    so a finding that reaches the gate is by construction an advisory nobody has looked at.
+    PR-time rather than the schedule alone because a solo maintainer will not read a scheduled
+    alert - the PR gate is the only channel with reliable attention.
+  - **Two different reds, and they stay distinguishable.** Exit 1: the scan could not be proven to
+    have run, so the *check* is broken and nothing was learned about the tree. Exit 2: the scan ran
+    and found something, so the *tree* needs triage. Separate headings in the job summary. When both
+    are true at once, exit 1 wins.
+  - **False positive, disputed, or no fixed version?** Add the id to `excludeVulnerabilityIds` in
+    the root pom with a reason and a retirement condition. `bin/check-ossindex-audit.sh` honours
+    that list - the exported report does *not* pre-filter by it - and states the suppression count
+    on every run, green ones included, so the list stays reviewable. If the fix is already merged
+    upstream and you are only waiting for a release, mark it `TEMPORARY-SINCE: YYYY-MM-DD` so it
+    expires (see `repo-hygiene.yml` above) instead of quietly joining the standing list.
+  - The did-it-actually-scan guard is not optional: the plugin has **no setting that makes an
+    unreachable scanner fatal**, so against an expired token it prints a WARNING and reports
+    `BUILD SUCCESS` - the exact silent-green defect this repo has already shipped once. Maven runs
+    with `-Dossindex.fail=false` deliberately, so a findings-bearing run still reaches the guard
+    instead of dying in the Maven step and taking the summary with it.
+    `bin/test-check-ossindex-audit.sh` runs first.
 - **`release.yml`** - the dispatch-triggered release. See [`docs/releasing.md`](releasing.md).
 - **`.semaphore/`** - legacy Confluent internal CI/release pipelines, retained but inactive on the
   fork.
@@ -160,11 +209,26 @@ is that the list is curated to this repo's own scripts, that the job holding it 
 and that it is withheld on fork heads. So the lists are the same, deliberately, and
 [`.github/workflows/claude.yml`](../.github/workflows/claude.yml) says to keep them that way.
 
+**The PR's code is on disk here, even though the checkout step names no `ref:`** - and the second
+half of that sentence is why it has been got wrong. `actions/checkout` does put master's tree down,
+but `claude-code-action` then checks the PR out itself: in tag mode it fetches the head branch by
+name and switches to it (`src/github/operations/branch.ts`, `setupBranch`). Visible in any comment
+run's log, e.g. run
+[`31550657594`](https://github.com/astubbs/parallel-consumer/actions/runs/31550657594) - `git
+checkout --force -B master refs/remotes/origin/master` in "Checkout repository", then `Switched to a
+new branch 'ci/ossindex-audit-job'` inside "Run Claude Code". So a `bin/` script run here is the
+PR's. What does **not** come from the PR is the workflow file, and therefore the allowlist - see
+"Editing the reviewer". Both routes grant `git rev-parse` so a reviewer can settle which tree it is
+standing in by looking, rather than inferring it from the workflow and getting it backwards.
+
 **On a fork PR this route answers but does not run anything** - and "answers" needs one
 qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put
 PR-controlled executables beside `CLAUDE_CODE_OAUTH_TOKEN`: a fork could replace an allowlisted
-script and wait to be asked to run the checks. That is the hazard the dispatched reviewer avoids by
-refusing fork heads outright; here the *reply* still happens, with no execution tools.
+script and wait to be asked to run the checks. That hazard is real on this route and not only on the
+dispatched one, because the action fetches a *cross-repository* PR through
+`pull/<n>/head:<branch>` - the same `setupBranch`, an explicit fork case - so a fork's files reach
+the runner exactly as an in-repo branch's do. The dispatched reviewer avoids it by refusing fork
+heads outright; here the *reply* still happens, with no execution tools.
 
 The qualification: **only a maintainer gets that reply.** `claude-code-action` runs its own
 collaborator-permission check and exits before Claude starts, so a fork author - or anyone else
@@ -432,7 +496,55 @@ default branch's copy, so a PR cannot rewrite its own reviewer. Two consequences
   the reviewer, which is the case the guard exists to refuse - so do not.
 - **The flip side:** changes to the reviewer's grants, procedure or instructions do not take effect
   until they merge, so the PR that makes them is reviewed by the old configuration. Expect the
-  reviewer to say it lacks a grant that PR adds.
+  reviewer to say it lacks a grant that PR adds. **The comment route is no exception and no
+  escape** - GitHub runs an `issue_comment` workflow from the default branch too, so `@claude` on
+  the PR exercises master's `claude.yml`. Both routes now say so in the reviewer's system prompt,
+  because this has already been misdiagnosed once as an approval layer beyond `--allowedTools`
+  ([`docs/inflight/ci-review-agent.md`](inflight/ci-review-agent.md)).
+- **So new `bin/` guards are granted by pattern, not one at a time.** Both allowlists carry
+  `Bash(bin/check-*.sh:*)` and `Bash(bin/test-check-*.sh:*)` (each in the bare and `./` spelling),
+  which means **a new `bin/check-*.sh` needs no allowlist change at all** - it is covered the
+  moment it exists on the default branch. The reasoning, and what the pattern deliberately
+  accepts, is in
+  [`claude-code-review-dispatch.yml`](../.github/workflows/claude-code-review-dispatch.yml).
+
+#### What the allowlist is for, and what it is not for
+
+Two boundaries meet here, and mistaking one for the other is how the list gets widened. *Whose* code
+runs beside the credential is settled by the fork refusal; what the job's **token** can reach is
+settled by splitting `review` from `refresh-gate`. Neither touches the third question: **what that
+code can talk the reviewer into running.** An in-repo head does not make the diff, the PR body and
+the comments trustworthy - they are still attacker-influencable text being fed to a model that can
+call Bash. Keeping the grants to this repo's own read-only scripts, rather than `Bash(*)` or
+`Bash(bin/*.sh:*)`, is the margin against injection-into-execution.
+
+So: **grant a script when it is read-only and lets the reviewer check a claim rather than infer it.
+Do not grant anything that writes, publishes, or reaches the network beyond `gh` reads.**
+
+**The pattern grants turn that rule into a naming convention, and the convention is now the
+boundary.** Nobody approves a new `bin/check-foo.sh`; naming it is what grants it. The two prefixes
+were chosen to keep `deploy.sh`, `chaos-test.sh`, `soak-test.sh`, `performance-test.sh`,
+`quarantined-test.sh` and `quarantine-lane-report.sh` outside the grant, so a script that writes must
+not be named `check-*` or `test-check-*` - a misnamed one defeats the scoping silently and nothing
+will flag it. ([`bin/AGENTS.md`](../bin/AGENTS.md) carries that one rule at the point someone would
+break it.) `bin/test-check-docs-data.sh` is the single granted script that writes: a considered
+exception, argued in the workflow comment, not a precedent.
+
+#### Adding a grant that no pattern covers
+
+For anything outside those two prefixes - the `ci-*-test.sh` wrappers, `./mvnw`, `actionlint`,
+`bin/todo-index.sh`, the `node .github/scripts/*.test.js` entries - all three of these apply:
+
+- **Both spellings.** Rules match the command as written, so `Bash(bin/foo.sh:*)` does **not** match
+  `./bin/foo.sh`. A half-added grant is worse than none: the invocation fails in a way that reads
+  like the script is broken, which is how the review on astubbs/parallel-consumer#108 logged ten
+  permission denials, gave up, and still reported success.
+- **Both files.** `claude-code-review-dispatch.yml` and `claude.yml` carry the same list and nothing
+  mechanical keeps them in step.
+- **An earlier PR than the script.** Per the bullet above, a grant never applies to the PR that adds
+  it. That discipline is the one nobody keeps - four check scripts arrived with
+  astubbs/parallel-consumer#279, all four granted in that same PR, and its reviewer could run none of
+  them - which is exactly why the two `bin/` families became patterns instead.
 
 ## Self-hosted lanes
 
@@ -452,7 +564,11 @@ never run on our own hardware.
 
 **There is no scheduled build, deliberately.** Every suite worth re-running is already a required
 check on each PR and runs again on every push to master, so a cron lane would only repeat covered
-work. **Do not add a lane for suites the gate already covers.**
+work. **Do not add a lane for suites the gate already covers.** The repo's single cron lane,
+`dependency-audit.yml`, is not a counter-example: it runs no *suite*, and what it catches - a new
+advisory published against an unchanged dependency tree - is a function of elapsed time, which no
+PR-triggered check can ever see. That is the test to apply to any future scheduled lane: **does time
+alone change the answer?**
 
 **Before pinning a job to a self-hosted label, confirm a runner serves it** -
 `gh api repos/astubbs/parallel-consumer/actions/runners` lists each runner's labels and online
