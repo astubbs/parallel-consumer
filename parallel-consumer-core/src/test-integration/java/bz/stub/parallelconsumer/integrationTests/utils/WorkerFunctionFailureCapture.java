@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.integrationTests.utils;
+package bz.stub.parallelconsumer.integrationTests.utils;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -8,7 +8,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.AppenderBase;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;

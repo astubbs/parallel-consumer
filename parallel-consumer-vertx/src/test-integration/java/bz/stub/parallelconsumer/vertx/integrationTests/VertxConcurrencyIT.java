@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.vertx.integrationTests;
+package bz.stub.parallelconsumer.vertx.integrationTests;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -11,13 +11,13 @@ import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.RequestListener;
 import com.github.tomakehurst.wiremock.http.Response;
-import io.confluent.csid.utils.LatchTestUtils;
-import io.confluent.csid.utils.ProgressBarUtils;
-import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.csid.utils.TrimListRepresentation;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
-import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.utils.LatchTestUtils;
+import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
@@ -48,10 +48,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static java.lang.Thread.getAllStackTraces;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;

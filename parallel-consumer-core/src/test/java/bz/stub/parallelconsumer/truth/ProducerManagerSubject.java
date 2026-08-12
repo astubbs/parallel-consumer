@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.truth;
+package bz.stub.parallelconsumer.truth;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
@@ -6,10 +6,10 @@ package io.confluent.parallelconsumer.truth;
  */
 
 import com.google.common.truth.FailureMetadata;
-import io.confluent.parallelconsumer.internal.ProducerManager;
-import io.confluent.parallelconsumer.internal.ProducerManagerChildSubject;
-import io.confluent.parallelconsumer.internal.ProducerManagerParentSubject;
-import io.confluent.parallelconsumer.internal.ProducerWrapper;
+import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.ProducerManagerChildSubject;
+import bz.stub.parallelconsumer.internal.ProducerManagerParentSubject;
+import bz.stub.parallelconsumer.internal.ProducerWrapper;
 import io.stubbs.truth.generator.SubjectFactoryMethod;
 import io.stubbs.truth.generator.UserManagedMiddleSubject;
 import io.stubbs.truth.generator.UserManagedSubject;

@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
@@ -6,16 +6,16 @@ package io.confluent.parallelconsumer.internal;
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.csid.utils.BlockedThreadAsserter;
-import io.confluent.csid.utils.LatchTestUtils;
-import io.confluent.parallelconsumer.ParallelConsumer;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.PollContextInternal;
-import io.confluent.parallelconsumer.ProvesClaim;
-import io.confluent.parallelconsumer.TransactionalClaim;
-import io.confluent.parallelconsumer.state.ModelUtils;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.internal.utils.BlockedThreadAsserter;
+import bz.stub.parallelconsumer.internal.utils.LatchTestUtils;
+import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.ProvesClaim;
+import bz.stub.parallelconsumer.TransactionalClaim;
+import bz.stub.parallelconsumer.state.ModelUtils;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -44,10 +44,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
-import static io.confluent.parallelconsumer.ManagedTruth.assertWithMessage;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
-import static io.confluent.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
+import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
+import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
 import static java.time.Duration.ofSeconds;
 import static java.util.Collections.emptyList;
 import static org.awaitility.Awaitility.await;
@@ -60,7 +60,7 @@ import static org.mockito.Mockito.*;
  *
  * @author Antony Stubbs
  * @see ProducerManager
- * @see io.confluent.parallelconsumer.integrationTests.TransactionTimeoutsTest for integration tests checking timeout
+ * @see bz.stub.parallelconsumer.integrationTests.TransactionTimeoutsTest for integration tests checking timeout
  *         behaiviour
  */
 @Tag("transactions")
@@ -134,7 +134,7 @@ class ProducerManagerTest {
 
     /**
      * Acquires the produce lock against the <em>real</em> context and hands it to that context, exactly as
-     * {@link io.confluent.parallelconsumer.ParallelEoSStreamProcessor#pollAndProduce} does.
+     * {@link bz.stub.parallelconsumer.ParallelEoSStreamProcessor#pollAndProduce} does.
      * <p>
      * This is load-bearing, not tidying: the lock must not be released until the work has reached the
      * controller's inbound queue - see {@link AbstractParallelEoSStreamProcessor#cleanUpContext},

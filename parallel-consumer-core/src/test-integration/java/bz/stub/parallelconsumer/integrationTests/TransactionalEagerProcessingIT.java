@@ -1,18 +1,18 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.ProvesClaim;
-import io.confluent.parallelconsumer.TransactionalClaim;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
-import io.confluent.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
-import io.confluent.parallelconsumer.integrationTests.utils.WorkerFunctionFailureCapture;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ProvesClaim;
+import bz.stub.parallelconsumer.TransactionalClaim;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
+import bz.stub.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
+import bz.stub.parallelconsumer.integrationTests.utils.WorkerFunctionFailureCapture;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.ProducerManager;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -40,9 +40,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.TRANSACTIONAL;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.TRANSACTIONAL;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofMinutes;
 import static java.time.Duration.ofSeconds;

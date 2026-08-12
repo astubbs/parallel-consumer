@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ProvesClaim;
-import io.confluent.parallelconsumer.TransactionalClaim;
-import io.confluent.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
+import bz.stub.parallelconsumer.ProvesClaim;
+import bz.stub.parallelconsumer.TransactionalClaim;
+import bz.stub.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -22,7 +22,7 @@ import java.util.List;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier.VISIBILITY_TIMEOUT;
+import static bz.stub.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier.VISIBILITY_TIMEOUT;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static java.util.Optional.empty;
@@ -30,7 +30,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * The visibility half of {@link io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}'s
+ * The visibility half of {@link bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}'s
  * documented guarantees, proved against a real broker: <em>what</em> a consumer can see, and <em>when</em>.
  * <p>
  * These claims are broker-only by construction. {@code MockProducer} models the transaction state machine but

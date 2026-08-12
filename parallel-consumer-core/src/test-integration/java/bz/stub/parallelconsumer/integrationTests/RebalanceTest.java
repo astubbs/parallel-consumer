@@ -3,11 +3,11 @@
  * Copyright (C) 2020-2023 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -26,9 +26,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.REUSE_GROUP;
+import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.REUSE_GROUP;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;

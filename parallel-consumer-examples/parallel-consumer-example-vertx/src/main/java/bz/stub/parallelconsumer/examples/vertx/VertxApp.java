@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer.examples.vertx;
+package bz.stub.parallelconsumer.examples.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
-import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
+import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;

@@ -1,16 +1,16 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.ProvesClaim;
-import io.confluent.parallelconsumer.TransactionalClaim;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
-import io.confluent.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
-import io.confluent.parallelconsumer.integrationTests.utils.WorkerFunctionFailureCapture;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ProvesClaim;
+import bz.stub.parallelconsumer.TransactionalClaim;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
+import bz.stub.parallelconsumer.integrationTests.utils.TransactionalTopicVerifier;
+import bz.stub.parallelconsumer.integrationTests.utils.WorkerFunctionFailureCapture;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -34,9 +34,9 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.TRANSACTIONAL;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.ProducerMode.TRANSACTIONAL;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofMinutes;
 import static java.time.Duration.ofSeconds;
@@ -73,7 +73,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * A {@code read_committed} consumer can only be shown records below the last stable offset, which moves in whole
  * transactions - but a single fetch could still return a prefix of what is available if it hit
  * {@code max.partition.fetch.bytes} (1MB) or {@code max.poll.records}
- * ({@link io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils#MAX_POLL_RECORDS}). The volumes
+ * ({@link bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils#MAX_POLL_RECORDS}). The volumes
  * here are deliberately tiny - {@link #INPUT_RECORDS} x {@link #RESULTS_PER_INPUT_RECORD} short strings, a few
  * kilobytes in total - so neither bound is reachable and a part-visible result set can only mean a
  * part-committed one. <b>Raising those volumes materially would re-introduce the possibility of a truncated

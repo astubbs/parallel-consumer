@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -292,7 +292,7 @@ public enum TransactionalClaim {
          * markers, so a claim moved out of the tag - and therefore off the rendered page - fails the check even
          * though the sentence still exists in the file.
          */
-        OPTIONS_JAVADOC("parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java",
+        OPTIONS_JAVADOC("parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java",
                 "// tag::transactionalJavadoc[]", "// end::transactionalJavadoc[]"),
 
         /**
