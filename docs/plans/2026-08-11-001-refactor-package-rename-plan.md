@@ -1,7 +1,7 @@
 # Package rename: `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`
 
 **Status:** **decided go, and executed - the rename landed on master in astubbs#294**, carried out by
-the re-runnable `bin/rename-packages.sh` rather than by hand, for the merge reason set out in §4.6.
+the re-runnable `bin/rename-packages.sh` rather than by hand, for the merge reason set out in §4.5.
 Everything below is the *pre-execution* record: the go/no-go, the evidence behind it, and the survey of
 what would have to move. Read it as what was known on 2026-08-11, not as an open task list - the
 inventory in §5 has since been worked, and `bin/rename-packages.sh --verify-only` is now the authority
@@ -142,7 +142,7 @@ Re-measure rather than quoting these; the commands are the point:
 
 The 8 string literals are the dangerous ones and each is enumerated in §5.
 
-### 4.5 Commit shape: two commits, and one commit is impossible - not merely worse
+### 4.4 Commit shape: two commits, and one commit is impossible - not merely worse
 
 **Decided. The move goes in its own commit; the content edits follow in a second.** `git mv` only,
 never `mv` plus `git add`.
@@ -177,7 +177,7 @@ above.
 Keep `--single-commit` only as the self-test's experiment arm - it is the negative control proving
 the mis-pairing detector fires. It is not an option to choose.
 
-### 4.6 The merge hazard, and the only defence that exists
+### 4.5 The merge hazard, and the only defence that exists
 
 **Commit shape is irrelevant to merges.** `git merge` resolves renames over the base-to-tip *tree
 delta*, which is identical however many commits span it; merging the two-commit and the
@@ -301,10 +301,16 @@ Each of these needs a human edit; most fail loudly, which is why they rank here.
 - [ ] **`docs/todo-index.md`** - 48 path references. **Regenerate, do not edit**: `bin/todo-index.sh`.
       Gated by `bin/todo-index.sh --check` at `.github/workflows/pr-checklist.yml:52`, so a stale
       index fails the PR.
-- [ ] **IntelliJ run configurations**: `.idea/runConfigurations/_Tag__transactions__.xml:4-5` and
-      `.idea/runConfigurations/All_examples.xml:6,10`. **Note the typo**:
-      `All_examples.xml:6` reads `io.confluent.parall**a**lconsumer.examples.core.*`, which a
-      find-and-replace on the correct spelling will skip. It is already broken; fix it while there.
+- [x] **IntelliJ run configurations** - **resolved by deletion, not by editing, in this same PR**
+      (`ca1bbed5`, `76384aca`). `.idea/runConfigurations/_Tag__transactions__.xml` and
+      `.idea/runConfigurations/All_examples.xml` no longer exist, so the `file:line` references this
+      bullet used to carry are gone with them and are deliberately not restored here. Why they went
+      is the reason they were listed: `All_examples.xml:6` read
+      `io.confluent.parall**a**lconsumer.examples.core.*` - misspelled, two lines above a correctly
+      spelled reference in the same file - so a find-and-replace on the correct spelling skipped it
+      silently while reporting itself complete; and `_Tag__transactions__.xml` pinned a test class by
+      fully-qualified name in an XML attribute that no compiler and no IDE refactor checks. Both were
+      rename traps with no CI consumer, which is the argument against the whole category.
 - [ ] **`parallel-consumer-core/src/test/resources/junit-platform.properties:6`** - commented out,
       referencing `io.confluent.csid.utils.ReplaceCamelCase`. Another `io.confluent.csid` case.
 - [ ] **Prose in `docs/`** - `grep -rn 'io\.confluent\|io/confluent' docs/`. **Dated plan and
@@ -312,8 +318,8 @@ Each of these needs a human edit; most fail loudly, which is why they rank here.
       they did not say; only live reference prose gets updated. Decide per file, and expect the
       answer to be "leave it" for everything under `docs/plans/`.
 - [ ] **`src/docs/README_TEMPLATE.adoc`**, then regenerate `README.adoc` with `./mvnw process-sources`.
-      Never hand-edit `README.adoc`. See §8 for the wording, and §9 for what the README may say
-      *before* the decision is taken.
+      Never hand-edit `README.adoc`. See §8 for the drafted wording and §9 for the pre-decision
+      constraint on it - both now carry a correction recording what actually shipped instead.
 
 ### R6 - Checked and clean, so nobody checks again
 
@@ -380,7 +386,20 @@ Anything that is none of the above is a miss. Fix it and note which sweep should
 
 ## 8. User-facing wording, pre-drafted
 
-Ready to paste **when the rename lands**, not before (see §9).
+Drafted on 2026-08-11 to be pasted **when the rename lands**, not before (see §9).
+
+**Correction (2026-08-12, after execution).** The rename landed, and this draft was **superseded
+rather than pasted**: what shipped is the `== Upgrading` rewrite in `src/docs/README_TEMPLATE.adoc`
+(regenerated into `README.adoc`), which is longer, gives the `groupId` step as well, and words the
+command differently. The draft is kept as the record of what was proposed, with its one defect noted
+here rather than silently edited out - **the `sed` one-liner below is BSD/macOS-only and rewrites
+nothing on GNU/Linux.** `sed -i ''` passes `-i` with no attached suffix, so GNU sed reads `''` as the
+script and the `s/.../.../g` expression as a *filename*: every matched file is rewritten with an
+empty script and sed errors on a file that does not exist. A Linux reader who pasted it would get no
+substitution. The shipped wording uses the GNU form,
+`find . -name '*.java' -exec sed -i 's/.../.../g' {} +`, followed by an explicit note giving the BSD
+variant. **Do not paste the block below.** The `0.6.0.0` release-note text further down was *not*
+superseded and still applies at generation time.
 
 **For `src/docs/README_TEMPLATE.adoc`, under `== Upgrading`, extending the 0.5-to-0.6 subsection:**
 
@@ -424,6 +443,10 @@ the whole argument of §1.
 
 ## 9. What the README may say before the decision is taken
 
+*Superseded on 2026-08-12: the decision was taken and executed, so the constraint below no longer
+binds. It is kept because it is the reasoning that shaped what shipped; the correction at the end of
+this section says what the README says now.*
+
 **Nothing that presents the rename as decided or done.** The README is a published artifact and this
 is an open go/no-go, so publishing unshipped behaviour as fact would be wrong in the one document
 whose readers cannot check.
@@ -439,6 +462,18 @@ What went in alongside this plan, because it is true today and shipping regardle
 
 If this plan is executed, both passages change together, using §8's wording; the drop-in claim in
 particular stops being true as written and must not simply be qualified.
+
+**Correction (2026-08-12, after execution).** Both passages did change together, in this same PR, and
+neither used §8's drafted wording (see §8's correction). `src/docs/README_TEMPLATE.adoc` - and
+`README.adoc`, regenerated from it, never hand-edited - now say that the Java packages move as well
+as the `groupId`, and give the import-rewrite recipe. So the two bullets above describe a README
+state that no longer exists, and the constraint at the top of this section was **lifted by the
+decision, not violated by the README**. The old-spelling references those migration instructions
+require are held inside the template's two freeze regions - the `freeze-begin` / `freeze-end` markers
+`bin/rename-packages.sh` honours - which is what stops the sweep rewriting a migration step into a
+package that moves to itself. (Writing that marker out in full here is itself enough to trip the
+preflight, which is the mechanism working: an unclosed region would exempt the rest of the file from
+the completeness check.)
 
 ## 10. Recommendation
 
