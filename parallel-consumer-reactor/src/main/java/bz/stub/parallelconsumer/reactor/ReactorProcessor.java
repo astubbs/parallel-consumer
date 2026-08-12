@@ -1,17 +1,17 @@
-package io.confluent.parallelconsumer.reactor;
+package bz.stub.parallelconsumer.reactor;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.PCRetriableException;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.PollContextInternal;
-import io.confluent.parallelconsumer.internal.ExternalEngine;
-import io.confluent.parallelconsumer.internal.MdcPropagation;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.PCRetriableException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -30,7 +30,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 
 /**
  * Adapter for using Project Reactor as the asynchronous execution engine
@@ -80,7 +80,7 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
      * @see #react(Function)
      * @see ParallelConsumerOptions
      * @see ParallelConsumerOptions#batchSize
-     * @see io.confluent.parallelconsumer.ParallelStreamProcessor#poll
+     * @see bz.stub.parallelconsumer.ParallelStreamProcessor#poll
      */
     public void react(Function<PollContext<K, V>, Publisher<?>> reactorFunction) {
 

@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import org.slf4j.MDC;
 
 import java.util.Map;
@@ -21,7 +21,7 @@ import java.util.Map;
  * Two operations, always used as a pair:
  * <ol>
  *     <li>{@link #capture()} on the thread that <em>has</em> the context (the caller of
- *     {@link io.confluent.parallelconsumer.ParallelStreamProcessor#poll}, or the controller at submit time).</li>
+ *     {@link bz.stub.parallelconsumer.ParallelStreamProcessor#poll}, or the controller at submit time).</li>
  *     <li>{@link #enter(Map)} on the thread that <em>runs</em> the work, in a try-with-resources block, so the context
  *     is torn down again when the work finishes.</li>
  * </ol>

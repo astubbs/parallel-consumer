@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -13,7 +13,7 @@ import java.util.concurrent.CountDownLatch;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mockingDetails;
 
@@ -82,7 +82,7 @@ class BrokerPollSystemDrainTest extends ParallelEoSStreamProcessorTestBase {
 
             // observe poll activity across three long-poll periods of the drain window
             long pollsAtDrainStart = consumerPollInvocationCount();
-            io.confluent.csid.utils.ThreadUtils.sleepQuietly(3 * DEFAULT_BROKER_POLL_FREQUENCY_MS);
+            bz.stub.parallelconsumer.internal.utils.ThreadUtils.sleepQuietly(3 * DEFAULT_BROKER_POLL_FREQUENCY_MS);
             long pollsDuringDrainWindow = consumerPollInvocationCount() - pollsAtDrainStart;
 
             // The drain-window polling property:

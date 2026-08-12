@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer.mutiny;
+package bz.stub.parallelconsumer.mutiny;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LatchTestUtils;
-import io.confluent.csid.utils.ProgressBarUtils;
+import bz.stub.parallelconsumer.internal.utils.LatchTestUtils;
+import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import io.smallrye.mutiny.Uni;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
@@ -20,7 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertWithMessage;
-import static io.confluent.parallelconsumer.truth.LongPollingMockConsumerSubject.assertThat;
+import static bz.stub.parallelconsumer.truth.LongPollingMockConsumerSubject.assertThat;
 import static org.awaitility.Awaitility.await;
 
 @Slf4j

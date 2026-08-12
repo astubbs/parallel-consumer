@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.examples.streams.integrationTests;
+package bz.stub.parallelconsumer.examples.streams.integrationTests;
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.examples.streams.StreamsApp;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.examples.streams.StreamsApp;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.Producer;

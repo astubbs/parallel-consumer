@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.vertx;
+package bz.stub.parallelconsumer.vertx;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import io.confluent.csid.utils.WireMockUtils;
-import io.confluent.parallelconsumer.MdcBoundaryProbe;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
+import bz.stub.parallelconsumer.internal.utils.WireMockUtils;
+import bz.stub.parallelconsumer.MdcBoundaryProbe;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +24,7 @@ import static org.awaitility.Awaitility.await;
  * not on the PC worker thread that the core fix covers.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.internal.MdcPropagation
+ * @see bz.stub.parallelconsumer.internal.MdcPropagation
  */
 @Isolated
 @Slf4j

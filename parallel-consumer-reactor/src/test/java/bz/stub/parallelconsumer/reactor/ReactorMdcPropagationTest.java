@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.reactor;
+package bz.stub.parallelconsumer.reactor;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.MdcBoundaryProbe;
+import bz.stub.parallelconsumer.MdcBoundaryProbe;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -18,7 +18,7 @@ import static org.awaitility.Awaitility.await;
  * function runs on a Reactor scheduler thread, not on the PC worker thread that the core fix covers.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.internal.MdcPropagation
+ * @see bz.stub.parallelconsumer.internal.MdcPropagation
  */
 @Slf4j
 class ReactorMdcPropagationTest extends ReactorUnitTestBase {

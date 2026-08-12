@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -28,7 +28,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * worker-pool boundary, and they differ per engine.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.internal.MdcPropagation
+ * @see bz.stub.parallelconsumer.internal.MdcPropagation
  */
 public class MdcBoundaryProbe {
 

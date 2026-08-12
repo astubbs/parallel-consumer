@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.mutiny;
+package bz.stub.parallelconsumer.mutiny;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.MdcBoundaryProbe;
+import bz.stub.parallelconsumer.MdcBoundaryProbe;
 import io.smallrye.mutiny.Uni;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
@@ -18,7 +18,7 @@ import static org.awaitility.Awaitility.await;
  * user's function runs on a Mutiny worker, not on the PC worker thread that the core fix covers.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.internal.MdcPropagation
+ * @see bz.stub.parallelconsumer.internal.MdcPropagation
  */
 @Slf4j
 class MutinyMdcPropagationTest extends MutinyUnitTestBase {

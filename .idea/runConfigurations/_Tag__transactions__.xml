@@ -1,8 +1,8 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="@Tag(&quot;transactions&quot;)" type="JUnit" factoryName="JUnit">
     <module name="parallel-consumer-core" />
-    <option name="PACKAGE_NAME" value="io.confluent.parallelconsumer.internal" />
-    <option name="MAIN_CLASS_NAME" value="io.confluent.parallelconsumer.internal.ProducerManagerTest" />
+    <option name="PACKAGE_NAME" value="bz.stub.parallelconsumer.internal" />
+    <option name="MAIN_CLASS_NAME" value="bz.stub.parallelconsumer.internal.ProducerManagerTest" />
     <option name="METHOD_NAME" value="" />
     <option name="TEST_OBJECT" value="tags" />
     <tag value="transactions" />

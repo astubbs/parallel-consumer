@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -19,7 +19,7 @@ import static com.google.common.truth.Truth.assertThat;
  * Unit tests for the {@link MdcPropagation} primitive itself - capture, install, restore, and the disabled mode.
  * <p>
  * The end-to-end behaviour through the worker pool is covered by
- * {@code io.confluent.parallelconsumer.MdcContextPropagationTest}.
+ * {@code bz.stub.parallelconsumer.MdcContextPropagationTest}.
  *
  * @author Antony Stubbs
  */

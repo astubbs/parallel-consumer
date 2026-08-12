@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.DynamicLoadFactor;
-import io.confluent.parallelconsumer.internal.MdcPropagation;
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
@@ -25,8 +25,8 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.function.Function;
 
-import static io.confluent.csid.utils.StringUtils.msg;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static java.time.Duration.ofMillis;
 
 /**
@@ -544,7 +544,7 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * Initial load factor - overrides default starting load factor
-     * {@link io.confluent.parallelconsumer.internal.DynamicLoadFactor#DEFAULT_INITIAL_LOADING_FACTOR}
+     * {@link bz.stub.parallelconsumer.internal.DynamicLoadFactor#DEFAULT_INITIAL_LOADING_FACTOR}
      * <p>
      * Ignored if {@link #messageBufferSize} is specified as dynamic load factor system is set to static load factor to
      * match requested buffer size.
@@ -554,7 +554,7 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * Initial load factor - overrides default maximum load factor
-     * {@link io.confluent.parallelconsumer.internal.DynamicLoadFactor#DEFAULT_MAX_LOADING_FACTOR}
+     * {@link bz.stub.parallelconsumer.internal.DynamicLoadFactor#DEFAULT_MAX_LOADING_FACTOR}
      * <p>
      * Ignored if {@link #messageBufferSize} is specified as dynamic load factor system is set to static load factor to
      * match requested buffer size.

@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
@@ -20,10 +20,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
-import static io.confluent.parallelconsumer.MdcBoundaryProbe.CALLER_KEY;
-import static io.confluent.parallelconsumer.MdcBoundaryProbe.CALLER_VALUE;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.MdcBoundaryProbe.CALLER_KEY;
+import static bz.stub.parallelconsumer.MdcBoundaryProbe.CALLER_VALUE;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -40,7 +40,7 @@ import static org.awaitility.Awaitility.await;
  * change the isolation logic.
  *
  * @author Antony Stubbs
- * @see io.confluent.parallelconsumer.internal.MdcPropagation
+ * @see bz.stub.parallelconsumer.internal.MdcPropagation
  */
 @Slf4j
 class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {

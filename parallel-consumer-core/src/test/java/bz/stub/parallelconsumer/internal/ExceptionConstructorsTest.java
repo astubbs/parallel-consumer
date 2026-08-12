@@ -1,19 +1,19 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ExceptionInUserFunctionException;
-import io.confluent.parallelconsumer.PCRetriableException;
-import io.confluent.parallelconsumer.ParallelConsumerException;
-import io.confluent.parallelconsumer.offsets.BitSetEncodingNotSupportedException;
-import io.confluent.parallelconsumer.offsets.EncodingNotSupportedException;
-import io.confluent.parallelconsumer.offsets.KafkaStreamsEncodingNotSupported;
-import io.confluent.parallelconsumer.offsets.NoEncodingPossibleException;
-import io.confluent.parallelconsumer.offsets.OffsetDecodingError;
-import io.confluent.parallelconsumer.offsets.RunLengthV1EncodingNotSupported;
-import io.confluent.parallelconsumer.offsets.RunLengthV2EncodingNotSupported;
+import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
+import bz.stub.parallelconsumer.PCRetriableException;
+import bz.stub.parallelconsumer.ParallelConsumerException;
+import bz.stub.parallelconsumer.offsets.BitSetEncodingNotSupportedException;
+import bz.stub.parallelconsumer.offsets.EncodingNotSupportedException;
+import bz.stub.parallelconsumer.offsets.KafkaStreamsEncodingNotSupported;
+import bz.stub.parallelconsumer.offsets.NoEncodingPossibleException;
+import bz.stub.parallelconsumer.offsets.OffsetDecodingError;
+import bz.stub.parallelconsumer.offsets.RunLengthV1EncodingNotSupported;
+import bz.stub.parallelconsumer.offsets.RunLengthV2EncodingNotSupported;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 

@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.integrationTests.chaostests;
+package bz.stub.parallelconsumer.integrationTests.chaostests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
