@@ -893,6 +893,15 @@ holds it, and the comment is residue.
 | `LoadTest` `8_000_0 / 4_000_00 / 4_000_0 / 8` | No | All four born commented in one commit, `af1fa5de` (2020-06-17), beside the live `4_000` | An authored range, 8 to 400,000, written in one sitting. §8.1 called it "dead code" without tracing it. `8` is a debug-fast setting, not a volume rung. |
 | `TransactionAndCommitModeTest` `2 / 100 / 1000` | No | Born commented at `2b0ab66b` (2020-11-27) beside live `numThreads = 16` | A concurrency ladder bracketing the live value. §8.1 said *"document or fix"*; `e67d8b89` did neither and deleted it. |
 
+**One rung does not survive its own test, and running it is what showed that.** `LoadTest`'s `8` was
+parked as a fast-iteration setting, but it could never have executed: the key range is derived as
+`volume / 100`, so eight records produced zero keys and `publishMessages` threw
+`IndexOutOfBoundsException` on the first send. That is true of `af1fa5de` as authored, not a later
+rot. So "born commented means someone ran it by hand" holds for the three volume rungs and fails for
+this one - provenance narrows the question, it does not answer it, and only executing the rung
+settles it. The floor added in `setupTestData` makes the setting work as intended rather than
+deleting it a second time.
+
 Reproduce any row with:
 
 ```bash
