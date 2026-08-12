@@ -16,6 +16,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junitpioneer.jupiter.ClearSystemProperty;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junitpioneer.jupiter.SetSystemProperty;
 import org.slf4j.LoggerFactory;
 
@@ -113,7 +114,12 @@ class AmbientProbeExtensionTest {
 
     // --- environment dump (what JavaEnvTest used to do by hand) ---
 
+    /**
+     * Serialised against its sibling: both mutate the same static guard, and this module runs JUnit
+     * thread-parallel outside {@code -Pci}, so unsynchronised they can interleave and red each other.
+     */
     @Test
+    @ResourceLock("ambient-probe-environment-dump")
     void autopsyCarriesTheEnvironmentDumpOncePerRun() {
         AmbientProbeExtension.resetEnvironmentDumpForTest();
         var probe = observerProbe();
@@ -131,17 +137,15 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
+    @ResourceLock("ambient-probe-environment-dump")
+    @SetSystemProperty(key = "ambient.probe.test.multiline", value = "alpha\nbeta")
     void environmentDumpEscapesNewlinesSoOneLinePerProperty() {
         AmbientProbeExtension.resetEnvironmentDumpForTest();
-        System.setProperty("ambient.probe.test.multiline", "alpha\nbeta");
-        try {
-            String autopsy = AmbientProbeExtension.buildAutopsy(
-                    contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
 
-            assertThat(autopsy).contains("ambient.probe.test.multiline=alpha\\nbeta");
-        } finally {
-            System.clearProperty("ambient.probe.test.multiline");
-        }
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("ambient.probe.test.multiline=alpha\\nbeta");
     }
 
     // --- autopsy rendering ---

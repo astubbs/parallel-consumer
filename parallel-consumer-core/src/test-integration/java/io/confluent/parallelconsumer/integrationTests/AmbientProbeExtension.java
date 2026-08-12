@@ -208,8 +208,11 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
     }
 
     /**
-     * Emitted once per run, on the first autopsy only. Later autopsies say where to find it rather
-     * than repeating a few hundred lines per failing test.
+     * Emitted on the first autopsy in each JVM, and pointed at thereafter rather than repeating a few
+     * hundred lines per failing test. Note "each JVM", not each CI run: the integration lane forks
+     * several JVMs, so a run can carry one dump per fork, each attached to whichever test failed
+     * first there. That is the cost of not repeating it; the alternative buries the probe findings
+     * the autopsy exists for.
      * <p>
      * This is what {@code JavaEnvTest} was doing by hand. Its javadoc said so - <em>"used to
      * manually inspect the java environment at runtime, particularly useful for CI

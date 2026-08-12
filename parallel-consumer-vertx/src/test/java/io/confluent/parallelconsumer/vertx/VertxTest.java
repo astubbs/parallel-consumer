@@ -262,6 +262,11 @@ class VertxTest extends VertxBaseUnitTest {
         var res = getResults(futureStream);
         assertThat(res).hasSize(1).doesNotContainNull();
         assertThat(res).extracting(AsyncResult::cause).doesNotContainNull();
+
+        // the half that makes this a contrast rather than a second success case: nothing commits, so
+        // the record is retried. Asserting only that the future failed would leave the boundary
+        // half-stated - and the boundary is the whole point of the pair.
+        assertCommits(of());
     }
 
     private List<AsyncResult<HttpResponse<Buffer>>> getResults(
