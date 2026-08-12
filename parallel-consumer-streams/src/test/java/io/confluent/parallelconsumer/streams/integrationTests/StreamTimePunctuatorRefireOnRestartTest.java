@@ -10,7 +10,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
@@ -25,7 +27,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
+import lombok.SneakyThrows;
 import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -72,9 +76,8 @@ import static org.awaitility.Awaitility.await;
  * the PC arm was looked at, because three claims died in this branch's history for want of exactly that
  * discipline - and it earned that twice over:
  * <ul>
- *   <li>It first failed because run 2's "late" records were stamped 2,000ms after the epoch. Kafka's
- *       time-based retention keys on the <em>record's</em> timestamp, so they were ~56 years old on
- *       arrival and eligible for deletion immediately. Event times are anchored to wall clock now.</li>
+ *   <li>It first failed because run 2's "late" records fell straight out of Kafka's retention - see
+ *       {@link #runOneBaseTimestamp} for why event times are wall-clock-anchored now.</li>
  *   <li>It then failed because the arm expected <em>silence</em> from run 2. A restored mark still
  *       punctuates once, at the restored value. The discriminator is therefore not whether run 2
  *       punctuates but <b>at what stream time</b>.</li>
@@ -124,7 +127,12 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
     /** Small enough that run 1 punctuates several times across its event-time span. */
     private static final Duration PUNCTUATE_EVENT_INTERVAL = Duration.ofMillis(2_000);
 
-    private static final Duration SETTLE = Duration.ofSeconds(5);
+    /**
+     * Four commit intervals. STREAM_TIME punctuation fires synchronously during record processing, so once
+     * the records are through, what is still outstanding is only the forwarded record's send and one
+     * commit landing before close - both bounded by COMMIT_INTERVAL, not by seconds.
+     */
+    private static final Duration SETTLE = Duration.ofSeconds(2);
 
     private static final AtomicInteger recordsProcessed = new AtomicInteger();
 
@@ -213,9 +221,13 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
 
         // Phase 1: climbing event time, so stream time advances and the punctuator fires.
         produceAt(inputTopic, runOneBaseTimestamp, STEP, RUN_ONE_RECORDS, "early");
-        KafkaStreams runOne = startTopology(appId, inputTopic, outputTopic);
+        KafkaStreams runOne = null;
         long dispatched;
         try {
+            // Assigned INSIDE the try: startAndAwaitRunning start()s the client before awaiting RUNNING,
+            // so a timeout there would orphan a live client - threads, consumer, producer, group
+            // membership - that no finally ever closed, and it would linger into the next arm.
+            runOne = startTopology(appId, inputTopic, outputTopic);
             await().atMost(Duration.ofSeconds(60))
                     .until(() -> recordsProcessed.get() >= RUN_ONE_RECORDS);
             sleepThrough(SETTLE, "letting run 1 punctuate and commit in " + name);
@@ -223,7 +235,9 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
         } finally {
             // Clean close: this arm is about what a restart restores, not about crash behaviour, and a
             // clean close is what writes the committed metadata the restart reads back.
-            runOne.close(Duration.ofSeconds(30));
+            if (runOne != null) {
+                runOne.close(Duration.ofSeconds(30));
+            }
         }
         List<String> runOnePunctuations = drainAll(outputTopic);
         long highest = runOneBaseTimestamp + ((RUN_ONE_RECORDS - 1) * STEP);
@@ -232,15 +246,20 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
 
         // Phase 2: same application id, LATE records only.
         long outputEnd = endOffset(outputTopic);
+        // Second reset, and load-bearing: phase 2's await must not be satisfied by phase 1's
+        // leftover count, which is already larger than RUN_TWO_RECORDS.
         recordsProcessed.set(0);
         produceAt(inputTopic, lateTimestamp(), STEP, RUN_TWO_RECORDS, "late");
-        KafkaStreams runTwo = startTopology(appId, inputTopic, outputTopic);
+        KafkaStreams runTwo = null;
         try {
+            runTwo = startTopology(appId, inputTopic, outputTopic);
             await().atMost(Duration.ofSeconds(60))
                     .until(() -> recordsProcessed.get() >= RUN_TWO_RECORDS);
             sleepThrough(SETTLE, "letting run 2 punctuate if it is going to in " + name);
         } finally {
-            runTwo.close(Duration.ofSeconds(30));
+            if (runTwo != null) {
+                runTwo.close(Duration.ofSeconds(30));
+            }
         }
         // Scoped past run 1's output, so run 1's punctuations cannot satisfy a run 2 assertion.
         List<String> runTwoPunctuations = drainFrom(outputTopic, outputEnd);
@@ -293,30 +312,37 @@ class StreamTimePunctuatorRefireOnRestartTest extends BrokerStreamsIntegrationTe
      */
     private List<String> drainFrom(final String topic, final long fromOffset) {
         List<String> values = new ArrayList<>();
-        org.apache.kafka.common.TopicPartition partition =
-                new org.apache.kafka.common.TopicPartition(topic, 0);
+        TopicPartition partition = new TopicPartition(topic, 0);
         try (KafkaConsumer<String, String> consumer =
                      getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
             consumer.assign(UniLists.of(partition));
             consumer.seek(partition, fromOffset);
-            for (int poll = 0; poll < 8; poll++) {
+            // Stop after a few consecutive quiet polls rather than always burning the whole budget.
+            // This keeps the property that matters - an arm may legitimately observe nothing, so there is
+            // no await-for-at-least-one that would hang on silence - while returning as soon as the topic
+            // has gone quiet, whether that is because nothing came or because everything already did.
+            int quiet = 0;
+            for (int poll = 0; poll < 8 && quiet < 3; poll++) {
+                int before = values.size();
                 for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500))) {
                     values.add(record.value());
                 }
+                quiet = values.size() == before ? quiet + 1 : 0;
             }
         }
         return values;
     }
 
+    /**
+     * The shared AdminClient, as the rest of the suite does for end-offset lookups - a whole
+     * {@code KafkaConsumer} for one stateless metadata call is construction cost for nothing.
+     */
+    @SneakyThrows
     private long endOffset(final String topic) {
-        org.apache.kafka.common.TopicPartition partition =
-                new org.apache.kafka.common.TopicPartition(topic, 0);
-        try (KafkaConsumer<String, String> consumer =
-                     getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            consumer.assign(UniLists.of(partition));
-            consumer.seekToEnd(UniLists.of(partition));
-            return consumer.position(partition);
-        }
+        TopicPartition partition = new TopicPartition(topic, 0);
+        return getKcu().getAdmin()
+                .listOffsets(UniMaps.of(partition, OffsetSpec.latest()))
+                .partitionResult(partition).get().offset();
     }
 
     private KafkaStreams startTopology(final String appId,
