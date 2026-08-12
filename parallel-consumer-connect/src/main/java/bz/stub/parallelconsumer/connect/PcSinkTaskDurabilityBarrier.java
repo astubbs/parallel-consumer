@@ -1,9 +1,9 @@
-package io.confluent.parallelconsumer.connect;
+package bz.stub.parallelconsumer.connect;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.streams.PcTaskDispatcher.CompletionHandle;
+import bz.stub.parallelconsumer.streams.PcTaskDispatcher.CompletionHandle;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;

@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.connect.integrationTests;
+package bz.stub.parallelconsumer.connect.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.connect.PcSinkTaskDurabilityBarrier.ConfirmationRule;
-import io.confluent.parallelconsumer.connect.PcSinkTaskLane;
-import io.confluent.parallelconsumer.connect.PcSinkTaskLaneRouter;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
+import bz.stub.parallelconsumer.connect.PcSinkTaskDurabilityBarrier.ConfirmationRule;
+import bz.stub.parallelconsumer.connect.PcSinkTaskLane;
+import bz.stub.parallelconsumer.connect.PcSinkTaskLaneRouter;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.streams.PcTaskDispatcher;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.OffsetSpec;
@@ -55,7 +55,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * returns a hard-coded {@code false}. The poll/dispatch/durability/commit loop below is written by hand and
  * the sink is this file's own {@link TopicSinkTask}, so the driver and the sink <em>are</em> the model that
  * reading {@code WorkerSinkTask} produced - only the broker, the commit and the resume are real. What this
- * arm therefore evidences is that {@link io.confluent.parallelconsumer.connect.PcSinkTaskDurabilityBarrier}'s
+ * arm therefore evidences is that {@link bz.stub.parallelconsumer.connect.PcSinkTaskDurabilityBarrier}'s
  * confirmations reach broker state correctly. It does <em>not</em> evidence the reading of
  * {@code WorkerSinkTask} that the barrier was designed against; that stays argued, not executed.
  *

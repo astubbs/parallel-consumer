@@ -1,13 +1,13 @@
-package io.confluent.parallelconsumer.connect;
+package bz.stub.parallelconsumer.connect;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.connect.PcSinkTaskDurabilityBarrier.ConfirmationRule;
-import io.confluent.parallelconsumer.state.ShardKey;
-import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
-import io.confluent.parallelconsumer.streams.PcTaskDispatcher.CompletionHandle;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.connect.PcSinkTaskDurabilityBarrier.ConfirmationRule;
+import bz.stub.parallelconsumer.state.ShardKey;
+import bz.stub.parallelconsumer.streams.PcTaskDispatcher;
+import bz.stub.parallelconsumer.streams.PcTaskDispatcher.CompletionHandle;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;

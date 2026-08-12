@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.KafkaTestUtils;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.RateLimiter;
+import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.RateLimiter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;

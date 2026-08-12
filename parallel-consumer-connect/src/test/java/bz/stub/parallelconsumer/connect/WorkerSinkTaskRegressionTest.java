@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.connect;
+package bz.stub.parallelconsumer.connect;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -13,8 +13,8 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import static io.confluent.parallelconsumer.connect.TestEnvironment.codeSourceOf;
-import static io.confluent.parallelconsumer.connect.TestEnvironment.requiredProperty;
+import static bz.stub.parallelconsumer.connect.TestEnvironment.codeSourceOf;
+import static bz.stub.parallelconsumer.connect.TestEnvironment.requiredProperty;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -23,7 +23,7 @@ class WorkerSinkTaskRegressionTest {
 
     private static final String MODE_PROPERTY = "pc.connect.regression.mode";
     private static final String WORKER_SINK_TASK = "org.apache.kafka.connect.runtime.WorkerSinkTask";
-    private static final String BRIDGE = "io.confluent.parallelconsumer.connect.PcConnectDispatchBridge";
+    private static final String BRIDGE = "bz.stub.parallelconsumer.connect.PcConnectDispatchBridge";
     private static final String BRIDGE_FIELD = "PC_CONNECT_DISPATCH_ENABLED";
 
     @Test

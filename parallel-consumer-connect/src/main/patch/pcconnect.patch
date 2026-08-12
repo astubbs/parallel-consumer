@@ -5,7 +5,7 @@ diff -ruN connect-pristine/org/apache/kafka/connect/runtime/WorkerSinkTask.java 
   */
  package org.apache.kafka.connect.runtime;
  
-+import io.confluent.parallelconsumer.connect.PcConnectDispatchBridge;
++import bz.stub.parallelconsumer.connect.PcConnectDispatchBridge;
  import org.apache.kafka.clients.consumer.Consumer;
  import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
  import org.apache.kafka.clients.consumer.ConsumerRecord;

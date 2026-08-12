@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.connect;
+package bz.stub.parallelconsumer.connect;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.connect.TestEnvironment.requiredProperty;
+import static bz.stub.parallelconsumer.connect.TestEnvironment.requiredProperty;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -33,7 +33,7 @@ class PatchHarnessTest {
     private static final String WORKER_SINK_TASK_PATH =
             "org/apache/kafka/connect/runtime/WorkerSinkTask.java";
     private static final String BRIDGE_IMPORT =
-            "+import io.confluent.parallelconsumer.connect.PcConnectDispatchBridge;";
+            "+import bz.stub.parallelconsumer.connect.PcConnectDispatchBridge;";
     private static final String BRIDGE_FIELD =
             "+    private static final boolean PC_CONNECT_DISPATCH_ENABLED = PcConnectDispatchBridge.enabled();";
 

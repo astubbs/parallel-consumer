@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.connect;
+package bz.stub.parallelconsumer.connect;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 
-import static io.confluent.parallelconsumer.connect.TestEnvironment.codeSourceOf;
+import static bz.stub.parallelconsumer.connect.TestEnvironment.codeSourceOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Proves that the one generated Connect class wins without splitting its runtime package. */

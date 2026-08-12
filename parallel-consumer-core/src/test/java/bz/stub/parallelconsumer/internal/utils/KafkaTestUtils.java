@@ -1,15 +1,15 @@
-package io.confluent.csid.utils;
+package bz.stub.parallelconsumer.internal.utils;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
-import io.confluent.parallelconsumer.state.WorkContainer;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -75,7 +75,7 @@ public class KafkaTestUtils {
     /**
      * Collapses a repeat commit of the same base offset, for a commit history that covers a single partition.
      * <p>
-     * PC commits {@link io.confluent.parallelconsumer.state.PartitionState#getOffsetToCommit()} - the highest
+     * PC commits {@link bz.stub.parallelconsumer.state.PartitionState#getOffsetToCommit()} - the highest
      * <em>sequentially</em> succeeded offset plus one. When a record completes that cannot advance that (say
      * an independent key's record finishing while a lower offset is still in flight), the base offset is
      * committed again with updated incomplete-offset encoding. The repeat carries new information and is

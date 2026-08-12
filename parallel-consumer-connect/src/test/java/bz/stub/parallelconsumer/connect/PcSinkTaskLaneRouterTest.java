@@ -1,11 +1,11 @@
-package io.confluent.parallelconsumer.connect;
+package bz.stub.parallelconsumer.connect;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.state.ShardKey;
-import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.state.ShardKey;
+import bz.stub.parallelconsumer.streams.PcTaskDispatcher;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.sink.SinkRecord;

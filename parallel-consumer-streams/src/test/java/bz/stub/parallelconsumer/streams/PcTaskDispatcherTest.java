@@ -1,12 +1,12 @@
-package io.confluent.parallelconsumer.streams;
+package bz.stub.parallelconsumer.streams;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -50,7 +50,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * produces verdicts nobody can act on.
  * <p>
  * The end-to-end half lives in
- * {@code io.confluent.parallelconsumer.streams.integrationTests.PcDrivenStreamsDispatchTest}.
+ * {@code bz.stub.parallelconsumer.streams.integrationTests.PcDrivenStreamsDispatchTest}.
  *
  * @author Antony Stubbs
  */

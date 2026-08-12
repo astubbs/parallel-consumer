@@ -1,9 +1,9 @@
-package io.confluent.parallelconsumer.examples.streams.integrationTests;
+package bz.stub.parallelconsumer.examples.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;

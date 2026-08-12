@@ -214,7 +214,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
   */
  package org.apache.kafka.streams.processor.internals;
  
-+import io.confluent.parallelconsumer.streams.PcTaskDispatcher;
++import bz.stub.parallelconsumer.streams.PcTaskDispatcher;
  import org.apache.kafka.clients.consumer.Consumer;
  import org.apache.kafka.clients.consumer.ConsumerConfig;
  import org.apache.kafka.clients.consumer.ConsumerRecord;

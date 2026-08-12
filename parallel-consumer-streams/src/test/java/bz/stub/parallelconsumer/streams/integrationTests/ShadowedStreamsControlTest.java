@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.streams.integrationTests;
+package bz.stub.parallelconsumer.streams.integrationTests;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.streams.PcDispatchSwitch;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.streams.PcDispatchSwitch;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -50,7 +50,7 @@ import static org.awaitility.Awaitility.await;
  * exists to say what the patched classes do under serial, single-threaded Streams, and it would silently stop
  * saying that if it ran on the PC path.
  *
- * @see io.confluent.parallelconsumer.streams.ShadowedClassLoadingTest
+ * @see bz.stub.parallelconsumer.streams.ShadowedClassLoadingTest
  */
 @Slf4j
 // The switch it depends on is process-wide, so an arm that turns it on in another class would otherwise be
