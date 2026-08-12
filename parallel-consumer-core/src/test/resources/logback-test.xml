@@ -36,7 +36,6 @@
     <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
     <!--    <logger name="io.confluent.parallelconsumer" level="trace"/>-->
 
-    <!--    <logger name="io.confluent.csid" level="trace"/>-->
 
     <logger name="org.apache.kafka" level="warn"/>
 
@@ -50,7 +49,6 @@
 
 
     <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
-    <!--    <logger name="io.confluent.csid" level="debug"/>-->
 
     <!-- Key classes -->
     <!--        <logger name="io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="debug"/>-->
@@ -79,7 +77,6 @@
 
 
     <!--    <logger name="io.confluent.parallelconsumer" level="debug"/>-->
-    <!--    <logger name="io.confluent.csid" level="debug"/>-->
     <!--        <logger name="io.confluent.parallelconsumer" level="trace"/>-->
     <!--    <logger name="io.confluent.parallelconsumer" level="error"/>-->
 
