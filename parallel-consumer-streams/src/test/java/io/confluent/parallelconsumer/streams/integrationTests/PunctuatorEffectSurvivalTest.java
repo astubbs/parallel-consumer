@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
@@ -56,50 +57,50 @@ import static org.awaitility.Awaitility.await;
  * <b>if a punctuator writes to a store or forwards a record, and the process then dies, is the effect
  * there afterwards?</b>
  *
- * <h2>The design, and the one thing that makes it sharp</h2>
- * The commit interval is left at Kafka's 30-second default and the crash lands roughly 600ms after the
- * punctuator starts firing. <b>No commit can occur in that window.</b> So anything found on the broker
- * afterwards got there without any {@code flush()} - which is precisely the mechanism the original concern
- * assumed was load-bearing.
+ * <h2>The first version of this class was wrong, and how it was caught</h2>
+ * It punctuated, called {@link PcTaskDispatcher#abortAllActive()}, closed the client, and <em>then</em>
+ * read the topics - reporting that the effects survived a crash without any {@code flush()}. Code review
+ * found the hole and one probe settled it: set {@code linger.ms} to five minutes, so the producer cannot
+ * possibly deliver during an eleven-second run, and <b>the old shape still passed</b>. The effects were
+ * being put on the broker by {@code streams.close()} itself, which runs a clean shutdown -
+ * {@code prepareCommit()} -> {@code flush()} -> {@code streamsProducer.flush()} -> commit ->
+ * {@code producer.close()}, the last of which blocks until every buffered record is sent.
  * <p>
- * The crash is {@link PcTaskDispatcher#abortAllActive()} - the same real abort
- * {@code CommitFrontierCrashRestartTest} uses. No drain, no completion feed-back, no final commit.
- * <p>
- * Two observables, both read directly out of Kafka rather than inferred:
- * <ul>
- *   <li><b>the output topic</b>, for what the punctuator {@code forward}ed;</li>
- *   <li><b>the store's changelog topic</b>, for what the punctuator {@code put}. Reading the changelog
- *       directly avoids needing interactive queries or a restart-and-probe topology to see whether a store
- *       write was durable.</li>
- * </ul>
+ * Two claims in that version were simply false. There was no "window with no commit in it":
+ * {@code StreamThread.lastCommitMs} starts at zero, so Streams commits on its first run-loop iteration
+ * rather than 30 seconds in. And nothing reached the broker "without a flush" - the measurement sat
+ * downstream of one.
  *
- * <h2>The stock arm is an instrument check, not a crash control - read it that way</h2>
- * {@code abortAllActive()} only reaches PC dispatchers, so there is no way to give a stock topology the
- * same in-process crash; the stock arm closes cleanly. It therefore proves only that <b>this fixture can
- * observe punctuator effects on both topics at all</b>. Without it, an empty PC reading would be
- * indistinguishable from a test looking in the wrong place. It is deliberately not claimed as evidence
- * about what stock does under a crash.
+ * <h2>What this class measures now</h2>
+ * The read happens <b>before</b> {@code close()}, and a <b>negative control</b> establishes that the
+ * measurement point is upstream of any flush: an otherwise identical arm holds the producer back with a
+ * five-minute linger and must find <em>nothing</em>. It does. So a non-empty reading in the other arms is
+ * asynchronous producer delivery, observed rather than manufactured.
  * <p>
- * A crash result needs no comparison arm to interpret anyway: effects present is objectively fine, effects
- * missing is objectively data loss.
+ * Measured: punctuator forwards and store writes reach the broker on the producer's own schedule, before
+ * and independently of any commit. That is a real property and it is what the three arms pin.
  *
- * <h2>The answer</h2>
- * <b>They survive.</b> Three punctuations, hard abort, no commit in the window: all three forwards were on
- * the output topic and all three store writes were on the changelog. The producer carries a punctuator's
- * effects to the broker on its own schedule; nothing about them depends on the {@code flush()} that
- * {@code prepareCommit} would have performed. So the data-loss reading of "a punctuator's effects never
- * become commit-covered" does not hold for either effect.
+ * <h2>What this class does NOT measure - read this before citing it</h2>
+ * <b>It is not a process-death test, and "survive a crash" overstates it.</b>
+ * {@code abortAllActive()} calls {@code workerPool.shutdownNow()} and nothing else: PC's worker pool dies,
+ * while the producer, the {@code StreamThread}, the {@code RecordCollector} and the punctuator itself all
+ * keep running. The punctuator in particular runs through {@code maybePunctuateSystemTime}, which is
+ * byte-for-byte stock and never enters PC dispatch - so the effect path under observation is not
+ * PC-specific at all, and markers observed here include punctuations that fired <em>after</em> the abort.
  * <p>
- * What is left of that concern after this run is not data loss: WALL_CLOCK_TIME punctuators fire unwarned
- * where STREAM_TIME logs, and the idle-window checkpoint tail measured on
- * {@code feats/ks-streams-postcommit-checkpoint-gap} costs a little extra changelog replay after a crash.
+ * Consequently this class does <b>not</b> settle the data-loss reading of "a punctuator's effects never
+ * become commit-covered" in the sense of a process actually dying. Answering that needs a real kill - a
+ * forked JVM and a SIGKILL - which nothing here does.
+ * <p>
+ * It also does not touch what U13's inflight entry actually ranked highest, which was
+ * <em>re-firing over already-covered event time on rebalance</em> - a duplication question, not a
+ * durability one. This class never restarts anything.
  *
- * <h2>The caveat that would change this, and why it is out of scope</h2>
- * <b>This is a non-EOS run.</b> Under exactly-once the forward would sit in an open transaction and a
- * {@code read_committed} consumer would not see it until a commit that, on this path, may not come - which
- * is the one configuration where the original concern would bite for real. EOS is refused by the supported
- * envelope (U11) and is out of scope for v6 (KTD7, pile E), so that is a boundary rather than a gap. It is
- * named here because a future EOS decision inherits this question rather than this answer.
+ * <h2>Non-EOS</h2>
+ * Under exactly-once the forward would sit in an open transaction and a {@code read_committed} consumer
+ * would not see it until a commit. EOS is refused by the supported envelope (U11) and out of scope for v6
+ * (KTD7, pile E), so that is a boundary rather than a gap - but a future EOS decision inherits the
+ * question rather than any answer here.
  *
  * @author Antony Stubbs
  * @see PcTaskDispatcher#abortAllActive()
@@ -126,6 +127,12 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
      */
     private static final int PUNCTUATIONS_AWAITED = 3;
 
+    /** Leave {@code linger.ms} at whatever Kafka Streams configures. */
+    private static final Integer DEFAULT_LINGER = null;
+
+    /** Longer than any run of this class, so the producer cannot deliver during it. */
+    private static final Integer HELD_BACK_LINGER = (int) Duration.ofMinutes(5).toMillis();
+
     private static final AtomicInteger recordsProcessed = new AtomicInteger();
 
     private static final AtomicInteger punctuationsFired = new AtomicInteger();
@@ -143,66 +150,86 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
     }
 
     /**
-     * The experiment. Punctuate, crash hard before any commit can happen, then look on the broker for what
-     * the punctuator did.
+     * The experiment. Punctuate, abort, and read the broker <b>before</b> the client is closed.
      */
     @Test
-    void punctuatorEffectsSurviveACrashOnThePcPath() {
+    void punctuatorEffectsReachTheBrokerBeforeAnyCommitOnThePcPath() {
         PcDispatchSwitch.enable(POOL_SIZE);
 
-        ArmResult result = runArm("pc-punctuator-effects", true);
+        ArmResult result = runArm("pc-punctuator-effects", DEFAULT_LINGER);
 
         assertThat(result.dispatchedToPool)
-                .as("premise: this arm must have gone through the PC dispatch seam, or it is measuring "
-                        + "stock and says nothing about the PC path")
+                .as("premise: this arm must have gone through the PC dispatch seam")
                 .isEqualTo(INPUT_RECORDS);
 
         assertThat(result.forwardedToOutput)
-                .as("A punctuator FORWARD, after a hard abort with no drain, no final commit, and no "
-                        + "commit possible in the window at all (30s interval, crash at ~600ms). If this "
-                        + "is empty the forward was lost with the process - real data loss, and the "
-                        + "original framing of defect 1 is right after all. If it is present, the "
-                        + "producer carried it without any flush() and the concern does not apply to "
-                        + "forwards.")
-                .isNotEmpty();
+                .as("every punctuator FORWARD that fired before the abort must already be on the output "
+                        + "topic, read before close. Asserted as a COUNT, not merely non-empty: losing 2 "
+                        + "of 3 is the realistic shape of a crash catching part of a producer batch, and "
+                        + "isNotEmpty() would call that survival.")
+                .hasSizeGreaterThanOrEqualTo(result.punctuations);
 
         assertThat(result.writtenToChangelog)
-                .as("and the punctuator's STORE WRITE, read straight off the changelog topic. Same "
-                        + "window, same crash. Empty here means the store mutation died with the process "
-                        + "and would not be restored.")
-                .isNotEmpty();
-
-        log.info("=== PUNCTUATOR EFFECTS AFTER CRASH: {} forwarded, {} changelog records, from {} "
-                        + "punctuations", result.forwardedToOutput.size(),
-                result.writtenToChangelog.size(), result.punctuations);
+                .as("and every punctuator STORE WRITE must already be on the changelog topic, same "
+                        + "window, same count rule")
+                .hasSizeGreaterThanOrEqualTo(result.punctuations);
     }
 
     /**
-     * The instrument check. Same topology, seam off, clean close: proves the fixture can see punctuator
-     * effects on both topics. Not a crash control - see the class javadoc.
+     * The negative control, and the arm that makes the one above mean anything.
+     * <p>
+     * Identical except the producer is given a five-minute {@code linger.ms}, so it cannot possibly have
+     * delivered anything within the run. The effects must therefore be <b>absent</b> at the same
+     * measurement point. If they show up anyway, something other than asynchronous producer delivery is
+     * putting them on the broker before the read - which is exactly the defect that invalidated the first
+     * version of this class, where the measurement sat after {@code streams.close()} and its flush.
+     */
+    @Test
+    void withTheProducerHeldBackTheSameMeasurementFindsNothing() {
+        PcDispatchSwitch.enable(POOL_SIZE);
+
+        ArmResult result = runArm("pc-linger-negative-control", HELD_BACK_LINGER);
+
+        assertThat(result.forwardedToOutput)
+                .as("NEGATIVE CONTROL: with a five-minute linger the producer cannot have sent anything "
+                        + "in this run, so the forward must NOT be on the topic at the point we measure. "
+                        + "A non-empty reading here means the measurement is downstream of a flush and "
+                        + "the sibling arm's result is manufactured, not observed.")
+                .isEmpty();
+
+        assertThat(result.writtenToChangelog)
+                .as("NEGATIVE CONTROL: and neither must the store write")
+                .isEmpty();
+    }
+
+    /**
+     * The instrument check: seam off, same protocol. Proves the fixture looks where the effects actually
+     * land, so that an empty reading elsewhere means loss rather than a mis-aimed reader.
      */
     @Test
     void theFixtureCanObservePunctuatorEffectsAtAll() {
         PcDispatchSwitch.disable();
 
-        ArmResult result = runArm("stock-punctuator-effects", false);
+        ArmResult result = runArm("stock-punctuator-effects", DEFAULT_LINGER);
+
+        assertThat(result.dispatchedToPool)
+                .as("this is the stock arm and must not have dispatched through the seam")
+                .isZero();
 
         assertThat(result.forwardedToOutput)
-                .as("INSTRUMENT CHECK: a punctuator forward must be visible on the output topic for this "
-                        + "fixture. If this is empty, the PC arm's readings are uninterpretable because "
-                        + "the test is not looking where the effects land.")
+                .as("INSTRUMENT CHECK: a punctuator forward must be visible on the output topic, or "
+                        + "every other arm's reading is uninterpretable")
                 .isNotEmpty();
 
         assertThat(result.writtenToChangelog)
-                .as("INSTRUMENT CHECK: and a punctuator store write must be visible on the changelog "
-                        + "topic")
+                .as("INSTRUMENT CHECK: and a punctuator store write must be visible on the changelog")
                 .isNotEmpty();
     }
 
     /**
-     * @param crash whether to abort the dispatchers instead of closing cleanly
+     * @param lingerMs {@link #DEFAULT_LINGER} to leave the producer alone, or a value to hold it back
      */
-    private ArmResult runArm(final String name, final boolean crash) {
+    private ArmResult runArm(final String name, final Integer lingerMs) {
         String inputTopic = setupTopic(name + "-in");
         String outputTopic = setupTopic(name + "-out");
         ensureTopic(inputTopic, 1);
@@ -211,9 +238,12 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
 
         produceInput(inputTopic);
 
-        KafkaStreams streams = startTopology(appId, inputTopic, outputTopic);
+        KafkaStreams streams = startTopology(appId, inputTopic, outputTopic, lingerMs);
         int punctuations;
         long dispatched;
+        List<String> forwarded;
+        List<String> changelog;
+        String changelogTopic = appId + "-" + STORE + "-changelog";
         try {
             await().atMost(Duration.ofSeconds(60))
                     .until(() -> recordsProcessed.get() >= INPUT_RECORDS
@@ -224,25 +254,24 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
             log.info("=== [{}] {} punctuations fired, {} dispatched to pool - crashing now",
                     name, punctuations, dispatched);
 
-            if (crash) {
-                // A crash, not a shutdown: no drain, no completion feed-back, no final commit.
-                PcTaskDispatcher.abortAllActive();
-            }
+            PcTaskDispatcher.abortAllActive();
+
+            // READ BEFORE CLOSE. This is the whole correction: an earlier version read after
+            // streams.close(), and close runs a CLEAN shutdown - prepareCommit -> flush() ->
+            // streamsProducer.flush() -> commit -> producer.close(), the last of which blocks until every
+            // buffered record is sent. So it delivered the effects itself and the test reported survival
+            // no matter what. Proven by setting linger.ms to five minutes: the old shape still passed.
+            Map<String, List<String>> drained = drainAll(outputTopic, changelogTopic);
+            forwarded = punctuatedOnly(drained.get(outputTopic));
+            changelog = punctuatedOnly(drained.get(changelogTopic));
+            log.info("=== [{}] BEFORE CLOSE - output topic: {}, changelog punctuator records: {}",
+                    name, forwarded, changelog.size());
         } finally {
+            // Cleanup only. Anything it flushes lands after the measurement above.
             streams.close(Duration.ofSeconds(30));
         }
 
-        // Read AFTER the client is gone, so nothing further can be produced while the reader runs. Both
-        // topics come off ONE subscription: two sequential drains each paid the full fixed poll budget,
-        // which was most of this class's runtime.
-        String changelogTopic = appId + "-" + STORE + "-changelog";
-        Map<String, List<String>> drained = drainAll(outputTopic, changelogTopic);
-        List<String> forwarded = drained.get(outputTopic);
-        List<String> changelog = drained.get(changelogTopic);
-        log.info("=== [{}] output topic: {}", name, forwarded);
-        log.info("=== [{}] changelog records: {}", name, changelog.size());
-
-        return new ArmResult(punctuatedOnly(forwarded), punctuatedOnly(changelog), punctuations, dispatched);
+        return new ArmResult(forwarded, changelog, punctuations, dispatched);
     }
 
     /**
@@ -307,7 +336,8 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
 
     private KafkaStreams startTopology(final String appId,
                                        final String inputTopic,
-                                       final String outputTopic) {
+                                       final String outputTopic,
+                                       final Integer lingerMs) {
         StoreBuilder<KeyValueStore<String, String>> store = Stores.keyValueStoreBuilder(
                         Stores.persistentKeyValueStore(STORE), Serdes.String(), Serdes.String())
                 .withLoggingEnabled(Collections.emptyMap())
@@ -350,9 +380,13 @@ class PunctuatorEffectSurvivalTest extends BrokerStreamsIntegrationTest {
 
         Properties props = baseStreamsProps(appId);
         props.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
-        // Deliberately NOT shortened. Kafka's 30s default means no commit can land between the first
-        // punctuation and the crash ~600ms later, so anything on the broker afterwards got there without
-        // a flush.
+        // Commit interval left at Kafka's default. Note this does NOT mean "no commit for 30s": Streams'
+        // lastCommitMs starts at zero, so its first commit fires on the first run-loop iteration. The
+        // measurement no longer depends on that either way - it is taken before close, and the negative
+        // control below is what establishes that a reading means asynchronous delivery.
+        if (lingerMs != null) {
+            props.put(StreamsConfig.producerPrefix(ProducerConfig.LINGER_MS_CONFIG), lingerMs);
+        }
         return startAndAwaitRunning(builder, props, LOG_AND_SHUT_DOWN_CLIENT);
     }
 
