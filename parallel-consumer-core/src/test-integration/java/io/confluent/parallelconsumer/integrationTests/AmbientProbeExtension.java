@@ -17,7 +17,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+
+import static java.util.stream.Collectors.toMap;
 
 /**
  * Ambient "flight recorder" for every broker integration test: runs {@link ProgressProbe} in
@@ -198,9 +202,45 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 sb.append("  - ").append(line).append('\n');
             }
         }
+        appendEnvironment(sb);
         sb.append("=== END AMBIENT PROBE AUTOPSY ===");
         return sb.toString();
     }
+
+    /**
+     * Emitted once per run, on the first autopsy only. Later autopsies say where to find it rather
+     * than repeating a few hundred lines per failing test.
+     * <p>
+     * This is what {@code JavaEnvTest} was doing by hand. Its javadoc said so - <em>"used to
+     * manually inspect the java environment at runtime, particularly useful for CI
+     * environments"</em> - and it was deleted in {@code cadf4c95} for asserting nothing, which was
+     * true and beside the point: it was a diagnostic, not a test, and deleting it removed the tool
+     * without automating what the tool was for. The autopsy is where a reader already looks when a
+     * broker integration test fails, per {@code AGENTS.md}, so the information now arrives there
+     * without anyone remembering to go and get it.
+     */
+    private static void appendEnvironment(StringBuilder sb) {
+        if (!ENVIRONMENT_DUMPED.compareAndSet(false, true)) {
+            sb.append("environment: dumped in this run's first autopsy\n");
+            return;
+        }
+        sb.append("environment (once per run):\n");
+        new TreeMap<>(System.getProperties().entrySet().stream()
+                .collect(toMap(e -> String.valueOf(e.getKey()), e -> String.valueOf(e.getValue()), (a, b) -> a)))
+                .forEach((key, value) -> sb.append("  ").append(key).append('=')
+                        .append(value.replace("\n", "\\n").replace("\r", "\\r")).append('\n'));
+    }
+
+    /**
+     * Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. Resets the
+     * once-per-run guard between tests of {@link #buildAutopsy}; production code never calls it,
+     * because the guard is the point.
+     */
+    public static void resetEnvironmentDumpForTest() {
+        ENVIRONMENT_DUMPED.set(false);
+    }
+
+    private static final AtomicBoolean ENVIRONMENT_DUMPED = new AtomicBoolean();
 
     private static String describe(Throwable cause) {
         if (cause == null) {

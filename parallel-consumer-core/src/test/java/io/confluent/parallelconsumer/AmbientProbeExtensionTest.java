@@ -111,6 +111,39 @@ class AmbientProbeExtensionTest {
         assertThat(AmbientProbeExtension.isDisabled(contextFor(MethodOptOutFixture.class, "optedOutMethod"))).isTrue();
     }
 
+    // --- environment dump (what JavaEnvTest used to do by hand) ---
+
+    @Test
+    void autopsyCarriesTheEnvironmentDumpOncePerRun() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+        var probe = observerProbe();
+        var context = contextFor(PlainFixture.class, "plainMethod");
+
+        String first = AmbientProbeExtension.buildAutopsy(context, probe, new AssertionError("first failure"));
+        String second = AmbientProbeExtension.buildAutopsy(context, probe, new AssertionError("second failure"));
+
+        // the first autopsy of a run carries the dump
+        assertThat(first).contains("environment (once per run):");
+        assertThat(first).contains("java.version=");
+        // a second failing test does not repeat a few hundred lines
+        assertThat(second).contains("environment: dumped in this run's first autopsy");
+        assertThat(second).doesNotContain("environment (once per run):");
+    }
+
+    @Test
+    void environmentDumpEscapesNewlinesSoOneLinePerProperty() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+        System.setProperty("ambient.probe.test.multiline", "alpha\nbeta");
+        try {
+            String autopsy = AmbientProbeExtension.buildAutopsy(
+                    contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+            assertThat(autopsy).contains("ambient.probe.test.multiline=alpha\\nbeta");
+        } finally {
+            System.clearProperty("ambient.probe.test.multiline");
+        }
+    }
+
     // --- autopsy rendering ---
 
     @Test
