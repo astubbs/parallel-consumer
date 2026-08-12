@@ -2,23 +2,24 @@
 
 This is a maintained hard fork of the effectively-archived `confluentinc/parallel-consumer`. This
 doc owns everything about that relationship: the manifest that maps fork work to upstream PRs, the
-mirrors that stand in for upstream issues, the commit trailers that carry provenance, and the sweep
-that watches upstream for new activity. AGENTS.md carries only the pointer and the one-line rule
-that manifest upkeep is the agent's job.
+editorial analysis that ranks and plans that work, the mirrors that stand in for upstream issues,
+the commit trailers that carry provenance, and the sweep that watches upstream for new activity.
+AGENTS.md carries only the pointer and the one-line rule that manifest upkeep is the agent's job.
 
 ## The two sources, and which wins
 
 We keep a durable, machine-readable cache of the fork↔upstream relationship so it never has to be
 re-derived from scratch:
 
-- **`src/docs/development/upstream-map.yaml`** - the **source of truth** for the *facts*: which
-  fork branch/PR maps to which upstream issue/PR, its work group, and current status. Its header
-  documents the schema. Validate and render with `scripts/upstream-map.py {validate,table,refs}`.
-  Design follows Debian DEP-3, Yocto `Upstream-Status:` and OpenShift's `UPSTREAM:` fork
-  conventions.
-- **`src/docs/development/upstream-pr-analysis.adoc`** - the *editorial* analysis (rankings,
-  verdicts, recommended merge order). When prose and manifest disagree, **the manifest wins for
-  facts**. Manifest entries link back to `.adoc` section anchors via `adoc_anchor`.
+- [**`src/docs/development/upstream-map.yaml`**](../src/docs/development/upstream-map.yaml) - the
+  **state tracker**, and the **source of truth** for the *facts*: which fork branch/PR maps to
+  which upstream issue/PR, its work group, and current status. Its header documents the schema.
+  Validate and render with `scripts/upstream-map.py {validate,table,refs}`. Design follows Debian
+  DEP-3, Yocto `Upstream-Status:` and OpenShift's `UPSTREAM:` fork conventions.
+- [**`src/docs/development/upstream-pr-analysis.adoc`**](../src/docs/development/upstream-pr-analysis.adoc) -
+  the **plan**: *editorial* analysis with rankings, verdicts, and the recommended merge order. When
+  prose and manifest disagree, **the manifest wins for facts**. Manifest entries link back to
+  `.adoc` section anchors via `adoc_anchor`.
 - **`docs/inflight/`** - *transient* cross-branch working notes only, one file per item.
 
 The manifest tracks upstream **PRs** only. **If the work maps to an upstream *issue*, the fork
