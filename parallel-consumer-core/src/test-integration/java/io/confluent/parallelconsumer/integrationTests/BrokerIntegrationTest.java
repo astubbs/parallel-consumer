@@ -61,6 +61,27 @@ public abstract class BrokerIntegrationTest<K, V> {
     int numPartitions = 1;
     int partitionNumber = 0;
 
+    /**
+     * How long a run at {@code units} is allowed to take, given that a run at {@code gatingUnits} is
+     * allowed {@code ceilingAtGating}. Returns exactly {@code ceilingAtGating} at the gating size, so
+     * a test's default deadline is unchanged, and never returns less - raising the size never
+     * shortens the deadline.
+     * <p>
+     * This exists because a hard-coded deadline is how a volume knob quietly stops working. Every
+     * volume alternative recovered on this branch had been parked as a comment beside a live value,
+     * and at each site the deadline had stayed fixed while the volume above it moved - so the higher
+     * setting could not pass no matter how healthy the run was, and was eventually deleted as dead.
+     * {@code MultiInstanceHighVolumeTest} says so in its own history: the volume was reduced because
+     * "the 60s wait below cannot be met at higher volumes".
+     * <p>
+     * It is a ceiling, not a throughput assertion. Proving a rate is what the performance suite is
+     * for; this only has to stop the deadline being the thing that fails.
+     */
+    public static Duration completionCeiling(long units, long gatingUnits, Duration ceilingAtGating) {
+        Duration scaled = ceilingAtGating.multipliedBy(Math.max(1, units)).dividedBy(gatingUnits);
+        return scaled.compareTo(ceilingAtGating) > 0 ? scaled : ceilingAtGating;
+    }
+
     @Getter
     String topic;
 

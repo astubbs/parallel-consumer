@@ -240,11 +240,12 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         // Rounds are deliberately not used here: ProgressTracker rejects being given both a round
         // count and a timeout, and this test tracks by duration. The open question of whether any
         // round without progress should be tolerated is recorded in docs/refactoring.md.
-        ProgressTracker progressTracker = new ProgressTracker(processedCount, null, timeoutFor(numThreads));
+        Duration deadline = timeoutFor(numThreads);
+        ProgressTracker progressTracker = new ProgressTracker(processedCount, null, deadline);
         var failureMessage = msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(timeoutFor(numThreads))
+            waitAtMost(deadline)
                     // dynamic reason support still waiting
                     // https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     // https://github.com/confluentinc/parallel-consumer/issues/199

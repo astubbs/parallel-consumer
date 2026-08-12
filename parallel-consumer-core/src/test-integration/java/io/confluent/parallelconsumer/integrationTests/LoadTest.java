@@ -80,15 +80,11 @@ public class LoadTest extends DbTest {
 
     static int total = Integer.getInteger("load.total", GATING_TOTAL);
 
-    /**
-     * A completion ceiling, not a performance assertion. The gating volume keeps exactly the 60
-     * seconds it has always had; larger volumes get proportionally longer, because a fixed wait is
-     * what made every higher rung unreachable regardless of whether the run was healthy. A load
-     * test's job is to complete - proving a rate is what the performance suite is for. Tighten it
-     * only with a measurement in hand.
-     */
-    private static Duration completionCeiling(int volume) {
-        return ofSeconds(Math.max(60, volume / 100));
+    /** The deadline the gating volume has always had. */
+    private static final Duration GATING_CEILING = ofSeconds(60);
+
+    private static Duration ceilingFor(int volume) {
+        return completionCeiling(volume, GATING_TOTAL, GATING_CEILING);
     }
 
     @SneakyThrows
@@ -165,7 +161,7 @@ public class LoadTest extends DbTest {
             });
 
             // keep checking how many message's we've processed
-            await().atMost(completionCeiling(volume)).until(() -> {
+            await().atMost(ceilingFor(volume)).until(() -> {
                 // log.debug("msg count: {}", msgCount.get());
                 pb.stepTo(msgCount.get());
                 return msgCount.get() >= volume;
@@ -214,7 +210,7 @@ public class LoadTest extends DbTest {
             });
 
             try (pb) {
-                await().atMost(completionCeiling(total)).untilAsserted(() -> {
+                await().atMost(ceilingFor(total)).untilAsserted(() -> {
                     assertThat(count).hasValue(total);
                 });
             }

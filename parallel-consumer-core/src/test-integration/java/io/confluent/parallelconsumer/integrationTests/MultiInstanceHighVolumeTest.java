@@ -70,12 +70,11 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         return Integer.getInteger("multiinstance.messages", GATING_VOLUME);
     }
 
-    /**
-     * A completion ceiling, not a throughput assertion. Exactly the 60 seconds this test has always
-     * had at its own volume, scaling proportionally above it.
-     */
-    private static Duration completionCeiling(int messages) {
-        return ofSeconds(Math.max(60, (long) messages * 60 / GATING_VOLUME));
+    /** The deadline this test has always had at its own volume. */
+    private static final Duration GATING_CEILING = ofSeconds(60);
+
+    private static Duration ceilingFor(int messages) {
+        return completionCeiling(messages, GATING_VOLUME, GATING_CEILING);
     }
 
     // todo multi commit mode, multi partition count, multi instance count? 2,3,10,100? more instances than partitions, more partitions than instances
@@ -110,7 +109,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(completionCeiling(expectedMessageCount))
+            waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     // .failFast( () -> pcThree.getFailureCause(), () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .failFast("PC died - check logs", () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761

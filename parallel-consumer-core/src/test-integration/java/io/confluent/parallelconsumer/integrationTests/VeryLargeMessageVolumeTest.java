@@ -101,13 +101,11 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         return Long.getLong("volume.messages", GATING_VOLUME);
     }
 
-    /**
-     * A completion ceiling, not a throughput assertion. Exactly the 120 seconds this test has always
-     * had at its own volume, scaling proportionally above it - a fixed deadline is what would make
-     * the aspiration unreachable regardless of whether the run was healthy.
-     */
-    private static Duration completionCeiling(long messages) {
-        return ofSeconds(Math.max(120, messages * 120 / GATING_VOLUME));
+    /** The deadline this test has always had at its own volume. */
+    private static final Duration GATING_CEILING = ofSeconds(120);
+
+    private static Duration ceilingFor(long messages) {
+        return completionCeiling(messages, GATING_VOLUME, GATING_CEILING);
     }
 
     @SneakyThrows
@@ -198,7 +196,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(completionCeiling(expectedMessageCount))
+            waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     .failFast("PC died - check logs", pc::isClosedOrFailed)
                     //, () -> pc.getFailureCause()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
