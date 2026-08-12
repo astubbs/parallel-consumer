@@ -495,6 +495,10 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-rea
 [source,xml,indent=0]
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/pom.xml[tag=exampleDep]
 
+.Dashboard Module Dependency (experimental - see <<dashboard>>)
+[source,xml,indent=0]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/pom.xml[tag=exampleDep]
+
 [[common_preparation]]
 === Common Preparation
 
@@ -1095,6 +1099,75 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-met
 
 NOTE:: any additional binders / metrics need to be cleaned up appropriately - for example the Kafka Consumer Metrics registered above - need to be closed using `kafkaClientMetrics.close()` after calling shutting down Parallel Consumer as Parallel Consumer will close Kafka Consumer on shutdown.
 
+
+[[dashboard]]
+== Dashboard
+
+WARNING: *Experimental, and off until you switch it on.*
+Putting `parallel-consumer-dashboard` on the classpath does nothing at all - there is no auto-start, no
+service loader, and no classpath-scanning activation.
+It serves a page only once you call `DashboardServer.startFor(..)`.
+The module is annotated `@InterfaceStability.Unstable` and its API may change without notice.
+
+An embedded, read-only web page showing what a running Parallel Consumer instance is actually doing.
+It is a diagnostic tool for a live instance, not a monitoring system - it keeps no history and stores
+nothing.
+
+Today it draws one graphic: the *offset ribbon*, per partition.
+Its point is to make visible the thing that is otherwise invisible - the records Parallel Consumer has
+already completed *beyond* the offset a single-threaded consumer would still be stuck at, encoded into
+the commit metadata so a restart does not replay them.
+The headline count on the page is exactly that: how many records are finished past the block.
+
+The dependency is the `parallel-consumer-dashboard` block in <<Maven>>.
+
+=== Switching it on
+
+The dashboard reads what it draws from Micrometer, so *the same registry must reach both the consumer
+and the dashboard*.
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/src/main/java/io/confluent/parallelconsumer/examples/dashboard/DashboardApp.java[tag=example]
+----
+<1> *The one mistake the API cannot prevent.* Without a `meterRegistry` on the Parallel Consumer options, the dashboard starts, serves, and renders an empty page. Nothing errors - there is simply nothing to read.
+<2> `startFor` takes the concrete `ParallelEoSStreamProcessor`, because it registers sampling on the control loop. `ParallelStreamProcessor.createEosStreamProcessor(options)` returns the interface, which does not expose that, so construct the implementation directly when you want the dashboard.
+<3> This is the whole integration. Your Parallel Consumer construction is otherwise unchanged.
+<4> The URL is also logged once, on start, in a form terminals linkify. When several instances share a machine the port *is* how you tell them apart, so that line is the primary output of starting the dashboard rather than an aside.
+
+Sampling runs in a callback on the consumer's control loop, at a default interval of 100ms.
+
+`DashboardServer` is `AutoCloseable`. Close it *before* the consumer: it samples on the consumer's own
+control loop.
+
+=== Security
+
+The dashboard exposes consumer group id, topic names, partition assignments and offsets. The threat
+model is therefore *information disclosure*, and the defaults are chosen for a developer machine.
+
+* *It binds loopback, and only loopback, by default.* Deliberately not `InetAddress.getLocalHost()`, which resolves the machine's hostname and is therefore sometimes loopback and sometimes a routable address depending on `/etc/hosts` - a default that is only usually safe is not a safe default.
+* *Plain HTTP. There is no TLS and no authentication.* Neither is planned for the experimental phase. Binding anywhere other than loopback puts everything above onto the network in the clear, readable by anything that can route to that address. If you need it off-box, forward a port over a channel that is already authenticated (`kubectl port-forward`, an SSH tunnel) rather than binding a routable interface.
+* *Read-only, structurally.* Every request that is not `GET` or `HEAD` is answered `405` by a handler that runs *before* the route table, so the property holds for routes that do not exist yet as well as the ones that do.
+* *The `Host` allowlist* exists for exactly those port-forwarding workflows, where the browser's idea of the host is legitimately not one the server can derive. Entries may carry a port.
+* *It starts on port 8080 and walks upward* until it finds a free one (up to 100 attempts), so two instances on one machine do not fight. Nothing is logged during the search - a busy port is not news.
+
+To bind elsewhere, having read the above:
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/src/main/java/io/confluent/parallelconsumer/examples/dashboard/DashboardApp.java[tag=exampleBind]
+----
+
+The module creates and owns its own Vert.x instance and closes it in `close()`. It deliberately does
+not adopt one your application may be using: closing somebody else's event loop as a side effect of
+stopping a dashboard would be a spectacular way for a diagnostic tool to cause an outage.
+
+=== Seeing it without wiring anything up
+
+`bin/dashboard-demo.sh` brings up a broker, a workload deliberately made to misbehave, Parallel
+Consumer and the page, in one command. It needs Docker.
+
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/src/main/java/io/confluent/parallelconsumer/examples/dashboard/DashboardApp.java[dashboard example] project.
 
 [[roadmap]]
 == Roadmap
