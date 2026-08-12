@@ -158,6 +158,11 @@ report + names the desired behaviour). Release latch; assert close completes cle
 - Modify: `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md` + `docs/inflight.md`
   (status: state-collapse fix IMPLEMENTED on PR astubbs#80; design review gains the single-thread merge as the
   explicit end-state option, deferred to confluentinc#857)
+  (Pointer repair: the single file `docs/inflight.md` became the directory
+  [`docs/inflight/`](../inflight/) on 2026-08-04, deleted in `0de96fc` - `git show
+  0de96fc^:docs/inflight.md` for the version this unit edited. Both statuses now live in
+  [`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md), which records astubbs#80 as
+  landed and the deadlock this plan deferred as still open.)
 
 **Approach:** verify RED first (flipped test fails on unfixed code), then apply the collapse, then GREEN.
 Wiring circularity: `PCModule` builds `ConsumerManager` before `BrokerPollSystem` exists — prefer setter
@@ -207,6 +212,10 @@ only if needed.
   "Uber-branch experiment results" section (run matrix, numbers, verdict, honest caveats — 5 runs is a
   small sample; state confidence accordingly).
 - Modify: `docs/inflight.md` — experiment outcome one-liner.
+  (Pointer repair, as in Unit 2's file list: that single file became
+  [`docs/inflight/`](../inflight/), deleted in `0de96fc` — `git show 0de96fc^:docs/inflight.md`. The
+  uber-branch outcome now sits in
+  [`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md), grep `uber-branch experiment`.)
 
 **Test expectation:** none — the experiment IS the test; results committed as docs on the PR astubbs#80 branch.
 

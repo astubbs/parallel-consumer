@@ -192,6 +192,11 @@ re-run - tune until the known real bug (pre-fix composition, not injected) is ca
   (branch pointer + calibration results table).
 - Modify: `docs/inflight.md` (this branch): chaos suite Phase 1 entry - where it lives, how to run
   (`-Dincluded.groups=chaos`, seed protocol), calibration evidence, transplant plan (post-astubbs#29-rebase).
+  (Pointer repair: the single file `docs/inflight.md` became the directory
+  [`docs/inflight/`](../inflight/) on 2026-08-04, deleted in `0de96fc` - `git show
+  0de96fc^:docs/inflight.md` for the version this unit edited, grep `Chaos Pain Suite`. The chaos
+  suite's live entry is [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md), the
+  Phase 2+ roster that succeeded this one.)
 
 **Test expectation:** none - docs.
 

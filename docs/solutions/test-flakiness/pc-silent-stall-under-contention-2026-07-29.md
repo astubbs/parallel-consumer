@@ -381,6 +381,10 @@ masking):
 - GitHub-hosted Integration red on the same PR: run `30424305954` - the sibling flake
   `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed`, not this test.
 - `docs/inflight.md` - existing `committedOffsetRemoved` and `MultiInstanceMetricsTest` flake entries.
+  (Pointer repair: that single file became the directory [`docs/inflight/`](../../inflight/) on
+  2026-08-04, deleted in `0de96fc` - `git show 0de96fc^:docs/inflight.md` for the entries as this
+  report read them. Both are now rows in
+  [`docs/inflight/test-load-tightness-flakes.md`](../../inflight/test-load-tightness-flakes.md).)
 - `docs/BUG_857_INVESTIGATION.md` (on `bugs/857-paused-consumption-multi-consumers-bug`).
 - Code: `parallel-consumer-core/.../integrationTests/state/PartitionStateCommittedOffsetIT.java`;
   `.../internal/AbstractParallelEoSStreamProcessor.java` (`innerDoClose` - drain-then-await sequencing;
