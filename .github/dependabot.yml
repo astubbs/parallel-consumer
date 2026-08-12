@@ -25,12 +25,31 @@ updates:
     # comments, whose ignore conditions live invisibly in Dependabot's state and give
     # future maintainers no clue why a dependency silently stopped updating.
     # Full rationale for each: docs/inflight/deps-deferred-majors.md.
+    #
+    # SCOPE EVERY IGNORE TO THE UPDATE YOU ACTUALLY FEAR. A bare `dependency-name` with
+    # no `update-types` silences the dependency completely, including the patch release
+    # you are waiting for - and an ignore is invisible: nothing reports the PR that was
+    # never opened. Write a blanket ignore only when the dependency is FROZEN, meaning
+    # you want no movement of any size until a stated condition is met (byte-buddy
+    # below is the one honest example). If you expect it to move again, say which sizes
+    # are dangerous and let the rest through.
     ignore:
       # Module-local, test-scoped pin coupled to WireMock's Jackson. Bumping it
       # globally forces WireMock onto an incompatible Jackson and breaks VertxTest.
-      # Managed by hand in the curated versions-maven-plugin sweep instead.
+      # Line changes stay hand-managed, via the curated versions-maven-plugin sweep.
       # See parallel-consumer-example-metrics/pom.xml.
+      #
+      # Patches allowed, minor/major blocked - narrowed for the same reason as the
+      # jackson-bom entry below, and deliberately kept the same shape as it, since the
+      # two pins are siblings. The recorded hazard is a LINE change; a patch inside the
+      # pinned line touches one test-scoped dependency in one example module and is
+      # exactly how a future advisory against it would be fixed. The whole-tree CVE scan
+      # resolves test scope, so it WILL report such an advisory - and a blanket ignore
+      # would leave that red with no automated route to green.
       - dependency-name: "com.fasterxml.jackson.core:jackson-databind"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
       # The second Jackson pin: the jackson-bom import in
       # parallel-consumer-example-streams, which holds that module at 2.18.9. It needs
       # the same hand management as the databind pin above, and it is a *different*
@@ -41,15 +60,34 @@ updates:
       # introduced in 2.18.0 and fixed only in 2.18.9, and CVE-2026-54518 applies to
       # 2.21.0-2.21.3 only. The root pom greenlights CVE-2026-54518 as a false positive
       # *because this module resolves 2.18.9*; a bump into 2.21.0-2.21.3 would make that
-      # finding real while the exclusion silently hid it. Bump this by hand, and
-      # re-check the exclusion list when you do.
-      # See docs/inflight/deps-cve-backlog.md.
+      # finding real while the exclusion silently hid it. Leaving the LINE is therefore a
+      # hand-managed decision, and the exclusion list gets re-checked when it happens.
+      #
+      # Allow patches within the pinned line; block minor/major - the same shape as the
+      # micrometer entry below, but here the patch allowance is load-bearing rather than
+      # tidy. This started out blanket, which was wrong in a way worth recording: every
+      # danger named above is a LINE change (2.18 -> 2.21), while a patch inside 2.18 is
+      # the exact thing we are waiting for. The root pom's TEMPORARY exclusions for
+      # CVE-2026-68497 and CVE-2026-19032 retire when jackson-databind 2.18.10 reaches
+      # Central - a patch bump IS the retirement mechanism - and a blanket ignore
+      # suppressed the only PR that would have announced it. Neither id is in OSV, NVD or
+      # GHSA, so no Dependabot alert can arrive instead: the ignore was covering the one
+      # notification we were relying on. bin/check-cve-exclusions.sh is the backstop for
+      # when that happens anyway. See docs/inflight/deps-cve-backlog.md.
       - dependency-name: "com.fasterxml.jackson:jackson-bom"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
       # Frozen workaround pin, NOT a dep to track upward: byte-buddy is held at
       # mockito's version because wiremock-jre8 2.35.2 drags in an ancient byte-buddy
       # that breaks mockito (MockitoInitializationException). A bump buys nothing and
       # risks re-breaking it. Remove this pin entirely when wiremock moves to 3.x
       # (which drops the stale transitive) - do not bump it in the meantime.
+      #
+      # Blanket ON PURPOSE, and the only entry here that should be: the desired state is
+      # frozen, so there is no update size we want. Not an oversight left behind when the
+      # two Jackson entries were scoped - if a byte-buddy advisory ever lands, the answer
+      # is the wiremock 3.x move, not a patch.
       - dependency-name: "net.bytebuddy:*"
       # micrometer 1.13+ renamed the Prometheus registry package -> breaks CoreApp.
       # Allow patches within the pinned line; block minor/major until CoreApp migrates.

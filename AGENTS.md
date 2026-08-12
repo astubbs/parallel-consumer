@@ -87,7 +87,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
-| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and their owning fix PR | Tests that merely flake - quarantine requires a diagnosis |
+| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires a diagnosis, or a recorded owner-granted exception |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
@@ -242,7 +242,7 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 ## Testing
 
 Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are in
-[`docs/testing.md`](docs/testing.md). Three rules bind regardless:
+[`docs/testing.md`](docs/testing.md). Four rules bind regardless:
 
 - **⚠️ Be EXTREMELY careful modifying tests to make them pass, especially under
   parallelism/stress.** A test failing under concurrent load may be exposing a **real main-code bug
@@ -254,6 +254,15 @@ Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are 
   hides exactly the bugs this library exists to prevent. **When a broker integration test fails,
   read its `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing by hand** - and check the
   probe's thresholds before believing a clean one.
+- **A flake fails the build - there is no retry, deliberately.** The CI scripts no longer pass
+  `-Dsurefire.rerunFailingTestsCount=2`: it retried failures into green runs and hid three flakes no
+  ledger knew about, one of them a regression of an already-fixed one. **Do not restore it to get a
+  build green** - the lever is `@Quarantined` with a diagnosis
+  ([`docs/testing.md`](docs/testing.md)), which relocates the signal where a retry destroys it, and
+  nothing enforces this. Background:
+  [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md);
+  the flakes it uncovered are open in
+  [`docs/inflight/test-untracked-ci-flakes.md`](docs/inflight/test-untracked-ci-flakes.md).
 - **Reuse test utilities - search before you add.** Extend the shared helpers rather than writing a
   parallel one; a drifted copy of topic-creation logic once became a flaky-CI source. Where they
   live and what they cover: [`docs/testing.md`](docs/testing.md). Check `docs/solutions/` before
@@ -372,6 +381,16 @@ Nothing lints commit messages, so all of this is on you.
   every box: check it `[x]`, or mark it `N/A - <reason>`. The `PR Checklist` gate fails a
   human-authored PR when the checklist is missing entirely *or* any box is left unchecked without an
   `N/A`, so dropping the template is not a bypass. Only real bot authors are exempt.
+- **Ask for the automated review when the PR is ready - it does not run on push.** Two routes, and
+  they are not interchangeable: comment **`@claude review this`** when you want findings that
+  mechanically block the merge (only that route can open inline review threads), or dispatch
+  `claude-code-review-dispatch.yml --ref master -f pr=<number> -f focus="<steer>"` when you want a
+  steer or the packaged review procedure. Enforced by the required `claude-review` check, so
+  **a red `claude-review` on a PR nobody has reviewed yet is the expected state, not a fault**,
+  and never something to fix by editing the gate. What exactly satisfies that check is stated in
+  one place only - [`docs/ci.md`](docs/ci.md), "The gate asks..." - along with which route to
+  reach for and why `--ref master` is required. Do not restate the rule here; it has drifted
+  before.
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the
   specific review comment, NOT as a separate top-level PR comment - a summary comment leaves the
   original conversation unresolved and can block merge on "unresolved conversations". When a finding

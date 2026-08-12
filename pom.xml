@@ -604,8 +604,10 @@
                          actually returned findings, because nothing else will. Clear the client's
                          on-disk report cache first, or a warm cache will answer for it.
 
-                         Why `fail` cannot police this, both traps in full, and what the first
-                         authenticated run found: docs/inflight/ci-ossindex-audit-dead.md -->
+                         Why `fail` cannot police this, and both traps in full:
+                         docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md
+                         What the first authenticated run found, and this scanner's false-positive
+                         rate: docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md -->
                     <authId>ossindex</authId>
                     <skip>${ossindex.skip}</skip>
                     <fail>${ossindex.fail}</fail>
@@ -617,7 +619,28 @@
                          docs/inflight/deps-cve-backlog.md.
 
                          Each entry says what would retire it. Re-check them whenever this list is
-                         touched: an exclusion that has quietly become fixable is the failure mode. -->
+                         touched: an exclusion that has quietly become fixable is the failure mode.
+
+                         The list is in two parts, and the difference matters. The STANDING entries
+                         below are open-ended - retiring them needs someone else to act (an upstream
+                         release that does not exist, a disputed record being settled, a migration we
+                         have deferred). The TEMPORARY entries at the end are waiting on a specific
+                         upstream fix that is already written and merged, and are expected to be
+                         deleted within weeks. If a temporary entry is more than a release cycle old,
+                         that is a bug in this list, not a fact about the world.
+
+                         THE FORMAT BELOW IS ENFORCED, not a convention. bin/check-cve-exclusions.sh
+                         (Repo Hygiene) parses this block on every PR:
+
+                           * every id must sit under a comment - an unclassified id reads as
+                             standing-forever, which is how temporary becomes permanent by accident;
+                           * any comment saying TEMPORARY must carry `TEMPORARY-SINCE: YYYY-MM-DD`,
+                             and undated / unparseable / future-dated all FAIL rather than passing as
+                             "not expired yet";
+                           * a temporary entry older than 90 days fails the check, naming itself.
+
+                         Nothing else was ever going to tell us: these ids are not in OSV, NVD or
+                         GHSA, so no Dependabot alert exists to chase them. -->
                     <excludeVulnerabilityIds>
                         <!-- org.hdrhistogram:HdrHistogram (via micrometer-core). Both are
                              VulDB-assigned, local-access-only, and carry isDisputed: true in the CVE
@@ -660,6 +683,55 @@
                              2.21.x that is genuinely in scope (then it needs >= 2.21.5, not an
                              exclusion). -->
                         <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
+
+                        <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
+
+                             The date is machine-read by bin/check-cve-exclusions.sh, which fails the
+                             Repo Hygiene check once this entry is 90 days old. Change it only after
+                             re-checking upstream, never to buy quiet.
+
+                             com.fasterxml.jackson.core:jackson-databind, example-streams only, at
+                             runtime scope via kafka-streams 3.9.2. Unlike everything above, these two
+                             are NOT permanent: both fixes are already merged upstream on the 2.18
+                             branch, milestone 2.18.10, and there is simply no release carrying them
+                             yet.
+
+                               CVE-2026-68497 (8.7, CWE-770) - unbounded allocation deserializing
+                               javax.xml.datatype.Duration / XMLGregorianCalendar. Fix: FasterXML/
+                               jackson-databind#6127, merged 2026-07-29, adds the StreamReadConstraints
+                               number-length limit to CoreXMLDeserializers.
+
+                               CVE-2026-19032 (6.3, CWE-470) - java.nio.file.Path deserialization
+                               accepts arbitrary URI schemes. Fix: FasterXML/jackson-databind#6129,
+                               merged 2026-08-06, restricts the accepted schemes.
+
+                             There is nothing to bump TO. Neither id is in OSV, NVD or GHSA yet, so the
+                             only public record is Sonatype's own; the fixed-version data comes from the
+                             two merged PRs. Every released 2.x artifact predates both merges - the
+                             newest on each line are 2.18.9 (2026-07-08), 2.21.5 (2026-07-07) and
+                             2.22.1 (2026-07-07) - so moving up a line does not help, and moving lines
+                             is separately blocked (2.21.0-2.21.3 would make CVE-2026-54518 above real,
+                             and a global pin breaks VertxTest through wiremock-jre8).
+
+                             Neither is reachable in this example: StreamsApp is String-serde end to
+                             end, constructs no ObjectMapper, and never names Path, Duration or
+                             XMLGregorianCalendar. jackson-databind is present only because
+                             kafka-streams drags it in for its own internal metadata.
+
+                             Being an example is why this is excludable rather than shipped risk: the
+                             examples parent sets maven.deploy.skip / maven.install.skip /
+                             skipPublishing, so no consumer of the library inherits this dependency.
+                             That is a statement about blast radius, not about the vulnerability -
+                             an example is still code people copy, and if either advisory had touched
+                             core, vertx, reactor or mutiny this would have been a bump or a stop, not
+                             an exclusion. It was checked: they resolve no jackson-databind at runtime
+                             at all.
+
+                             RETIRE WHEN: jackson-databind 2.18.10 is on Central. Then bump the
+                             jackson-bom import in parallel-consumer-example-streams/pom.xml and DELETE
+                             these two lines - do not carry them forward. -->
+                        <excludeVulnerabilityId>CVE-2026-68497</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-19032</excludeVulnerabilityId>
                     </excludeVulnerabilityIds>
                 </configuration>
                 <executions>

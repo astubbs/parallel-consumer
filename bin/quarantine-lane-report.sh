@@ -137,7 +137,8 @@ for t in $entries; do
     cls=${t%%.*}; method=${t#*.}
     [ "$method" = "$t" ] && method=""
     block=$(registry_entry_block "$t")
-    owner=$(echo "$block" | grep -oE 'Owner: PR #[0-9]+' | grep -oE '#[0-9]+' | head -1 || true)
+    # Same three accepted forms as bin/check-quarantine-owners.sh - keep the two in step.
+    owner=$(echo "$block" | grep -oE 'Owner: PR (astubbs/parallel-consumer|astubbs)?#[0-9]+' | grep -oE '#[0-9]+' | head -1 || true)
     outcome=$(outcome_of "$cls" "$method")
     flapping=$(is_flapping "$cls")
     case "$outcome" in

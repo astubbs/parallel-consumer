@@ -1,0 +1,32 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: PollContext processing API
+category: processing
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.0.0
+  evidence:
+    tag: 0.5.0.0
+    path: CHANGELOG.adoc
+    basis: Added PollContext as the processing API's central record-set and metadata view.
+summary: Receive a PollContext in processing callbacks to access a single record or a configured batch plus record metadata.
+use_this_when:
+  - Your processing callback needs record metadata, failure information or batch access through one API shape.
+setup:
+  callback_input: PollContext<K, V>
+  accessors:
+    - getSingleConsumerRecord for single-record processing.
+    - stream for the configured batch.
+opt_in:
+  mechanism: Use the current poll, produce, Vert.x or Reactor callback APIs.
+  isolated_from_stable_modules: false
+boundaries:
+  - getSingleConsumerRecord is invalid for batch processing.
+  - PollContext is a callback-scoped processing view, not a durable record store.
+references:
+  - label: PollContext source
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/PollContext.java
