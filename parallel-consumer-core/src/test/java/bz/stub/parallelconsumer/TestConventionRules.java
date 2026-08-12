@@ -43,6 +43,13 @@ public class TestConventionRules {
     static final ArchRule integration_tests_must_live_in_an_integrationTest_package =
             noClasses()
                     .that().resideOutsideOfPackages("..integrationTest..", "..integrationTests..")
+                    // The Testcontainers SUPPORT package holds no tests - one log-filtering consumer that
+                    // integration tests hand to a container - so it cannot inflate the surefire suite, which
+                    // is the only thing this rule is protecting. It became visible here because the package
+                    // rename moved it into bz.stub.parallelconsumer.internal.testcontainers; its former home
+                    // was outside the analysed namespace entirely. Nothing about the class changed; the set
+                    // of classes the rule can see did.
+                    .and().resideOutsideOfPackages("..internal.testcontainers..")
                     .should().beAssignableTo("bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest")
                     .orShould().dependOnClassesThat().resideInAnyPackage("org.testcontainers.containers..", "org.testcontainers.junit..")
                     .because("integration tests (extend BrokerIntegrationTest or use Testcontainers) must live in "
