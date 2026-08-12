@@ -17,7 +17,6 @@
     <name>Parallel Consumer - Examples - Metrics</name>
 
     <dependencies>
-        <!-- tag::exampleDep[] -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
@@ -32,7 +31,6 @@
                  See docs/inflight.md "Deferred dependency upgrades". -->
             <version>1.12.13</version>
         </dependency>
-        <!-- end::exampleDep[] -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>

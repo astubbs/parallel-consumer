@@ -16,10 +16,6 @@
         <appender-ref ref="STDOUT"/>
     </root>
 
-    <logger name="io.confluent.csid" level="info"/>
-    <!--    <logger name="io.confluent.csid" level="debug" />-->
-    <!--    <logger name="io.confluent.csid" level="trace" />-->
-
     <!-- containers -->
     <logger name="io.confluent.parallelconsumer.integrationTests.DbTest" level="debug"/>
     <logger name="io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest" level="debug"/>

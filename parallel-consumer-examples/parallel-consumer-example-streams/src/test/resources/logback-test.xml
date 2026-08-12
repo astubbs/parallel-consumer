@@ -15,10 +15,6 @@
         <appender-ref ref="STDOUT"/>
     </root>
 
-    <logger name="io.confluent.csid" level="info"/>
-    <!--    <logger name="io.confluent.csid" level="debug" />-->
-    <!--    <logger name="io.confluent.csid" level="trace" />-->
-
     <!-- related -->
     <logger name="org.apache.kafka.clients" level="warn"/>
     <logger name="org.postgresql" level="info"/>
