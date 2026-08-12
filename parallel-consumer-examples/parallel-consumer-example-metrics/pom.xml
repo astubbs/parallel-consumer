@@ -14,10 +14,9 @@
     </parent>
 
     <artifactId>parallel-consumer-example-metrics</artifactId>
-    <name>Kafka Parallel Consumer Example - Metrics</name>
+    <name>Parallel Consumer - Examples - Metrics</name>
 
     <dependencies>
-        <!-- tag::exampleDep[] -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
@@ -29,10 +28,9 @@
             <!-- Pinned to 1.12.x: micrometer 1.13+ renamed the registry package
                  io.micrometer.prometheus -> io.micrometer.prometheusmetrics, which breaks
                  CoreApp.java. Bump together with micrometer-core when migrating that import.
-                 See docs/inflight.md "Deferred dependency upgrades". -->
+                 See docs/inflight/deps-deferred-majors.md, the micrometer-core row. -->
             <version>1.12.13</version>
         </dependency>
-        <!-- end::exampleDep[] -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
@@ -75,14 +73,4 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
-    <repositories>
-        <!-- tag::exampleRepo[] -->
-        <repository>
-            <name>Confluent</name>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-        </repository>
-        <!-- end::exampleRepo[] -->
-    </repositories>
 </project>

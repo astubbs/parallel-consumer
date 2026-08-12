@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.state.ModelUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -264,6 +265,17 @@ class ProducerManagerTest {
 
     @SneakyThrows
     @Test
+    @Quarantined(
+            reason = "Timing-precision failure in the shared BlockedThreadAsserter#assertUnblocksAfter helper, "
+                    + "not in this test's own assertions. The unblocker is scheduled BEFORE the elapsed clock "
+                    + "starts, so the measured window begins later than the delay it is compared against and is "
+                    + "systematically SHORT by however long arming the scheduler takes. `isAtLeast(unblocksAfter)` "
+                    + "then fails by a millisecond or two whenever the machine is busy enough to widen that gap. "
+                    + "Seen as `getElapsed() expected to be at least PT20S but was PT19.998S` - 2ms short on a 20s "
+                    + "bound - on a PR whose diff contained no Java at all.",
+            tracking = "docs/inflight/test-untracked-ci-flakes.md",
+            fixedBy = "astubbs#262",
+            flapping = true)
     void producedRecordsCantBeInTransactionWithoutItsOffsetDirect() {
         // custom settings
         setup(ParallelConsumerOptions.<String, String>builder()

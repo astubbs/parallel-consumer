@@ -1,0 +1,35 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Draining and non-draining shutdown
+category: operability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The initial repository baseline and first tagged release contain the drain and non-drain shutdown contract.
+readme_anchor: shutdown
+summary: Choose whether shutdown finishes downloaded backlog or returns unstarted records for redelivery.
+use_this_when:
+  - Your deployment needs a bounded shutdown policy that is explicit about queued versus in-flight work.
+setup:
+  modes:
+    - closeDrainFirst drains queued work before shutdown.
+    - closeDontDrainFirst returns queued unstarted records for redelivery and waits only for in-flight work.
+  timeouts:
+    - shutdownTimeout bounds in-flight work.
+    - drainTimeout adds a budget for queued work in drain mode.
+opt_in:
+  mechanism: Call the explicit close method or close overload with the required DrainingMode.
+  isolated_from_stable_modules: false
+boundaries:
+  - close() defaults to the non-draining mode.
+  - A user function that swallows interruption can delay close until the configured timeout is exceeded.
+references:
+  - label: Close-mode example
+    path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java
