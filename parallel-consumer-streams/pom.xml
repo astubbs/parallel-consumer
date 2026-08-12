@@ -104,6 +104,9 @@
              only the patch is tracked. -->
         <kafka.test.patched.dir>${project.build.directory}/kafka-test-patched</kafka.test.patched.dir>
         <kafka.test.pristine.dir>${project.build.directory}/kafka-test-pristine</kafka.test.pristine.dir>
+        <!-- The seam-on upstream run is opt-in; see the kafka-upstream-tests-seam-on execution. -->
+        <seam.on.upstream.skip>true</seam.on.upstream.skip>
+
         <patched.test.classes>org/apache/kafka/test/InternalMockProcessorContext.java</patched.test.classes>
     </properties>
 
@@ -488,6 +491,64 @@
                             </properties>
                             <!-- Kafka's tests are not written for our tag scheme; the inherited
                                  group filters would silently drop all of them. -->
+                            <groups combine.self="override"/>
+                            <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+                    <!-- The same upstream classes, with the seam ON.
+
+                         The seam-off execution above is a BEHAVIOUR-PRESERVATION claim: the patch changes
+                         nothing when the switch is off. This one is the opposite measurement - what Kafka's
+                         own suite says about the path this module actually ships - and it is the gate U11's
+                         reinstatement rule needs, because an API only comes back when Kafka's suite
+                         exercises it seam-ON and passes.
+
+                         Until this run was added, only StreamTaskTest had a recorded seam-on number
+                         (65/101). The other three patched classes had never been run this way at all, so
+                         the module's seam-on evidence was one class out of four.
+
+                         SKIPPED BY DEFAULT, because it is expected to fail: the failures are the measured
+                         divergence, not a regression, and a red gate on every build would train people to
+                         ignore it. Run deliberately:
+
+                           ./mvnw -pl .,parallel-consumer-streams test -Dseam.on.upstream.skip=false
+
+                         and read the counts from target/surefire-reports-kafka-upstream-seam-on/. Do NOT
+                         use -Dtest= to narrow it: that overrides this execution's includes, the suite
+                         never runs, and the build goes green having computed nothing. -->
+                    <execution>
+                        <id>kafka-upstream-tests-seam-on</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <skipTests>${seam.on.upstream.skip}</skipTests>
+                            <!-- Failures here are the measurement, so this execution must not fail the
+                                 build. The counts in the report are the output. -->
+                            <testFailureIgnore>true</testFailureIgnore>
+                            <dependenciesToScan>
+                                <dependency>org.apache.kafka:kafka-streams</dependency>
+                            </dependenciesToScan>
+                            <includes>
+                                <include>org/apache/kafka/streams/processor/internals/StreamTaskTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/ProcessorContextImplTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/RecordCollectorTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/StreamThreadTest.java</include>
+                            </includes>
+                            <reportsDirectory>${project.build.directory}/surefire-reports-kafka-upstream-seam-on</reportsDirectory>
+                            <systemPropertyVariables>
+                                <pc.streams.dispatch.enabled>true</pc.streams.dispatch.enabled>
+                            </systemPropertyVariables>
+                            <classpathDependencyExcludes>
+                                <classpathDependencyExclude>ch.qos.logback:logback-classic</classpathDependencyExclude>
+                            </classpathDependencyExcludes>
+                            <!-- Same serial-runner requirement as the seam-off execution above. -->
+                            <properties>
+                                <configurationParameters>
+                                    junit.jupiter.execution.parallel.enabled = false
+                                </configurationParameters>
+                            </properties>
                             <groups combine.self="override"/>
                             <excludedGroups combine.self="override"/>
                         </configuration>
