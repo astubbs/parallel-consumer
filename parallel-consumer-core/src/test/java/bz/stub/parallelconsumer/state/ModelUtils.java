@@ -1,11 +1,12 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
-import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;

@@ -1,19 +1,19 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.LoopingResumingIterator;
-import io.confluent.parallelconsumer.ParallelConsumer;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.BrokerPollSystem;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.metrics.PCMetrics;
-import io.confluent.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.internal.utils.LoopingResumingIterator;
+import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.BrokerPollSystem;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Gauge;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -27,7 +27,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.util.Optional.empty;
 import static java.util.Optional.of;
 

@@ -25,7 +25,7 @@ setup:
   maven:
     group_id: bz.stub.parallelconsumer
     artifact_id: parallel-consumer-vertx
-  example: parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java
+  example: parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java
 opt_in:
   mechanism: Add the Vert.x module and use its processor API.
   isolated_from_stable_modules: false

@@ -29,4 +29,4 @@ boundaries:
   - PollContext is a callback-scoped processing view, not a durable record store.
 references:
   - label: PollContext source
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/PollContext.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/PollContext.java

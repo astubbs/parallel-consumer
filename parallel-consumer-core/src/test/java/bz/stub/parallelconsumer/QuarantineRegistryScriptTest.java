@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 /*-
  * Copyright (C) 2020-2026 Antony Stubbs and contributors
  */
@@ -90,7 +90,7 @@ class QuarantineRegistryScriptTest extends AbstractQuarantineScriptTest {
     @Test
     void fullyQualifiedAnnotationIsDetected() throws Exception {
         writeTestSource("FqIT", "class FqIT {\n" +
-                "    @io.confluent.parallelconsumer.Quarantined(reason = \"d\", tracking = \"t\")\n" +
+                "    @bz.stub.parallelconsumer.Quarantined(reason = \"d\", tracking = \"t\")\n" +
                 "    void m() {}\n}\n");
         writeRegistry("");
         Result result = runCheck();

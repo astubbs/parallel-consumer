@@ -137,12 +137,12 @@ fp_path_of() { # <path> -> prints the fork-point path (for the manifest normalis
 # half names a path in the UPSTREAM tree and must keep saying io/confluent - normalising
 # it as well is a no-op on a correct manifest and repairs one that a bulk rewrite got at.
 RENAMED_FROM_UPSTREAM="
-parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java|parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/CoreAppMetricsIntegrationTest.java
-parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/PrometheusContainer.java|parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/PrometheusContainer.java
-parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java|parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/StreamsAppTest.java
-parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerCommitTimeoutTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithCommitTimeoutException.java
-parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerSaslAuthenticationTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithSaslAuthenticationException.java
-parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerEarlyCloseTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithEarlyClose.java
+parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/bz/stub/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java|parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/CoreAppMetricsIntegrationTest.java
+parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/bz/stub/parallelconsumer/examples/metrics/integrationTests/PrometheusContainer.java|parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/PrometheusContainer.java
+parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/bz/stub/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java|parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/StreamsAppTest.java
+parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerCommitTimeoutTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithCommitTimeoutException.java
+parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerSaslAuthenticationTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithSaslAuthenticationException.java
+parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerEarlyCloseTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithEarlyClose.java
 ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 "
 
@@ -151,7 +151,7 @@ ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 # stack, not yet on master - listing it early is harmless (only tracked files are
 # checked) and stops the check ambushing the stack at merge (see PR astubbs#83).
 EXTRACTED_FROM_UPSTREAM="
-parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/ManagedPCInstance.java
+parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/ManagedPCInstance.java
 ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 "
 

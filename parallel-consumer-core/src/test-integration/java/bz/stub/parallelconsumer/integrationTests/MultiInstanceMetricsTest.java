@@ -1,14 +1,14 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import io.confluent.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.internal.PCModule;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.search.Search;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -23,12 +23,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.DoubleSupplier;
 import java.util.stream.Stream;
 
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.NEW_GROUP;
-import static io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.REUSE_GROUP;
-import static io.confluent.parallelconsumer.metrics.PCMetricsDef.PC_INSTANCE_TAG;
-import static io.confluent.parallelconsumer.metrics.PCMetricsDef.PROCESSED_RECORDS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.NEW_GROUP;
+import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.REUSE_GROUP;
+import static bz.stub.parallelconsumer.metrics.PCMetricsDef.PC_INSTANCE_TAG;
+import static bz.stub.parallelconsumer.metrics.PCMetricsDef.PROCESSED_RECORDS;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;

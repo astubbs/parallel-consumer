@@ -1,10 +1,11 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import lombok.*;
 import lombok.experimental.Delegate;
 import lombok.extern.slf4j.Slf4j;
@@ -22,7 +23,7 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.Map;
 
-import static io.confluent.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
+import static bz.stub.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
 
 /**
  * Our extension of the standard Producer to mostly add some introspection functions and state tracking.

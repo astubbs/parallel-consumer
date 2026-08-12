@@ -1,14 +1,15 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.KafkaUtils;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.internal.EpochAndRecordsMap;
-import io.confluent.parallelconsumer.internal.PCModule;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.internal.utils.KafkaUtils;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
+import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;

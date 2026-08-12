@@ -1,12 +1,13 @@
-package io.confluent.parallelconsumer.vertx;
+package bz.stub.parallelconsumer.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.ParallelEoSStreamProcessorTestBase;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.ext.web.client.WebClient;

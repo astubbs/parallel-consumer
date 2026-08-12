@@ -29,4 +29,4 @@ boundaries:
   - A provider supersedes defaultMessageRetryDelay, so keeping both can hide which policy is active.
 references:
   - label: Retry-delay option
-    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java

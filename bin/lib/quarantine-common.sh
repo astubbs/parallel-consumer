@@ -10,7 +10,7 @@
 # (e.g. `@Test @Quarantined(...)`), plain or fully-qualified form. Does NOT match string literals
 # (those have a quote before the @ - e.g. the self-tests' check("@Quarantined(") - so anchoring to
 # an annotation-only prefix is what keeps releases from being blocked by the tooling's own sources).
-QUARANTINE_ANNOTATION_ERE='^[[:space:]]*(@[[:alnum:]_.]+(\([^)]*\))?[[:space:]]*)*@(io\.confluent\.parallelconsumer\.)?Quarantined\('
+QUARANTINE_ANNOTATION_ERE='^[[:space:]]*(@[[:alnum:]_.]+(\([^)]*\))?[[:space:]]*)*@(bz\.stub\.parallelconsumer\.)?Quarantined\('
 
 REGISTRY="${REGISTRY:-docs/quarantined-tests.md}"
 

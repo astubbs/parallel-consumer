@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.integrationTests;
+package bz.stub.parallelconsumer.integrationTests;
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -21,7 +21,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Set;
 
-import static io.confluent.csid.utils.GeneralTestUtils.time;
+import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,7 +33,7 @@ public class KafkaSanityTests extends BrokerIntegrationTest<String, String> {
 
     /**
      * Exercises {@code pollBrokerForRecords} on
-     * {@link io.confluent.parallelconsumer.internal.BrokerPollSystem}.
+     * {@link bz.stub.parallelconsumer.internal.BrokerPollSystem}.
      */
     @Timeout(value = 20) // includes docker broker startup time, can be slow on CI machines
     @Test
