@@ -5,6 +5,17 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
 
 ## Still open
 
+- **The package rename landed, so what is left is keeping the release notes honest about it.**
+  `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*` went in with astubbs#294, and the
+  README and the `== 0.6.0.0` changelog section now both describe a namespace that exists - the docs
+  are no longer ahead of the code. The release-day risk is regeneration: that changelog section is
+  rebuilt from the commit log when the tag is cut, and generation reads commits, so it will not notice
+  that it has dropped a claim the current text makes. After regenerating, confirm the opening
+  paragraph and the `=== Breaking` bullet still name **both** changes - the Maven `groupId` and the
+  Java packages every import names - rather than reverting to "the only required change is the Maven
+  groupId". Reasoning, Apache 2.0 analysis and task inventory:
+  [`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`](../plans/2026-08-11-001-refactor-package-rename-plan.md);
+  the project entry is [`branch-package-rename.md`](branch-package-rename.md).
 - **Recheck the documentation data before the tag, and again after the critical fixes land.** The
   published claim is now "every known **critical** defect resolved and evidenced", not "all known
   defects" - the earlier wording was a promise the project cannot keep. Nothing verifies that claim
@@ -21,7 +32,6 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
     record before it lands, or it ships undocumented.
   - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
     replacement, `production-use`, is only as good as the critical-defect gate holding.
-
 - **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
   two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
   fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when
