@@ -159,7 +159,12 @@ evidence; no bound changed without documented arithmetic.
 **Files:**
 - Modify: `ChaosRevokeUnderWorkCooperativeIT` javadoc (calibration record), `ChaosRevokeUnderWorkIT`
   javadoc (pointer to sibling), `docs/inflight.md` (Class 2 hunt status update; any new findings
-  rostered), `docs/plans/2026-07-31-001-...-plan.md` (this plan, durable copy, status annotations).
+  rostered), `docs/plans/2026-07-31-001-feat-chaos-w4-cooperative-variant-plan.md` (this plan, durable
+  copy, status annotations).
+  (Pointer repair: the single file `docs/inflight.md` became the directory
+  [`docs/inflight/`](../inflight/) on 2026-08-04, deleted in `0de96fc` - `git show
+  0de96fc^:docs/inflight.md` for the version this unit edited. The Class 2 hunt status now lives in
+  [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md).)
 
 **Verification:** docs match the measured record; commits on `feats/chaos-w4-cooperative`; push +
 propose the stacked PR (`depends on #85`) - ask before opening, per convention.

@@ -26,6 +26,15 @@ watching that PR's CI). **Updated the same day** after the investigation ran to 
 
 **Ledger entry:** `docs/inflight.md`. This report is the long form of that entry.
 
+> **Pointer repair (the ledger moved, the claims did not).** The single file `docs/inflight.md` was
+> split into the directory [`docs/inflight/`](../inflight/) on 2026-08-04 and deleted in `0de96fc`
+> (`git log --diff-filter=D -- docs/inflight.md`). Read it as it stood while this report was written
+> with `git show 0de96fc^:docs/inflight.md`. The live successors to this entry are
+> [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md) (Class 2 hunt status) and
+> [`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md) (the confluentinc#857 family,
+> including the RED-side occurrence this report predicted). Every `docs/inflight.md` named below is
+> that pre-split single file, as it was on the dates given.
+
 ---
 
 ## 0. CONFIRMED root cause (added after the investigation completed)
@@ -351,7 +360,9 @@ budget on a box that cannot boot a broker in 15 minutes will trip regardless of 
 ### H2: a genuine commit-response stall under revoke-heavy load
 
 This is exactly the confluentinc#857-family behaviour the Class 2 probe was built to catch, and `docs/inflight.md`
-records the probe as "a calibrated TRIPWIRE - RED-side awaiting a real-world/CI occurrence". If the
+records the probe as "a calibrated TRIPWIRE - RED-side awaiting a real-world/CI occurrence" (`git
+show 0de96fc^:docs/inflight.md`, grep `calibrated TRIPWIRE`; the successor carries the same stance -
+grep `calibrated tripwire` in [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md)). If the
 load hypotheses are falsified, H2 is the live explanation and this is PC's first RED-side hit - a
 significantly more valuable outcome than a CI-scheduling fix. Treat it as a PC bug then, not a test
 bug. Note the astubbs#87 correlation does not rule H2 out: if the second scenario simply makes the fleet
@@ -377,6 +388,12 @@ fleet-size, `maxConcurrency`, commit-mode or consumer-property default that chan
 > investigation down the H2 branch and found the root cause in section 0. Steps 2 and 3 are therefore
 > superseded; the "decide the classification question" item in step 4 is still open and now lives in
 > the follow-ups list in `docs/inflight.md`.
+>
+> **Pointer repair.** That list is the section `Open follow-ups from the W4 revoke-under-work
+> investigation` - `git show 0de96fc^:docs/inflight.md` and grep the heading. It did **not** carry
+> into `docs/inflight/` when the file was split, so the history above is the record of it; the
+> nearest live note is [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md).
+> Whether the classification item is still open today is not a question this repair answers.
 
 1. **Replay a captured seed on an idle machine, at `192d32bc`.** This one step separates every
    hypothesis. Both of these failed in CI:

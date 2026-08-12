@@ -279,12 +279,14 @@ the race needs — which makes PIT a *useful reproducer*, not merely a victim.
 | `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ProducerManager.java` | `preAcquireOffsetsToCommit`, `commitOffsets`, `acquireProduceLock`, `ProducingLock` |
 | `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering |
 | `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java` | `onPostAddToMailBox`, the other `finishProducing` caller |
-| `docs/inflight.md` | the ledger entry for this flake — **update it as you go** |
+| [`docs/inflight/bug-producing-lock-double-release.md`](../inflight/bug-producing-lock-double-release.md) | the ledger entry for this flake — **update it as you go**. (Written here as `docs/inflight.md`; that single file became the directory [`docs/inflight/`](../inflight/) on 2026-08-04, deleted in `0de96fc` — `git show 0de96fc^:docs/inflight.md` for the entry as it stood.) |
 
 ## 10. Context worth having
 
-- **`docs/inflight.md` is the repo's ledger** for parked/in-flight work. Record findings there, not in
-  a scratch file.
+- **[`docs/inflight/`](../inflight/) is the repo's ledger** for parked/in-flight work. Record findings
+  there, not in a scratch file — one file per item, conventions in
+  [`docs/inflight/AGENTS.md`](../inflight/AGENTS.md). (This plan said `docs/inflight.md`, the single
+  file that preceded the directory.)
 - **The astubbs#100 / astubbs#108 pattern.** Both were "an offset recorded as committed when it was not", on the
   consumer path, and both were mis-framed at first (astubbs#100 as CI load, astubbs#108 as an already-handled
   exception). The house lesson from that workstream: when a test fails under stress, establish
