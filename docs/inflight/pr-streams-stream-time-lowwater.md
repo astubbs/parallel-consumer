@@ -62,17 +62,28 @@ test to a single key so it passed, deleting the only coverage of the divergence.
 the narrower property that is actually true - the mark never passes a record *currently in flight* - and
 `theMarkOvertakesStockWhereDispatchOrderDiffers` pins the `[0, 2, 2]` sequence.
 
-**The largest thing still open, and it is a decision rather than a task:**
-**a punctuator's effects never become commit-covered, and WALL_CLOCK_TIME has the same defect with no
-warning at all.** Kafka's unmodified `maybePunctuateStreamTime` *and* `maybePunctuateSystemTime` both set
-`commitNeeded = true`; `pcAwareCommitNeeded()` discards that field on the PC path, so an interval in
-which the task only punctuated does no `prepareCommit()`, hence no `flush()` and no checkpoint. Combined
-with stream time restarting at UNKNOWN, punctuators **re-fire over event time they already covered** on
-every rebalance - and "may not survive a rebalance" in the warning understates it. The one-line candidate
-is `hasUncommittedWork() || commitNeeded` in `pcAwareCommitNeeded()`, which closes both instances; it
-changes commit cadence for every PC-path caller, which is U10's KTD2 territory and needs its own
-evidence. Note also that WALL_CLOCK_TIME punctuators fire on this path **today**, unwarned - that half is
-pre-existing, not introduced by U13.
+**Punctuation and commit coverage - what is left of it after measurement.** This entry used to rank the
+largest open item as *a punctuator's effects never become commit-covered*, with
+`hasUncommittedWork() || commitNeeded` as the one-line candidate. Measured on
+`feats/ks-streams-punctuator-commit-coverage` and `feats/ks-streams-postcommit-checkpoint-gap`, that
+framing does not hold: offsets commit on the PC path, and `postCommit` runs under load (12,000 records
+checkpointed at changelog 11,862-11,929 against stock's 11,999). What survives is an idle-window tail -
+when no work completes between the commit and `TaskExecutor`'s second loop, that round's `postCommit` is
+skipped, bounded by the final commit round, with clean `close()` checkpointing regardless.
+
+Still open from it:
+
+- **Whether a punctuator's own effects survive a crash on the PC path** - a store write, a forward.
+  Everything measured so far is commit *bookkeeping*. The direct experiment has not been run: punctuator
+  writes, `abortAllActive()`, restart, check what survived.
+- **The re-fire-over-covered-event-time claim**, still unmeasured.
+- **WALL_CLOCK_TIME punctuators fire here unwarned**, where STREAM_TIME logs. Pre-existing, not
+  introduced by U13.
+- **The `hasUncommittedWork() || commitNeeded` candidate cannot be evidenced through commit cadence.**
+  The thread-level `commit-total` sensor is pinned at zero on an idle PC task, so it carries no
+  information about punctuation. `PunctuatorCommitCoverageTest`'s javadoc records why, plus two further
+  observables (the checkpoint file, punctuator output on a topic) that look decisive and are not - read
+  it before picking an observable.
 
 Still open:
 
