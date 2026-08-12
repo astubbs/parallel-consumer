@@ -155,12 +155,36 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
+      - name: Enforce registry (docs/quarantined-tests.md matches @Quarantined annotations)
         run: bin/check-quarantine-registry.sh
       - name: Verify owner claims (each quarantined test's fix PR exists, is open, and removes the quarantine)
         env:
           GH_TOKEN: ${{ github.token }}
         run: bin/check-quarantine-owners.sh
+
+  # Documentation-data AUDIT: structure only. docs/features/*.yaml and docs/data/*.yaml are
+  # hand-written and a documentation generator reads them, so a malformed file or a missing required
+  # field produces a broken generated page rather than a loud error. This checks that each file
+  # parses, declares its kind, carries what that kind requires, and points at README anchors that
+  # exist. It deliberately does NOT check whether the claims are true - nothing can, and a check that
+  # implied otherwise would be worse than none.
+  docs-data-audit:
+    if: github.event_name == 'pull_request'
+    name: "docs data: audit"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the YAML parser the check needs
+        run: python3 -m pip install --quiet pyyaml
+      # Self-test first, same as the copyright and sigpipe scanners: this guard has twice shipped
+      # green on a failure it was written to catch, so the cases that pin those gaps have to run
+      # where a regression is visible. It mutates the corpus one way at a time and restores it, so
+      # the guard step below still sees an untouched tree.
+      - name: Self-test the guard (each case is a gap it once had)
+        run: bash bin/test-check-docs-data.sh
+      - name: Validate release-documentation data structure
+        run: bin/check-docs-data.sh
 
   # Experimental Kafka 4.x compatibility check. Non-blocking.
   # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds

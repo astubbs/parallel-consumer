@@ -236,7 +236,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // wall-clock, not by cycle count. Nothing guaranteed a commit had happened before the latch was
         // released, after which v1 completes (it sleeps 100ms) and the next commit covers offset 2 - so
         // offset 1 was never committed on its own and the set-wise assertion saw only [2, 2]. Waiting on
-        // the commit itself makes the precondition explicit instead of probable. See docs/inflight.md.
+        // the commit itself makes the precondition explicit instead of probable. Full triage in
+        // astubbs#101, which diagnosed and fixed this; the ledger entry it came from was in
+        // docs/inflight.md, the single file that became docs/inflight/ and was deleted in 0de96fc
+        // (git show 0de96fc^:docs/inflight.md, grep this test's name).
         awaitForCommit(1);
 
         latch.countDown();

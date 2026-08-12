@@ -1,0 +1,31 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Fair shard and partition traversal
+category: processing
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The initial repository baseline and first tagged release contain the fairness resume-point behavior.
+readme_anchor: features-list
+summary: Rotate the work-selection resume point so an early shard cannot starve later shards when work is bounded.
+use_this_when:
+  - Your consumer receives uneven traffic across partitions or keys.
+  - You want bounded work selection to make progress across available shards rather than repeatedly favoring the first ones.
+setup:
+  configuration: Automatic; no separate application switch is required.
+opt_in:
+  mechanism: Use Parallel Consumer work selection.
+  isolated_from_stable_modules: false
+boundaries:
+  - Fair traversal cannot create records for an idle partition or overcome a downstream system that is saturated.
+  - Buffer and fetch settings still determine how much work can be held before backpressure applies.
+references:
+  - label: ShardManager fairness implementation
+    path: parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ShardManager.java

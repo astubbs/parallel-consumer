@@ -1,6 +1,8 @@
 # In-flight & parked work - how this directory works
 
 Cross-branch working notes on what is open right now. **Not** an issue tracker and **not** a backlog.
+This doc owns how these notes are written; the root AGENTS.md routes here and keeps only what binds
+every session.
 
 A note is written on the branch whose work it concerns, and reaches `master` when that branch merges -
 so the set on `master` is what has landed, and the full picture is spread across the active branches.
@@ -51,7 +53,7 @@ is the grouping.
   what no command knows: why something is parked, what blocks it, which decision is pending, what
   collides.
 - **No committed index.** An index file would be edited by every PR, which is the problem this
-  directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/TODO_INDEX.md` is
+  directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/todo-index.md` is
   the cautionary case: committed, generated, and stale until a reviewer caught it on astubbs#110.)
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
@@ -61,7 +63,7 @@ is the grouping.
 Below `#1000`, **name the repo**: `astubbs#NNN` for this fork, `confluentinc#NNN` for the original.
 The fork's numbering sits entirely inside upstream's range, so a bare number is a coin flip - and one
 that resolves to the wrong issue looks fine. See
-[AGENTS.md, "Issue references"](../../AGENTS.md#issue-references) for the full rule;
+[`docs/issue-references.md`](../issue-references.md) for the full rule;
 `.github/scripts/issue-ref-gate.js` enforces it on added lines, so a note written the old way fails CI.
 Fork branch names encode the *upstream* number (`bugs/857-...`, `fix/909-...`, `upstream-pr-905`), so
 a number in a branch name is `confluentinc#NNN`, never a fork issue.
@@ -71,7 +73,7 @@ a number in a branch name is `confluentinc#NNN`, never a fork issue.
 `CHANGELOG.adoc` (what shipped) · PR bodies and commit messages (history) ·
 [`docs/solutions/`](../solutions/) (lessons from solved problems) ·
 [`docs/refactoring.md`](../refactoring.md) (deferred internal work - deliberately still one file, it
-is touched by 2 commits in 30) · [`docs/QUARANTINED_TESTS.md`](../QUARANTINED_TESTS.md) (quarantine
-registry) · [`docs/TODO_INDEX.md`](../TODO_INDEX.md) (code markers) ·
+is touched by 2 commits in 30) · [`docs/quarantined-tests.md`](../quarantined-tests.md) (quarantine
+registry) · [`docs/todo-index.md`](../todo-index.md) (code markers) ·
 [`src/docs/development/upstream-map.yaml`](../../src/docs/development/upstream-map.yaml) (the source
 of truth for fork↔upstream mapping - record mappings there, not here).
