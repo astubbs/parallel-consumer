@@ -323,6 +323,51 @@ Docker integration suite.
 
 ---
 
+## The six things that actually blocked branches
+
+The plan predicted one blocker per branch (the `asyncconsumer` javadoc). The sweep found six classes.
+Every one was found by an agent **stopping and reporting instead of improvising**, which is the single
+highest-value rule in the procedure: five agents diagnosed class B independently and none of them
+invented a fix, so it cost one investigation rather than 33 divergent resolutions.
+
+Counts are out of the 37 branches attempted.
+
+| | What | Branches | Resolution |
+|---|---|---|---|
+| A | `asyncconsumer` javadoc has no rule | all | verbatim replacement, already in the procedure |
+| B | dead `io.confluent.csid` logback loggers, deleted on master by astubbs#289 | 33 | delete the same lines; verified on astubbs#31 |
+| C | the tooling checkout wipes the branch's own copyright-manifest entry | 3 | restore the entry; verified on astubbs#202 |
+| D | the README regen inlines the frozen CHANGELOG | 4 | apply astubbs#113's replacement; verified on astubbs#105 |
+| E | the accelerators URL reads as a package path | 2 | delete the line |
+| F | a prose guard whose sentence the branch never had | 2 attempted, ~121 repo-wide | **fixed in the tooling** |
+
+**B, D and E share one shape, and it is the lesson worth carrying.** Each is a master commit that made
+the rename mechanical — deleting dead config, removing an include, dropping a stale link — which older
+branches simply do not have. The procedure was written against master's tip and silently assumed every
+branch was rebased onto it. **When a cleanup lands "ahead of the rename so the change stays mechanical",
+it makes the rename mechanical only for branches that contain it.** A future sweep should screen for
+each such prerequisite commit up front with `git merge-base --is-ancestor`, rather than discovering
+them one refusal at a time.
+
+**C is the one that will bite again outside this project.** `git checkout <ref> -- <file>` is a
+whole-file overwrite, so a branch that had registered its own file provenance in
+`bin/check-copyright-headers.sh` lost it. The failure then surfaces four steps downstream — copyright
+fails, so `mvnw` fails, so the README regen is skipped, so the README keeps its old spelling, so the
+completeness check fails — and reads as "the rename broke something". astubbs#202 traced the whole
+cascade back to one deleted line. The procedure warned about taking too few files; it did not warn that
+taking them is destructive to what the branch had added.
+
+**F was a genuine tool defect and was fixed rather than worked around**, because it does not scale: the
+orphan refusal sat before the `--defer-prose` check, so the flag meaning "prose is master's problem"
+could not reach it, and replicating the guard's logic across the repo showed 121 of 193 branches would
+fail the same way. On master it still refuses — a guard matching nothing is still not a passing check —
+and a negative control asserts that widening the branch case did not soften the master case.
+
+Cost of that fix, measured rather than assumed: branches carry a copy of the tooling, so master's copy
+now differs from theirs and each branch gains **one** extra conflict on `bin/rename-packages.sh`,
+add/add, resolved by taking master's side. One mechanical conflict per branch, against a tool that
+would otherwise block ~121.
+
 ## What the real sweep measured, superseding the rehearsal numbers
 
 Two swept branches were merge-tested against renamed master in throwaway worktrees — nothing
