@@ -917,5 +917,10 @@ non-2xx handling is untested and that `testHttp` asserts 200 on the happy path o
 appears to mark the work succeeded. That is a coverage gap the stub was named for, and it is worth
 writing even though the stub was not worth keeping.
 
-Recovery of the born-commented procedures, and characterization of the Vert.x behaviour, are planned
-in `docs/plans/2026-08-12-001-test-recover-manual-test-procedures-plan.md`.
+Recovery of the born-commented procedures, and characterization of the Vert.x behaviour, were planned
+in `docs/plans/2026-08-12-001-test-recover-manual-test-procedures-plan.md`. That work has since
+landed in astubbs#264, and the plan was deleted with it per the `AGENTS.md` lifecycle rule; read it
+at `git show a69cd348:docs/plans/2026-08-12-001-test-recover-manual-test-procedures-plan.md`. The
+recovered rungs now live in the tests themselves - `LoadTest.RECOVERED_VOLUMES`, the concurrency
+ladder in `TransactionAndCommitModeTest`, the environment dump in `AmbientProbeExtension`, and the
+Vert.x 5xx characterization in `VertxTest`.

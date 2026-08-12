@@ -4,50 +4,69 @@ Two stacked PRs. **astubbs#264 is based on `chore/audit-inactive-tests`, not `ma
 astubbs#263 first, then astubbs#264. `Check PR Dependencies` fails on astubbs#264 by design while
 astubbs#263 is open; that is not a defect.
 
-Both branches had `master` merged into them on 2026-08-13 (merge commits `f5e72f41` on
-astubbs#263, `0e625866` on astubbs#264). Both were `DIRTY`/stale before that.
-
 ## What each PR is
 
 - **astubbs#263 `chore/audit-inactive-tests`** - records only. The audit
-  (`docs/test-hardening/inactive-tests-audit-2026-08-08.md`), its plan, and two ledger corrections.
-  No test behaviour changes.
+  (`docs/test-hardening/inactive-tests-audit-2026-08-08.md`) and two ledger corrections. No test
+  behaviour changes.
 - **astubbs#264 `test/inactive-test-remediation`** - acts on the audit. The real change is
   `OffsetEncodingTests`: five `OffsetEncoding` values that `assumeWorkingCodec` was branching around
   now assert the degraded contract (*work is repeated, nothing is lost*). Plus four dead tests
-  deleted, the last JUnit 4 usage off the test compile path, and a `PartitionStateManager`
-  javadoc correction (javadoc only - it claimed to truncate offsets on commit; it does not).
+  deleted, the recovered manual procedures (`LoadTest.RECOVERED_VOLUMES`, the
+  `TransactionAndCommitModeTest` concurrency ladder, `AmbientProbeExtension`'s environment dump, the
+  Vert.x 5xx characterization), the last JUnit 4 usage off the test compile path, and a
+  `PartitionStateManager` javadoc correction (javadoc only - it claimed to truncate offsets on
+  commit; it does not).
 
-## Merge conflicts already resolved - do not re-litigate
+## The package rename is merged into both - do not re-litigate
 
-`master` rewrote the `AGENTS.md` documentation-map table and renamed `docs/TODO_INDEX.md` →
-`docs/todo-index.md` and `docs/QUARANTINED_TESTS.md` → `docs/quarantined-tests.md`.
+`master` landed the `io.confluent.*` → `bz.stub.*` rename in astubbs#294. Both branches had already
+run the same rename with the same script, so most of the move auto-merged; the sweep
+(`grep -rnE 'io[\./]*conflu'`) is clean in every `.java` and `pom.xml`.
 
-- astubbs#263 took master's table wholesale and re-inserted one `docs/test-hardening/` row after
-  `docs/quarantined-tests.md`.
-- astubbs#264 inherited that resolution, and its edit to the old uppercase `docs/TODO_INDEX.md` was
-  re-sited onto `docs/todo-index.md` (a rename/modify conflict).
-- Stale path references inside both branches' own docs were repaired **address-only**, per
-  `docs/citations.md`: a dated record's claims are not rewritten, but a reference that no longer
-  resolves is.
+The ten conflicts and how they went are in astubbs#264's merge commit message. The three that could
+be re-opened by mistake:
+
+- `SampleTestingFailsafePluginInclusionCore`, `JavaEnvTest` and `StringTestUtils` came back as
+  rename/delete. `master` only renamed them; this stack **deletes** them (`cadf4c95`). Deletion kept.
+- `README.adoc` / `README_TEMPLATE.adoc` took master's wording. The branch still claimed the Java
+  packages were unchanged and only the `groupId` moved - the exact claim the rename falsified.
+- `bin/rename-packages.sh` took master's copy, which is newer (it adds `--defer-prose`).
+
+Earlier, `master` had also renamed `docs/TODO_INDEX.md` → `docs/todo-index.md` and
+`docs/QUARANTINED_TESTS.md` → `docs/quarantined-tests.md`, and rewrote the `AGENTS.md`
+documentation-map table; astubbs#263 took master's table and re-inserted one `docs/test-hardening/`
+row. Stale path references inside both branches' own docs were repaired **address-only**, per
+`docs/citations.md`: a dated record's claims are not rewritten, but a reference that no longer
+resolves is.
 
 ## Open items
 
-- **U6, U7, U8 are deliberately not started** - re-enabling the two long-dark core tests
-  (`ParallelEoSStreamProcessorTest.processInKeyOrder` and its sibling) and writing the one missing
-  test, `userSucceedsButProduceToBrokerFails`. All three are blocked on astubbs#260, which rewrites
-  both files they touch. The research is done and recorded in
-  `docs/plans/2026-08-08-002-test-inactive-test-remediation-plan.md`: both tests fail 100%
-  deterministically, the library is correct, and the measured commit sequences are in the plan as
-  retarget targets. They need assertion surgery, not investigation.
+- **The three unstarted units are now unblocked.** Re-enabling the two long-dark core tests
+  (`ParallelEoSStreamProcessorTest.processInKeyOrder` and
+  `offsetsAreNeverCommittedForMessagesStillInFlightLong`) and writing the missing
+  `userSucceedsButProduceToBrokerFails`. They were held behind astubbs#260, **which is now merged**,
+  so the stated precondition is satisfied. Both dark tests fail 100% deterministically, the library
+  is correct, and the measured commit sequences they should assert are recorded in
+  `docs/test-hardening/dark-core-tests-measured-commit-sequences-2026-08-12.md`. They need assertion
+  surgery, not investigation. **This is not part of either PR** - it is follow-on work.
+- **Should the new 40,000-message `LoadTest` case auto-run in the required performance check?**
+  `bin/performance-test.sh` passes `-Dincluded.groups=performance` and is the "Performance Tests"
+  leg of `maven.yml`, a required check on every PR, so `asyncConsumeAndProcessAtVolume` runs there
+  automatically at ten times the gating volume. `LoadTest` is a listed 1/20 undiagnosed member of the
+  load-tightness flake family at the *gating* volume; the rate at 40,000 has never been measured.
+  Raised on astubbs#264 and left open for a human call - the javadoc now states the exposure either
+  way.
 - **The audit is a dated record and has started to drift.** It records
   `grep -c "^- \[ \]" docs/quarantined-tests.md  # 0`; that returns **3** today. Left as-is
   deliberately - the registry gained entries after 2026-08-08. Anyone re-running its reproduction
   commands should read the date first.
-- **Local Java verification after the merge was not completed.** The merge, the four repo gates
-  (`todo-index --check`, copyright, docs-data, quarantine registry) and a conflict-marker sweep all
-  passed; the core unit suite was **not** re-run locally afterwards. CI on the pushed head covers it.
-- **Undecided: the plan documents.** astubbs#263 and astubbs#264 together add ~2,400 lines of
-  markdown against ~150 lines of added Java. Two of those files are plan documents totalling ~1,210
-  lines (`docs/plans/2026-08-08-001-*` and `-002-*`). `AGENTS.md` says a plan goes stale once its
-  work lands. Whether they ship with the code or are cut before merge is an open call.
+
+## Settled
+
+- **The plan documents are cut.** All three (`2026-08-08-001`, `2026-08-08-002`,
+  `2026-08-12-001`) are deleted: their work landed, and `AGENTS.md` says a plan goes stale once its
+  work lands. The one thing that outlived them - the measured commit sequences for the three
+  unstarted units - was salvaged to `docs/test-hardening/` first, rather than left to be re-derived.
+- **Local verification is done.** Temurin 17, full reactor `test-compile` clean, core unit suite
+  328 tests / 0 failures under `-Pci` and 3/3 green thread-parallel.
