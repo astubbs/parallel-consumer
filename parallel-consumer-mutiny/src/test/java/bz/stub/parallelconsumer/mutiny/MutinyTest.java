@@ -1,7 +1,8 @@
-package io.confluent.parallelconsumer.mutiny;
+package bz.stub.parallelconsumer.mutiny;
 
 /*-
  * Copyright (C) 2020-2025 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import io.smallrye.mutiny.Multi;

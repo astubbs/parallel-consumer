@@ -29,4 +29,4 @@ boundaries:
   - An exception returns every record in the batch to retry; the next attempt need not contain the same batch grouping.
 references:
   - label: Core batch example
-    path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java
+    path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java

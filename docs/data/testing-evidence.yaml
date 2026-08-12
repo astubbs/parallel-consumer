@@ -38,9 +38,9 @@ test_layers:
     why_it_matters: Deterministic fakes make scheduler, ordering and offset decisions directly observable without broker timing.
     limitation: Does not prove broker protocol, consumer-group or transaction behavior.
     inspect:
-      - path: parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
+      - path: parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
         demonstrates: Shared deterministic processor harness with a long-polling mock consumer and commit history.
-      - path: parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/BatchTestMethods.java
+      - path: parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/BatchTestMethods.java
         demonstrates: Common batch behavior checks applied across processing adapters.
   - id: broker-integration
     proves: Consumer-group progress, rebalances, transactions and real Kafka behavior.
@@ -49,11 +49,11 @@ test_layers:
     why_it_matters: Uses real Kafka brokers and deliberately isolates broker work by JVM fork in CI so a passing run is not shared-broker luck.
     limitation: The standard suite cannot exhaust every schedule or reproduce every production topology.
     inspect:
-      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerIntegrationTest.java
+      - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java
         demonstrates: Shared real-broker base with diagnostic waits and failure context.
-      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java
+      - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java
         demonstrates: Canonical production of test records and real Kafka clients, including controlled topic setup.
-      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/RebalanceEoSDeadlockTest.java
+      - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/RebalanceEoSDeadlockTest.java
         demonstrates: The confluentinc#857 deadlock condition under a real broker.
   - id: performance
     proves: Behavior under sustained concurrent processing.
@@ -86,11 +86,11 @@ test_layers:
     why_it_matters: Seeded schedules, progress probes and a no-loss/bounded-duplicate ledger target alive-but-not-progressing failures that normal tests can miss.
     limitation: A calibrated detector hunts known failure classes; it does not establish the absence of every concurrency defect.
     inspect:
-      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java
+      - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java
         demonstrates: Reproducible chaos schedules with recorded seeds and workload control.
-      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosChurnStormIT.java
+      - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosChurnStormIT.java
         demonstrates: Calibrated consumer-churn detection for stalled progress.
-      - path: parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosRevokeUnderWorkIT.java
+      - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosRevokeUnderWorkIT.java
         demonstrates: Revocation while work is active and protocol-invisible lag stagnation detection.
   - id: soak
     proves: Long-running behavior outside the merge gate.
@@ -105,56 +105,56 @@ test_harness:
   deterministic_harness:
     claim: The core harness makes ordering, commit and bounded-concurrency assertions causal rather than wall-clock guesses.
     inspect:
-      - parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
-      - parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/BatchTestMethods.java
+      - parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
+      - parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/BatchTestMethods.java
   real_broker_harness:
     claim: Shared broker utilities make transactional clients, topic creation and failure diagnostics consistent instead of reimplemented per test.
     inspect:
-      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerIntegrationTest.java
-      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java
+      - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java
+      - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java
   failure_classification:
     claim: The ambient probe records rebalance dwell, stagnant lag and frozen committed offsets on a broker-test failure, separating contention evidence from a lost-progress lead.
     limitation: The probe is observational and best-effort; a clean probe does not prove the test has no fault.
     inspect:
-      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/AmbientProbeExtension.java
-      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ProgressProbe.java
+      - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java
+      - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ProgressProbe.java
 module_evidence:
   - id: core
     artifact: parallel-consumer-core
     coverage: Deterministic processor/offset tests, real-broker integration, ambient diagnostics and chaos scenarios.
     inspect:
-      - parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
-      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/RebalanceEoSDeadlockTest.java
-      - parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosChurnStormIT.java
+      - parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/AbstractParallelEoSStreamProcessorTestBase.java
+      - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/RebalanceEoSDeadlockTest.java
+      - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosChurnStormIT.java
     limitation: The breadth of core evidence does not automatically prove an adapter's own execution boundary.
   - id: vertx
     artifact: parallel-consumer-vertx
     coverage: Adapter unit harness plus a real-Kafka, WireMock-backed concurrency and drain integration test.
     inspect:
-      - parallel-consumer-vertx/src/test/java/io/confluent/parallelconsumer/vertx/VertxBaseUnitTest.java
-      - parallel-consumer-vertx/src/test-integration/java/io/confluent/parallelconsumer/vertx/integrationTests/VertxConcurrencyIT.java
+      - parallel-consumer-vertx/src/test/java/bz/stub/parallelconsumer/vertx/VertxBaseUnitTest.java
+      - parallel-consumer-vertx/src/test-integration/java/bz/stub/parallelconsumer/vertx/integrationTests/VertxConcurrencyIT.java
     limitation: The real-broker adapter test is one configured workload, not a full broker matrix.
   - id: reactor
     artifact: parallel-consumer-reactor
     coverage: Reactor adapter tests inherit processor semantics and exercise delayed reactive completion, bounded concurrency and commits.
     inspect:
-      - parallel-consumer-reactor/src/test/java/io/confluent/parallelconsumer/reactor/ReactorUnitTestBase.java
-      - parallel-consumer-reactor/src/test/java/io/confluent/parallelconsumer/reactor/ReactorPCTest.java
+      - parallel-consumer-reactor/src/test/java/bz/stub/parallelconsumer/reactor/ReactorUnitTestBase.java
+      - parallel-consumer-reactor/src/test/java/bz/stub/parallelconsumer/reactor/ReactorPCTest.java
     limitation: Reactor currently has no adapter-specific real-broker integration suite.
   - id: mutiny
     artifact: parallel-consumer-mutiny
     coverage: Mutiny adapter tests inherit processor semantics and exercise delayed Uni completion, bounded concurrency and commits.
     inspect:
-      - parallel-consumer-mutiny/src/test/java/io/confluent/parallelconsumer/mutiny/MutinyUnitTestBase.java
-      - parallel-consumer-mutiny/src/test/java/io/confluent/parallelconsumer/mutiny/MutinyPCTest.java
+      - parallel-consumer-mutiny/src/test/java/bz/stub/parallelconsumer/mutiny/MutinyUnitTestBase.java
+      - parallel-consumer-mutiny/src/test/java/bz/stub/parallelconsumer/mutiny/MutinyPCTest.java
     limitation: Mutiny currently has no adapter-specific real-broker integration suite; its Java 17 runtime floor is independently verified at release.
   - id: examples
     artifact: parallel-consumer-examples
     coverage: Runnable application wiring for core, Reactor and Vert.x plus real-broker Streams and metrics examples.
     inspect:
-      - parallel-consumer-examples/parallel-consumer-example-core/src/test/java/io/confluent/parallelconsumer/examples/core/CoreAppTest.java
-      - parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java
-      - parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java
+      - parallel-consumer-examples/parallel-consumer-example-core/src/test/java/bz/stub/parallelconsumer/examples/core/CoreAppTest.java
+      - parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/bz/stub/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java
+      - parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/bz/stub/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java
     limitation: Examples demonstrate wiring and operability; they are not a runtime-library compatibility guarantee.
   - id: streams-alpha
     artifact: parallel-consumer-streams-spike
@@ -189,7 +189,7 @@ quality_system:
   - id: test-convention-architecture
     detects: Accidental Testcontainers or integration-test discovery inside the unit lane.
     posture: Required by the ordinary test path.
-    inspect: parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/TestConventionsArchTest.java
+    inspect: parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/TestConventionsArchTest.java
   - id: required-suite-gates
     detects: Unit, integration and performance regressions before merge.
     posture: Merge-gated.
