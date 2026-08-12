@@ -81,6 +81,20 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Getter
     private Optional<Boolean> maybeUserFunctionSucceeded = Optional.empty();
 
+    /**
+     * Set when work is returned to scheduling without any verdict at all - the record was neither processed
+     * successfully nor seen to fail. An external engine whose worker disconnects mid-record has no verdict to
+     * report, but the record must not be treated as a failure either, because a dropped connection is not a
+     * processing attempt and must not consume a retry.
+     * <p>
+     * Deliberately distinct from {@link #maybeUserFunctionSucceeded}: an empty verdict with this flag unset is
+     * still the bug {@code WorkManager.handleFutureResult} throws on.
+     *
+     * @see #markAbandoned()
+     */
+    @Getter
+    private boolean abandoned = false;
+
     @Getter
     @Setter(AccessLevel.PUBLIC)
     private Future<List<?>> future;
@@ -193,7 +207,23 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     public void onQueueingForExecution() {
         log.trace("Queueing for execution: {}", this);
         inFlight = true;
+        // A redelivery is a fresh attempt and carries no verdict yet. Both of these must be cleared, or state
+        // from the previous delivery decides the outcome of this one: a record that failed, was redelivered and
+        // then abandoned would still be carrying `maybeUserFunctionSucceeded == false` and would be routed down
+        // the failure path, earning a retry delay the abandonment never earned.
+        abandoned = false;
+        maybeUserFunctionSucceeded = Optional.empty();
         timeTakenAsWorkMs = of(System.currentTimeMillis());
+    }
+
+    /**
+     * Marks this work as returned without a verdict, so {@code WorkManager.handleFutureResult} returns it to
+     * scheduling rather than throwing. Does not touch {@link #numberOfFailedAttempts} or the retry delay - the
+     * record is redelivered as the same attempt it already was.
+     */
+    public void markAbandoned() {
+        log.trace("Abandoning without verdict {}", this);
+        this.abandoned = true;
     }
 
     public TopicPartition getTopicPartition() {
