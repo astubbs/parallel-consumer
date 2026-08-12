@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.integrationTests.chaostests;
+package bz.stub.parallelconsumer.integrationTests.chaostests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.Value;

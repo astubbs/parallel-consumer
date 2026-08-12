@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
@@ -75,10 +75,10 @@ public class DynamicLoadFactor {
      * True when this factor is fixed - it starts at its ceiling, so there is nothing for the stepping machinery to do
      * and being "at max" carries no information.
      * <p>
-     * This is the shape produced by {@link io.confluent.parallelconsumer.ParallelConsumerOptions#messageBufferSize},
+     * This is the shape produced by {@link bz.stub.parallelconsumer.ParallelConsumerOptions#messageBufferSize},
      * which pins both bounds to the factor that yields the requested buffer size, and by explicitly configuring
-     * {@link io.confluent.parallelconsumer.ParallelConsumerOptions#initialLoadFactor} equal to
-     * {@link io.confluent.parallelconsumer.ParallelConsumerOptions#maximumLoadFactor}. In both cases the user asked for
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#initialLoadFactor} equal to
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#maximumLoadFactor}. In both cases the user asked for
      * a fixed buffer, so saturation is the configuration working as requested - not a condition to report.
      */
     @Getter

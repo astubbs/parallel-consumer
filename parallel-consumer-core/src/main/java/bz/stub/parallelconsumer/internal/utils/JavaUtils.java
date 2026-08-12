@@ -1,10 +1,11 @@
-package io.confluent.csid.utils;
+package bz.stub.parallelconsumer.internal.utils;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
 import lombok.experimental.UtilityClass;
 
 import java.time.Duration;

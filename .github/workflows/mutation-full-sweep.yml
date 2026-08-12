@@ -33,7 +33,7 @@
 #
 # THE COVERAGE PASS DOES NOT DOMINATE - measured at 311s of 1315s, about 24% - so narrowing `target-tests`
 # is not worth doing, and this lever is documented rather than recommended:
-#   gh workflow run mutation-full-sweep -f target-tests='io.confluent.parallelconsumer.offsets.*'
+#   gh workflow run mutation-full-sweep -f target-tests='bz.stub.parallelconsumer.offsets.*'
 # It is the only lever on the instrumented full-suite pass, which is paid up front regardless of mutant
 # count, but it costs accuracy: a mutant killed only by a test outside `offsets.*` would then be reported
 # as no-coverage rather than killed. At 24% there is little to buy. Reach for it deliberately or not at all.
@@ -61,11 +61,11 @@ on:
       target-classes:
         description: 'PIT targetClasses glob (what gets mutated). Default offsets.* = decidable mutants. internal.* is the sweep that has never completed.'
         required: false
-        default: 'io.confluent.parallelconsumer.offsets.*'
+        default: 'bz.stub.parallelconsumer.offsets.*'
       target-tests:
         description: 'PIT targetTests glob (what runs for coverage). Narrowing cuts the ~332s coverage pass but reports mutants killed elsewhere as no-coverage.'
         required: false
-        default: 'io.confluent.parallelconsumer.*'
+        default: 'bz.stub.parallelconsumer.*'
       threads:
         description: 'PIT minion JVMs (one per core is the knee). Each gets -Xmx2g, so RAM ceiling = threads x 2g.'
         required: false

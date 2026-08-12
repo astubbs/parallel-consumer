@@ -1,14 +1,15 @@
-package io.confluent.parallelconsumer.vertx;
+package bz.stub.parallelconsumer.vertx;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.PollContext;
-import io.confluent.parallelconsumer.PollContextInternal;
-import io.confluent.parallelconsumer.internal.ExternalEngine;
-import io.confluent.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.state.WorkContainer;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -37,7 +38,7 @@ import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-import static io.confluent.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 
 
 @Slf4j

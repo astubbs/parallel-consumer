@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.internal;
+package bz.stub.parallelconsumer.internal;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
@@ -8,7 +8,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.junit.jupiter.api.Test;
@@ -40,7 +40,7 @@ import static com.google.common.truth.Truth.assertThat;
  * many times and assert on what reaches the log.
  * <p>
  * NOTE the log capture below is deliberately minimal and private to this test: a reusable
- * {@code io.confluent.csid.utils.LogCapture} is arriving on the log-verbosity branch, and whichever of the two lands
+ * {@code bz.stub.parallelconsumer.internal.utils.LogCapture} is arriving on the log-verbosity branch, and whichever of the two lands
  * second should delete its own copy and use that one (recorded in {@code docs/inflight/pr-blockers-and-collisions.md}).
  */
 // Captures a class-wide logger and changes its level, so nothing else may run while it does - not another class
