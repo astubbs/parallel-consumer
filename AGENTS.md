@@ -267,6 +267,14 @@ chaos suite, the ambient probe - and wins where the two disagree. Four rules bin
 - **Quarantine is master-state, not PR-state.** A test red on only one PR is that PR's problem, not
   a quarantine candidate - and nothing enforces this, so it is on you. The rest of the quarantine
   discipline is in [`docs/testing.md`](docs/testing.md).
+- **A test that never runs is not a passing test, and nothing goes red to tell you.** Tests that are
+  disabled, assumption-skipped, assert nothing, or were never written are recorded in dated audits
+  under [`docs/test-hardening/`](docs/test-hardening/) - per-test evidence and the commit that
+  disabled each one; the current one is
+  [`inactive-tests-audit-2026-08-08.md`](docs/test-hardening/inactive-tests-audit-2026-08-08.md).
+  Read the newest before re-enabling, deleting, or rewriting a dark test - the reason it went dark
+  is usually already established there. Each audit is point-in-time: add a new dated one rather than
+  editing an old one.
 
 Unit tests are surefire (`src/test/java/`); integration tests are failsafe and need Docker
 (`src/test-integration/java/`).
