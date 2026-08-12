@@ -20,9 +20,10 @@ stream-time tests in `PcTaskDispatcherTest`.
 
 ## What U13 still owes, in priority order
 
-1. **U13.3's integration test.** There is no end-to-end proof: no real topology, no real broker, no
-   `STREAM_TIME` punctuator observed firing, and no seam-OFF control arm. This matters more than it
-   looks, because of item 2.
+1. ~~**U13.3's integration test.**~~ **Done** - `StreamTimePunctuatorRefireOnRestartTest` is the
+   end-to-end proof this asked for: real topology, real broker, a `STREAM_TIME` punctuator observed
+   firing, and a seam-OFF control arm. It found the re-fire defect on the way (see below), which is
+   why this item mattered more than it looked.
 2. **U13.4's divergence measurements.** How far punctuation lags stock, whether the lag is bounded by
    the slowest in-flight record, whether two runs over identical input punctuate at the same points,
    and the **lateness meter split by cause** (dispatch-order term versus not-yet-fetched term).
@@ -84,8 +85,21 @@ Still open from it:
   stock `maybePunctuateSystemTime`, which never enters PC dispatch. A real answer needs a forked JVM
   and a SIGKILL. **Non-EOS throughout**; under exactly-once the forward sits in an open transaction,
   which is where this would bite - EOS is refused (U11) and out of scope (KTD7).
-- **The re-fire-over-covered-event-time claim**, still unmeasured - and this, not durability, is what
-  this entry ranked highest in the first place. No branch has touched it.
+- **The re-fire-over-covered-event-time claim is now MEASURED and CONFIRMED**, on
+  `feats/ks-streams-punctuator-refire-on-restart`. Run 1 climbs event time and commits; run 2 restarts
+  the same application id with records below run 1's base. Stock punctuates at the restored mark; PC
+  punctuates 60s and 56s **below run 1's base**, so the mark is lost and the punctuation queue re-anchors
+  on the late record. Asserted below the base rather than the highest, so a replayed run-1 record cannot
+  satisfy it.
+  <br>This closes the `seedStreamTime` call-site gap listed below: that call site now has end-to-end
+  coverage, and what it proves is that the seed does **not** help the real case.
+  <br>**Wording correction to this entry's own framing:** the gap is a restart against a **PC-written**
+  group, not a stock-written one. `TopicPartitionMetadata.decode` yields UNKNOWN precisely because the
+  commit was written by this module; a genuinely stock-written group decodes fine, which is exactly what
+  the control arm demonstrates. A mixed stock-to-PC handoff is a different path and is still untested.
+  <br>**Fix direction:** populate PC's own opaque rider (KTD-S7) per
+  `docs/solutions/architecture-patterns/one-owner-per-metadata-field-with-an-opaque-rider.md`. Do not
+  reintroduce Streams' `TopicPartitionMetadata` as a second writer.
 - **WALL_CLOCK_TIME punctuators fire here unwarned**, where STREAM_TIME logs. Pre-existing, not
   introduced by U13.
 - **The `hasUncommittedWork() || commitNeeded` candidate cannot be evidenced through commit cadence.**
@@ -96,14 +110,12 @@ Still open from it:
 
 Still open:
 
-- **`seedStreamTime`'s call site has no coverage at all.** Delete the
-  `if (pcDispatcher != null) { pcDispatcher.seedStreamTime(...) }` block from the patch and the build
-  stays green. The unit test drives `seedStreamTime` directly, so it pins the arithmetic and not the
-  wiring; and the only execution that runs Kafka's `shouldReadCommittedStreamTime*` cases pins the seam
-  **off**, so the branch never executes there. Consequence: a task restarted against a stock-written
-  group restarts stream time at -1 and re-fires punctuators over closed windows, with nothing red. The
-  suggested shape is a third, narrow surefire execution running only the stream-time cases with the seam
-  on - which is also what would turn `pcAwareStreamTime()`'s PC branch from measured-by-hand into gated.
+- **`seedStreamTime`'s call site is now covered end to end**, by
+  `StreamTimePunctuatorRefireOnRestartTest` - and what that coverage establishes is that the seed does
+  not help the case that matters (the confirmed re-fire above). What remains open from this item is the
+  cheaper second guard it suggested: a narrow surefire execution running only Kafka's own
+  `shouldReadCommittedStreamTime*` cases with the seam **on**, which would also turn
+  `pcAwareStreamTime()`'s PC branch from measured-by-hand into gated.
 - **`pcAwareStreamTime()`'s PC branch is unexercised by any automated run**, for the same reason. That
   covers `ProcessorContext.currentStreamTimeMs()` as well as punctuation. Distinct from the missing
   end-to-end topology test: the seam-on arm of Kafka's own `StreamTaskTest` already exists as a
