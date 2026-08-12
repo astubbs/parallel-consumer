@@ -214,18 +214,30 @@ contents out of its own rewrite. Nothing to publish, nothing to re-publish, corr
 **The one rule that makes "newest from master" always right:**
 
 > **The script on master must always be the script that produced master's current layout.** A change
-> to `PKG_MAP` or any exclusion list re-runs the rename on master **in the same commit**. Instruction
-> and prose edits are exempt — they change no layout.
+> to `PKG_MAP` or any exclusion list re-runs the rename on master **in the same change-set**, using
+> the script's two-commit shape — never a single commit, which is the arm §4.5 measured inventing
+> four cross-module renames. Instruction and prose edits are exempt: they change no layout.
 
 With that rule, a branch taking the newest script gets rules that agree with the tree it is about to
 merge, by construction. Without it, the two can silently diverge — which is the §4.6 failure arriving
 *through* the tool built to prevent it.
 
-**Drift then becomes self-healing rather than fatal.** A branch renamed under older rules is not
-corrupt, just behind: the script is re-runnable on an arbitrary branch by design, and works per file
-rather than per directory precisely so a partly-moved tree is handled. Re-running brings it current.
-That is a far cheaper failure mode than a freeze, which would have made any rule fix a 40-branch
-recall.
+**Drift is self-healing for some rule changes and unrecoverable for others. The difference is
+measured, not assumed.** Discovery runs off `PATH_SCAN_ERE`, built by `build_path_scan_ere` (`:506`)
+from the **old side of `PKG_MAP` only**, and off `SWEEP_ERE`. A tree with no `io/confluent` paths
+left matches neither, so the script prints `already applied, nothing to do` (`:1305`) and exits 0.
+
+- **Self-healing** — changes that leave an `io.confluent` spelling for discovery to find: an old-side
+  `PKG_MAP` addition, or an exclusion-list *removal*. Re-running the branch brings it current, which
+  is why this is a risk rather than a freeze.
+- **NOT self-healing** — a change to a `PKG_MAP` **destination**, or an exclusion-list *addition*.
+  Re-running is a silent no-op, so a branch already renamed to the old destination is stranded there
+  permanently. Its next merge with master is a rename on one side against files sitting in place on
+  the other — §4.6's shape, now under `bz/stub`, and **neither side can be re-run into agreement**.
+  The same no-op blocks the rule above from being carried out on master for that change class.
+
+So a destination change is not a rule edit; it is a second migration, and it needs its own pass over
+every affected branch. Treat the two classes differently or the mitigation is imaginary.
 
 **Still worth stamping.** "Behind" and "current" are only distinguishable if a branch records which
 rules it ran. A fingerprint over the transformation-relevant config alone — `PKG_MAP` plus the
@@ -262,13 +274,13 @@ flowchart TD
     PROC --> RS
     RS -->|"U3: rename-packages.sh<br/>prose guards HONOURED"| RSR
     P260 --> B260
-    PROC -.->|"U5: procedure followed verbatim"| B260
-    RSR -.->|"U5: git checkout sha -- 2 files<br/><b>not a merge, not a cherry-pick</b>"| B260
+    PROC -.->|"U4: procedure followed verbatim"| B260
+    RSR -.->|"U4: git checkout -- 2 files<br/><b>not a merge, not a cherry-pick</b>"| B260
     B260 -->|"U5: rename-packages.sh --defer-prose"| B260R
     RSR -->|"U6a: merge — update from master"| B260M
     B260R --> B260M
-    B260M -->|"U6b: merge — PR lands on master"| RSR
-    B260M --> AUDIT["<b>U7 audit</b><br/>rename pairing · completeness sweep · residue pass<br/>copyright headers · conflict inventory<br/><b>PR 260's edits intact and in the right module</b><br/><b>every improvisation logged as a procedure defect</b>"]
+    B260M -.->|"U6b: merge the PRE-UPDATE tag home<br/><i>post-U6a tip would fast-forward</i>"| RSR
+    B260M --> AUDIT["<b>U8 audit</b><br/>rename pairing · completeness sweep · residue pass<br/>copyright headers · conflict inventory<br/><b>PR 260's edits intact and in the right module</b><br/><b>every improvisation logged as a procedure defect</b>"]
 ```
 
 The load-bearing property, and why KTD1's order is not negotiable: at the U6a merge the files under
@@ -399,7 +411,7 @@ before U5, revise it from what U5 finds, and treat a revision as the unit's real
   `SELF_BASENAMES` (`:352`), matched on basename; confirm it still holds after the header grows.
 
 **Verification:** a branch author with no context can execute the block start to finish. U4 is that
-test. The paste line itself is a deliverable, recorded in the ledger alongside the sha it pins.
+test. The paste line itself is a deliverable, recorded in the ledger; it pins no sha (KTD10).
 
 ---
 
@@ -442,17 +454,29 @@ test. The paste line itself is a deliverable, recorded in the ledger alongside t
 **Files:** ~234 Java files moved; ~31 non-Java rewritten; `docs/todo-index.md` regenerated;
 `src/docs/README_TEMPLATE.adoc` and `CHANGELOG.adoc` prose (KTD7)
 
-**Execution note:** `--dry-run` first, and read the work set before applying. The script refuses on a
-dirty tree or an unmapped legacy package — a refusal is information, and its message names what has
-no rule.
+**Execution note:** `--dry-run --defer-prose` first, and read the work set before applying. The script
+refuses on a dirty tree or an unmapped legacy package — a refusal is information, and its message
+names what has no rule.
+
+**`--defer-prose` is required on the dry run, and is not the KTD7 decision.** `check_prose_guards`
+runs at `bin/rename-packages.sh:1330`, **before** the dry-run exit at `:1332`, and it `die`s unless
+the flag is set. A bare `--dry-run` therefore aborts with `FAIL:` and never prints the work set. The
+flag changes nothing on disk here, because the dry run exits before any mutation; the guards still
+fire on the applying run in step 3, which is where KTD7's correction actually happens.
 
 **Approach:**
 
-1. `bin/rename-packages.sh --dry-run`; read the work set.
-2. `bin/rename-packages.sh --skip-readme-regen` (KTD6). **No `--defer-prose`** — this arm is master,
-   so the three prose claims get corrected here with origin §8's pre-drafted wording (KTD7). Expect
-   the guards to stop the run; that is the design.
-3. Record every number the verification block prints: files moved, renames detected, **mis-paired**,
+1. `bin/rename-packages.sh --dry-run --defer-prose`; read the work set.
+2. `bin/rename-packages.sh --skip-readme-regen` (KTD6). **No `--defer-prose` on the applying run** —
+   this arm is master, so the three prose claims get corrected here with origin §8's pre-drafted
+   wording (KTD7). Expect the guards to stop the run; that is the design.
+3. **Correct the three sentences with origin §8's wording and commit them on their own**, before
+   re-running. The dirty-tree refusal sits at `:1347`, *after* the prose guard, so an uncommitted
+   correction makes the re-run exit 2 with `working tree is not clean`. Consequence for the audit:
+   **U3 produces three commits** — the prose fix, then the script's move and content commits — not
+   the two the pattern note below describes.
+4. Re-run `bin/rename-packages.sh --skip-readme-regen`.
+5. Record every number the verification block prints: files moved, renames detected, **mis-paired**,
    lowest similarity, add/delete counts, and the `diff.renameLimit` / `merge.renameLimit` values it
    reports for the merges to come.
 
@@ -520,7 +544,8 @@ the whole point is that 40 people who cannot ask will do exactly what it says.
 
 **Approach:**
 
-1. `bin/rename-packages.sh --dry-run` — **the interesting read.** The script globs the tree rather
+1. `bin/rename-packages.sh --dry-run --defer-prose` — **the interesting read.** (The flag is
+   required to reach the work-set print at all; see U3's Execution note.) The script globs the tree rather
    than working from a manifest, precisely so a PR's newly added files under the old path are picked
    up. astubbs#260 adds `KafkaTestUtilsTest.java`, which did not exist when the script was written.
    Confirm it is in the work set.
@@ -534,7 +559,11 @@ the whole point is that 40 people who cannot ask will do exactly what it says.
 - Renames detected equals files moved; `mis-paired` is 0; no add/delete pairs.
 - The moved-file count differs from U3's by exactly astubbs#260's added files. An unexplained
   difference is a finding.
-- `--defer-prose` lists the guarded sentences under MANUAL FOLLOW-UPS rather than rewriting them.
+- `--defer-prose` lists the guarded sentences under MANUAL FOLLOW-UPS **and rewrites the unfrozen
+  one**: `CHANGELOG.adoc` is in `FROZEN_PREFIXES` and is left alone, while
+  `src/docs/README_TEMPLATE.adoc` is mechanically rewritten into the new spelling — the same false
+  claim, respelt, exactly as the script's `--help` warns. **That rewrite is what manufactures the
+  KTD7 conflict U6a expects master's §8 wording to win**, so seeing it is the pass, not a defect.
 - `bash bin/check-copyright-headers.sh` → 0 violations, checked count = baseline + astubbs#260's
   added files. **A red here means the KTD3 two-file checkout was actually one file** — worth
   confirming deliberately, since it is the mistake the procedure is written to prevent.
@@ -559,8 +588,14 @@ open PRs must perform, and the one origin §4.6 calls mandatory. Record the full
 every path, every kind, and for each whether resolution was mechanical or needed judgement — that
 number gets multiplied by 40.
 
-**U6b — land on master.** Merge `260-rename` into `rename-stage`. The PR merging home. Record the
-same.
+**U6b — land on master.** Merge the **pre-update** tip into `rename-stage`, so two independently
+renamed sides actually meet.
+
+**Merging the post-U6a tip home would prove nothing.** U6a makes `rename-stage` an ancestor of
+`260-rename`, and nothing advances `rename-stage` afterwards, so that merge fast-forwards with zero
+conflicts *by construction* — an empty inventory that reads as a clean result rather than an
+untested direction. So: tag `260-rename` immediately after U5 as `260-rename-preupdate`, and merge
+that tag into `rename-stage` here. Record the same inventory as U6a.
 
 **Patterns to follow:** origin §4.6 — with both sides renamed, the expected shape of any collision is
 a loud `CONFLICT (rename/delete)` plus `CONFLICT (add/add)` **on the correct path with the edit
@@ -712,19 +747,20 @@ question, explicitly not to be merged into this one).
    too, and the shape of that failure is unmeasured. If recutting is safe it may be cheaper for the
    branches that get recut anyway. **This run does not test it.**
 4. **Does anything learned here transfer if astubbs#280 changes materially before it lands?** (KTD5.)
-5. **Is `diff.renameLimit` (git default 1000) comfortable at 234–265 moved files?** Under the default
+5. **Is `diff.renameLimit` (git default 1000) comfortable at 234 moved files?** Under the default
    today; the question is headroom, since the limit is exceeded **silently**.
-6. **What enforces KTD10's rule — that a rule change re-runs the rename on master in the same commit?**
-   Today, nothing but this sentence. The stamp proposed in KTD10 makes divergence *detectable* after
-   the fact; it does not prevent someone editing `PKG_MAP` on its own. Options for astubbs#280: the
-   script refuses when its own fingerprint disagrees with the one recorded in the tree it is running
-   against, or a `bin/check-*.sh` compares them. Both are more than this plan needs and less than the
-   real fan-out probably wants.
-7. **Is the script genuinely re-runnable on an already-renamed branch?** KTD10's self-healing property
-   depends on it. The header claims re-runnability as the central design constraint and the move phase
-   works per file rather than per directory to support exactly this — but the case *measured* is a
-   branch with new files at old paths, not a fully-renamed branch catching up to changed rules. Cheap
-   to test during the rehearsal; not currently a unit.
+6. **What enforces KTD10's rule — that a rule change re-runs the rename on master in the same
+   change-set?** Today, nothing but this sentence. The stamp proposed in KTD10 makes divergence
+   *detectable* after the fact; it does not prevent someone editing `PKG_MAP` on its own. Options for
+   astubbs#280: the script refuses when its own fingerprint disagrees with the one recorded in the
+   tree it is running against, or a `bin/check-*.sh` compares them. **The refusal is the stronger
+   option here**, because for the not-self-healing change class the failure currently presents as a
+   clean `already applied, nothing to do` — indistinguishable from a correct no-op.
+7. **What is the recovery procedure for a branch stranded at an old destination?** Answered-negative
+   rather than open: re-running the script does nothing (KTD10, verified). So the procedure is an
+   explicit second migration over every affected branch, and nobody has written one. Related, and
+   also unanswered: Open Question 1 covers a wrong-order merge; neither it nor this covers a branch
+   that already merged renamed-master under superseded rules.
 
 ---
 
@@ -732,7 +768,7 @@ question, explicitly not to be merged into this one).
 
 | Risk | Effect | Mitigation |
 |---|---|---|
-| A transformation rule changes without the rename being re-run on master | Branches taking the newest script get rules that disagree with master's actual layout — the §4.6 failure delivered by the tool built to prevent it, silently | KTD10's rule: a `PKG_MAP` or exclusion-list change re-runs the rename on master in the same commit. Enforced by nothing today — Open Question 6. Drift is recoverable by re-running the script on the branch, which is why this is a risk and not a freeze |
+| A transformation rule changes without the rename being re-run on master | Branches taking the newest script get rules that disagree with master's actual layout — the §4.6 failure delivered by the tool built to prevent it, silently | KTD10's rule: the change re-runs the rename on master in the same change-set, two-commit shape. Enforced by nothing today — Open Question 6. Recovery depends on the change class: re-running the branch fixes an old-side addition or an exclusion removal, and does **nothing** for a destination change or an exclusion addition, where the script exits 0 as `already applied` |
 | The procedure is written by someone who already knows the answer | It reads fine and is unexecutable by anyone else — the exact failure it exists to prevent | R4: U4 follows it verbatim and logs every deviation; U8 folds them back. An empty log must be *confirmed*, not assumed |
 | The rename PR gets squash-merged out of habit | Four invented cross-module renames land on master permanently; history corrupted, unfixable in place | KTD4. The exception covers one PR and nothing enforces it — agree the method with whoever merges **before** the PR is opened |
 | Only `bin/rename-packages.sh` is checked out, not the copyright checker | 197 spurious copyright violations on the branch until master merges in; looks like the rename broke something | KTD3 names both files and says why; U5 tests for it deliberately |
