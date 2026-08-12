@@ -1,0 +1,281 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: roadmap
+
+# The release this was last reviewed against. Compare it to the newest published version: if that is
+# newer than this, treat the issue tracker as authoritative until someone reviews this again. The
+# warning fires without anyone having to remember to set it.
+reviewed_at_release: 0.6.0.0
+
+reader_contract:
+  answers: What is being built, roughly in what order, why that order, and what 1.0 means.
+  does_not_answer: Dates, individual issue status, or a promise that anything ships.
+  granularity: >-
+    Big-picture entries only. A bug, a chore or a single option does not appear here; the issue tracker
+    carries those. An entry is something a reader can watch finish.
+
+# STRATEGY.md states the proposition, the intended user and the tracks. Not restated here.
+strategy: STRATEGY.md
+
+concerns:
+  note: >-
+    Concerns an entry serves, not competitors for priority, and nothing here ranks them. Correctness
+    and reliability are preconditions of performance rather than rivals for it: throughput is worthless
+    if the results are wrong or the consumer stalls, so work on one is work on the other. Most entries
+    serve several, which is the demonstration. The first four are STRATEGY.md's tracks.
+  values:
+    performance: Fan-out, latency and the practical concurrency ceiling.
+    reliability: Correctness, progress, and surviving real production events.
+    observability: Seeing what the client-side queue is doing.
+    flexibility: Processing models and integrations a broker must keep generic.
+    compatibility: Staying reachable on current runtimes and brokers.
+    usability: Being discoverable and safe to adopt.
+
+horizons:
+  note: >-
+    0.6.0.0 is not a 1.0 attempt. Expect one or two more major 0.x releases before 1.0, so next-0x is a
+    real interval rather than a synonym for soon.
+  values:
+    "0.6.0.0": In the release being prepared.
+    next-0x: One of the next major 0.x releases.
+    "1.0": Required before 1.0. See one_point_zero.
+    backlog: Wanted, undecided, or waiting on a reason to start. Gates nothing.
+
+entries:
+  - id: known-defects-cleared
+    title: Every known critical defect resolved, each with a guard that would catch its return
+    serves: [reliability]
+    horizon: "0.6.0.0"
+    blocks_1_0: false
+    why_now: The release claim rests on it, and the evidence has to be inspectable rather than asserted.
+    done_when: >-
+      No known critical defect open in release scope, and each resolution has a named guard that
+      passes. Critical is the line: non-critical defects are not claimed to be fixed.
+    unblocks: [api-settlement]
+    evidence: testing-evidence.yaml
+
+  - id: streams-parallelism-preview
+    title: Give a Kafka Streams topology the per-key parallelism of Parallel Consumer
+    serves: [flexibility, performance]
+    horizon: "0.6.0.0"
+    blocks_1_0: false
+    why_now: Streams users hit the same head-of-line blocking, and the idea can be shown to work before it is committed to.
+    done_when: An opt-in alpha module exists, isolated from the stable modules, with setup a reader can follow.
+    tracking: astubbs#255
+    pull_request: astubbs#271
+    caveat: Alpha. Depending on the artifact is the entire opt-in.
+
+  - id: connect-integration-preview
+    title: Run a Kafka Connect sink with Parallel Consumer underneath
+    serves: [flexibility]
+    horizon: "0.6.0.0"
+    blocks_1_0: false
+    why_now: The same reasoning as the Streams preview, for a different and widely deployed surface.
+    done_when: An opt-in alpha module exists, isolated from the stable modules.
+    tracking: astubbs#240
+    pull_request: astubbs#269
+    caveat: Alpha. Depending on the artifact is the entire opt-in.
+
+  - id: running-instance-visibility
+    title: A web view showing what a running instance is actually doing
+    serves: [observability, usability]
+    horizon: "1.0"
+    previewed_in: "0.6.0.0"
+    blocks_1_0: true
+    why_now: >-
+      Moving scheduling and offset state into the JVM leaves ordinary broker tooling blind to most of
+      what matters. An operator has metrics today and no picture.
+    done_when: An operator can see shard queues, in-flight work, retries and commit state for a live instance.
+    tracking: astubbs#215
+    pull_request: astubbs#268
+    caveat: 0.6.0.0 ships a preview and an announcement, not the finished surface.
+
+  - id: delivered-value-metrics
+    title: Emit the measures the library exists to improve
+    serves: [observability, performance]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      STRATEGY.md names head-of-line blocking avoided, end-to-end record latency and achieved fan-out as
+      the measures of the whole proposition, and concedes the central ones are not emitted. Until they
+      are, no performance claim is checkable, including by this project.
+    done_when: Head-of-line blocking avoided, end-to-end record latency and per-shard queue depth are published meters.
+    unblocks: [running-instance-visibility]
+    tracking: astubbs#222
+    evidence: ../features/micrometer-metrics.yaml
+
+  - id: bounded-buffers
+    title: Give every internal buffer an upper bound, and show its depth
+    serves: [reliability, observability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      An unbounded buffer is a memory-safety problem rather than a monitoring gap, and the streaming
+      results API is being deprecated for exactly that, so the two are one piece of work.
+    done_when: No internal buffer can grow without limit, and each publishes its depth.
+    tracking: astubbs#216
+    related: astubbs#116
+
+  - id: survive-producer-fencing
+    title: Abort and rejoin when the producer is fenced, rather than dying
+    serves: [reliability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      Fencing is an ordinary consequence of a rebalance under transactions and it currently kills the
+      instance. Kafka Streams treats the equivalent as a migrated task and rejoins.
+    done_when: A fenced producer causes an abort and rejoin, with the instance still running afterwards.
+    tracking: astubbs#225
+
+  - id: current-java-and-kafka
+    title: Run on current Java and current Kafka
+    serves: [compatibility]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: A recent constraint rather than long-standing debt, and one an adopter on a modern JDK hits immediately.
+    done_when: The library builds and runs on the current Java LTS and against Kafka 4.x.
+    tracking: astubbs#181
+    related: astubbs#193
+
+  - id: health-check-surface
+    title: A health-check surface on the consumer interface
+    serves: [observability, usability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: Orchestrators need a liveness answer better than "the process is up".
+    done_when: A supported health surface exists on the public interface.
+    tracking: astubbs#126
+
+  - id: virtual-threads
+    title: Support virtual threads
+    serves: [performance, flexibility]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: Blocking work is the case virtual threads help most, and supporting them removes a reason to reach for an adapter module.
+    done_when: A user can run the processing function on virtual threads.
+    tracking: astubbs#147
+
+  - id: micro-batching
+    title: Batch by size and time, not by whatever happens to be available
+    serves: [performance, flexibility]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: Downstream systems that are cheaper per batch cannot exploit batching without a minimum size and a maximum wait.
+    done_when: A batch can be bounded by both a minimum size and a maximum wait.
+    tracking: astubbs#165
+    evidence: ../features/batch-processing.yaml
+
+  - id: dead-letter-queue
+    title: A dead letter queue for records that cannot succeed
+    serves: [reliability, flexibility]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: Retrying forever is the only built-in answer today, and it is the wrong one for a poison record.
+    done_when: A record that exhausts its retries can be diverted rather than blocking or being dropped silently.
+    tracking: astubbs#149
+
+  - id: docs-site
+    title: A documentation site, rendered from the feature data rather than one enormous README
+    serves: [usability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      The feature data exists and nothing renders it. Until something does, the README stays the only
+      documentation and the data is a second corpus rather than a source.
+    done_when: A versioned documentation site renders the feature records, and the README defers to it.
+    tracking: astubbs#208
+    evidence: ../features/README.md
+
+  - id: api-settlement
+    title: Settle the public API so it stops moving
+    serves: [reliability, flexibility]
+    horizon: "1.0"
+    blocks_1_0: true
+    why_now: >-
+      This is the remaining reason not to call the stable modules 1.0. Reliability is already
+      release-gated; the API surface is not settled.
+    done_when: >-
+      The public surface is intentionally settled rather than merely unchanged, thread safety across it
+      is established, and the Consumer operations users need are exposed safely rather than by reaching
+      around the library.
+    blocked_by: [known-defects-cleared]
+    tracking: astubbs#139
+    related: astubbs#158
+
+not_planned:
+  note: Decided against, with the reason. Not a backlog.
+  entries:
+    - subject: Anything requiring a broker change
+      reason: >-
+        STRATEGY.md's position: broker changes are extremely difficult politically and technically, and
+        no broker-side answer to high-performance key ordering exists or may ever. The approach is
+        client-side and invisible to the cluster.
+    - subject: Competing with KIP-932 Share Groups on their terms
+      reason: >-
+        Share Groups solve a different problem and need a current broker. The comparison in the README
+        exists to help a reader choose, not to position against them.
+
+backlog:
+  note: >-
+    Wanted or debated, gating nothing, deliberately without a horizon. Listed so a reader can see these
+    were considered rather than missed.
+  entries:
+    - subject: Shared-nothing architecture refactor
+      status: Up for debate. The thread complexity it was raised for has largely been fixed since.
+      tracking: astubbs#142
+    - subject: Removing the JStream API entirely
+      status: >-
+        Someday, and its deprecation is proposed separately. Nothing to do with Kafka Streams: these
+        are the JStream processors that hand back a JDK Stream of produce results.
+      tracking: astubbs#116
+    - subject: Dynamic concurrency control using flow-control theory
+      status: Undecided. Architectural rather than incremental.
+      tracking: astubbs#227
+    - subject: Backpressure per partition rather than across the whole assignment
+      status: Undecided. Architectural rather than incremental.
+      tracking: astubbs#160
+
+one_point_zero:
+  meaning: >-
+    1.0 waits on three things, not one: a settled public API, the functionality still intended for the
+    release, and confidence that reaches beyond the defects already known. Below 1.0 does not mean
+    unproven - the same core engine has been in production use for years.
+  does_not_mean: That pre-1.0 reserves only the API surface. Functionality and confidence are gates too.
+  what_changes_for_users: The API stops moving by default. The reliability standard is already release-gated before 1.0.
+  distance: Not the next release. Expect one or two more major 0.x releases first.
+  blocking_rule: >-
+    An entry gates 1.0 only when it carries blocks_1_0. Everything else is targeted, not blocking. That
+    distinction is inherited from the upstream release train, which drew it explicitly and is the reason
+    its checklist stayed workable for as long as it did.
+  not_exit_criteria:
+    - A deadline.
+    - The absence of every backlog item.
+  exit_criteria:
+    - id: public-api-settlement
+      condition: The public surface is intentionally settled, thread-safe, and exposes what users need without reaching around it.
+      inspect: Entries carrying blocks_1_0.
+    - id: intended-functionality-present
+      condition: The functionality intended before 1.0 has landed.
+      inspect: Entries at horizon next-0x.
+    - id: confidence-beyond-the-known-set
+      condition: >-
+        Known defects are resolved with reproducible guards, and confidence reaches beyond the known set
+        rather than resting on it.
+      inspect: >-
+        Not checkable by reading, deliberately. The honest indicator is STRATEGY.md's measure of
+        production deployments with a public story, which is counted by hand.
+    - id: adoption-guidance
+      condition: Each module's intended use, support posture and boundaries are stated.
+      inspect: module-maturity.yaml
+
+update_policy:
+  trigger: A release changes an entry's horizon, or an entry meets its done_when.
+  reviewed_by: Whoever cuts a release, since the release notes have to say which entries it advanced.
+  source_inputs:
+    - An entry meets its done_when.
+    - A release changes the supported module posture.
+    - A backlog entry is promoted, or a planned entry is dropped.
+  rule: >-
+    Do not copy individual issue state into this document; link readers to the issue tracker instead.
+    Entries are big-picture: if one could be closed by a single pull request, it is too small to be here.
