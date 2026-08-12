@@ -115,7 +115,10 @@ public class ManagedPCInstance implements Runnable {
             // See confluentinc#857.
             if (parallelConsumer != null) {
                 int waitMs = 0;
-                while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000) {
+                // bail out of the wait as soon as a stop lands: an aborting run() creates no
+                // replacement PC, so it does not need the old one to have finished closing, and
+                // this runs on a bounded work-stealing pool where sleeping holds a carrier thread
+                while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000 && !stopRequested) {
                     try {
                         Thread.sleep(100);
                         waitMs += 100;

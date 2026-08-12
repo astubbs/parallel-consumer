@@ -9,6 +9,7 @@ import io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import io.confluent.parallelconsumer.ParallelEoSStreamProcessor;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -21,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 
@@ -112,7 +114,8 @@ class ManagedPCInstanceLifecycleIT {
         instance.setParallelConsumerForTest(pc);
 
         instance.stopAsync();
-        awaitCloseEntered(closesEntered);
+        await().atMost(Duration.ofMillis(CLOSE_ENTRY_TIMEOUT_MS))
+                .untilAsserted(() -> assertThat(closesEntered.get()).isEqualTo(1));
 
         instance.stopAsync(); // must be refused while the first close is still running
         Thread.sleep(200); // give a (wrongly) spawned second closer time to enter close()
@@ -121,15 +124,6 @@ class ManagedPCInstanceLifecycleIT {
         assertThat(instance.isClosePending()).isTrue();
 
         releaseClose.countDown();
-    }
-
-    private void awaitCloseEntered(AtomicInteger closesEntered) throws InterruptedException {
-        int waited = 0;
-        while (closesEntered.get() == 0 && waited < CLOSE_ENTRY_TIMEOUT_MS) {
-            Thread.sleep(20);
-            waited += 20;
-        }
-        assertThat(closesEntered.get()).isEqualTo(1);
     }
 
     /** Captures submissions instead of running them, so the queued-start window stays observable. */
