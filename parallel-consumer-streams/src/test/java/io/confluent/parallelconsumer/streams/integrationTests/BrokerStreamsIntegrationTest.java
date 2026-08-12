@@ -5,12 +5,16 @@ package io.confluent.parallelconsumer.streams.integrationTests;
 
 import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse;
+import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.Properties;
@@ -81,6 +85,36 @@ abstract class BrokerStreamsIntegrationTest extends BrokerIntegrationTest<String
         KafkaStreams streams = new KafkaStreams(builder.build(), props);
         streams.setUncaughtExceptionHandler(uncaughtHandler);
         return startAndAwaitRunning(streams);
+    }
+
+    /**
+     * The application's own committed offset for one input partition, or {@code null} when the group has
+     * never committed.
+     * <p>
+     * The reader carries the app's group id but <b>never subscribes</b>, so it performs an OffsetFetch
+     * without joining the group and cannot rebalance the topology under test. Shared because two arms of
+     * this module need it and a second copy of that subtlety is how one of them silently starts
+     * rebalancing what it is measuring.
+     */
+    OffsetAndMetadata committedOffsetOrNull(final String applicationId, final TopicPartition partition) {
+        try (KafkaConsumer<String, String> groupReader = getKcu().createNewConsumer(applicationId)) {
+            return groupReader.committed(UniSets.of(partition)).get(partition);
+        }
+    }
+
+    /**
+     * Sleeps for the full duration, restoring the interrupt flag and failing loudly if interrupted.
+     *
+     * @param what what the sleep is for, used in the failure message - a bare "interrupted" tells the
+     *             reader nothing about which wait died
+     */
+    static void sleepThrough(final Duration duration, final String what) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while " + what, e);
+        }
     }
 
     private static KafkaStreams startAndAwaitRunning(final KafkaStreams streams) {

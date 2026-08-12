@@ -272,7 +272,7 @@ class HeadOfLineBlockingBenchmarkTest extends BrokerStreamsIntegrationTest {
             // control was measuring a different workload as well as a different cardinality. Measured before the
             // fix: the control's p50 was 19568ms against experiment A's 1865ms. A control arm may differ in
             // exactly one term, and here that term is cardinality.
-            sleep(BLOCKER_VALUE.equals(value) ? SLOW_COST : FAST_COST);
+            sleepThrough(BLOCKER_VALUE.equals(value) ? SLOW_COST : FAST_COST, "simulating processing cost");
             timer.markCompleted(key, value);
             return value;
         }).to(outputTopic);
@@ -282,15 +282,6 @@ class HeadOfLineBlockingBenchmarkTest extends BrokerStreamsIntegrationTest {
         props.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
 
         return startAndAwaitRunning(builder, props);
-    }
-
-    private static void sleep(final Duration duration) {
-        try {
-            Thread.sleep(duration.toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while simulating processing cost", e);
-        }
     }
 
     /**
