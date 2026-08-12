@@ -4,11 +4,13 @@ package bz.stub.parallelconsumer.connect;
  */
 
 import bz.stub.parallelconsumer.connect.PcSinkTaskDurabilityBarrier.ConfirmationRule;
+import bz.stub.parallelconsumer.connect.PcSinkTaskLaneRouter.DurabilityCycleResult;
 import bz.stub.parallelconsumer.streams.PcTaskDispatcher;
 import bz.stub.parallelconsumer.streams.PcTaskDispatcher.CompletionHandle;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 import org.junit.jupiter.api.AfterEach;
@@ -23,11 +25,13 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -442,6 +446,134 @@ class OffsetCompositionProbeTest {
                 .isEqualTo(4L);
     }
 
+    // ---------- U6: one lane's failure does not stall every lane -------------------------------------
+
+    /**
+     * {@code runDurabilityCycle()} polls each lane's {@code preCommit} in a bare loop, and
+     * {@link PcSinkTaskLane#preCommit} rethrows whatever the connector threw. One sink whose store is
+     * unreachable therefore aborts the cycle for <em>every</em> lane: those later in the list are never even
+     * asked, and because the confirm phase runs only after the gather phase completes, no lane's completions
+     * are applied at all.
+     *
+     * <p>Not a safety defect - nothing is confirmed, so nothing is over-committed - but it is precisely the
+     * head-of-line stall this module exists to remove, reintroduced one level up.
+     */
+    @Test
+    @DisplayName("a lane whose preCommit throws does not stop the other lanes confirming in the same cycle")
+    void aThrowingLanesFailureIsIsolatedToItsOwnLane() {
+        final PcSinkTaskLaneRouter router = threeLaneRouter();
+        final List<ConsumerRecord<byte[], byte[]>> batch = deliverBatch(router, 12);
+        final Map<PcSinkTaskLane, List<Long>> owned = ownedByLane(router, batch);
+        assertThat(owned.keySet())
+                .as("the arm proves nothing unless at least two lanes hold records")
+                .hasSizeGreaterThan(1);
+
+        // Whichever lane owns offset 0 is the one told to throw, so PC's frontier cannot advance past it
+        // however well the others do.
+        final PcSinkTaskLane thrower = router.laneFor(batch.get(0));
+        int healthyRecords = 0;
+        for (final Map.Entry<PcSinkTaskLane, List<Long>> entry : owned.entrySet()) {
+            final ScriptedSinkTask task = (ScriptedSinkTask) entry.getKey().getTask();
+            if (entry.getKey() == thrower) {
+                task.throwFromPreCommit();
+            } else {
+                task.declareDurableThrough(batch.size());
+                healthyRecords += entry.getValue().size();
+            }
+        }
+
+        final DurabilityCycleResult result = router.runDurabilityCycle();
+
+        assertThat(result.confirmed())
+                .as("every healthy lane's records confirm; only the throwing lane's are held back")
+                .isEqualTo(healthyRecords);
+        assertThat(result.confirmed())
+                .as("a throw is never treated as durable, so the thrower's own records stay incomplete")
+                .isLessThan(batch.size());
+        assertThat(result.failures().values())
+                .as("the failure surfaces to the caller rather than being swallowed")
+                .singleElement()
+                .isInstanceOf(ConnectException.class);
+    }
+
+    /**
+     * The retry-versus-quarantine decision, made observable. A thrown {@code preCommit} is the connector's
+     * standard transient-failure signal - an unreachable store, not a corrupt one - so the lane is asked
+     * again next cycle rather than retired. Quarantining on one blip would convert a transient fault into
+     * the permanent stall this module exists to remove, and there is no un-quarantine path to pair it with.
+     *
+     * <p>Retrying is safe precisely because a throw confirms nothing: the lane's records stay in
+     * {@code deliverable}, PC's frontier holds at the lowest incomplete offset, and a later successful cycle
+     * completes them.
+     */
+    @Test
+    @DisplayName("a lane throwing every cycle is retried, not quarantined, and confirms once it recovers")
+    void aPermanentlyThrowingLaneIsRetriedRatherThanQuarantined() {
+        final PcSinkTaskLaneRouter router = threeLaneRouter();
+        final List<ConsumerRecord<byte[], byte[]>> batch = deliverBatch(router, 12);
+        final Map<PcSinkTaskLane, List<Long>> owned = ownedByLane(router, batch);
+        assertThat(owned.keySet()).hasSizeGreaterThan(1);
+
+        final PcSinkTaskLane thrower = router.laneFor(batch.get(0));
+        final ScriptedSinkTask throwingTask = (ScriptedSinkTask) thrower.getTask();
+        for (final PcSinkTaskLane lane : owned.keySet()) {
+            final ScriptedSinkTask task = (ScriptedSinkTask) lane.getTask();
+            if (lane == thrower) {
+                task.throwFromPreCommit();
+            } else {
+                task.declareDurableThrough(batch.size());
+            }
+        }
+
+        for (int cycle = 0; cycle < 3; cycle++) {
+            assertThat(router.runDurabilityCycle().hasFailures())
+                    .as("the lane is still failing, and every cycle says so rather than reporting a clean run")
+                    .isTrue();
+        }
+
+        assertThat(throwingTask.preCommitCalls())
+                .as("asked once per cycle - the lane is retried, never quarantined, and never spins within one")
+                .isEqualTo(3);
+
+        // The store comes back, and the records it was holding all along finally confirm.
+        throwingTask.declareDurableThrough(batch.size());
+        final DurabilityCycleResult recovered = router.runDurabilityCycle();
+        assertThat(recovered.failures()).as("the lane answers again once it recovers").isEmpty();
+        assertThat(recovered.confirmed())
+                .as("nothing was lost while the lane was failing - its whole backlog confirms on recovery")
+                .isEqualTo(owned.get(thrower).size());
+    }
+
+    private static PcSinkTaskLaneRouter threeLaneRouter() {
+        return new PcSinkTaskLaneRouter(Arrays.asList(
+                new PcSinkTaskLane(new ScriptedSinkTask()),
+                new PcSinkTaskLane(new ScriptedSinkTask()),
+                new PcSinkTaskLane(new ScriptedSinkTask())), OffsetCompositionProbeTest::project);
+    }
+
+    /** Registers a batch of distinct-key records and pumps it through a real dispatcher. */
+    private List<ConsumerRecord<byte[], byte[]>> deliverBatch(final PcSinkTaskLaneRouter router,
+                                                             final int count) {
+        dispatcher = new PcTaskDispatcher("connect-probe", Collections.singleton(PARTITION), 4);
+        final List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
+        for (long offset = 0; offset < count; offset++) {
+            batch.add(record(offset, "key-" + offset));
+        }
+        dispatcher.registerRecords(PARTITION, batch);
+        dispatcher.pumpUntilQuiescent(router, Duration.ofSeconds(30));
+        return batch;
+    }
+
+    /** Which offsets actually landed in each lane - asked of the router rather than assumed. */
+    private static Map<PcSinkTaskLane, List<Long>> ownedByLane(
+            final PcSinkTaskLaneRouter router, final List<ConsumerRecord<byte[], byte[]>> batch) {
+        final Map<PcSinkTaskLane, List<Long>> owned = new LinkedHashMap<>();
+        for (final ConsumerRecord<byte[], byte[]> record : batch) {
+            owned.computeIfAbsent(router.laneFor(record), key -> new ArrayList<>()).add(record.offset());
+        }
+        return owned;
+    }
+
     // ---------- fixtures ----------------------------------------------------------------------------
 
     /**
@@ -559,9 +691,10 @@ class OffsetCompositionProbeTest {
 
         private final Set<Long> received = new LinkedHashSet<>();
         private final AtomicLong durableThrough = new AtomicLong();
+        private final AtomicInteger preCommitCalls = new AtomicInteger();
         private volatile Mode mode = Mode.WATERMARK;
 
-        private enum Mode { WATERMARK, OMIT_PARTITION, EMPTY }
+        private enum Mode { WATERMARK, OMIT_PARTITION, EMPTY, THROW }
 
         @Override
         public void put(final Collection<SinkRecord> records) {
@@ -571,15 +704,29 @@ class OffsetCompositionProbeTest {
         @Override
         public Map<TopicPartition, OffsetAndMetadata> preCommit(
                 final Map<TopicPartition, OffsetAndMetadata> currentOffsets) {
+            preCommitCalls.incrementAndGet();
             switch (mode) {
                 case EMPTY:
                     return Collections.emptyMap();
                 case OMIT_PARTITION:
                     return new HashMap<>();
+                case THROW:
+                    // ConnectException rather than a bare RuntimeException: this is what a real sink throws
+                    // when its store is unreachable, and it is the case the isolation exists for.
+                    throw new ConnectException("scripted preCommit failure");
                 case WATERMARK:
                 default:
                     return Collections.singletonMap(PARTITION, new OffsetAndMetadata(durableThrough.get()));
             }
+        }
+
+        void throwFromPreCommit() {
+            mode = Mode.THROW;
+        }
+
+        /** How many times this task was asked, so retry-versus-quarantine is observable rather than assumed. */
+        int preCommitCalls() {
+            return preCommitCalls.get();
         }
 
         void declareDurableThrough(final long offset) {

@@ -352,7 +352,7 @@ class OffsetCompositionCrashRestartTest extends BrokerIntegrationTest<String, St
                         dispatcher.registerRecords(inputPartition, toBytes(polled.records(inputPartition)));
                     }
                     dispatcher.dispatchAvailable(router);
-                    final int confirmed = router.runDurabilityCycle();
+                    final int confirmed = router.runDurabilityCycle().confirmed();
 
                     final Map<TopicPartition, OffsetAndMetadata> toCommit = dispatcher.collectCommitData();
                     if (toCommit.containsKey(inputPartition)) {

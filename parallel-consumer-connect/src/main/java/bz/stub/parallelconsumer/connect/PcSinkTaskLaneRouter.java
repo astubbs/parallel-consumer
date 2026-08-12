@@ -17,6 +17,7 @@ import org.apache.kafka.connect.sink.SinkRecord;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -122,17 +123,45 @@ public class PcSinkTaskLaneRouter implements PcTaskDispatcher.DeferringWorkPrepa
      * <p>Call this off the dispatcher's owner thread - it holds each lane's lock in turn and a connector
      * flushes inside {@code preCommit}.
      *
-     * @return how many records were confirmed durable across all lanes
+     * <p><b>One lane's failure is that lane's alone.</b> {@code preCommit} is where a sink reports that its
+     * store is unreachable, and a connector throwing there used to abort the whole cycle: lanes later in the
+     * list were never asked, and because confirmation runs only after every watermark is gathered, no lane
+     * completed anything. That is the head-of-line stall this module exists to remove, reappearing one level
+     * up. A throwing lane now contributes an empty answer and the cycle carries on without it.
+     *
+     * <p><b>Retried, not quarantined.</b> A thrown {@code preCommit} is a connector's transient-failure
+     * signal, and {@code WorkerSinkTask} itself logs the failed commit and tries again on the next interval
+     * rather than retiring the task; diverging from the runtime being patched would need a reason, and one
+     * network blip is not it. Retrying is safe because a throw confirms nothing: an empty answer covers no
+     * offset, so the lane's records stay in the barrier's {@code deliverable} map, PC's frontier holds at the
+     * lowest incomplete offset, and a later successful cycle completes the whole backlog. Quarantining would
+     * also need an un-quarantine path, which nothing here has.
+     *
+     * <p>Only {@link RuntimeException} is caught. An {@link Error} means the JVM is in trouble rather than
+     * the connector, and continuing the cycle around it would hide that.
+     *
+     * @return the number of records confirmed durable, and any lane that failed this cycle
      */
-    public int runDurabilityCycle() {
+    public DurabilityCycleResult runDurabilityCycle() {
         // Two phases on purpose. Gather every lane's watermark BEFORE confirming any of them, so the
         // cross-lane ceiling describes this cycle rather than the previous one. Built from the previous
         // cycle it starts empty, the inverted rule degenerates into the sound one, and the probe's negative
         // control silently cannot fire - which is how it first shipped, and what the probe caught.
         final List<Map<TopicPartition, OffsetAndMetadata>> watermarks = new ArrayList<>(barriers.size());
         final Map<TopicPartition, Long> ceiling = new HashMap<>();
-        for (final PcSinkTaskDurabilityBarrier barrier : barriers) {
-            final Map<TopicPartition, OffsetAndMetadata> returned = barrier.pollWatermarks();
+        final Map<Integer, RuntimeException> failures = new LinkedHashMap<>();
+        for (int index = 0; index < barriers.size(); index++) {
+            Map<TopicPartition, OffsetAndMetadata> returned;
+            try {
+                returned = barriers.get(index).pollWatermarks();
+            } catch (RuntimeException e) {
+                failures.put(index, e);
+                // Empty, not partial: this lane says nothing this cycle, so it neither confirms its own
+                // records nor raises the cross-lane ceiling the inverted control rule reads.
+                returned = Collections.emptyMap();
+                log.warn("Lane {} preCommit failed; its records stay incomplete and it will be asked again "
+                        + "next cycle. The other {} lane(s) are unaffected.", index, lanes.size() - 1, e);
+            }
             watermarks.add(returned);
             returned.forEach((partition, offset) -> ceiling.merge(partition, offset.offset(), Math::max));
         }
@@ -141,7 +170,39 @@ public class PcSinkTaskLaneRouter implements PcTaskDispatcher.DeferringWorkPrepa
         for (int index = 0; index < barriers.size(); index++) {
             confirmed += barriers.get(index).confirm(rule, watermarks.get(index), ceiling);
         }
-        return confirmed;
+        return new DurabilityCycleResult(confirmed, failures);
+    }
+
+    /**
+     * What one durability cycle did: how much it confirmed, and which lanes could not answer.
+     *
+     * <p>The failures are returned rather than logged and dropped because a lane that never answers never
+     * completes a record, and the only symptom otherwise is a frontier that quietly stops advancing. A caller
+     * driving the cycle is the one placed to escalate that - retire the lane, alert, or stop the worker.
+     */
+    public static final class DurabilityCycleResult {
+
+        private final int confirmed;
+        private final Map<Integer, RuntimeException> failures;
+
+        private DurabilityCycleResult(final int confirmed, final Map<Integer, RuntimeException> failures) {
+            this.confirmed = confirmed;
+            this.failures = Collections.unmodifiableMap(failures);
+        }
+
+        /** How many records were confirmed durable across every lane that answered. */
+        public int confirmed() {
+            return confirmed;
+        }
+
+        /** Lane index to the exception it threw, in lane order. Empty when every lane answered. */
+        public Map<Integer, RuntimeException> failures() {
+            return failures;
+        }
+
+        public boolean hasFailures() {
+            return !failures.isEmpty();
+        }
     }
 
     /**
