@@ -235,6 +235,7 @@ every method beneath it, not one. Worth remembering if that ever changes.
 - **Covered elsewhere?** No. Non-200 handling is untested in the vertx module. The nearest real test
   in the file, `testHttp`, asserts `statusCode()` is 200 on the happy path only.
 - This is a **deletion candidate, not a re-enablement candidate** - there is nothing here to restore.
+  *The stub is not worth keeping; the gap it names is worth writing. See §11.*
 
 ### 1.4 `MultiInstanceRebalanceTest.largeNumberOfInstances`
 
@@ -629,6 +630,9 @@ copy holds nothing this document lacks. **They are recorded, not fixed.**
 
 ### 8.1 Kneecapped volumes
 
+*Whether each commented-out value here was ever live - and what that makes it - is answered per site
+in §11.*
+
 | Location | Issue | Status |
 |---|---|---|
 | `LargeVolumeInMemoryTests` | 500 vs 1,000,000 messages | **Open.** Still `int quantityOfMessagesToProduce = 500;` with `// 1_000_000` commented above it, `git blame`d to `565230cd5a` (2020-06-04) and untouched since. The predecessor listed this as fixed by astubbs#49, but carried a caveat - *"Check whether this fix has been merged to master before flagging again"* - and it had not: astubbs#49 never touched the file. The restore-to-1M commit exists only on `refactor/test-hardening`; the **OOM diagnostics from running it are now salvaged** into [`large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md`](large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md) in this directory, and show 1M failing with `OutOfMemoryError` in the close path. **Restoring 1M is not a value change** - see `docs/refactoring.md`. |
@@ -680,6 +684,8 @@ This count was re-derived independently here, by masking every file and keeping 
 occurrences whose byte offset falls inside a comment region. Three raw hits; two are prose (in
 `TestConventionRules` and `QuarantineRegistryScriptTest`). **It agrees with the predecessor's count
 of 1.**
+
+*Provenance for this one, and for the §8.1 and §8.2 commented-out lines: §11.*
 
 ### 8.4 Tag-based exclusions - correct, but they cover fewer tests than §8.1 implies
 
@@ -863,3 +869,44 @@ included.
 
 Per repo convention, triage for these lives in `docs/refactoring.md`, not here. This document is the
 inventory and the evidence.
+
+---
+
+## 11. Addendum, 2026-08-12: what the commented-out lines were, and which of them this audit traced
+
+The 2026-08-08 findings above stand as written. This section adds the one question none of them
+asked: **was the commented-out line ever live?** Nine review threads on astubbs#264 objected to the
+deletions that acted on §8.1-§8.3, all saying the same thing - the commented-out code was there for
+a reason. Answering that question per site shows they are right about some of it, and shows why.
+
+**A line that was never live is more likely to be a record of a manual run, not less.** Uncommenting
+a rung, running it, and commenting it back leaves no trace in git; the parked state is all that
+survives. So a born-commented ladder *is* the procedure - it is the only place the volumes someone
+actually exercised are written down. A superseded live value is the opposite: the history already
+holds it, and the comment is residue.
+
+| Line | Ever live? | Provenance | What it is |
+|---|---|---|---|
+| `MultiInstanceHighVolumeTest` `//10_000_000` | **Yes** | Live at `04cd4d81` (2020-12-14); commented at `ad3636a5` (2021-07-02) when reduced to 3M | Residue. §8.1 traced this correctly. |
+| `StreamTest` `//@Test` | No | Born commented at `61f4c0e4` (2020-05-27) | Scratchpad, never wired in. §8.3 correct. |
+| `VeryLargeMessageVolumeTest` `//2_000_000` | No | Added at `2b0ab66b` (2020-11-27), in the same edit that lowered the live value | Aspiration. §8.1 identified this correctly - *"always an aspirational comment"*. The deletion commit `e67d8b89` called it "stale", which is not what §8.1 said. |
+| `LoadTest` `8_000_0 / 4_000_00 / 4_000_0 / 8` | No | All four born commented in one commit, `af1fa5de` (2020-06-17), beside the live `4_000` | An authored range, 8 to 400,000, written in one sitting. §8.1 called it "dead code" without tracing it. `8` is a debug-fast setting, not a volume rung. |
+| `TransactionAndCommitModeTest` `2 / 100 / 1000` | No | Born commented at `2b0ab66b` (2020-11-27) beside live `numThreads = 16` | A concurrency ladder bracketing the live value. §8.1 said *"document or fix"*; `e67d8b89` did neither and deleted it. |
+
+Reproduce any row with:
+
+```bash
+git log --all -p -S'<the commented literal>' -- '<path>'   # introduced, and whether as a comment
+git log -p <deleting-commit>^ -- '<path>'                  # the file's own lineage on this branch
+```
+
+**§1.3's verdict on `VertxTest.handleHttpResponseCodes` is right about the stub and silent about the
+gap.** There is nothing in `assertThat(true).isFalse()` to restore. But §1.3 also records that
+non-2xx handling is untested and that `testHttp` asserts 200 on the happy path only - and in
+`VertxParallelEoSStreamProcessor`, `send.onSuccess` calls `wc.onUserFunctionSuccess()`. A Vert.x
+`WebClient` future succeeds on any HTTP response and fails only on transport errors, so a 5xx
+appears to mark the work succeeded. That is a coverage gap the stub was named for, and it is worth
+writing even though the stub was not worth keeping.
+
+Recovery of the born-commented procedures, and characterization of the Vert.x behaviour, are planned
+in `docs/plans/2026-08-12-001-test-recover-manual-test-procedures-plan.md`.
