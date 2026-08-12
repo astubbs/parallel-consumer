@@ -790,7 +790,7 @@ public class WorkManagerTest {
      * branch selection in {@link WorkManager#handleFutureResult} is what is under test.
      */
     private void abandon(WorkContainer<String, String> wc) {
-        wc.markAbandoned();
+        wc.markAbandoned(wc.getDeliveryCount());
         wm.handleFutureResult(wc);
     }
 
@@ -897,22 +897,80 @@ public class WorkManagerTest {
     }
 
     @Test
-    void abandoningTwiceDoesNotDoubleDecrementTheCounter() {
+    void aDuplicateReturnAfterRedeliveryIsIgnored() {
         setupUnordered();
         registerSomeWork();
 
         var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
         assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
 
         abandon(wc);
         assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(0);
 
-        // a disconnect detected while a report is already in flight can return the same record twice
+        // The control loop drains returns and re-selects in the same iteration, so by the time a duplicate
+        // arrives the record is live again on a later delivery.
+        var redelivered = wm.getWorkIfAvailable(1);
+        assertThat(redelivered).hasSize(1);
+        assertThat(redelivered.get(0)).isSameAs(wc);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        // the late duplicate, carrying the delivery it was actually raised for
+        wc.markAbandoned(firstDelivery);
         wm.handleFutureResult(wc);
 
         assertThat(wm.getNumberRecordsOutForProcessing())
-                .as("the duplicate return is ignored rather than driving the counter negative")
+                .as("the superseded return is ignored - it must not end the live delivery's flight")
+                .isEqualTo(1);
+        assertThat(wc.isInFlight())
+                .as("the live delivery is still in flight")
+                .isTrue();
+    }
+
+    @Test
+    void aSupersededReturnDoesNotOrphanTheAwaitingSelectionCount() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        abandon(wc);
+
+        var redelivered = wm.getWorkIfAvailable(1).get(0);
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        // the live delivery now completes normally
+        succeed(redelivered);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("counter nets out - a superseded return must not decrement")
                 .isEqualTo(0);
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("two of three records remain selectable; a superseded return must not orphan an increment")
+                .isEqualTo(2);
+    }
+
+    @Test
+    void aSupersededReturnOnARevokedPartitionDoesNotDecrement() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        abandon(wc);
+        var redelivered = wm.getWorkIfAvailable(1).get(0);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        // the partition goes away while the duplicate is still in flight
+        wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(0)));
+
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("the superseded check runs before the stale-partition branch, which decrements unconditionally")
+                .isEqualTo(1);
     }
 
     @Test

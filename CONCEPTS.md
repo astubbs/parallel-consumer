@@ -33,8 +33,15 @@ configured ordering, and a shard processes its records in order while different 
 parallel. This is how the project gets concurrency without adding partitions.
 
 **In-flight work**
-Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
-merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
+Records handed to the worker pool and not yet resolved. Distinct from records merely fetched:
+in-flight work is what a commit must wait for, and what a shutdown must drain.
+
+**Verdict**
+The outcome a delivered record reports back: succeeded, or failed. Distinct from the *return* itself,
+because work can come back with no verdict at all — when the process holding it disappears before
+reporting on it. A verdict-free return is not a failure: it consumes no retry attempt and earns no
+retry delay. Returns are matched to a delivery, so a late one arriving after the record has already
+been redelivered is recognised as superseded and ignored rather than acted on twice.
 
 ## Transactional commit
 

@@ -82,18 +82,25 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private Optional<Boolean> maybeUserFunctionSucceeded = Optional.empty();
 
     /**
-     * Set when work is returned to scheduling without any verdict at all - the record was neither processed
-     * successfully nor seen to fail. An external engine whose worker disconnects mid-record has no verdict to
-     * report, but the record must not be treated as a failure either, because a dropped connection is not a
-     * processing attempt and must not consume a retry.
+     * Counts deliveries of this record. Incremented every time it is queued for execution, so each delivery has
+     * an identity a return can be matched against.
      * <p>
-     * Deliberately distinct from {@link #maybeUserFunctionSucceeded}: an empty verdict with this flag unset is
-     * still the bug {@code WorkManager.handleFutureResult} throws on.
-     *
-     * @see #markAbandoned()
+     * This exists because an abandoned record is immediately re-selectable, and the control loop drains returns
+     * and re-selects work in the same iteration. Without a delivery identity, a return arriving late for
+     * delivery <em>n</em> is indistinguishable from a return for the live delivery <em>n+1</em>, and acting on
+     * it ends a flight that is still running and decrements the in-flight counter twice.
      */
     @Getter
-    private boolean abandoned = false;
+    private long deliveryCount = 0;
+
+    /**
+     * The delivery this record was abandoned on, or {@code -1} if it has never been abandoned. Deliberately
+     * <em>not</em> cleared on redelivery: a late return still has to be recognisable as belonging to a delivery
+     * that has already ended.
+     *
+     * @see #markAbandoned(long)
+     */
+    private long abandonedAtDelivery = -1;
 
     @Getter
     @Setter(AccessLevel.PUBLIC)
@@ -207,23 +214,46 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     public void onQueueingForExecution() {
         log.trace("Queueing for execution: {}", this);
         inFlight = true;
-        // A redelivery is a fresh attempt and carries no verdict yet. Both of these must be cleared, or state
-        // from the previous delivery decides the outcome of this one: a record that failed, was redelivered and
-        // then abandoned would still be carrying `maybeUserFunctionSucceeded == false` and would be routed down
-        // the failure path, earning a retry delay the abandonment never earned.
-        abandoned = false;
+        deliveryCount++;
+        // A redelivery carries no verdict yet. Clearing this matters: a record that failed, was redelivered and
+        // then abandoned would otherwise still carry `maybeUserFunctionSucceeded == false` and be routed down
+        // the failure path, earning a retry delay the abandonment never earned. The abandon marker is
+        // deliberately NOT cleared here - it is keyed by delivery, so a stale one identifies itself.
         maybeUserFunctionSucceeded = Optional.empty();
         timeTakenAsWorkMs = of(System.currentTimeMillis());
     }
 
     /**
-     * Marks this work as returned without a verdict, so {@code WorkManager.handleFutureResult} returns it to
-     * scheduling rather than throwing. Does not touch {@link #numberOfFailedAttempts} or the retry delay - the
-     * record is redelivered as the same attempt it already was.
+     * Marks the given delivery of this work as returned without a verdict, so
+     * {@link WorkManager#handleFutureResult} returns it to scheduling rather than throwing. Does not touch
+     * {@link #numberOfFailedAttempts} or the retry delay - the record is redelivered as the same attempt it
+     * already was.
+     *
+     * @param delivery the {@link #getDeliveryCount()} value observed when the record was handed out. Callers
+     *                 must capture it at dispatch, not read it at return time: by then the record may already
+     *                 have been redelivered, and passing the current value would make a stale return look live.
      */
-    public void markAbandoned() {
-        log.trace("Abandoning without verdict {}", this);
-        this.abandoned = true;
+    public void markAbandoned(long delivery) {
+        log.trace("Abandoning delivery {} without verdict {}", delivery, this);
+        this.abandonedAtDelivery = delivery;
+    }
+
+    /**
+     * @return true when this record was abandoned on the delivery that is currently outstanding
+     */
+    public boolean isAbandonedForCurrentDelivery() {
+        return abandonedAtDelivery == deliveryCount;
+    }
+
+    /**
+     * @return true when a return carries no verdict and its abandon marker belongs to a delivery that has
+     *         already ended - a late duplicate, which must be ignored rather than acted on
+     */
+    public boolean isReturnForSupersededDelivery() {
+        // not isEmpty() - core compiles to Java 8 bytecode, where that Optional method does not exist
+        return !maybeUserFunctionSucceeded.isPresent()
+                && abandonedAtDelivery >= 0
+                && abandonedAtDelivery != deliveryCount;
     }
 
     public TopicPartition getTopicPartition() {

@@ -226,7 +226,7 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().onFailure();
+            shardOptional.get().markAvailableAgain();
             this.retryQueue.add(wc);
         }
 
@@ -236,14 +236,12 @@ public class ShardManager<K, V> {
      * Work returned without a verdict - restores shard availability but, unlike {@link #onFailure}, does
      * <em>not</em> insert into the retry queue. There is nothing to retry: the record was never attempted to a
      * conclusion, so it becomes immediately selectable rather than waiting out a retry delay it never earned.
-     * <p>
-     * Idempotent in the same sense as {@link #onFailure} - work may or may not have been removed already.
      */
     public void onAbandoned(WorkContainer<?, ?> wc) {
         log.debug("Work ABANDONED without verdict");
 
         var key = computeShardKey(wc);
-        getShard(key).ifPresent(ProcessingShard::onAbandoned);
+        getShard(key).ifPresent(ProcessingShard::markAvailableAgain);
     }
 
     /**

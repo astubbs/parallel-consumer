@@ -73,17 +73,13 @@ public class ProcessingShard<K, V> {
         entries.remove(wc.offset());
     }
 
-    public void onFailure() {
-        // increase available cnt first to let retry expired calculated later
-        availableWorkContainerCnt.incrementAndGet();
-    }
-
     /**
-     * Work returned without a verdict. It never failed, so no retry is scheduled and no attempt is consumed -
-     * but it must become selectable again, so the awaiting-selection count has to come back up exactly as it
-     * would on a failure.
+     * The work is out of flight and selectable again - whether it failed, or came back with no verdict at all.
+     * Increase the available cnt first, to let retry expiry be calculated later.
+     * <p>
+     * Whether a retry is <em>also</em> scheduled is {@link ShardManager}'s decision, not this shard's.
      */
-    public void onAbandoned() {
+    public void markAvailableAgain() {
         availableWorkContainerCnt.incrementAndGet();
     }
 
