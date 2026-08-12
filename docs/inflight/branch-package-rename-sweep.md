@@ -323,6 +323,43 @@ Docker integration suite.
 
 ---
 
+## What the real sweep measured, superseding the rehearsal numbers
+
+Two swept branches were merge-tested against renamed master in throwaway worktrees — nothing
+committed, no branch touched. **This is not Phase D**, which is a fast-forward; it is the later
+per-branch master merge, measured early.
+
+| | astubbs#263 (small) | astubbs#268 (`feats/web-gui`, 311 files moved) |
+|---|---|---|
+| conflicted paths | **3** | **22** |
+| of which prose (`README.adoc`, `README_TEMPLATE.adoc`) | 2 | 2 |
+| of which `TestConventionRules.java` | 1 | 1 |
+| of which logback | 0 | 9 |
+| of which branch content | 0 | 10 |
+
+Every conflict is mechanical. The prose pair resolves to master's wording, as the procedure already
+says. `TestConventionRules.java` conflicts because master's rename added the Testcontainers exemption
+to it. The logback ones are the interesting class, and they are **avoidable noise this sweep chose to
+accept**: master's astubbs#289 deleted the dead logger lines AND collapsed the blank runs around them
+AND removed one further commented `ParallelConsumerTestBase` logger. The sweep's prescribed deletion
+removes only the logger lines, so the two sides differ by whitespace and one comment, and git reports
+a conflict on ~8-9 logback files per pre-289 branch. Both sides are commented-out dead configuration,
+so resolution is trivial in every case.
+
+A future sweep of this shape should transplant the upstream commit's hunks whole rather than deleting
+the offending lines, and would save roughly 8 spurious conflicts on each of 33 branches. Re-running
+the 30 branches already green to buy that was not judged worth it — the conflicts are loud, mechanical,
+and land at a step a human is doing anyway.
+
+**The mis-pairing fear did not materialise, at any pool size.** The plan was written around five
+near-identical `TestConventionsArchTest.java` files. Branches carry more — astubbs#268 seven,
+astubbs#269 eight, astubbs#266 ten — and in every case all of them paired within their own module at
+R100, with no cross-module invention and nothing dropped to an add/delete pair. The reason is
+structural, not luck: the move commit changes only paths, so each file scores exactly 100% against its
+own former path and git never has a tie to break. The documented cross-module cycle is a property of
+the **squashed** arm alone, and pool size does not touch the supported shape. It does mean a squash on
+astubbs#266 would now damage ten files rather than the five the plan describes.
+
 ## Housekeeping
 
 Delete when this is finished, folding anything durable into
