@@ -1,11 +1,12 @@
-package io.confluent.parallelconsumer.metrics;
+package bz.stub.parallelconsumer.metrics;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.ParallelConsumer;
-import io.confluent.parallelconsumer.internal.State;
+import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.internal.State;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import lombok.Getter;
@@ -13,7 +14,7 @@ import lombok.Getter;
 import java.util.Arrays;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.metrics.PCMetricsDef.MeterType.*;
+import static bz.stub.parallelconsumer.metrics.PCMetricsDef.MeterType.*;
 
 /**
  * This enum defines the metrics that are collected by the PC.

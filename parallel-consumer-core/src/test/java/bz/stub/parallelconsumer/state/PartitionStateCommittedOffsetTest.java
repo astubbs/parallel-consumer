@@ -1,4 +1,4 @@
-package io.confluent.parallelconsumer.state;
+package bz.stub.parallelconsumer.state;
 
 /*-
  * Copyright (C) 2020-2023 Confluent, Inc.
@@ -6,9 +6,9 @@ package io.confluent.parallelconsumer.state;
  */
 
 import com.google.common.truth.Truth;
-import io.confluent.parallelconsumer.internal.PCModuleTestEnv;
-import io.confluent.parallelconsumer.offsets.OffsetEncodingTests;
-import io.confluent.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
+import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.offsets.OffsetEncodingTests;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.extern.slf4j.Slf4j;
 import one.util.streamex.LongStreamEx;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -21,7 +21,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 
-import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
+import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
 
 /**
  * Unit test for PartitionState behaviour when committed offsets are changed and random records are removed (compaction)
@@ -31,7 +31,7 @@ import static io.confluent.parallelconsumer.ManagedTruth.assertThat;
  * @see OffsetEncodingTests#ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential
  * @see PartitionState#maybeTruncateBelow
  * @see PartitionState#maybeTruncateOrPruneTrackedOffsets
- * @see io.confluent.parallelconsumer.integrationTests.state.PartitionStateCommittedOffsetIT
+ * @see bz.stub.parallelconsumer.integrationTests.state.PartitionStateCommittedOffsetIT
  */
 @Slf4j
 class PartitionStateCommittedOffsetTest {
