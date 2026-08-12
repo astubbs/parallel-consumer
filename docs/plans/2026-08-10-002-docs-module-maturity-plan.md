@@ -78,7 +78,7 @@ core, vertx, reactor, mutiny, examples, and the Streams and Connect experiments.
 The experimental rows must also carry the blast-radius point - depending on the artifact is the whole
 opt-in, and these modules cannot affect plain PC usage (see `release-0.6.0.0.md`).
 
-`README_TEMPLATE.adoc` already has a "Java Version per Module" table around line 1072; this belongs
+`README_TEMPLATE.adoc` already has a `=== Java Version per Module` table; this belongs
 near it, and that table needs the new modules added anyway. `README.adoc` is generated - edit the
 template.
 

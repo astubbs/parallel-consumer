@@ -1,6 +1,8 @@
 # `bin/` - how these scripts relate to CI and to the reviewer
 
-Repo scripts. Two conventions live here because nothing else enforces them.
+Repo scripts. This doc owns the conventions for writing a script in `bin/`; the root AGENTS.md
+routes here and keeps only what binds every session. Two conventions live here because nothing else
+enforces them.
 
 ## Naming a script here can grant it to the PR reviewer
 

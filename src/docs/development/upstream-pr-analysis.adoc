@@ -163,7 +163,7 @@ These address real bugs observed in production and should be the highest priorit
 
 == Part 2: astubbs Closed-Unmerged PRs (Revival Candidates)
 
-A GitHub search of `confluentinc/parallel-consumer` for `author:astubbs is:closed is:unmerged` returns *53 PRs*. A striking pattern: *~40 of them were closed on the same day, 2023-06-15*, which looks like an administrative sweep (coinciding with astubbs leaving Confluent) rather than a substantive rejection of the ideas. The PRs represent a trove of unfinished but intentional design work.
+A GitHub search of `confluentinc/parallel-consumer` for `author:astubbs is:closed is:unmerged` returns *53 PRs*. A striking pattern: *~40 of them were closed on the same day, 2023-06-15*, which the 2026-08 audit confirmed was an administrative sweep (eddyv, comment "Closing - Stale.", coinciding with astubbs leaving Confluent) rather than a substantive rejection of the ideas -- see the `THE 2023 ADMINISTRATIVE SWEEPS` section of `upstream-map.yaml`. The PRs represent a trove of unfinished but intentional design work.
 
 === Group A -- Major features (top revival candidates)
 
@@ -300,7 +300,7 @@ Reviving these pays dividends on every other revival in Groups A-C.
 
 == Part 3: Upstream Issues Analysis
 
-`confluentinc/parallel-consumer` has *~61 open issues* (dating back to Nov 2020) and *8 issues formally closed as "Not Planned"*. The issues were NOT bulk-closed in the Jun 2023 sweep -- only the PRs were. Most feature requests and bug reports are still sitting open with no maintainer triage since mid-2023.
+`confluentinc/parallel-consumer` has *~61 open issues* (dating back to Nov 2020) and *8 issues formally closed as "Not Planned"*. An earlier revision of this paragraph claimed the issues were never bulk-closed -- that was wrong: a second administrative sweep on *2023-07-07* (johnbyrnejb, comment "Closing Issue") closed *28 issues*, every one marked COMPLETED rather than "not planned", which is why they read as resolved for three years. That cohort is mapped as the `sweep-2023-*` entries in `upstream-map.yaml` and mirrored as astubbs#227-254 under label `upstream-admin-closed`. Most remaining feature requests and bug reports are still sitting open with no maintainer triage since mid-2023.
 
 Issue #907 ("Is the project still actively maintained?") filed Jan 2026 summarises the community frustration.
 

@@ -1,7 +1,8 @@
 # In-flight & parked work - how this directory works
 
 Shared, cross-branch working notes kept on `master`, so any branch or session can see what is open
-right now. **Not** an issue tracker and **not** a backlog.
+right now. **Not** an issue tracker and **not** a backlog. This doc owns how these notes are
+written; the root AGENTS.md routes here and keeps only what binds every session.
 
 This was one file until 2026-08-04. It became a directory because *every* PR edited it - it appeared
 in 26 of the last 30 master commits - so unrelated PRs conflicted with each other constantly, purely

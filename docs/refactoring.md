@@ -1,5 +1,8 @@
 # Refactoring backlog
 
+This doc owns the deferred-work backlog - internal refactors, the release-gated breaking-change
+queue, and `TODO`/`FIXME`/`XXX` triage. AGENTS.md routes here and keeps only the one-line rule.
+
 Deferred internal refactors - improvements noticed while working that are too big
 or too risky to fold into the change at hand, to be picked up **when things are
 quiet**. This is a solo-maintainer backlog, not an issue tracker: entries live
@@ -62,11 +65,12 @@ non-breaking and can land any time - these change the public, user-visible surfa
 so they are **release-gated**: do not fold them into a minor/patch. Collected here
 so a major-release prep can action them in one pass.
 
-- **Remove the deprecated `commitInterval` options** -
-  `internal/AbstractParallelEoSStreamProcessor.java` L87-103.
-- **Remove the accreting deprecated `ParallelConsumerOptions` fields** (L282-286,
-  L361-363, L500-502) **and retire the temporary Kafka-compat work-around flag**
-  (L564) - `ParallelConsumerOptions.java`.
+- **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
+  `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
+- **Remove the accreting deprecated `ParallelConsumerOptions` fields**
+  (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
+  `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
+  (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
 - **Remove the JStream API** (deprecate first) - design ref
   `origin/refactor/deprecate-jstream` @8a8f6508.
 - **Rename the enum to the standard pattern** (public enum rename) -
@@ -167,8 +171,10 @@ Do not start one casually.
   but the observations stand, all verified still present on master 2026-08-04):
   - `AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE` (8) - non-atomic read-modify-write
     on a shared field: `AbstractParallelEoSStreamProcessor.numberOfAssignedPartitions`
-    (L420/448/463) and `ConsumerManager`'s `noWakeups`, `erroneousWakups`,
-    `correctPollWakeups` counters.
+    (written in `onPartitionsRevoked(Collection<TopicPartition> partitions)`,
+    `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
+    `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
+    `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
     be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
     `ConsumerManager.commitRequested`, `RetryQueue.closed`.
@@ -193,58 +199,72 @@ Do not start one casually.
 ### offsets/OffsetMapCodecManager.java — confluentinc#233 (central)
 *Mirror: [#117](https://github.com/astubbs/parallel-consumer/issues/117).*
 - Encoding and decoding are conflated; the class needs a `Consumer` only for one
-  decode-on-assignment method (L131), is passed `null` elsewhere, and is created as
-  throwaway instances. Refactor: split encode/decode, drop the consumer dependency,
-  remove the `null` usage. (static-state at L51-65; see "Remove static state".)
-- L30: prune the "keep multiple encodings for comparison" analysis-only code once
-  the encoding choice is settled. L33/L35: `sneaky throws` IO handling; missing
-  `max-uncommitted < Short.MAX` bound.
+  decode-on-assignment method (`todo this is the only method that needs the consumer`), is
+  passed `null` elsewhere, and is created as throwaway instances. Refactor: split
+  encode/decode, drop the consumer dependency, remove the `null` usage. (static-state at
+  `todo remove static state manipulation from tests` and
+  `todo refactored to constant in the remove statics branch`; see "Remove static state".)
+- `can refactor other options out for analysis only`: prune the "keep multiple encodings for
+  comparison" analysis-only code once the encoding choice is settled.
+  `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
+  missing `max-uncommitted < Short.MAX` bound.
 
 ### offsets/OffsetSimultaneousEncoder.java
-- L218: large offset ranges (→ `Integer.MAX_VALUE`) are slow - scans could be
-  skipped by passing in the known incompletes map (draft: `origin/refactor/encode-with-incompletes-direct` @fa56ff18).
-- L214: run-length range capped at `Short.MAX_VALUE`, could double. L227: move the
-  per-offset loop into the encoder subtypes. L212: inline into the WorkManager
-  partition loop. L90-91: static state for test serialisation (see cross-cutting).
+- `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -
+  scans could be skipped by passing in the known incompletes map (draft:
+  `origin/refactor/encode-with-incompletes-direct` @fa56ff18).
+- `could double the run-length range`: run-length range capped at `Short.MAX_VALUE`, could double.
+  `todo refactor this loop into the encoders`: move the per-offset loop into the encoder subtypes.
+  `inline this into the partition iteration loop`: inline into the WorkManager partition loop.
+  `COMPRESSION_FORCED_RESOURCE_LOCK`: static state for test serialisation (see cross-cutting).
 
 ### offsets/BitSetEncoder.java & OffsetBitSet.java
-- Unify the V1/V2 init paths (BitSetEncoder L90); merge/clarify why `OffsetBitSet`
-  is separate at all (OffsetBitSet L21).
+- Unify the V1/V2 init paths (BitSetEncoder `TODO refactor inivtV2 and V1 together`);
+  merge/clarify why `OffsetBitSet` is separate at all (OffsetBitSet
+  `todo unify or refactor with`).
 
 ### offsets/OffsetRunLength.java
-- L92: possibly avoid creating offset metadata at all in some cases.
+- `maybe in those cases we should not create metadata at all`: possibly avoid creating offset
+  metadata at all in some cases.
 
 ### offsets/OffsetDecodingError.java
-- L13: should it extend `java.lang.Error`? (exception-hierarchy design)
+- `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
+  (exception-hierarchy design)
 
 ### state/PartitionState.java (715 lines)
-- L96: concurrent commit-data collection exists only because control/poller threads
-  share state - removed under shared-nothing (confluentinc#200). L491: `null` passed to
-  the codec manager (confluentinc#233). L327: visibility widened for legacy tests.
+- `Needs to be concurrent because`: concurrent commit-data collection exists only because
+  control/poller threads share state - removed under shared-nothing (confluentinc#200).
+  `todo refactor use of null shouldn't be needed`: `null` passed to the codec manager
+  (confluentinc#233). `visible for legacy testing`: visibility widened for legacy tests.
 
 ### state/PartitionStateManager.java
-- L123 was a throwaway `OffsetMapCodecManager` per assignment (confluentinc#233); PR astubbs#57
+- There was a throwaway `OffsetMapCodecManager` per assignment
+  (`todo remove throw away instance creation`, confluentinc#233); PR astubbs#57
   cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)
   (mirror astubbs#117) refactor remains.
 
 ### state/WorkContainer.java
 *Mirror: [#143](https://github.com/astubbs/parallel-consumer/issues/143) - and see the index above: the field is read by nobody, so deletion beats an enum.*
-- L42: instance field working around static state - folds into static-state removal.
+- `Instance reference to otherwise static state`: instance field working around static state -
+  folds into static-state removal.
 
 ### internal/AbstractParallelEoSStreamProcessor.java
-- God class (see cross-cutting). L930: `todo move into WorkManager` (misplaced
-  "enough work?" check). L531: brittle Kafka-consumer-by-classname string check.
-  Deprecated `commitInterval` options to delete (L87-103) - **breaking**, see
+- God class (see cross-cutting). `todo move into {@link WorkManager}` (misplaced
+  "enough work?" check). `LegacyKafkaConsumer`: brittle Kafka-consumer-by-classname string check
+  in `private static Optional<Boolean> getAutoCommitEnabled`.
+  Deprecated `commitInterval` options to delete (`public void setTimeBetweenCommits` /
+  `public Duration getTimeBetweenCommits`) - **breaking**, see
   [Breaking changes queued for next major version](#breaking-changes-queued-for-next-major-version).
 
 ### internal/ConsumerOffsetCommitter.java
-- L154: `commitAndWait()` blocks for `commitTimeout` but interpolates
+- `DEFAULT_TIMEOUT`: `commitAndWait()` blocks for `commitTimeout` but interpolates
   `DEFAULT_TIMEOUT` into the timeout message, so every such error misstates the wait
   (reports `PT30S` for an actual 10s). Tiny standalone fix + unit test.
 
 ### Double-release of the produce lock (transactional poll-and-produce) - OPEN QUESTION
 - `WorkContainer#onPostAddToMailBox` (via `finishProducing`) and
-  `AbstractParallelEoSStreamProcessor#cleanUpContext` (L1419) both unconditionally
+  `AbstractParallelEoSStreamProcessor#cleanUpContext` (`private void cleanUpContext`) both
+  unconditionally
   unlock the *same* `PollContextInternal#producingLock`, and nothing resets that
   `Optional` between them - `cleanUpContext` runs in the enclosing `finally`
   immediately after the success path already released it. By JDK contract a
@@ -256,28 +276,34 @@ Do not start one casually.
   second is harmless - or, if it is not, what is swallowing it.
 
 ### internal/ProducerManager.java
-- L162: `syncBeginTransaction()` is `private synchronized` (locks on `this`) -
+- `private synchronized void syncBeginTransaction` locks on `this` -
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
-  fix); low priority, separate concern. L265: brute-force transaction-commit retry.
+  fix); low priority, separate concern. `alternatives to this brute force approach`:
+  brute-force transaction-commit retry.
 
 ### internal/DynamicLoadFactor.java
-- L90: `doStep()` is `private synchronized` (locks on `this`) - same lock-hygiene
-  note as ProducerManager; low priority.
+- `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
+  ProducerManager; low priority.
 
 ### internal/ExternalEngine.java
-- L52: avoid the extra thread (go straight from the control thread). L91: method may
-  be redundant now that modules don't use the internal threading system.
+- `TODO optimise thread usage`: avoid the extra thread (go straight from the control thread).
+  `is this method redundant`: method may be redundant now that modules don't use the internal
+  threading system.
 
 ### ParallelConsumerOptions.java (573 lines)
-- Accreting deprecated fields (L282-286, L361-363, L500-502) and the L564 temporary
+- Accreting deprecated fields (`public void setCommitInterval`,
+  `private final Duration defaultMessageRetryDelay`, `isUsingTransactionalProducer`) and the
+  `ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck` temporary
   Kafka-compat work-around flag - both **breaking to remove**, see
   [Breaking changes queued for next major version](#breaking-changes-queued-for-next-major-version).
 
 ### ParallelEoSStreamProcessor.java
-- L80: extract the wrapping function into its own class so it's directly reusable.
+- `todo refactor to it's own class`: extract the wrapping function into its own class so it's
+  directly reusable.
 
 ### metrics/PCMetricsDef.java
-- L43/L46: two unimplemented metric definitions - implement or drop.
+- `AVERAGE_USER_PROCESSING_TIME` / `AVERAGE_WAITING_TIME`: two unimplemented metric definitions -
+  implement or drop.
 
 ---
 
@@ -335,7 +361,8 @@ Cross-cutting above; the rest:
 
 **Offset encoding** → relevant to the offsets/*Encoder items above:
 - `origin/refactor/encode-with-incompletes-direct` @fa56ff18 - invoke the encoder with known
-  incompletes directly instead of iterating (the `OffsetSimultaneousEncoder` L218 hot-spot).
+  incompletes directly instead of iterating (the `OffsetSimultaneousEncoder`
+  `TODO VERY large offset ranges is slow` hot-spot).
 - `origin/refactor/continuous-encode-22` @0b98d4de, `origin/continuous-encode` @25340f89 - split
   run-length sequence/entry; continuous encoding (draft `confluentinc#46`).
 - `origin/encoders-truncate-themselves` @8d3903b9 - push truncation into the encoders.
