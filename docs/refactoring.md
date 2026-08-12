@@ -317,6 +317,67 @@ Do not start one casually.
   to event/trigger-based waits removes the flake class and speeds the suite up. Related to *Remove
   static state* above, which is the other half of why these tests cannot run cleanly in parallel.
 
+### Test infrastructure - tests that do not run, or do not check anything
+
+Full per-test evidence, the disabling commit for each, and what coverage is actually lost:
+[`docs/test-hardening/inactive-tests-audit-2026-08-08.md`](test-hardening/inactive-tests-audit-2026-08-08.md).
+Only the items needing a decision are listed here - do not restate the inventory.
+
+**Outright defects, cheap to fix:**
+
+- **`@Timeout(60000L)` means 16h40m, not 60s** - in `MockConsumerEarlyCloseTest`,
+  `MockConsumerSaslAuthenticationTest` and `MockConsumerCommitTimeoutTest`. JUnit 5's `@Timeout`
+  defaults to seconds. This is not cosmetic: `MockConsumerEarlyCloseTest.mockConsumer` has **no
+  assertion at all** - the timeout *is* its assertion - so it currently cannot fail by hanging within
+  any realistic CI budget. Everywhere else in the tree writes it correctly.
+- **`assumeWorkingCodec` is not an assumption** - it is `return !encodingsThatFail.contains(encoding)`.
+  Five `OffsetEncoding` values run `OffsetEncodingTests.ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential`
+  with most assertions branched around and **report green rather than skipped**. Rename it to
+  `isWorkingCodec`, or convert the sites to real per-value assumptions so the skips appear in the
+  report.
+- **`OffsetEncodingTests` imports JUnit 4's `org.junit.Assume` in a Jupiter test.** No pom declares
+  JUnit 4 - it arrives transitively via testcontainers, and works only because the Jupiter engine
+  reflectively recognises JUnit 4's assumption exception when it happens to be on the classpath. The
+  day it falls off, that skip becomes a hard failure for four enum values. One-line fix to
+  `org.junit.jupiter.api.Assumptions`.
+- **`MultiInstanceHighVolumeTest` underscore typo** - `30_000_00` is 3M, not 30M.
+
+**Coverage decisions:**
+
+- **`ParallelEoSStreamProcessorTest.processInKeyOrder`** (`@Disabled`, no reason recorded) - the one
+  real gap in the audit. Key ordering is well covered at the shard layer by `WorkManagerTest`, but
+  nothing asserts end-to-end, per-`CommitMode`, that offset *commits* respect key-order blocking
+  across partitions. Re-enabling means reconciling it with the commit semantics `c1fefbc64`
+  introduced in 2020 - which is what disabled it.
+- **`ParallelEoSStreamProcessorTest.offsetsAreNeverCommittedForMessagesStillInFlightLong`** - same
+  commit, same reconciliation. Its siblings cover the invariant at lower volume; the deeper
+  in-flight interleaving is not covered elsewhere.
+- **`closeWithoutRunningShouldBeEventBasedFast` never measures "fast"** - add the timing assertion
+  from the test three lines above it, which already does `time(...)` + `assertThat(...).isLessThan(...)`.
+- **Assertions commented out, implying coverage that does not exist** -
+  `WorkManagerOffsetMapCodecManagerTest.stringVsByteVsBitSetEncoding` (computes four unused values,
+  asserts nothing), `MultiTopicTest.assertCommit` (waits on a branch that does not exist on master),
+  `VertxConcurrencyIT.assertNumberOfThreads`. Restore or delete - leaving them is the worst option.
+- **Delete candidates** - `VertxTest.handleHttpResponseCodes` (`assertThat(true).isFalse()`, never
+  ran, cannot pass), `sanity/StreamTest.test` (commented-out `@Test` over an infinite stream),
+  `SampleTestingFailsafePluginInclusionCore` (empty body), `JavaEnvTest.checkJavaEnvironment`
+  (`log.error` dump on every run).
+- **`LargeVolumeInMemoryTests` runs 500 messages, not 1,000,000** - the 1M line is commented out
+  directly above, `git blame`d to 2020 and untouched since. Previously recorded as fixed by
+  astubbs#49; that PR never touched the file. The restore-to-1M commit and the OOM diagnostics from running it
+  live on `origin/refactor/test-hardening` - **salvage both before deleting that branch**.
+- **Kneecapped volumes still undecided** - `VeryLargeMessageVolumeTest` (1M vs 2M), `LoadTest` (4K vs
+  commented alternatives), `TransactionAndCommitModeTest.numThreads` (64 vs 1000) and `.roundsAllowed`
+  (10, with a TODO). The last two likely mask real issues rather than being tuning choices.
+
+Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29, and `ProgressBarTest.width`
+is a deliberate manual check.
+
+A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.sh` shape) was
+considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
+such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
+revisiting once the audit has been in use.
+
 ### Build - jacoco coverage under forked surefire
 
 - `prepare-agent` writes ONE `jacoco.exec` in append mode, but the unit suite now runs
@@ -392,8 +453,18 @@ Cross-cutting above; the rest:
 - `origin/refactor/chaos-broker` @1b9bd385, `.../chaos-broker-challage-test` @c9acb00c,
   `.../test-consumer-disconnect` @6a968074 - ChaosBroker / broker-disconnect testing (draft
   `confluentinc#345`, issue `confluentinc#203`).
-- `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M.
-- `origin/refactor/empty-tests` @5f8b3dba - remove/implement the empty placeholder tests (draft `confluentinc#496`).
+- `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M,
+  plus a restore-to-1M commit. It **also** carried a 455-line audit of disabled/kneecapped/weakened
+  tests that this entry never mentioned, which is why nobody triaged it for four months. That audit
+  is now absorbed into [`docs/test-hardening/inactive-tests-audit-2026-08-08.md`](test-hardening/inactive-tests-audit-2026-08-08.md)
+  on master, with the two reasons its own git history refutes corrected - so the branch now holds
+  nothing the master copy lacks, and only the 1M/OOM work is left to salvage.
+- `origin/refactor/empty-tests` @5f8b3dba - **the removal half already landed** on master via
+  upstream `confluentinc#493`, which deleted `ParallelEoSStreamProcessorTest.avro`,
+  `WorkManagerOffsetMapCodecManagerTest.truncationOnCommit`, `WorkManagerTest.maxPerPartition` and
+  `.maxPerTopic`. What this branch (draft `confluentinc#496`) still holds is the *implement* half:
+  restoring them as `NotImplementedException` stubs so the debt is visible rather than absent. Never
+  merged; no PR on the fork.
 - `origin/improvements/test-perf` @932210b6, `.../multi-topic-test` @dd3ad77b - test perf / multi-topic.
 - `origin/client-factory` @9636c33d - client-factory config to prevent client reuse (draft `confluentinc#106`).
 - `origin/slf4j-no-logger` @9c9396b8 - warn when no SLF4J logger is bound (→ `confluentinc#139`; UX, not a refactor).
