@@ -160,8 +160,23 @@ set -euo pipefail
 # `io.confluent.csid.utils.MyRunListener`, a resource no compiler and no IDE refactor will ever
 # touch. Leaving `csid` also defeats the reason for the rename, since it is still Confluent's mark in
 # our namespace. So it moves, and the plan records that as the decision.
+#
+# `io.confluent.csid.utils` IS A SPECIAL CASE WITHIN THAT MOVE, AND MUST STAY ABOVE THE GENERAL
+# `io.confluent.csid` LINE. Those classes (JavaUtils, KafkaUtils, StringUtils, ...) are the project's
+# general-purpose utilities, not a second product surface, so instead of landing at a parallel
+# `bz.stub.csid.utils` they fold into the internal utils package: `bz.stub.parallelconsumer.internal.utils`.
+# Everything else under `io.confluent.csid` (e.g. `.testcontainers`) still takes the general rule.
+#
+# ORDER MATTERS HERE BECAUSE PKG_MAP IS A PROGRAM, APPLIED TOP TO BOTTOM AGAINST THE SAME TEXT. A
+# general prefix rule that runs first CONSUMES the string a later, more specific rule is looking for:
+# once `io.confluent.csid` has already become `bz.stub.csid`, a rule still hunting for the literal
+# `io.confluent.csid.utils` matches nothing and the special case is silently shadowed by the general
+# one. So the `.utils` line sits ABOVE the general `io.confluent.csid` line, and the self-test's
+# assertions on the actual destination (bin/test-rename-packages.sh) are what catch a re-ordering
+# that shadows it, rather than a bare completeness check that would still pass either way.
 PKG_MAP="\
 io.confluent.parallelconsumer|bz.stub.parallelconsumer
+io.confluent.csid.utils|bz.stub.parallelconsumer.internal.utils
 io.confluent.csid|bz.stub.csid"
 
 MODS_HOLDER="Antony Stubbs and contributors"

@@ -27,30 +27,33 @@
 #   15. fork-point commit missing from history (shallow clone)     -> exit 0 (warn+skip);
 #       exit 2 only with COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 (strict, as CI sets)
 #
-# Fixture D (cases 16-23) is the NEGATIVE CONTROL for the package move, and it is the reason the
+# Fixture D (cases 16-24) is the NEGATIVE CONTROL for the package move, and it is the reason the
 # scanner resolves provenance through PACKAGE_MOVES instead of by path equality. Its files sit under
 # bz/stub/... having been `git mv`d there from io/confluent/... after the fork point, exactly as
 # bin/rename-packages.sh leaves them. Under the old path-equality model EVERY one of them missed the
 # fork-point lookup, was judged fork-original, and its retained Confluent header was reported as a
 # violation - the verdict INVERTS rather than degrading (measured on the real tree: 0 -> 197
-# violations, and `./mvnw` dying in the validate phase before any goal ran). So cases 16, 18 and 20
-# below FAIL against the old model, and case 17 fails with the WRONG message. Fixtures A-C keep the
-# un-renamed spelling, so both tree states are covered - which is the actual requirement while the
-# rename rolls out branch by branch.
+# violations, and `./mvnw` dying in the validate phase before any goal ran). So cases 16, 18, 20 and
+# 21 below FAIL against the old model, and case 17 fails with the WRONG message. Fixtures A-C keep
+# the un-renamed spelling, so both tree states are covered - which is the actual requirement while
+# the rename rolls out branch by branch.
 #
 #   16. upstream file MOVED verbatim by the rename, Confluent-only -> pass (still upstream-derived)
 #   17. upstream file MOVED and edited, no modifications line      -> FAIL, as an upstream file
 #   18. upstream file MOVED and edited, dual header                -> pass
 #   19. upstream file MOVED with its header removed                -> FAIL (upstream, not fork-original)
-#   20. io.confluent.CSID file MOVED and edited, dual header       -> pass (the second prefix moves too)
-#   21. registered rename whose newpath was RETARGETED to bz/stub  -> FAIL without the mods line
-#   22. registered rename still written in the OLD spelling while
+#   20. io.confluent.csid.utils file MOVED and edited, dual header -> pass, through the NESTED
+#       special case (bz/stub/parallelconsumer/internal/utils), not the general bz/stub/csid
+#   21. io.confluent.csid.testcontainers file MOVED, dual header   -> pass, through the GENERAL csid
+#       rule - proves the special case above did not swallow the rest of the prefix
+#   22. registered rename whose newpath was RETARGETED to bz/stub  -> FAIL without the mods line
+#   23. registered rename still written in the OLD spelling while
 #       the file has already moved (the half-renamed tree that
 #       exists between the rename's two commits)                   -> FAIL without the mods line
-#   23. fork-original file under the NEW package claiming
+#   24. fork-original file under the NEW package claiming
 #       Confluent                                                  -> FAIL (the rule must not
 #       classify everything under bz/stub as upstream-derived)
-#   24. the scanner's PACKAGE_MOVES agrees with bin/rename-packages.sh's PKG_MAP (drift guard)
+#   25. the scanner's PACKAGE_MOVES agrees with bin/rename-packages.sh's PKG_MAP (drift guard)
 #
 # Run: bin/test-check-copyright-headers.sh   (CI runs it before the real scan)
 
@@ -194,7 +197,7 @@ out=$( (cd "$repoB" && COPYRIGHT_CHECK_FORK_POINT=000000000000000000000000000000
 assert          "missing fork point hard-fails (exit 2) in strict mode" 2 "$rc"
 assert_contains "strict-mode missing fork point explains the fix"       "fetch-depth: 0" "$out"
 
-# --- Fixture D: the package move (rules 16-23) --------------------------------------
+# --- Fixture D: the package move (rules 16-24) --------------------------------------
 # The paths here are the REAL package directories, because the scanner's PACKAGE_MOVES table is
 # real and hard-coded - a fixture with invented package names would exercise nothing.
 # bin/rename-packages.sh freezes this file for exactly that reason: rewriting io/confluent out of
@@ -203,28 +206,35 @@ repoD="$WORK/d"
 new_repo "$repoD"
 oldmain="$repoD/parallel-consumer-core/src/main/java/io/confluent/parallelconsumer"
 newmain="$repoD/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer"
-oldcsid="$repoD/parallel-consumer-core/src/main/java/io/confluent/csid/utils"
-newcsid="$repoD/parallel-consumer-core/src/main/java/bz/stub/csid/utils"
-mkdir -p "$oldmain" "$oldcsid"
-confluent_file "$oldmain/MovedVerbatim.java"        # 16
-confluent_file "$oldmain/MovedEdited.java"          # 17
-confluent_file "$oldmain/MovedEditedDual.java"      # 18
-confluent_file "$oldmain/MovedLostHeader.java"      # 19
-confluent_file "$oldcsid/MovedCsid.java"            # 20
-confluent_file "$oldmain/RetargetedOld.java"        # 21: renamed AND moved
-confluent_file "$oldmain/StaleEntryOld.java"        # 22: renamed AND moved, entry not retargeted
+# The NESTED special case: io/confluent/csid/utils folds into bz/stub/parallelconsumer/internal/utils.
+oldcsidutils="$repoD/parallel-consumer-core/src/main/java/io/confluent/csid/utils"
+newcsidutils="$repoD/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils"
+# Everything else under io/confluent/csid still takes the GENERAL rule, to bz/stub/csid.
+oldcsidgeneral="$repoD/parallel-consumer-core/src/main/java/io/confluent/csid/testcontainers"
+newcsidgeneral="$repoD/parallel-consumer-core/src/main/java/bz/stub/csid/testcontainers"
+mkdir -p "$oldmain" "$oldcsidutils" "$oldcsidgeneral"
+confluent_file "$oldmain/MovedVerbatim.java"           # 16
+confluent_file "$oldmain/MovedEdited.java"             # 17
+confluent_file "$oldmain/MovedEditedDual.java"         # 18
+confluent_file "$oldmain/MovedLostHeader.java"         # 19
+confluent_file "$oldcsidutils/MovedCsidUtils.java"     # 20: the NESTED special case
+confluent_file "$oldcsidgeneral/MovedCsidGeneral.java" # 21: the GENERAL csid rule (non-utils)
+confluent_file "$oldmain/RetargetedOld.java"           # 22: renamed AND moved
+confluent_file "$oldmain/StaleEntryOld.java"           # 23: renamed AND moved, entry not retargeted
 git -C "$repoD" add -A && git -C "$repoD" commit -qm upstream
 fork_point_d=$(git -C "$repoD" rev-parse HEAD)
 
 # The rename: `git mv` of the package directories, then the content edits - the shape
 # bin/rename-packages.sh produces.
-mkdir -p "$newmain" "$newcsid"
+mkdir -p "$newmain" "$newcsidutils" "$newcsidgeneral"
 for n in MovedVerbatim MovedEdited MovedEditedDual MovedLostHeader; do
     git -C "$repoD" mv "parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/$n.java" \
                        "parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/$n.java"
 done
-git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/csid/utils/MovedCsid.java \
-                   parallel-consumer-core/src/main/java/bz/stub/csid/utils/MovedCsid.java
+git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/csid/utils/MovedCsidUtils.java \
+                   parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils/MovedCsidUtils.java
+git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/csid/testcontainers/MovedCsidGeneral.java \
+                   parallel-consumer-core/src/main/java/bz/stub/csid/testcontainers/MovedCsidGeneral.java
 git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/RetargetedOld.java \
                    parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/Retargeted.java
 git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/StaleEntryOld.java \
@@ -232,11 +242,12 @@ git -C "$repoD" mv parallel-consumer-core/src/main/java/io/confluent/parallelcon
 confluent_file      "$newmain/MovedEdited.java" "int changed;"      # 17: no mods line -> violation
 dual_file           "$newmain/MovedEditedDual.java" "int changed;"  # 18: conformant
 headerless_file     "$newmain/MovedLostHeader.java"                 # 19: violation
-dual_file           "$newcsid/MovedCsid.java" "int changed;"        # 20: conformant
-confluent_file      "$newmain/Retargeted.java" "int changed;"       # 21: violation
-confluent_file      "$newmain/StaleEntry.java" "int changed;"       # 22: violation
+dual_file           "$newcsidutils/MovedCsidUtils.java" "int changed;"     # 20: conformant, via the nested rule
+dual_file           "$newcsidgeneral/MovedCsidGeneral.java" "int changed;" # 21: conformant, via the general rule
+confluent_file      "$newmain/Retargeted.java" "int changed;"       # 22: violation
+confluent_file      "$newmain/StaleEntry.java" "int changed;"       # 23: violation
 fork_file           "$newmain/ForkUnderNewPackage.java"             # conformant: fork-original, moved-package path
-confluent_file      "$newmain/ForkClaimsConfluent.java"             # 23: violation
+confluent_file      "$newmain/ForkClaimsConfluent.java"             # 24: violation
 git -C "$repoD" add -A && git -C "$repoD" commit -qm rename
 
 # One entry in the RETARGETED spelling (newpath already moved to bz/stub, as
@@ -261,18 +272,18 @@ assert_contains "rename entry left in the OLD spelling still resolves (half-rena
 assert_contains "fork-original file under the NEW package still may not claim Confluent" \
     "fork-original file claims Confluent copyright): parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ForkClaimsConfluent.java" "$out"
 assert_contains "renamed-package repo reports exactly 5 violations" "5 violation(s)" "$out"
-assert_contains "the move does not shrink the checked set" "Checked 9 java files" "$out"
+assert_contains "the move does not shrink the checked set" "Checked 10 java files" "$out"
 # The conformant half. Under the OLD path-equality model every one of these was reported as a
 # fork-original file claiming Confluent copyright, so this case is the negative control: it goes
 # red against the model this replaced.
 case "$out" in
-    *"MovedVerbatim.java"*|*"MovedEditedDual.java"*|*"MovedCsid.java"*|*"ForkUnderNewPackage.java"*)
+    *"MovedVerbatim.java"*|*"MovedEditedDual.java"*|*"MovedCsidUtils.java"*|*"MovedCsidGeneral.java"*|*"ForkUnderNewPackage.java"*)
         echo "FAIL: moved-but-conformant files were flagged (provenance lost across the package move)"
         failures=$((failures + 1)) ;;
-    *) echo "ok:   moved upstream files keep their provenance (verbatim, dual-header, csid, fork-original)" ;;
+    *) echo "ok:   moved upstream files keep their provenance (verbatim, dual-header, nested csid/utils, general csid, fork-original)" ;;
 esac
 
-# --- Drift guard: PACKAGE_MOVES vs bin/rename-packages.sh's PKG_MAP (rule 24) --------
+# --- Drift guard: PACKAGE_MOVES vs bin/rename-packages.sh's PKG_MAP (rule 25) --------
 # The two tables are deliberately NOT shared: the rename script is a migration tool and gets
 # deleted once the rename has landed everywhere, while the scanner's table describes the fork
 # point, which is permanent. This is what stops them disagreeing while both exist - if the target

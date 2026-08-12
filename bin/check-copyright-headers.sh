@@ -67,18 +67,30 @@ HEADER_WINDOW=8 # lines from the top of the file searched for copyright notices
 # script handles - the files it scans and both halves of the manifests below - is mapped through
 # this table before it is looked up, so a file keeps its provenance across the move.
 #
-# TWO LINES, NOT ~200 RENAMED_FROM_UPSTREAM ENTRIES. The move is a rule, so it is written as one:
-# a per-file manifest of everything that moved would be unreviewable, and the next file to move
-# under a moved package would silently not be in it. Derived, this needs no maintenance.
+# A SMALL TABLE, NOT ~200 RENAMED_FROM_UPSTREAM ENTRIES. The move is a rule, so it is written as
+# one (or a handful): a per-file manifest of everything that moved would be unreviewable, and the
+# next file to move under a moved package would silently not be in it. Derived, this needs no
+# maintenance.
+#
+# THE FIRST LINE IS A NESTED SPECIAL CASE AND MUST STAY FIRST. `io/confluent/csid/utils` folds into
+# `bz/stub/parallelconsumer/internal/utils` rather than the general `bz/stub/csid`, because those
+# files are the project's general-purpose utilities (see bin/rename-packages.sh for the reasoning).
+# Its bz/stub half sits INSIDE the general `bz/stub/parallelconsumer` prefix on the next line, and
+# fork_point_path() below returns on the FIRST prefix match it finds - so if the general rule were
+# checked first, every file the special case actually moved would match it too and resolve to a
+# fork-point path under parallelconsumer that Confluent never owned.
 #
 # NOT SHARED WITH bin/rename-packages.sh, DELIBERATELY. That script is a migration tool and is
 # deleted once the rename has landed on every branch; this table describes the fork point, which is
 # immutable history, so it must outlive it. Wiring a permanent gate - one bound to maven's validate
 # phase - into a disposable script buys DRY at the cost of the gate breaking when the tool goes.
-# bin/test-check-copyright-headers.sh cross-checks the two tables while both exist, so the only
-# real drift risk (someone changing the target package before the rename lands) fails loudly - it
-# reads this one with an anchored grep, which is why the first entry sits below the opening quote.
+# bin/test-check-copyright-headers.sh cross-checks the two-segment (package.package) rules against
+# bin/rename-packages.sh's PKG_MAP while both exist - the nested special case above does not fit
+# that shape and is exercised directly by Fixture D instead - so the only real drift risk (someone
+# changing a target package before the rename lands) fails loudly. It reads this one with an
+# anchored grep, which is why entries sit flush against the opening quote.
 PACKAGE_MOVES="
+bz/stub/parallelconsumer/internal/utils|io/confluent/csid/utils
 bz/stub/parallelconsumer|io/confluent/parallelconsumer
 bz/stub/csid|io/confluent/csid"
 

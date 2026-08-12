@@ -27,6 +27,9 @@
 #                                                       find-and-replace on the dotted form misses
 #                                                       and the habitual grep cannot even see
 #    7. a MISSPELT reference is normalised            - parallalconsumer, from All_examples.xml
+#   7a. io.confluent.csid.utils folds into the internal utils package, NOT the general bz.stub.csid
+#                                                       a plain prefix rule would give it - and the
+#                                                       general csid rule stays shadow-free elsewhere
 #    8. java gets ` * Modifications Copyright ...`    - block-comment continuation
 #    9. XML gets it INSIDE the <!-- --> block         - and NEVER a `//`
 #   10. YAML gets a `#` prefix                        - and NEVER a `//`
@@ -328,6 +331,31 @@ assert_contains ".properties gets a # prefix" "$propfile" "# ${MODS}"
 assert_absent ".properties never gets a // comment" "$propfile" "// ${MODS}"
 assert_absent "a fork-original file gets NO modifications line" \
     "$FIX/parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ForkOnly.java" "$MODS"
+
+# --- 7a: the io.confluent.csid.utils special case: it folds into the internal utils package, NOT
+# the general bz.stub.csid path a plain prefix rule would give it ---
+utilsfile="$FIX/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils/Bar.java"
+assert_contains "io.confluent.csid.utils moves under the directory the special case names" \
+    "$utilsfile" "class Bar"
+assert_contains "its package declaration is rewritten to bz.stub.parallelconsumer.internal.utils" \
+    "$utilsfile" "package bz.stub.parallelconsumer.internal.utils;"
+if [ -f "$FIX/parallel-consumer-core/src/main/java/bz/stub/csid/utils/Bar.java" ]; then
+    echo "FAIL: the general bz.stub.csid.utils path was used - the special case was shadowed"
+    failures=$((failures + 1))
+else
+    echo "ok:   the general bz.stub.csid.utils path is NOT used (the special case is not shadowed)"
+fi
+assert_contains "the import of the folded class is rewritten to its new package" \
+    "$javafile" "import bz.stub.parallelconsumer.internal.utils.Bar;"
+assert_absent "no io.confluent.csid.utils spelling survives in the importing file" \
+    "$javafile" "io.confluent.csid.utils"
+
+# --- the general io.confluent.csid rule still applies OUTSIDE .utils, unaffected by the special
+# case above (this is the ordering check: a bug that let the specific rule swallow the general
+# prefix, or vice versa, would show up here) ---
+assert_contains "io.confluent.csid (non-utils) still takes the general csid rule" \
+    "$xmlfile" 'name="bz.stub.csid"'
+assert_absent "the old io.confluent.csid spelling does not survive" "$xmlfile" "io.confluent.csid"
 
 # --- 13: historical documents ---
 assert_contains "historical docs/plans/ prose is left exactly as written" \
