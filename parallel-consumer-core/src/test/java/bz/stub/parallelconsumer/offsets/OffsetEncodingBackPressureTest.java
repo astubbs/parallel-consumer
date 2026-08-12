@@ -8,7 +8,9 @@ package bz.stub.parallelconsumer.offsets;
 import com.google.common.truth.Truth;
 import com.google.common.truth.Truth8;
 import bz.stub.parallelconsumer.FakeRuntimeException;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
+import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
@@ -75,6 +77,14 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
     @Test
     // needed due to static accessors in parallel tests
     @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ_WRITE)
+    @Quarantined(
+            reason = "UNDIAGNOSED - quarantined as an explicit rule-1 exception by owner decision, because at "
+                    + "4/45 it blocked every PR. Fails as ConditionTimeout at the getHighestSeenOffset() "
+                    + "assertion: the committed high-water mark never reaches expectedHighestSeen (139), with "
+                    + "a different actual each run (136, 132 seen). Unverified hypothesis and its "
+                    + "falsification path are in the tracking entry.",
+            tracking = "docs/inflight/test-untracked-ci-flakes.md",
+            flapping = true)
     void backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing() throws OffsetDecodingError {
         // mock messages downloaded for processing > MAX_TO_QUEUE
         // make sure work manager doesn't queue more than MAX_TO_QUEUE

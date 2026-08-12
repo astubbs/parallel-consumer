@@ -15,7 +15,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>parallel-consumer-core</artifactId>
-    <name>Kafka Parallel Consumer Core</name>
+    <name>Parallel Consumer - Core</name>
 
     <properties>
         <!-- JUnit 5 thread-parallelism for THIS module's tests. Declared once here because surefire and

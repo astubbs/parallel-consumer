@@ -51,7 +51,7 @@
 # mutation-full-sweep" until the rename reaches master. That is GitHub's rule, not a typo.
 #
 # SECURITY: `workflow_dispatch` only, so this can only be started by someone with write access - a fork
-# PR can never reach the self-hosted runner through this file. See docs/SELF_HOSTED_RUNNER.md.
+# PR can never reach the self-hosted runner through this file. See docs/self-hosted-runner.md.
 
 name: mutation-full-sweep
 

@@ -37,7 +37,6 @@
     <!--    <logger name="bz.stub.parallelconsumer.state.WorkManager" level="info"/>-->
         <logger name="bz.stub.parallelconsumer.internal.ExternalEngine" level="info"/>
 
-
     <!--    <logger name="bz.stub.parallelconsumer.vertx.VertxBatchTest" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.BatchTestMethods" level="debug"/>-->
 
@@ -48,14 +47,12 @@
     <!--        <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="info"/> &lt;!&ndash; docker logs &ndash;&gt;-->
     <!--        <logger name="bz.stub.parallelconsumer.internal.utils" level="debug"/>-->
 
-
     <!--            <logger name="bz.stub.parallelconsumer" level="trace" />-->
 
     <!-- notable specifics -->
     <!--        <logger name="bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.integrationTests" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.integrationTests.LargeVolumeInMemoryTests" level="debug"/>-->
-    <!--    <logger name="bz.stub.parallelconsumer.ParallelConsumerTestBase" level="trace"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.ParallelConsumer" level="info" />-->
     <!--    <logger name="bz.stub.parallelconsumer.offsets.OffsetMapCodecManager" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest" level="debug"/>-->
