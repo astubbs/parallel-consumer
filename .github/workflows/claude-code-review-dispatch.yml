@@ -10,9 +10,12 @@ name: review (on demand)
 #
 # It used to run on every `pull_request` event, which spent a full review on every push,
 # overwhelmingly on branches that were not ready for one. The cheap always-on half of that
-# job now lives in .github/workflows/claude-code-review.yml, which asserts that a review
-# exists for the current head and costs nothing; this is the expensive half, and it runs when
-# somebody asks for it.
+# job now lives in .github/workflows/claude-code-review.yml, which costs nothing; this is the
+# expensive half, and it runs when somebody asks for it. What satisfies that gate is stated once,
+# in docs/ci.md - not restated here, because this sentence described the previous contract for
+# weeks after it changed. (There is a third `claude*` workflow, claude.yml - the @claude comment
+# route. It is a reviewer too, and the only one that can open inline review threads. The three
+# are told apart in docs/ci.md, "The three claude* workflows".)
 #
 # WHAT MUST NOT BE LOST FROM THIS FILE
 #
@@ -26,6 +29,58 @@ name: review (on demand)
 # The `focus` input is what a free-form mention was better at, kept without giving up the
 # procedure: the steer is APPENDED to the slash command, never substituted for it.
 #
+# WHAT A DISPATCH TRIGGER COSTS, AND WHY IT IS PAID HERE RATHER THAN HIDDEN
+#
+# `claude-code-action` picks its behaviour from the EVENT, not from its inputs. On a PR or
+# issue event it runs in TAG mode: it opens a tracking comment as `claude[bot]`, installs an
+# MCP server for inline review comments, and installs another for reading the PR's CI. On
+# every other event it runs in AGENT mode and does none of that. `workflow_dispatch` is not a
+# PR event and CANNOT BE MADE INTO ONE - see "WHY THE EVENT CANNOT BE FAKED" below - so this
+# workflow runs in agent mode, and three things the `pull_request`-triggered version had are
+# gone. Each is compensated for below, out loud, because a capability that quietly stops
+# existing is this repo's most-repeated defect:
+#
+#   1. NO TRACKING COMMENT, so nothing posts a `claude[bot]` issue comment on its own. Left
+#      alone, the packaged procedure posts an issue comment ONLY when it finds nothing (its
+#      step 7); when it finds something it posts inline comments and stops. The gate reads
+#      ISSUE comments, so the reviews that matter most would never turn `claude-review` green.
+#      Compensated by the FINISH WITH A SUMMARY COMMENT instruction in the system prompt below,
+#      which makes the summary comment mandatory rather than a fallback. That instruction is
+#      load-bearing: delete it and the gate becomes unsatisfiable on any review with findings.
+#   2. NO `mcp__github_inline_comment__create_inline_comment`. The action installs that server
+#      only for a PR/issue event, so on this trigger the tool does not exist. It is therefore
+#      NOT in --allowedTools - a grant that cannot match reads as a capability the reviewer
+#      does not have - and the blocking-findings instruction no longer asks for review threads.
+#      THIS IS A REAL LOSS: an unresolved review thread is the only thing that mechanically
+#      gates a merge here, so blocking findings are now prose in the summary that a human has
+#      to act on. Restoring it needs a different trigger or a different posting route; see
+#      docs/inflight/ci-review-agent.md.
+#   3. NO `github_ci` MCP server. Replaced with plain CLI grants (`gh run list`, `gh run view`)
+#      plus `additional_permissions: actions: read`, which is what gives the reviewer's own
+#      token the scope to read them. NOT `gh pr checks`: it reads check RUNS, which needs the
+#      `checks` permission, and `checks` is neither in the action's default token scope
+#      (`contents`, `pull_requests`, `issues`) nor something `additional_permissions` is
+#      documented to support - "Currently supports 'actions: read'". The workflow-run view is
+#      the one this token can actually be granted.
+#
+# WHY THE EVENT CANNOT BE FAKED
+#
+# The obvious escape is to hand the action a `pull_request` payload and let tag mode run:
+# `@actions/github` learns its trigger from exactly two variables, `GITHUB_EVENT_NAME` and
+# `GITHUB_EVENT_PATH`. It does not work, and it was tried rather than reasoned about. The
+# runner writes the `GITHUB_*` context variables into every step's environment AFTER the step's
+# own `env:` block, unconditionally, so the override is silently discarded. Measured in run
+# 31466525816, a step declaring both of them saw:
+#
+#     GITHUB_EVENT_NAME as this step sees it: 'workflow_dispatch'
+#     GITHUB_EVENT_PATH as this step sees it: '/home/runner/work/_temp/_github_workflow/event.json'
+#
+# (`ScriptHandler.PrepareExecution` and `NodeScriptActionHandler.PrepareExecution` in
+# actions/runner both end with `Environment[env.Key] = env.Value` over the github context, and
+# `event_name` is on its allowlist. GitHub's own documentation says the same thing: default
+# `GITHUB_*` variables cannot be overridden.) The payload file's CONTENTS are writable, but the
+# event NAME is not, and the name alone decides the mode. So: do not try this again.
+#
 # WHY --ref master
 #
 # `claude-code-action` refuses to run when the workflow file invoking it differs from the
@@ -37,6 +92,23 @@ name: review (on demand)
 #
 # Dispatching `--ref <the PR branch>` would defeat that and reintroduce the old trap, so do
 # not: it runs the PR's copy of this file, which is the case the guard exists to refuse.
+#
+# WHY THIS IS TWO JOBS
+#
+# `review` checks out the PR and RUNS ITS CODE - the reviewer is allowed to execute this repo's
+# test and check scripts, and on a PR branch those scripts are whatever the PR says they are.
+# So `review` holds no write grant it does not need, and its checkout sets
+# `persist-credentials: false` so the job's token is not left in .git/config next to that code.
+#
+# `refresh-gate` exists solely to hold the one write grant the contract does need - `actions:
+# write`, to re-run the gate - in a job that checks NOTHING out. Keeping it in `review` would
+# put a token that can dispatch, cancel and re-run any workflow in the repo (release.yml among
+# them) in the same filesystem as PR-authored scripts.
+#
+# This is the fork-head refusal's question asked one level in. That guard asks "whose code is
+# this?"; the split asks "what could that code reach if it turned out to be hostile?". A
+# same-repository PR does mean a write-access author, but write access to a branch is not the
+# same thing as a token that can fire a release. Do not merge these jobs back together.
 
 on:
   workflow_dispatch:
@@ -61,21 +133,33 @@ jobs:
     # must not hold a runner indefinitely. Generous enough for a unit run on a 2-core hosted
     # box.
     timeout-minutes: 30
+    # Consumed by `refresh-gate`, which needs both of these but must NOT check out PR code to
+    # get them.
+    outputs:
+      # The ACTION's own verdict, not the step's. `steps.claude-review.outcome` is the step's,
+      # and the step reports success in at least one case where the action reviewed nothing at
+      # all - see "Refuse to report success for a review that did not run" below.
+      review_conclusion: ${{ steps.claude-review.outputs.conclusion }}
     permissions:
       contents: read
-      # write, not read: the reviewer creates INLINE review comments for blocking findings
-      # (see the blocking-findings instruction in claude_args). The action may well use its
-      # own app token - the summary comment already posts under `read` - but a silently
-      # failing inline comment would mean a blocking finding never gates the merge, which is
-      # the whole point.
+      # The review comment is posted by the ACTION's own app token, not by this one, so what
+      # this scope buys is not the posting. It is kept at write rather than narrowed because
+      # nothing here has proven the workflow token is unused on that path, and a review that
+      # runs for half an hour and then cannot post is a far worse failure than a scope that
+      # turns out to be unnecessary. Narrowing it is a follow-up with a test behind it, not a
+      # guess.
       pull-requests: write
       issues: read
       id-token: write
-      # read: lets the reviewer read the PR's CI results - worth more here than on the old push
-      # trigger, since a review is requested when the branch is ready, by which time the test
-      # jobs have usually finished. write: for the final step, which re-runs the review gate so
-      # the required check re-evaluates once this review has posted.
-      actions: write
+      # READ, never write. This job checks out the PR's own code and deliberately EXECUTES it
+      # (see --allowedTools: the reviewer runs this repo's test and check scripts), so every
+      # permission here is a permission handed to whatever those scripts have been changed to
+      # do. `actions: write` would be enough to dispatch, cancel or re-run any workflow in the
+      # repo - including release.yml's `workflow_dispatch` path - so it lives in the separate
+      # `refresh-gate` job below, which checks nothing out. Read alone lets the reviewer read
+      # the PR's CI results, which is worth more here than on the old push trigger: a review is
+      # requested when the branch is ready, by which time the test jobs have usually finished.
+      actions: read
 
     steps:
       # `pr` reaches a git ref and a prompt, so it is checked before either. A dispatch
@@ -138,12 +222,12 @@ jobs:
           # Full history: the reviewer compares against the PR base, which a depth-1 clone
           # can't reach.
           fetch-depth: 0
-
-      # Recorded immediately after checkout, so the final step can tell whether the PR moved
-      # underneath this review.
-      - name: Record the reviewed SHA
-        id: reviewed-sha
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # Do NOT leave the job's token in .git/config. checkout defaults this to true, which
+          # writes an authenticated header into the working copy - the same working copy whose
+          # scripts this job then executes. Nothing after this step pushes or fetches, so the
+          # persisted credential buys nothing and only widens what a modified `bin/` script
+          # could reach.
+          persist-credentials: false
 
       # The reviewer is allowed to run the unit/integration suites itself (see --allowedTools
       # below), so the job needs a JDK and a warm Maven cache - otherwise every invocation
@@ -160,13 +244,27 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Post visible "review in progress" status on the PR (sticky tracking comment) so
-          # it's clear a review is running, not just silent until it finishes. It is also the
-          # comment the review itself lands in, authored by `claude[bot]` - which is the
-          # identity bin/check-review-posted.sh looks for. Removing this does not merely lose
-          # the progress indicator; it can move the review into a comment posted by
-          # `github-actions[bot]` instead, which the gate will not accept as a review.
-          track_progress: true
+          # NOT `true`, and this is the one input that cannot simply be turned back on. The
+          # action REFUSES track_progress on any event that is not a PR or issue event, so on
+          # this trigger it does not degrade the run, it aborts it before the review starts -
+          # which is exactly how the first live dispatch (run 31464598166) died. Setting it
+          # here would break every review again.
+          #
+          # What it used to buy was the sticky tracking comment: the `claude[bot]`-authored
+          # comment the review landed in, which is the identity bin/check-review-posted.sh
+          # looks for. That job now belongs to the FINISH WITH A SUMMARY COMMENT instruction in
+          # the system prompt below. See "WHAT A DISPATCH TRIGGER COSTS" in the header.
+          track_progress: false
+          # The reviewer's own token gets `contents`, `pull_requests` and `issues` by default -
+          # enough to read the diff and post the review, but NOT to read CI. The system prompt
+          # tells it to read the PR's CI results first, and on this trigger it does that with
+          # `gh run list` / `gh run view` rather than the MCP CI server, so the scope those
+          # calls need has to be asked for explicitly. Without this line the instruction is one
+          # the reviewer cannot carry out. It is `actions: read` and not also `checks: read`
+          # because the exchange endpoint behind this input is documented to support
+          # `actions: read` and nothing else; see the `--allowedTools` note below.
+          additional_permissions: |
+            actions: read
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           # --comment is REQUIRED for the review to be posted: without it the plugin's step 7
@@ -204,23 +302,54 @@ jobs:
           # is NOT granted - it needs Docker and takes ~2 minutes per scenario arm, far too
           # slow for a per-PR review pass, and it is non-gating anyway.
           #
-          # BOTH `bin/foo.sh` and `./bin/foo.sh` are granted for every script. These are PREFIX
-          # matches, not globs: `Bash(bin/ci-unit-test.sh:*)` does not match
-          # `./bin/ci-unit-test.sh`, so granting only the bare form denied every natural
-          # invocation. That is not theoretical - it is why the review on
+          # BOTH `bin/foo.sh` and `./bin/foo.sh` are granted for every script, pattern or not.
+          # A rule is matched against the command AS WRITTEN, so `Bash(bin/ci-unit-test.sh:*)`
+          # does not match `./bin/ci-unit-test.sh` and granting only the bare form denied every
+          # natural invocation. That is not theoretical - it is why the review on
           # astubbs/parallel-consumer#108 logged 10 permission denials, gave up before running
           # anything, and still reported success. A grant that cannot match is worse than no
           # grant: it reads as capability the reviewer does not have.
           #
-          # Also grants the repo's fast, read-only VERIFICATION scripts (bin/check-*.sh,
-          # bin/test-check-copyright-headers.sh, bin/test-check-review-posted.sh,
-          # bin/check-shell-sigpipe.sh, bin/check-docs-data.sh, bin/test-check-docs-data.sh,
-          # bin/todo-index.sh) plus the two gate self-tests under
-          # .github/scripts/, so the reviewer can independently re-run what a PR claims
-          # rather than inferring it from the diff - e.g. `bin/check-copyright-headers.sh` to
-          # confirm a header claim. NOT the quarantine/test RUNNERS (quarantined-test.sh,
+          # Also grants the repo's fast, read-only VERIFICATION scripts - `bin/check-*.sh` and
+          # their `bin/test-check-*.sh` self-tests, plus `bin/todo-index.sh` and the two gate
+          # self-tests under .github/scripts/ - so the reviewer can independently re-run what a
+          # PR claims rather than inferring it from the diff, e.g. `bin/check-copyright-headers.sh`
+          # to confirm a header claim. NOT the quarantine/test RUNNERS (quarantined-test.sh,
           # quarantine-lane-report.sh) - those execute suites, are slow, and test execution is
           # already covered by the ci-*-test.sh wrappers above.
+          #
+          # THOSE TWO FAMILIES ARE GRANTED AS PATTERNS ON PURPOSE. DO NOT RE-ENUMERATE THEM.
+          #
+          # A grant a pull request adds can never apply to that pull request, on any route: the
+          # action runs the DEFAULT BRANCH's copy of the workflow (docs/ci.md, "Editing the
+          # reviewer"). So a per-script grant has to land in an EARLIER pull request than the
+          # script it grants - a discipline nobody keeps, and demonstrably so. Four check scripts
+          # arrived with astubbs/parallel-consumer#279, all four were granted in that same pull
+          # request, and its own reviewer could run none of them; the failure was then written up
+          # as a mystery approval layer before anyone noticed the copy in force was master's.
+          # A pattern makes the grant arrive with the CONVENTION instead, once, ahead of every
+          # script that will ever follow it.
+          #
+          # Bash rules glob with `*` at any position and `:*` is the trailing-wildcard form, so
+          # `Bash(bin/check-*.sh:*)` matches `bin/check-foo.sh` bare and with arguments.
+          #
+          # WHAT THE PATTERN FORM DELIBERATELY ACCEPTS: a pull request can add
+          # `bin/check-<anything>.sh` and have this reviewer run it. That is not a new capability
+          # on this route. The checkout below IS `refs/pull/<n>/head`, so every grant here already
+          # executes the PULL REQUEST's copy - `bin/check-copyright-headers.sh` has been granted
+          # for months and is whatever the branch says it is, the ci-*-test.sh wrappers run the
+          # branch's Java, and `./mvnw` runs the branch's pom. The bound is unchanged and is not
+          # the shape of the list: fork heads are refused outright, and dispatching requires write
+          # access. (The comment route is the same in this respect, not narrower: the action
+          # checks the PR's head out there too, so the pattern matches the PR's scripts on both
+          # routes. Its bound is its own fork-head withholding - see claude.yml.)
+          #
+          # NOT WIDENED FURTHER, and the remaining enumeration is not laziness. `Bash(bin/*.sh:*)`
+          # would sweep in exactly the scripts this list refuses on purpose - quarantined-test.sh,
+          # quarantine-lane-report.sh, chaos-test.sh, soak-test.sh, performance-test.sh, deploy.sh
+          # - so ci-unit-test.sh, ci-integration-test.sh and todo-index.sh stay named one by one.
+          # `check-` and `test-check-` are the two prefixes this repo uses for fast, read-only
+          # guards, and the pattern is scoped to exactly those.
           #
           # bin/test-check-docs-data.sh is the one grant that writes: it mutates a corpus file,
           # asks the guard for a verdict, and copies the file back, one case at a time. That is a
@@ -233,17 +362,50 @@ jobs:
           # astubbs/parallel-consumer#273, which added the scripts; the reviewer moved out of that
           # file, so the grant had to move with it or be silently lost.)
           #
-          # Every grant here is a script that EXISTS ON MASTER. Granting one that only exists
-          # on another branch makes the grant inert and the claim false - which is how
-          # `bin/todo-index.sh` (added by astubbs/parallel-consumer#103) briefly ended up
-          # listed here. Its grant belongs in astubbs/parallel-consumer#103, with the script.
-          # That is also why the OSS Index audit pair is not listed: those scripts arrive with
-          # astubbs/parallel-consumer#279, and their grants belong in it.
+          # Every ENUMERATED grant here is a script that EXISTS ON MASTER. Granting one that only
+          # exists on another branch makes the grant inert and the claim false - which is how
+          # `bin/todo-index.sh` (added by astubbs/parallel-consumer#103) briefly ended up listed
+          # here before the script did. The two patterns are the deliberate exception to that
+          # rule, and the reason they exist: a pattern is never inert, because it is a statement
+          # about a naming convention rather than about a file.
+          #
+          # `gh run list` and `gh run view` replace the `github_ci` MCP server, which the action
+          # installs only on a PR/issue event and therefore not on this one. The system prompt
+          # tells the reviewer to read the PR's CI results before running anything itself, so
+          # without these two that instruction had no way to be carried out. They are read-only,
+          # and the scope they need is granted by `additional_permissions: actions: read` above -
+          # the grant and the permission have to move together or the calls 403.
+          #
+          # NOT LISTED, DELIBERATELY: `gh pr checks`. It is the obvious tool for the job and it
+          # is the wrong one here, because it reads check RUNS and this token cannot be given
+          # the `checks` scope to do that. The action's own token defaults are `contents`,
+          # `pull_requests` and `issues` (src/github/token.ts, DEFAULT_PERMISSIONS); `checks` is
+          # not among them, and `additional_permissions` is documented as "Currently supports
+          # 'actions: read'" - it forwards any key you write to the token-exchange endpoint
+          # without validating it, so `checks: read` would be a guess at an undocumented server
+          # contract sitting in the critical path of every review. Granting a tool whose calls
+          # would 403 is the astubbs/parallel-consumer#108 mistake in a second costume. Runs are
+          # reachable per head SHA with `gh run list -c <sha>`, which `actions: read` does cover.
+          #
+          # NOT LISTED, DELIBERATELY: mcp__github_inline_comment__create_inline_comment. It was
+          # granted here when this workflow ran on `pull_request`, and the tool genuinely does
+          # not exist on a dispatch - the action installs its server only for a PR/issue event.
+          # A grant that cannot match is worse than no grant, because it reads as a capability
+          # the reviewer has (that is the astubbs/parallel-consumer#108 lesson, two paragraphs
+          # up). The blocking-findings instruction was rewritten to match; see "WHAT A DISPATCH
+          # TRIGGER COSTS" in the header for what that loses.
           #
           # `actionlint` is granted and is not a repo script - it ships on `ubuntu-latest`,
           # with .github/actionlint.yaml already present, so the grant can never be inert. It
           # closes a gap the reviewer raised itself on astubbs/parallel-consumer#102: it could
           # not lint a workflow PR, on a repo where workflow PRs are common.
+          #
+          # `git rev-parse` LETS THE REVIEWER ESTABLISH WHICH TREE IT IS STANDING IN, rather than
+          # inferring it from the workflow and getting it wrong - which is what happened on the
+          # comment route, and is written up in docs/ci.md under "The `@claude review this`
+          # comment route". Agent mode passes through only what this list names (no base Bash at
+          # all, src/modes/agent/index.ts), so without the grant the check is simply unavailable.
+          # Read-only; it mutates nothing. Granted on both routes to keep the lists in step.
           #
           # ./mvnw IS granted, for the job the wrappers cannot do: running ONE test class.
           # Verifying a RED/GREEN claim means reverting the fix and re-running just the new
@@ -267,11 +429,100 @@ jobs:
           # injection-into-execution. Keep it a list. The trigger itself is bounded by
           # `workflow_dispatch` requiring write access to the repository.
           claude_args: |
-            --allowedTools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-copyright-headers.sh:*),Bash(./bin/check-copyright-headers.sh:*),Bash(bin/check-shell-sigpipe.sh:*),Bash(./bin/check-shell-sigpipe.sh:*),Bash(bin/check-docs-data.sh:*),Bash(./bin/check-docs-data.sh:*),Bash(bin/test-check-docs-data.sh:*),Bash(./bin/test-check-docs-data.sh:*),Bash(bin/test-check-shell-sigpipe.sh:*),Bash(./bin/test-check-shell-sigpipe.sh:*),Bash(bin/test-check-copyright-headers.sh:*),Bash(./bin/test-check-copyright-headers.sh:*),Bash(bin/test-check-review-posted.sh:*),Bash(./bin/test-check-review-posted.sh:*),Bash(bin/check-quarantine-registry.sh:*),Bash(./bin/check-quarantine-registry.sh:*),Bash(bin/check-quarantine-owners.sh:*),Bash(./bin/check-quarantine-owners.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*),mcp__github_inline_comment__create_inline_comment"
-            --append-system-prompt "You CAN run this repo's tests yourself, and should when the PR adds or changes tests, or when a claim about test results is load-bearing to your review. Use bin/ci-unit-test.sh (fast, no Docker) or bin/ci-integration-test.sh (needs Docker); do NOT run the chaos suite, it is far too slow for a review pass. You can also run the repo's fast verification scripts directly to check a claim rather than trusting the PR body - e.g. bin/check-copyright-headers.sh, bin/check-quarantine-registry.sh - invoke them by their bare path, they are executable. For a SINGLE test class, use ./mvnw directly - e.g. ./mvnw -o -pl parallel-consumer-core -Dtest=SomeTest surefire:test - which takes seconds where a full suite takes minutes. That makes the highest-value check affordable: when a PR claims a test fails without its fix, revert the fix (git stash push the source files), run just that test, and confirm it actually goes RED - a test that passes either way proves nothing, and this is the single most common defect in a regression-test PR. Two rules for scoped runs: never report a targeted -Dtest result as though the suite were green (it skips the -Dexcluded.groups the wrappers pin, and covers one class), and always restore anything you stashed. For whole-suite evidence, use the wrappers, not a hand-rolled ./mvnw line. Reviews are requested on demand rather than fired on every push, so by the time you are asked the CI jobs have usually finished and you have actions:read - READ THEIR RESULTS FIRST and say which ones you read, then execute tests yourself for anything CI does not settle. Do not treat a green CI as evidence a NEW test ran: when a PR adds a test, verify the suite ACTUALLY COLLECTED it (surefire only picks up *Test.java, Test*.java, *Tests.java, *TestCase.java - a test named otherwise silently never runs) rather than trusting a green total. If you run out of time, or a suite fails for environmental reasons, say so explicitly instead of implying you verified it. REVIEW THE PR TITLE AND DESCRIPTION AS PART OF THE DIFF, not as decoration. They are what a future reader gets instead of the diff, and on a squash merge the title BECOMES the commit title, so an inaccurate one is permanent. Check three things. (1) COMPLETENESS: does the description cover every substantive change in the diff? Descriptions are written early and drift as commits land, so a whole fix or workstream missing from an otherwise good description is the common failure - call out what is in the diff but not described. (2) ACCURACY: do specifics match reality - counts, file and test names, flags, numbers of things granted or changed, and any claimed verification? Re-derive them from the diff rather than trusting the prose; a stale \"622 tests\" or \"two scripts\" when the diff says otherwise is a real defect. Treat a checklist item marked N/A as a claim to verify like any other, especially \"docs updated - N/A\" when the diff changes docs. (3) TERMINOLOGY: does it use words the codebase uses, and does any word mislead? Flag a term that means something specific in this repo being used loosely - for example calling cross-test state contamination a \"leak\" in a repo where \"leak\" means a memory leak. Report these as normal findings, non-blocking unless the description actively misrepresents what the code does. BLOCKING FINDINGS MUST BE INLINE REVIEW COMMENTS. This repo sets required_review_thread_resolution, so an unresolved review thread is the ONLY thing that actually gates a merge - a finding written only in your summary comment can be, and will be, merged straight past. So: if you find something that should block the merge (a correctness bug, data loss or corruption, a security hole, a broken public contract, or a test that cannot do what it claims), raise it with mcp__github_inline_comment__create_inline_comment on the offending line, one thread per finding, each stating plainly what breaks and what would fix it. Keep the summary comment for everything else - context, praise, nits and non-blocking observations - and do NOT raise those inline, or routine notes become merge gates and the signal is lost. If you are unsure whether a finding is blocking, put it in the summary and say why you were unsure, rather than blocking on a maybe. Finally: FINISH, or say plainly that you did not. The review gate reads your own task list - a comment left with an unticked box is taken as your statement that you stopped partway, and it holds the claude-review check red. Do not announce that you will continue in the background; there is no background."
+            --allowedTools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git rev-parse:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-*.sh:*),Bash(./bin/check-*.sh:*),Bash(bin/test-check-*.sh:*),Bash(./bin/test-check-*.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)"
+            --append-system-prompt "You CAN run this repo's tests yourself, and should when the PR adds or changes tests, or when a claim about test results is load-bearing to your review. Use bin/ci-unit-test.sh (fast, no Docker) or bin/ci-integration-test.sh (needs Docker); do NOT run the chaos suite, it is far too slow for a review pass. You can also run the repo's fast verification scripts directly to check a claim rather than trusting the PR body - e.g. bin/check-copyright-headers.sh, bin/check-quarantine-registry.sh - invoke them by their bare path, they are executable. For a SINGLE test class, use ./mvnw directly - e.g. ./mvnw -o -pl parallel-consumer-core -Dtest=SomeTest surefire:test - which takes seconds where a full suite takes minutes. That makes the highest-value check affordable: when a PR claims a test fails without its fix, revert the fix (git stash push the source files), run just that test, and confirm it actually goes RED - a test that passes either way proves nothing, and this is the single most common defect in a regression-test PR. Two rules for scoped runs: never report a targeted -Dtest result as though the suite were green (it skips the -Dexcluded.groups the wrappers pin, and covers one class), and always restore anything you stashed. For whole-suite evidence, use the wrappers, not a hand-rolled ./mvnw line. YOUR TOOL ALLOWLIST COMES FROM THE DEFAULT BRANCH'S COPY OF THIS WORKFLOW, not from the pull request you are reviewing: this run is dispatched --ref master, and the action refuses to start from any other ref. The CODE you run is the PR's, because the checkout is refs/pull/<n>/head - but a GRANT the PR adds is NOT in effect for you. So a script the diff appears to grant coming back refused is expected rather than a defect in the PR: say so plainly, review the change by reading it, and do not report yourself as broken. Reviews are requested on demand rather than fired on every push, so by the time you are asked the CI jobs have usually finished and you can read them with gh run list -c <the PR head SHA> and gh run view - READ THEIR RESULTS FIRST and say which ones you read, then execute tests yourself for anything CI does not settle. Do not treat a green CI as evidence a NEW test ran: when a PR adds a test, verify the suite ACTUALLY COLLECTED it (surefire only picks up *Test.java, Test*.java, *Tests.java, *TestCase.java - a test named otherwise silently never runs) rather than trusting a green total. If you run out of time, or a suite fails for environmental reasons, say so explicitly instead of implying you verified it. REVIEW THE PR TITLE AND DESCRIPTION AS PART OF THE DIFF, not as decoration. They are what a future reader gets instead of the diff, and on a squash merge the title BECOMES the commit title, so an inaccurate one is permanent. Check three things. (1) COMPLETENESS: does the description cover every substantive change in the diff? Descriptions are written early and drift as commits land, so a whole fix or workstream missing from an otherwise good description is the common failure - call out what is in the diff but not described. (2) ACCURACY: do specifics match reality - counts, file and test names, flags, numbers of things granted or changed, and any claimed verification? Re-derive them from the diff rather than trusting the prose; a stale \"622 tests\" or \"two scripts\" when the diff says otherwise is a real defect. Treat a checklist item marked N/A as a claim to verify like any other, especially \"docs updated - N/A\" when the diff changes docs. (3) TERMINOLOGY: does it use words the codebase uses, and does any word mislead? Flag a term that means something specific in this repo being used loosely - for example calling cross-test state contamination a \"leak\" in a repo where \"leak\" means a memory leak. Report these as normal findings, non-blocking unless the description actively misrepresents what the code does. FINISH BY POSTING A SUMMARY COMMENT. THIS IS NOT OPTIONAL AND IT IS NOT THE SAME AS PRINTING A SUMMARY. Whatever you found or did not find, your LAST action must be to post exactly one comment on the pull request with gh pr comment. The review procedure you are running only posts a comment when it finds NOTHING; that is not enough here, because the required check claude-review is satisfied by an issue comment from you and by nothing else. A review that finds problems and posts no comment leaves the PR unmergeable and is indistinguishable from no review at all - so the run that does the most work is the one that would fail hardest. One comment, not several. YOU CANNOT OPEN INLINE REVIEW THREADS ON THIS RUN. There is no inline-comment tool available to you here, so do not attempt one and do not describe your findings as though you had raised them on the line. Blocking findings (a correctness bug, data loss or corruption, a security hole, a broken public contract, or a test that cannot do what it claims) go at the TOP of that same summary comment, under a heading that says Blocking, numbered, each naming the file and line, what breaks, and what would fix it. Say in the comment, plainly, that they are blocking and that a human must act on them, because nothing mechanical will: merges here are gated on unresolved review threads and this review cannot create one. Put everything else - context, praise, nits, non-blocking observations - in a clearly separate section below, so the two are never read as the same thing. If you are unsure whether a finding is blocking, put it in the lower section and say why you were unsure. DO NOT LEAVE AN UNTICKED TASK-LIST BOX IN THAT COMMENT. The gate reads a `- [ ]` in your comment as your own statement that you stopped partway, and it will hold claude-review red forever, because a posted comment never changes. Tick every box before posting, or use plain bullets instead. And FINISH, or say plainly that you did not - do not announce that you will continue in the background; there is no background."
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
+      # THE ACTION EXITS 0 WHEN IT REVIEWS NOTHING, AND THAT IS NOT A THEORY HERE.
+      #
+      # Run 31466885778 dispatched this workflow, the action refused to start - "Skipping action
+      # due to workflow validation: the workflow file must ... have identical content to the
+      # version on the repository's default branch" - and every step of the job, including this
+      # one's predecessor, reported SUCCESS. Eleven seconds, no review, green. `refresh-gate`
+      # then went and re-ran the gate on the strength of it.
+      #
+      # That is the failure documented in
+      # docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md, and
+      # the reason bin/check-review-posted.sh exists at all. The gate caught it - `claude-review`
+      # on the reviewed PR stayed red, because no review comment appeared - so nothing went
+      # green that should not have. But relying on the downstream gate to notice that the
+      # UPSTREAM reviewer did nothing leaves the person who dispatched it reading a green run
+      # and a red check with no explanation joining them.
+      #
+      # `outputs.conclusion` is the action's own verdict and is set only on the path that
+      # actually ran Claude; the validation-skip path returns before setting it, so an empty
+      # value means "did not review". Checking it here turns a silent skip into a red job with
+      # the reason attached.
+      - name: Refuse to report success for a review that did not run
+        env:
+          # Empty when the action bailed out before reviewing; 'success' or 'failure' otherwise.
+          CONCLUSION: ${{ steps.claude-review.outputs.conclusion }}
+        run: |
+          if [ "$CONCLUSION" = "success" ]; then
+            echo "The reviewer ran and concluded successfully."
+            exit 0
+          fi
+
+          if [ -z "$CONCLUSION" ]; then
+            echo "::error::The review action exited without reviewing anything - it reported no" \
+                 "conclusion at all. The usual cause is its workflow-validation guard: it refuses" \
+                 "to run unless THIS FILE is byte-identical to the copy on the default branch," \
+                 "so a dispatch of a branch that edits this workflow always lands here. Read the" \
+                 "'Run Claude Code Review' step's log for the reason. No review was posted, and" \
+                 "the gate on the target PR is correctly still red."
+            exit 1
+          fi
+
+          echo "::error::The review action ran but concluded '$CONCLUSION'. Treating that as no" \
+               "review rather than letting the gate be refreshed toward green."
+          exit 1
+
+  # WHY THIS SURVIVED THE FRESHNESS DELETION, when almost everything around it did not.
+  #
+  # Removing the strict rule was expected to retire this job too, on the reasoning that a push
+  # creates a fresh gate run which now greens immediately. That is true OF A PUSH, and it is not
+  # the case this job exists for. The gate triggers on `pull_request` only, so the terminal flow
+  # - push, then ask for a review, then merge - produces no event after the review lands, and a
+  # check run keeps its last conclusion until something re-runs it. The check would sit red at
+  # the value it recorded BEFORE the review existed, and the only ways out would be a dummy push
+  # or a hand-run re-run, on every PR.
+  #
+  # That is not theory: traced live on astubbs/parallel-consumer#288, where a review posted at
+  # 08:29 for the current head left `claude-review` red until a hand-run `gh run rerun --failed`
+  # at 08:37. Leniency does not touch that mechanism - it changes what the gate ASKS, not when
+  # it is asked.
+  #
+  # What leniency DID delete from here: the reviewed-SHA job output and the head-moved refusal,
+  # which only mattered while the answer depended on which commit was reviewed.
+  # Holds the contract's only write grant, in a job that checks NOTHING out. See "WHY THIS IS TWO
+  # JOBS" in the header before changing anything here - in particular, do not add a checkout.
+  refresh-gate:
+    runs-on: ubuntu-latest
+    needs: review
+    # ONLY AFTER A REVIEW THAT ACTUALLY SUCCEEDED. An earlier revision used `always()`, with the
+    # rationale that a failed review should still refresh the gate rather than leave a stale
+    # verdict. That rationale was wrong, and backwards: the gate accepts any fresh,
+    # finished-looking `claude[bot]` comment, and a failed run can still leave its tracking or
+    # error comment behind. Refreshing the gate toward SUCCESS after a review that failed is
+    # exactly how an error message turns a required check green. A failed review leaving the
+    # check red is the correct outcome, not a stale one.
+    #
+    # `needs:` alone would already skip this job on a failed review; the explicit test keeps that
+    # true if anyone ever adds `continue-on-error` to the review step.
+    #
+    # It tests the ACTION's conclusion, not the step's outcome, and the difference is not
+    # academic. In run 31466885778 the action refused to start and the step still reported
+    # success, so an outcome test passed and this job re-ran the gate for a review that never
+    # happened. The action's `conclusion` output is empty on every path that did not actually
+    # review, which is the distinction this job needs.
+    if: needs.review.outputs.review_conclusion == 'success'
+    permissions:
+      # The whole reason this job exists.
+      actions: write
+      # To read the PR's current head SHA, and nothing else.
+      pull-requests: read
+    steps:
       # WITHOUT THIS STEP THE GATE STAYS RED FOREVER AFTER A SUCCESSFUL REVIEW.
       #
       # `claude-review` is produced by .github/workflows/claude-code-review.yml, which triggers
@@ -286,43 +537,21 @@ jobs:
       # dispatch- or comment-triggered run would attach its check to the default branch instead
       # and never satisfy the PR's required check.
       #
-      # ONLY AFTER A REVIEW THAT ACTUALLY SUCCEEDED. An earlier revision used `always()`, with
-      # the rationale that a failed review should still refresh the gate rather than leave a
-      # stale verdict. That rationale was wrong, and backwards: the gate accepts any fresh,
-      # finished-looking `claude[bot]` comment, and a failed run can still leave its tracking or
-      # error comment behind. Refreshing the gate toward SUCCESS after a review that failed is
-      # exactly how an error message turns a required check green. A failed review leaving the
-      # check red is the correct outcome, not a stale one.
-      #
       # Never fails the job: not finding a gate run to re-run is a reason to say so, not to fail
       # a review that already happened.
       - name: Re-run the review gate so it sees this review
-        if: steps.claude-review.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
-          # The SHA this run actually checked out and reviewed.
-          REVIEWED_SHA: ${{ steps.reviewed-sha.outputs.sha }}
         run: |
           head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
 
-          # Refuse to refresh the gate for a head this review did not look at. The reviewer
-          # checked out REVIEWED_SHA minutes ago; if the PR has moved since, the review covers
-          # the old commit, and re-running the gate now would let a comment timestamped after
-          # the new head arrived certify code the reviewer never saw. Leaving the check red
-          # asks for a fresh review of the new head, which is the honest answer.
-          #
-          # This narrows the window rather than closing it: the gate still compares timestamps
-          # rather than SHAs, so a later gate run can still accept this review for the newer
-          # head. Closing it properly means recording the reviewed SHA itself - see
-          # docs/inflight/ci-review-agent.md.
-          if [ "$head_sha" != "$REVIEWED_SHA" ]; then
-            echo "::warning::PR head moved from $REVIEWED_SHA to $head_sha while this review ran," \
-                 "so the review covers the older commit. Not refreshing the gate - dispatch a" \
-                 "fresh review for $head_sha."
-            exit 0
-          fi
+          # No head-moved comparison any more, and none is needed. The gate no longer asks
+          # whether the review covered this head - only whether a finished review exists on the
+          # PR - so a head that moved mid-review does not change the answer, and the reviewed
+          # SHA no longer has to be carried across the job boundary. It went with the freshness
+          # rule; see docs/inflight/parked-strict-review-gate-freshness.md.
 
           # head_sha ALONE DOES NOT IDENTIFY THIS PR'S GATE RUN. One head can back more than one
           # PR - the same branch opened against `master` and a release branch - and the gate runs

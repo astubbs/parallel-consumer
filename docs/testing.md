@@ -55,15 +55,18 @@ registry staying honest, never on the test outcomes.
 
 The live registry and task list is [`docs/quarantined-tests.md`](quarantined-tests.md), enforced by
 `bin/check-quarantine-registry.sh` to match the annotations in both directions so it cannot drift;
-`bin/check-quarantine-owners.sh` additionally verifies each entry's owner claim (the owning PR
-exists, is open, and eventually removes the quarantine).
+`bin/check-quarantine-owners.sh` additionally verifies each entry's owner claim when it names one
+(the owning PR exists, is open, and eventually removes the quarantine); an entry without an owner is
+legal and flagged as an advisory, not an error.
 
 Rules:
 
-1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose.
+1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose. The
+   repository owner can grant an explicit, recorded exception - see the registry's rule list.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
-   merging master, atomically restoring the test to the gating lane.
+   merging master, atomically restoring the test to the gating lane. An owning PR is the goal, not
+   a precondition - unowned entries stay loud via the lane report and the release guard.
 
 A non-empty lane blocks releases - see [`docs/releasing.md`](releasing.md). Run the lane locally
 with `bin/quarantined-test.sh`.

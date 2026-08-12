@@ -42,6 +42,55 @@ docs-and-CI-scripts branch that touches no product code, so the branch is not a 
 suite randomises its seed per run, so other branches passing the same day only means their seeds
 did not draw this interleaving.
 
+**Third sighting, 2026-08-12 - the COOPERATIVE variant went red, and this one is NOT confirmed as
+the stall.** `ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor`
+failed on [job 93954713987](https://github.com/astubbs/parallel-consumer/actions/runs/31544745175/job/93954713987).
+**Replay seed `3986919097693415295`** - captured because it is the part no command can recover once
+the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=3986919097693415295
+
+**Read this as consistent with the family, not as a member of it.** The second sighting above was a
+clean `ProgressProbe` kill - explicit `CLASS2_STALL`/`LAG_STAGNATION` violations, named partitions,
+lag numbers, a 154s stagnation against a 150s bound. This one has **no probe verdict that could be
+extracted from the log at all**. What it shows is a shutdown-path symptom:
+
+```
+Thread execution pool termination await timeout (PT10S)! Were any processing jobs dead locked
+(test latch locks?) or otherwise stuck? Forcing shutdown of workers.
+```
+
+That is compatible with work wedged behind the open deadlock, and equally compatible with an
+ordinary chaos `STOP_NO_DRAIN` racing a slow shutdown. **Nothing here distinguishes the two**, and
+the inference should not be made without doing so.
+
+**What would settle it**, for whoever picks this up: replay the seed above and look for a
+`ProgressProbe` verdict. A `CLASS2_STALL`/`LAG_STAGNATION` violation alongside the termination
+timeout makes it the family; `probe violations=[]` with the timeout still present makes it a
+shutdown-path issue of its own, and a third thing to chase rather than evidence about astubbs#29.
+Check the surefire XML rather than the console log - the console tail here carried no verdict either
+way, which is why this entry cannot resolve it.
+
+**Why it matters even unconfirmed: it is the cooperative sibling, one assignor apart.** The second
+sighting records that the cooperative variant *passed in that same run* (`probe violations=[]`), and
+reasons from that to "whatever remains is eager-protocol-specific". A cooperative red is the first
+datapoint pointing the other way - and it is **not** enough to retire that inference, precisely
+because it is unconfirmed as a stall. If the replay comes back with a probe violation, the
+eager-specific reading needs revisiting; if it comes back clean, it stands untouched. No cooperative
+sighting had been recorded before this one.
+
+**Do not re-diagnose astubbs#100 from this log.** It is full of
+`org.apache.kafka.common.errors.RebalanceInProgressException` lines. Those are the **landed** fix
+working - `ConsumerOffsetCommitter.commitDeferringOnRebalance()` catching and deferring - not the old
+unhandled path that killed the broker-poll thread. Grepping the log for that exception and
+concluding the poll thread died again would re-open something already closed.
+
+**Branch context:** seen on astubbs#287, a review-gate/CI branch whose only Java change is a
+one-line test annotation, so the branch is not a suspect. As with the second sighting, the chaos
+suite randomises its seed per run, so other branches passing the same day only means their seeds did
+not draw this interleaving.
+
 **Gated on astubbs#29: proving thread-parallel integration tests are safe again.** astubbs#68 made the integration
 suite reliable by *forking* per broker (`forkCount=4`), which sidesteps the deadlock rather than
 proving it gone - the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure it was hiding is

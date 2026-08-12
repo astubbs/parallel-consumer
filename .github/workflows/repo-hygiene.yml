@@ -61,3 +61,31 @@ jobs:
       # an action in one grouped PR.
       - name: One version per action
         run: bash bin/check-action-versions.sh
+
+  cve-exclusions:
+    name: "deps: CVE exclusion expiry"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # Self-test first, as everywhere else here. This one has a control arm: two fixtures that
+      # differ only by a single day either side of the limit, so a pass on one and a fail on the
+      # other shows the expiry rule is what decides, and not something incidental.
+      - name: Self-test the exclusion-expiry guard
+        run: bash bin/test-check-cve-exclusions.sh
+
+      # The root pom's `excludeVulnerabilityIds` is what keeps the whole-tree CVE scan from going
+      # permanently red on a finding nobody can act on, and some of those entries are TEMPORARY -
+      # parked only until an upstream release carries a fix that is already merged. Nothing was
+      # going to tell us when it landed: the two ids this was written for are in no advisory
+      # database, so no Dependabot alert can fire, and the retirement condition lived in a pom
+      # comment addressed to whoever happened to read it. After 90 days the entry stops being a note
+      # and becomes a red check that names itself.
+      #
+      # HERE rather than in dependency-audit.yml, which is where the exclusion list is otherwise
+      # read: that job is skipped for fork PRs and dies early on a token expiry or a Sonatype
+      # outage, so the list would rot unwatched for exactly as long as the lane was broken. This
+      # check needs no JDK, no secrets and no network - the charter of this workflow.
+      - name: Temporary CVE exclusions must expire
+        run: bash bin/check-cve-exclusions.sh

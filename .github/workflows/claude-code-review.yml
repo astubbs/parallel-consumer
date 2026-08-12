@@ -1,10 +1,10 @@
 name: review gate
 
 # The REVIEW GATE. It does not review anything, and it costs nothing to run - no Claude
-# invocation, no JDK, no build. It asserts that a review exists for the CURRENT head of the
-# PR, and goes red when one does not.
+# invocation, no JDK, no build. It asserts that this PR HAS HAD a deliberate review, and goes
+# red when it has not.
 #
-# The reviewer itself is on demand, in .github/workflows/claude-code-review-dispatch.yml:
+# The reviewer itself is on demand, two ways - dispatched, or asked for by comment:
 #
 #   gh workflow run claude-code-review-dispatch.yml -R astubbs/parallel-consumer --ref master \
 #     -f pr=<number> -f focus="<optional steer>"
@@ -22,26 +22,31 @@ name: review gate
 # docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md, which
 # already lists this workflow twice. Hence: cheap gate always, expensive reviewer on demand.
 #
+# IT NO LONGER ASKS WHETHER THE REVIEW COVERED THE CURRENT HEAD. It used to, and the strict
+# implementation is archived at the tag `archive/review-gate-strict-head-freshness` with the
+# reasoning in docs/inflight/parked-strict-review-gate-freshness.md. Short version: strict is
+# the stronger guarantee, but per-push coverage already comes from an auto-reviewer, and
+# enforcing strictness here cost a write-scoped job on every review route plus a page of
+# timestamp plumbing. Do not re-add it without reading that entry.
+#
 # THE JOB NAME `claude-review` IS AN API. It is a required status check in the master ruleset
 # (`gh api repos/astubbs/parallel-consumer/rules/branches/master`), matched by name. Rename the
 # job and the ruleset silently stops being satisfied by anything - same convention, and same
 # hazard, as the job names in repo-hygiene.yml.
 #
-# One thing this rewrite quietly fixes: because this file no longer invokes
+# One thing the on-demand split quietly fixes: because this file no longer invokes
 # `claude-code-action`, the action's workflow-validation guard no longer applies to it. A PR
 # editing the gate used to lose its own review - the action refuses to run when its workflow
 # file differs from the default branch, exits 0, and the gate then correctly reds a REQUIRED
 # check that no re-run can turn green, because the input is the workflow diff itself. That
-# needed an admin ruleset bypass to merge. It does not any more, and for the same reason a PR
-# editing the reviewer does not either: the reviewer is dispatched `--ref master`, so the copy
-# that runs is the default branch's.
+# needed an admin ruleset bypass to merge. It does not any more.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
-# Newest push wins. A superseded run has nothing to say: it would be judging a head that is
-# already gone. Keyed on the PR number rather than the ref so it also covers reopened PRs.
+# Newest push wins. A superseded run has nothing to say. Keyed on the PR number rather than the
+# ref so it also covers reopened PRs.
 concurrency:
   group: claude-review-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -52,44 +57,72 @@ jobs:
     # not held to the review requirement. Widening that is a separate decision from this one.
     if: github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
-    # Two `gh api` calls and a shell script. If it has not finished in five minutes something
-    # is wrong, and a wedged required check is worse than a failed one.
+    # One `gh api` call and a shell script. If it has not finished in five minutes something is
+    # wrong, and a wedged required check is worse than a failed one.
     timeout-minutes: 5
-    # Read-only, and deliberately narrower than the reviewer job that used to live here: this
-    # job posts nothing, so it holds no write scope and no `id-token`.
-    #   contents        - checkout, and reading the head commit's date
+    # Read-only, and deliberately narrow: this job posts nothing, so it holds no write scope and
+    # no `id-token`. `checks: read` went with the freshness rule - it existed only to read when
+    # GitHub first raised check suites for the head SHA, and nothing compares timestamps now.
+    #   contents        - checkout, for bin/
     #   pull-requests   - reading the PR's comments
-    #   checks          - reading when GitHub first raised checks for the head SHA
     permissions:
       contents: read
       pull-requests: read
-      checks: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          # Only bin/ is needed. The reviewer wanted full history to diff against the base;
-          # the gate does not look at the code at all.
+          # Only bin/ is needed. The gate does not look at the code at all.
           fetch-depth: 1
+          persist-credentials: false
+
+      # A FORK PR CANNOT SATISFY THIS GATE, AND THAT IS DELIBERATE - see docs/ci.md, "A fork PR
+      # cannot turn the gate green".
+      #
+      # This check lives here rather than being left implicit, and it became load-bearing when
+      # the freshness rule was removed. The gate asks only "has `claude[bot]` posted a finished
+      # comment on this PR?", and `claude.yml` answers `@claude` on fork PRs - so a maintainer
+      # ASKING AN ORDINARY QUESTION on a fork PR would otherwise satisfy the gate on the next
+      # push. That is the self-asserted escape docs/ci.md rejects by name: the person who wants
+      # the merge would also be the person certifying the review.
+      #
+      # Under the old strict rule this was harder to hit but never actually closed, because the
+      # gate has always judged comments rather than provenance. Leniency made it reachable, so
+      # it is now refused explicitly.
+      #
+      # A fork PR is merged on a human's judgement with this check red, or its commits are moved
+      # to a branch in this repo. Both are documented.
+      - name: Refuse fork heads
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "::error::This PR's head is in '${HEAD_REPO:-<deleted fork>}', not $REPO." \
+               "A fork PR cannot turn claude-review green: the reviewer refuses fork heads" \
+               "(it would run untrusted code beside a credential), and this gate will not" \
+               "accept an ordinary @claude answer as a review. Push the same commits to a" \
+               "branch in this repo to get a review, or merge with this check red after" \
+               "reviewing by hand. See docs/ci.md."
+          exit 1
 
       # The gate is the only thing standing between "nobody reviewed this" and a green
       # required check, so it is tested before it is trusted. Seconds, no JDK.
       - name: Self-test the review gate
         run: bash bin/test-check-review-posted.sh
 
-      # Rationale, matching rules, the strict-vs-lenient decision, and what this deliberately
-      # does NOT prove: bin/check-review-posted.sh.
-      - name: Assert a review exists for this head
+      # Rationale, the two matching rules, why freshness was removed, and what this
+      # deliberately does NOT prove: bin/check-review-posted.sh.
+      - name: Assert a review exists for this PR
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # Segments the comment stream. A comment body carrying this marker would otherwise
-          # open a comment of its own choosing in the stream, with an author and timestamp of
-          # its own choosing - so the token must be UNGUESSABLE, not merely per-run.
+          # open a comment of its own choosing in the stream, with an author of its own
+          # choosing - so the token must be UNGUESSABLE, not merely per-run.
           #
           # It used to be ${{ github.run_id }}, which is neither: the run id is public the
           # moment the run starts, so anyone able to comment on the PR could paste a marker
@@ -99,37 +132,9 @@ jobs:
           MARKER_TOKEN=$(openssl rand -hex 16)
           export MARKER_TOKEN
 
-          # FALLBACK ONLY: when the commit was made, by the contributor's own clock. Set at
-          # commit time, which can be well before the push - and, being contributor-controlled,
-          # it can also be in the future, which is why the script prefers the server-side value
-          # below rather than taking the later of the two.
-          committed_at=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.committer.date')
-
-          # PREFERRED: when GitHub first raised checks for this SHA, i.e. effectively when it
-          # arrived. Server-side, so it closes the window where somebody commits, asks for a
-          # review, and only then pushes. Empty when a SHA legitimately has no suites yet; the
-          # script falls back to the committer date and says so.
-          #
-          # PAGINATED, because the endpoint's page ORDER is undocumented. Unpaginated it returns
-          # one page of 30, and a head in this repo already carries 15 suites - close enough that
-          # a few more workflows start truncating it. Today's order happens to be oldest-first,
-          # so even a truncated page still holds the earliest suite and the minimum comes out
-          # right; that is an accident of an unspecified API, not a guarantee. If it ever flips
-          # to newest-first, the minimum jumps forward and the gate starts rejecting valid
-          # reviews of a head that never moved - a red no re-run can clear. One flag removes the
-          # assumption.
-          #
-          # Sorted here rather than with jq's `min` because --paginate applies --jq PER PAGE: a
-          # per-page `min` emits one line per page, and the shell would take the last. So: a flat
-          # list of timestamps, sorted (ISO-8601 UTC sorts chronologically), first line taken with
-          # awk rather than `head -1` so the writer never takes EPIPE.
-          first_seen_at=$(gh api --paginate \
-            "repos/$REPO/commits/$HEAD_SHA/check-suites?per_page=100" \
-            --jq '.check_suites[].created_at' | LC_ALL=C sort | awk 'NR==1')
-
-          # One marker line per comment, then that comment's body. Keep this marker in step
-          # with bin/check-review-posted.sh and bin/test-check-review-posted.sh.
+          # One marker line per comment, then that comment's body. The created-at is carried
+          # for the human-readable message only; nothing compares it to anything. Keep this
+          # marker in step with bin/check-review-posted.sh and bin/test-check-review-posted.sh.
           gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
               --jq '.[] | "<!-- check-review-posted \(env.MARKER_TOKEN) \(.created_at) \(.user.login) -->", (.body // "")' \
-            | bash bin/check-review-posted.sh \
-                "$MARKER_TOKEN" "$HEAD_SHA" "$committed_at" "$first_seen_at"
+            | bash bin/check-review-posted.sh "$MARKER_TOKEN"
