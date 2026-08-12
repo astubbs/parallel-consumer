@@ -223,6 +223,8 @@ quality_system:
       distinct from the scan's two reds because neither the tree nor the lane is at fault - the
       bookkeeping has rotted. What expires is the classification, never a claim about an upstream
       release being late, so the red is always clearable by retiring the entry or re-arguing it.
+      Dates and structure only; green means every entry is classified and in date, not that any
+      exclusion deserves to be there - whether a stated reason is any good stays a review question.
     inspect: bin/check-cve-exclusions.sh, run by .github/workflows/repo-hygiene.yml
   - id: mutation-analysis
     detects: Assertions that survive relevant mutations in changed offset code.
