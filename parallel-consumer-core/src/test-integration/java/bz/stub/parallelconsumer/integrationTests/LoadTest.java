@@ -61,6 +61,13 @@ public class LoadTest extends DbTest {
      *
      * <pre>./mvnw verify -Pci -Dload.total=400000</pre>
      *
+     * Run that top rung outside the CI lanes, or raise their job timeout first. The deadline is derived, so
+     * {@code ceilingFor(400_000)} scales the gating 60s by 100 to <b>100 minutes</b>, while both lanes that
+     * run this suite cap at 60 - {@code maven.yml}'s performance leg and {@code pr-highcpu-fast-feedback.yml}.
+     * Inside either, a genuinely hung run - the exact failure the deadline exists to catch - is killed by the
+     * runner 40 minutes before the ceiling fires, turning a diagnostic {@code ConditionTimeoutException} into
+     * an ambiguous cancelled job.
+     * <p>
      * The same commit also parked {@code 8}, which is not a volume rung at all - it is the
      * fast-iteration setting for working on this harness itself, and it was deleted as though it
      * were one of the volumes. It is {@code -Dload.total=8}, and it works now: as parked it could
@@ -116,9 +123,16 @@ public class LoadTest extends DbTest {
 
     /**
      * The same scenario at one of the {@link #RECOVERED_VOLUMES}. Tagged, so the gating lane never
-     * runs it and the default excluded groups keep it out; select it with
-     * {@code -Dincluded.groups=performance}, and reach the top of the recovered range by adding
-     * {@code -Dload.total=400000}.
+     * runs it and the default excluded groups keep it out; reach the top of the recovered range by
+     * adding {@code -Dload.total=400000}.
+     * <p>
+     * The tag is not opt-in, though: {@code bin/performance-test.sh} passes
+     * {@code -Dincluded.groups=performance}, and that script is the "Performance Tests" leg of
+     * {@code maven.yml} - a required check on every PR - so this case runs automatically there at
+     * {@link #HIGH_VOLUME_TOTAL}, ten times the gating volume, with no retry. {@code LoadTest} is a
+     * listed member of the load-tightness flake family at the gating volume
+     * (docs/inflight/test-load-tightness-flakes.md, 1/20, undiagnosed); whether that rate holds at
+     * this volume has not been measured.
      */
     @SneakyThrows
     @Test

@@ -54,8 +54,13 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
      *     <li><b>v1 short overflow</b> - {@link OffsetEncoding#BitSet}, {@link OffsetEncoding#BitSetCompressed},
      *     {@link OffsetEncoding#RunLength} and {@link OffsetEncoding#RunLengthCompressed} encode their length (bitset
      *     bit count / run length) as a {@code short}, so they cannot express anything past {@link Short#MAX_VALUE}
-     *     (32,767). The encoders detect the overflow while encoding and drop themselves from the candidate set - see
-     *     {@link BitSetEncoder#MAX_LENGTH_ENCODABLE} and {@link OffsetRunLength}.</li>
+     *     (32,767). The encoders detect the overflow while encoding and drop themselves from the candidate set: the
+     *     bitset limit is the {@code Short.MAX_VALUE} guard in {@link BitSetEncoder}'s {@code initV1}, and the
+     *     run-length limit is {@code MathUtils.toShortExact} throwing {@code RunLengthV1EncodingNotSupported} out of
+     *     {@link RunLengthEncoder#serialise()}. Note it is neither {@link BitSetEncoder#MAX_LENGTH_ENCODABLE}, which
+     *     is {@code Integer.MAX_VALUE} and is consulted only on the v2 path, nor {@link OffsetRunLength}, which is
+     *     the decode side and carries no overflow detection at all - raising either would leave these codecs
+     *     overflowing at 32,767 exactly as before.</li>
      *     <li><b>metadata size</b> - {@link OffsetEncoding#BitSetV2} encodes the length as an int, so it does not
      *     overflow, but uncompressed it needs one bit per offset in the range and the resulting payload exceeds
      *     {@link OffsetMapCodecManager#DefaultMaxMetadataSize} (4096 bytes), so it is rejected when the payload is
@@ -336,18 +341,10 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             EpochAndRecordsMap<String, String> epochAndRecordsMap = new EpochAndRecordsMap<>(testRecordsWithBaseCommittedRecordRemoved, newWm.getPm());
             newWm.registerWork(epochAndRecordsMap);
 
+            // Asserted once: nothing between here and the work retrieval below mutates partitionState, so a second
+            // and third copy of these same checks would re-verify state that cannot have changed.
             if (isWorkingCodec(encoding)) {
                 // check state reloaded ok from consumer
-                assertTruth(partitionState).getOffsetHighestSucceeded().isEqualTo(highestSucceeded);
-            } else {
-                // Degraded: re-polling the records lifts the highest *seen* offset back to the true high water mark,
-                // but which of them had succeeded lived only in the offset map that was never committed, so the
-                // highest *succeeded* offset stays where the bare committed offset left it.
-                assertDegradedReloadedState(partitionState, FIRST_COMMITTED_OFFSET, highestSucceeded);
-            }
-
-            //
-            if (isWorkingCodec(encoding)) {
                 assertTruth(partitionState).getOffsetHighestSequentialSucceeded().isEqualTo(FIRST_SUCCEEDED_OFFSET);
 
                 assertTruth(partitionState).getOffsetHighestSucceeded().isEqualTo(highestSucceeded);
@@ -358,35 +355,15 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
                 var incompletes = partitionState.getIncompleteOffsetsBelowHighestSucceeded();
                 Truth.assertThat(incompletes).containsExactlyElementsIn(expected);
             } else {
+                // Degraded: re-polling the records lifts the highest *seen* offset back to the true high water mark,
+                // but which of them had succeeded lived only in the offset map that was never committed, so the
+                // highest *succeeded* offset stays where the bare committed offset left it.
                 assertDegradedReloadedState(partitionState, FIRST_COMMITTED_OFFSET, highestSucceeded);
             }
 
             // check record is marked as incomplete
             var anIncompleteRecord = records.get(3);
             assertThat(partitionState.isRecordPreviouslyCompleted(anIncompleteRecord)).isFalse();
-
-            // check state
-            {
-                if (isWorkingCodec(encoding)) {
-                    long offsetHighestSequentialSucceeded = partitionState.getOffsetHighestSequentialSucceeded();
-                    assertThat(offsetHighestSequentialSucceeded).isEqualTo(0);
-
-                    long offsetHighestSucceeded = partitionState.getOffsetHighestSucceeded();
-                    assertThat(offsetHighestSucceeded).isEqualTo(highestSucceeded);
-
-                    long offsetHighestSeen = partitionState.getOffsetHighestSeen();
-                    assertThat(offsetHighestSeen).isEqualTo(highestSucceeded);
-
-                    var incompletes = partitionState.getIncompleteOffsetsBelowHighestSucceeded();
-                    Truth.assertThat(incompletes).containsExactlyElementsIn(expected);
-
-                    assertThat(partitionState.isRecordPreviouslyCompleted(anIncompleteRecord)).isFalse();
-                } else {
-                    assertDegradedReloadedState(partitionState, FIRST_COMMITTED_OFFSET, highestSucceeded);
-
-                    assertThat(partitionState.isRecordPreviouslyCompleted(anIncompleteRecord)).isFalse();
-                }
-            }
 
 
             var workRetrieved = newWm.getWorkIfAvailable();
@@ -405,11 +382,12 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
                         .map(ConsumerRecord::offset)
                         .filter(offset -> offset >= FIRST_COMMITTED_OFFSET)
                         .collect(Collectors.toList());
+                // Pinning the exact ordered contents already determines everything else about this list - a further
+                // doesNotContainSequence(expected) could not fail unless the assertion above had already failed.
                 Truth.assertWithMessage("Degraded codec redelivers every record from the committed offset up, including the ones that had succeeded")
                         .that(workRetrievedOffsets)
                         .containsExactlyElementsIn(everyRecordFromTheCommittedOffsetUp)
                         .inOrder();
-                assertThat(workRetrievedOffsets).doesNotContainSequence(expected);
             }
         }
 

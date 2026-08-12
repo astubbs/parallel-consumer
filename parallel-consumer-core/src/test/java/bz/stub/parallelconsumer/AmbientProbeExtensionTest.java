@@ -135,11 +135,11 @@ class AmbientProbeExtensionTest {
         String second = AmbientProbeExtension.buildAutopsy(context, probe, new AssertionError("second failure"));
 
         // the first autopsy of a run carries the dump
-        assertThat(first).contains("environment (once per run):");
+        assertThat(first).contains("environment (once per JVM):");
         assertThat(first).contains("java.version=");
         // a second failing test does not repeat a few hundred lines
-        assertThat(second).contains("environment: dumped in this run's first autopsy");
-        assertThat(second).doesNotContain("environment (once per run):");
+        assertThat(second).contains("environment: dumped in this JVM's first autopsy");
+        assertThat(second).doesNotContain("environment (once per JVM):");
     }
 
     @Test
@@ -152,6 +152,26 @@ class AmbientProbeExtensionTest {
                 contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
 
         assertThat(autopsy).contains("ambient.probe.test.multiline=alpha\\nbeta");
+    }
+
+    /**
+     * The autopsy goes straight to CI logs, so a property whose name reads like a credential is masked - while the
+     * key itself still prints, because knowing it was set is the diagnostic.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.password", value = "hunter2")
+    @SetSystemProperty(key = "ambient.probe.test.plain", value = "not-a-secret")
+    void environmentDumpMasksValuesOfCredentialLookingKeys() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("ambient.probe.test.password=***");
+        assertThat(autopsy).doesNotContain("hunter2");
+        // an ordinary knob is untouched - the masking is by key name, not a blanket filter
+        assertThat(autopsy).contains("ambient.probe.test.plain=not-a-secret");
     }
 
     // --- autopsy rendering ---

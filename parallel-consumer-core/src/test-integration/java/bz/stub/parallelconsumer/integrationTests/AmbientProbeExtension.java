@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -224,15 +225,38 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
      */
     private static void appendEnvironment(StringBuilder sb) {
         if (!ENVIRONMENT_DUMPED.compareAndSet(false, true)) {
-            sb.append("environment: dumped in this run's first autopsy\n");
+            sb.append("environment: dumped in this JVM's first autopsy\n");
             return;
         }
-        sb.append("environment (once per run):\n");
+        sb.append("environment (once per JVM):\n");
         new TreeMap<>(System.getProperties().entrySet().stream()
                 .collect(toMap(e -> String.valueOf(e.getKey()), e -> String.valueOf(e.getValue()), (a, b) -> a)))
                 .forEach((key, value) -> sb.append("  ").append(key).append('=')
-                        .append(value.replace("\n", "\\n").replace("\r", "\\r")).append('\n'));
+                        .append(redact(key, value)).append('\n'));
     }
+
+    /**
+     * The autopsy prints straight to CI logs, which anyone with access to the Actions run can read, so a property
+     * whose NAME reads like a credential has its value masked. Nothing in this repo passes a secret as {@code -D}
+     * today - this stops a future one from being dumped rather than fixing a present leak.
+     * <p>
+     * Masking by name rather than filtering to an allowlist of known-interesting prefixes is deliberate: an
+     * allowlist silently drops the next knob somebody adds, which is precisely when the dump is wanted, and it
+     * would need hand-maintaining against a set the code cannot derive. The key is always printed, so the reader
+     * still sees the property was set - only the value is withheld.
+     */
+    private static String redact(String key, String value) {
+        String lower = key.toLowerCase(Locale.ROOT);
+        for (String marker : SECRET_KEY_MARKERS) {
+            if (lower.contains(marker)) {
+                return "***";
+            }
+        }
+        return value.replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    private static final String[] SECRET_KEY_MARKERS =
+            {"password", "passwd", "secret", "token", "credential", "apikey", "api.key", "accesskey", "access.key"};
 
     /**
      * Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. Resets the
