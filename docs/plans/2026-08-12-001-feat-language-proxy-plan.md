@@ -4,7 +4,7 @@ type: feat
 date: 2026-08-12
 topic: language-proxy
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: requirements-only
+artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 ---
@@ -15,7 +15,8 @@ execution: code
 
 - **Objective:** Give applications written in languages other than Java the parallel consumption Parallel Consumer provides today, by running PC in a sidecar the application's worker processes talk to over loopback, and shipping two client libraries — Python and Go.
 - **Product authority:** This plan owns the sidecar proxy, its wire protocol, and its first two client libraries. It does not own the shared multi-tenant server, transactional exactly-once over the wire, or any in-process language binding; those are named non-goals below.
-- **Open blockers:** Two. The Go client library's effort budget under R16 has no value, and the latency multiple the first Success Criterion is judged against has no value. Both must be set before the work they gate begins. Eleven further questions are deferred to planning.
+- **Open blockers:** None blocking a start. Three values had no owner and are now recorded as explicit assumptions in the Planning Contract (ASM1-ASM3); each names what would falsify it. ASM3 — that the users who asked for a Python client need key-ordered concurrency rather than the parallel consumption Share Groups now supply — is the highest-risk assumption in this document, and if it is wrong the product changes shape rather than the plan.
+- **Product Contract preservation:** unchanged. No R-, A-, F- or AE-ID was added, removed, renumbered or reworded during enrichment.
 
 ---
 
@@ -33,7 +34,7 @@ Broker-native Share Groups (KIP-932, GA on Apache Kafka 4.2) now give any runtim
 
 The demand is real rather than hypothetical: users have asked for a Python client, and one attempt exists upstream. That attempt, `confluentinc/parallel-consumer#443`, took the in-process route — a JPype/JNI bridge that starts a JVM inside the Python interpreter and ships a Parallel Consumer jar inside the wheel. It was closed unmerged in the 2023-06-15 administrative sweep. The approach gives full API fidelity because the boundary is PC's own Java API, but it requires a JDK in the client's runtime, serialises CPU-bound callbacks behind the GIL, and generalises only to languages with a mature JVM foreign-function bridge — which in practice means Python and nothing else worth shipping.
 
-That demand predates Share Groups reaching GA, and it evidences appetite for parallel consumption in Python rather than for key-ordered concurrency specifically. Whether the people who asked need the narrower claim is an open blocker, not an assumption.
+That demand predates Share Groups reaching GA, and it evidences appetite for parallel consumption in Python rather than for key-ordered concurrency specifically. Whether the people who asked need the narrower claim is carried as assumption ASM3, which names how to falsify it.
 
 The cost shape of the two routes differs in kind, not degree. An in-process binding pays at runtime, per deployment, forever, and must be written again for every language. A proxy pays once at design time, in protocol fidelity: whatever the protocol does not express is unavailable to every client, and every later PC capability needs a protocol revision.
 
@@ -230,7 +231,6 @@ stateDiagram-v2
 - A GraalVM native image of the sidecar — the target packaging per R25, not v1 content.
 - Authentication on the sidecar's own listener, which R17 leaves out of v1 and R18's warning presumes.
 - A worker liveness heartbeat. It is an additive protocol revision under R38 rather than a breaking one, and a per-connection liveness timeout is the shape KD1 excluded. The consequence is explicit: v1 detects a worker that dies but not one that hangs, so a hung worker holds its records and its shard's commit progress until its connection closes.
-- A protocol conformance suite for third-party client libraries — the route later languages take, not v1 content. Until it exists, community client libraries are unsupported and carry no compatibility promise, and R13's specification is validated by R15's independently written Go client alone.
 - Client libraries beyond Python and Go, per the assessment below.
 
 **Later language client libraries**
@@ -243,9 +243,11 @@ The baseline a non-Java runtime already has is Share Groups, not hand-rolled thr
 | PHP | Assess before building | Yes — no threading at all | Pure process model; `rdkafka-php` exists. Larger Kafka footprint than usually assumed. |
 | TypeScript / Node | Assess before building | Yes for CPU-bound work | Single-threaded event loop handles I/O concurrency well, so the parallelism gain is narrower than Ruby's or PHP's. |
 | C# / .NET | Required — nothing else justifies it | No | Real threads, mature async, and a first-class Confluent client. Share Groups already supply unordered concurrency, so only an ordering requirement makes a client worth building. |
-| Rust | Required — nothing else justifies it | No | Same position as C#. Smallest Kafka population of the set; best treated as a community contribution once the protocol is stable. |
+| Rust | Required — nothing else justifies it | No | Same position as C#. Smallest Kafka population of the set, so it sequences last. |
 
 Excluded rather than deferred: Kotlin and Scala run on the JVM and should use the library directly, where a proxy is strictly worse. Elixir and Erlang already have strong answers on the BEAM.
+
+Client libraries live in this repository and are generated from the protocol specification, not maintained as separate downstream projects. A new language arrives as a pull request here, so the repository's build owns the code-generation toolchain and its CI covers every client. No conformance suite for third-party implementations is scoped, because there are no third-party implementations to police. The bar R13's specification must clear is therefore generation quality for the languages above, not implementability by a stranger working from prose.
 
 **Outside this product's identity**
 
@@ -304,3 +306,220 @@ Excluded rather than deferred: Kotlin and Scala run on the JVM and should use th
 - `docs/plans/2026-08-07-002-feat-embedded-web-dashboard-plan.md` on `feats/web-gui` — the precedent for a new opt-in module, its one-command demonstration, and the bar that each capability must be something existing tools cannot provide.
 - `confluentinc/parallel-consumer#154` (mirrored as `astubbs/parallel-consumer#242`) — the original proxy proposal.
 - `confluentinc/parallel-consumer#443` — the JPype in-process binding, closed unmerged in the 2023-06-15 sweep.
+
+---
+
+## Planning Contract
+
+### Key Technical Decisions
+
+- KTD1. **The transport is settled by a spike between two candidates, not by argument.** Candidate A is protobuf-defined messages carried over framed connections without the gRPC stack; candidate B is gRPC bidirectional streaming. Each is built far enough to run the work-handout loop with a Python and a Go client, and the effort R16 records is the tiebreaker. The reasoning previously recorded against a streaming RPC framework — that it is materially harder under GraalVM native image — was verified false: gRPC's reachability metadata tracks its current release and covers bidirectional streaming in a CI-verified native test, while Vert.x removed its own metadata in 2026 and the shared repository's coverage lags its release and never exercises an HTTP or WebSocket server. Native image does not discriminate; toolchain weight against free HTTP/2 flow control does. (session-settled: user-directed — chosen over settling on gRPC immediately: the threading-model and generated-API concerns Confluent recorded when ksqlDB made this same choice are worth testing against our own design rather than accepted on their say-so.) Governs R1, R13, R23.
+
+- KTD2. **Client libraries are generated and live in this repository.** A new language arrives as a pull request here, so the build owns the code-generation toolchain and CI covers every client. This is why no conformance suite is scoped and why R13's bar is generation quality rather than implementability from prose. (session-settled: user-directed — chosen over independent downstream client projects proving themselves against a conformance suite: there are no third-party implementations to police.) Governs R13, R14, R15.
+
+- KTD3. **The module overrides `release.target` to 17.** The build compiles Java 17 source to Java 8 bytecode via Jabel, so modern networking APIs are invisible to a wire-protocol module. `parallel-consumer-mutiny/pom.xml` already models the override and records why it must be deliberate — at the wrong target that module compiled happily and failed at runtime, because nothing in the build detects the mistake. Governs R37.
+
+- KTD4. **The verdict-free return is a core change that mirrors the existing stale-work branch.** `WorkManager.handleFutureResult` throws on a work container with no success flag; the only re-queue entry point records the return as a record failure and increments the failed-attempt count. The new branch restores exactly what the stale branch restores — `endFlight()`, one decrement of the in-flight counter, and re-selectability — and adds a shard-availability increment without a retry-queue insert, so the awaiting-selection arithmetic nets correctly. Governs R27, R33.
+
+- KTD5. **The module lands depending on nothing from `feats/web-gui`.** The duplicate-code gate is a 5% absolute cap against a baseline near 4.2%, so copying that branch's serving code into a sibling module is the shape of change that exceeds it. Extracting a shared serving module once both branches are on trunk deletes duplication instead of creating it, and is scheduled as follow-up work rather than a dependency. Governs R29.
+
+- KTD6. **The sidecar extends `ExternalEngine` and expresses demand through its existing hooks.** That base already declines to stamp a verdict at dispatch, declines to pipeline into the worker pool, and rejects transactional commit mode outright — which independently enforces KD4. Demand is expressed by overriding the per-pass target hook, and a credit arriving on a worker connection wakes the control loop rather than waiting for the next commit tick. Worker connections hand work back only through the controller's mailbox; they never touch work-manager state directly, because the in-flight counter that gates the broker poller is not thread-safe and drift in it stalls the consumer silently. Governs R23, R26.
+
+### Assumptions
+
+- ASM1. The Go client library's budget under R16 is **three working days of one engineer**, covering reading the specification, finishing the generated surface, the runnable example of R19, and language-native packaging. Falsified by an overrun, which per the Success Criteria pauses any third language.
+- ASM2. The latency bar under R31 is **p99 within 1.5× and median within 1.25×** of the in-process baseline. Chosen to be falsifiable: a loopback round trip is tens of microseconds against a per-record cost normally dominated by the user function, so a looser bound could not fail.
+- ASM3. **The users who asked for a Python client need key-ordered concurrency, not the parallel consumption Share Groups now supply.** This is the highest-risk assumption in the document. It is falsified by one conversation with a requesting user, and if it is wrong the product changes shape rather than the plan. Test it before Phase 2 starts, not after.
+
+### High-Level Technical Design
+
+```mermaid
+sequenceDiagram
+  participant W as Worker (Python/Go)
+  participant S as Sidecar (PC + engine)
+  participant K as Kafka
+  W->>S: connect, request N records
+  S->>S: control loop target = outstanding credit
+  K-->>S: poll, shard
+  S->>W: record (≤ N outstanding)
+  W->>S: result + request 1 more
+  S->>S: mailbox → handleFutureResult
+  S->>K: encoded offsets committed on PC's schedule
+  Note over W,S: connection drops → verdict-free return,<br/>attempt count untouched
+```
+
+---
+
+## Implementation Units
+
+### Phase 1 — settle the transport and prove the crux
+
+### U1. Transport spike
+
+**Goal:** Settle KTD1 with evidence.
+**Requirements:** R1, R13, R23. **Dependencies:** none.
+**Files:** `docs/inflight/branch-language-proxy.md` (record the outcome), throwaway spike code not merged.
+**Approach:** Build each candidate far enough to hand a record out, take a result, and carry credit on the result message. Write a Python and a Go client against each. Record wall-clock effort per candidate and per language.
+**Execution note:** This is a decision instrument, not a deliverable — do not harden it. The output is a recorded number and a chosen candidate.
+**Test scenarios:** Test expectation: none — spike code is discarded.
+**Verification:** KTD1 names a winner, with the effort figures that chose it written into the inflight note.
+
+### U2. Module scaffolding
+
+**Goal:** A new module that builds, tests and satisfies every gate.
+**Requirements:** R37. **Dependencies:** U1.
+**Files:** `pom.xml`, `parallel-consumer-proxy/pom.xml`, `parallel-consumer-proxy/src/test/java/io/confluent/parallelconsumer/proxy/TestConventionsArchTest.java`, `.github/workflows/maven.yml`.
+**Approach:**
+1. Register in root `pom.xml` before `parallel-consumer-examples`, which stays last.
+2. Add the module to **both** duplicate-detector lists in `.github/workflows/maven.yml` — one is space-separated, one comma-separated.
+3. Override `release.target` to 17 per KTD3, with a comment saying why.
+4. Depend on `parallel-consumer-core`, and on the same coordinate with the `tests` classifier at test scope; add `commons-lang3` at test scope explicitly, since core's test-jar reaches for it and test scope is not transitive.
+**Patterns to follow:** `parallel-consumer-reactor/pom.xml` is the smallest module pom; `parallel-consumer-mutiny/pom.xml` models the `release.target` override.
+**Test scenarios:** The arch test runs and enforces the integration-test package rule.
+**Verification:** `bin/build.sh -pl parallel-consumer-proxy -am` passes, including the copyright check.
+
+### U3. Verdict-free work return in core
+
+**Goal:** A record can return to scheduling with no verdict and no retry consumed.
+**Requirements:** R27, R33. **Dependencies:** U2.
+**Files:** `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java`, `.../state/WorkManager.java`, `.../state/ShardManager.java`, `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/state/WorkManagerTest.java`.
+**Approach:** Add an abandoned marker distinct from the success optional; branch `handleFutureResult` on it before the existing throw; restore shard availability without a retry-queue insert. Per KTD4.
+**Execution note:** Write the counter assertion first and watch it fail — the in-flight counter is the thing most likely to drift silently.
+**Test scenarios:**
+- A record returned without a verdict is re-selectable on the next pass.
+- Its failed-attempt count is unchanged. Covers AE9.
+- The in-flight counter returns to its pre-return value; assert the exact number, not merely that work flows.
+- A work container with neither verdict nor abandoned marker still throws.
+- Returning twice does not double-decrement.
+**Verification:** The counter assertion passes and the existing stale-work path is untouched.
+
+### U4. The sidecar engine
+
+**Goal:** PC hands out only what workers have asked for.
+**Requirements:** R23, R26, R2. **Dependencies:** U3.
+**Files:** `parallel-consumer-proxy/src/main/java/io/confluent/parallelconsumer/proxy/ProxyProcessor.java`, `.../proxy/CreditLedger.java`, `parallel-consumer-proxy/src/test/java/io/confluent/parallelconsumer/proxy/CreditLedgerTest.java`.
+**Approach:** Extend `ExternalEngine`; override the per-pass target to the outstanding credit total; wake the control loop when credit arrives rather than waiting for the next tick. Per KTD6.
+**Patterns to follow:** `parallel-consumer-vertx`'s processor for the engine shape; its unit-test base for exercising an engine without a broker.
+**Test scenarios:**
+- A worker with two outstanding requests receives at most two records. Covers AE7.
+- A worker with zero credit receives nothing while another with credit is served.
+- Credit arriving wakes the loop rather than waiting for the commit interval.
+- Under key ordering with four workers, two records sharing a key are never in flight at once. Covers AE8.
+- A single-threaded worker keeping one request outstanding receives its next record without a further exchange. Covers AE17.
+**Verification:** Ordering holds across workers and no worker starves while credit is outstanding.
+
+### U5. Protocol surface and its guards
+
+**Goal:** Workers connect, are authorised, and exchange the protocol.
+**Requirements:** R3, R5, R17, R18, R29, R36, R9, R10, R35. **Dependencies:** U4.
+**Files:** `parallel-consumer-proxy/src/main/java/io/confluent/parallelconsumer/proxy/ProxyServer.java`, `.../proxy/ProxyOptions.java`, `.../proxy/AuthorityAllowlist.java`, `parallel-consumer-proxy/src/test/java/io/confluent/parallelconsumer/proxy/AuthorityAllowlistTest.java`.
+**Approach:** Bind loopback by default; require a separate named opt-in for a non-loopback bind; reject a connection whose declared authority is not allowlisted; take configuration at startup only. Per KTD5 the guards are written here rather than lifted.
+**Test scenarios:**
+- A connection declaring an unlisted origin is rejected before any record is delivered. Covers AE12.
+- A loopback worker declaring no origin connects under the default allowlist. Covers AE12.
+- A duplicate authority header is rejected rather than resolved to the first value.
+- A non-loopback bind without the opt-in refuses to start and names the missing setting. Covers AE6.
+- No configuration is settable over the protocol.
+**Verification:** The allowlist rejects a rebinding-shaped request on a loopback bind.
+
+### U6. Python client library
+
+**Goal:** The flagship client.
+**Requirements:** R14, R19. **Dependencies:** U5.
+**Files:** `parallel-consumer-proxy-python/` (layout follows U1's transport choice), including its example and tests.
+**Approach:** Generate the transport from the specification; hand-finish the surface so it reads idiomatically.
+**Test scenarios:**
+- A record is received, processed and reported, and the offset advances.
+- Several worker processes of one application process concurrently under key ordering.
+- A killed worker's records are redelivered with the attempt count unchanged.
+**Verification:** The example runs against a real broker.
+
+### U7. The differentiator proof
+
+**Goal:** Prove what the product claims.
+**Requirements:** R22. **Dependencies:** U6.
+**Files:** `parallel-consumer-proxy/src/test-integration/java/io/confluent/parallelconsumer/proxy/integrationTests/ProxyDifferentiatorIT.java`.
+**Approach:** Several Python worker processes, key ordering, more concurrent records than partitions, then restart and assert completed work is not reprocessed.
+**Execution note:** The package must be named `integrationTests` or failsafe silently never runs it. Assert a non-zero record count so a suite whose workers never connect cannot pass vacuously.
+**Test scenarios:**
+- Concurrency exceeds partition count under key ordering.
+- Out-of-order completions survive a restart without reprocessing. Covers AE2.
+- Unique topic and consumer group per run; no absolute per-operation deadlines.
+**Verification:** The test fails if run with a single worker, proving it measures the multi-worker claim.
+
+### Phase 2 — falsification, terminal failure, latency
+
+### U8. Go client library and the budget record
+
+**Goal:** Test the cheap-clients premise.
+**Requirements:** R15, R16. **Dependencies:** U7.
+**Files:** `parallel-consumer-proxy-go/`, `docs/inflight/branch-language-proxy.md`.
+**Approach:** Written from the specification alone by an author who did not write the proxy; effort recorded against ASM1's budget. Any proxy change needed to finish counts as falsification.
+**Test scenarios:** Mirrors U6's scenarios in Go.
+**Verification:** Effort is recorded whether or not it lands inside budget.
+
+### U9. Terminal failure
+
+**Goal:** A record that cannot be processed stops blocking its partition.
+**Requirements:** R7, R8, R28. **Dependencies:** U7.
+**Files:** `parallel-consumer-proxy/src/main/java/io/confluent/parallelconsumer/proxy/TerminalFailureSink.java`, plus its tests.
+**Approach:** Count connection-loss returns only when attributable to a record; reset on any later outcome; route past the bound to the sink. Adopt core's destination semantics where they exist and define the triggers here, per KD6.
+**Test scenarios:**
+- A record whose delivery reliably kills its worker resolves terminally and the offset advances. Covers AE11.
+- A record held across a rolling restart of every worker keeps its count. Covers AE18.
+- A record reported terminally failed is never delivered again. Covers AE4.
+- The sink does not write payloads to ordinary logs.
+**Verification:** Fleet churn does not discard healthy records.
+
+### U10. Latency measurement
+
+**Goal:** Give ASM2 something to judge.
+**Requirements:** R31. **Dependencies:** U7.
+**Files:** `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/metrics/PCMetricsDef.java`, plus the proxy's benchmark harness.
+**Approach:** Add a poll-to-completion timer — the metric does not exist today; only user-function processing time is registered. Measure in-process PC and the proxy on the same workload.
+**Test scenarios:** The timer records a value for a completed record; the benchmark reports both arms.
+**Verification:** Both numbers exist and are comparable.
+
+### Phase 3 — demonstration and documentation
+
+### U11. One-command demonstration
+
+**Goal:** One command shows it working.
+**Requirements:** R20. **Dependencies:** U8.
+**Files:** `bin/proxy-demo.sh`, and its once-mode integration test.
+**Approach:** Bring up a broker, the sidecar, a workload and workers. Exit 3 with one actionable line when Docker is absent.
+**Test scenarios:** Once-mode runs in CI and fails on any unmet postcondition.
+**Verification:** The demo runs from a clean checkout.
+
+### U12. Documentation and the data records
+
+**Goal:** The module is discoverable and correctly described.
+**Requirements:** R21. **Dependencies:** U11.
+**Files:** `src/docs/README_TEMPLATE.adoc`, `docs/data/module-maturity.yaml`, `docs/data/testing-evidence.yaml`, `docs/features/proxy-integration.yaml`, `AGENTS.md`.
+**Approach:** Edit the README template and re-render; add the maturity row, its matching evidence entry, and the feature record. These land here and not earlier — a record naming a Maven coordinate that does not resolve is the documented failure.
+**Test scenarios:** Test expectation: none — `bin/check-docs-data.sh` validates the schema.
+**Verification:** `bin/check-docs-data.sh` passes and `README.adoc` regenerates without manual edits.
+
+---
+
+## Verification Contract
+
+| Gate | Command | Applies to |
+|---|---|---|
+| Module build and unit tests | `bin/build.sh -pl parallel-consumer-proxy -am` | U2-U5, U9, U10 |
+| Core change | `bin/build.sh -pl parallel-consumer-core -am` | U3 |
+| Integration lane | `bin/ci-integration-test.sh` | U7, U9, U11 |
+| Full gating build | `bin/ci-build.sh` | before opening the PR |
+| Docs data | `bin/check-docs-data.sh` | U12 |
+| Issue references | `bin/check-issue-refs.sh` | every commit |
+
+Always pass `-am`; `-pl` alone fails the reactor-convergence enforcer and the module silently does not recompile. There is no test retry in this repository and quarantine is not available to a branch's own new tests — a flake here is fixed here.
+
+## Definition of Done
+
+- Every unit's test scenarios pass, and U7 fails when run single-worker.
+- The in-flight counter returns to baseline across every return path in U3.
+- KTD1 names a transport, with the effort figures that decided it recorded.
+- ASM1's budget outcome is recorded whether or not it was met.
+- ASM3 has been tested against a real user, or the plan is annotated with the fact that it was not.
+- `bin/ci-build.sh` is green and `docs/inflight/branch-language-proxy.md` is deleted by the PR that lands the module.
