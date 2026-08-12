@@ -228,7 +228,7 @@ stateDiagram-v2
 
 - Transactional exactly-once across the boundary, per KD4.
 - Dynamic subscription changes at runtime. v1 takes its subscription from configuration at startup, per R36.
-- A GraalVM native image of the sidecar — the target packaging per R25, not v1 content. U1 builds a native image of each transport candidate's hand-out loop as a feasibility gate, because R25 makes the image win any conflict and discovering the conflict after clients ship is unrecoverable under R38. That gate is a throwaway check on the spike, not a shipped artifact.
+- A GraalVM native image of the sidecar — the target packaging per R25, not v1 content. U1 builds a native image of a minimal hand-out loop as a feasibility gate, because R25 makes the image win any conflict and discovering the conflict after clients ship is unrecoverable under R38. That gate is a throwaway check, not a shipped artifact.
 - Authentication on the sidecar's own listener, which R17 leaves out of v1 and R18's warning presumes.
 - A worker liveness heartbeat. It is an additive protocol revision under R38 rather than a breaking one, and a per-connection liveness timeout is the shape KD1 excluded. The consequence is explicit: v1 detects a worker that dies but not one that hangs, so a hung worker holds its records and its shard's commit progress until its connection closes.
 - Client libraries beyond Python and Go, per the assessment below.
@@ -282,7 +282,7 @@ Each bullet names the Planning Contract entry or unit that settles it.
 
 - Whether the client library manages the sidecar's lifecycle in v1 at all, which process owns the sidecar's lifetime, and how a worker discovers the endpoint without being configured with a port. *(settled by KTD7 — library-supervised, bind-failure as election, fixed default port; owned by U7)*
 - How a Python wheel or Go module obtains the Java runtime R25 requires in v1. *(settled by KTD7 — resolved from the packaged location or an explicit configuration key, never a path search or a first-run download; owned by U7)*
-- Which transport and specification format carries the protocol. *(settled by KTD1's spike between two named candidates, gated on R29's declarable authority and R25's native image before effort is compared; owned by U1, with the schema and generator owned by U2)*
+- Which transport and specification format carries the protocol. *(settled by KTD1 — gRPC bidirectional streaming, with a `.proto` as the machine-readable schema; U1 clears its two gates and U2 owns the schema and generator)*
 - How work is distributed across workers with outstanding requests when supply is scarce, so one worker cannot absorb everything its peers asked for. *(settled by KTD9 — round-robin across connections holding credit, resuming from the last served; owned by U5)*
 - The roadmap horizon this takes in `docs/data/roadmap.yaml` and which entries it sequences after. *(owned by U14, which now edits that file; horizon `next-0x`, sequenced after the core dead-letter queue it adopts destination semantics from)*
 
@@ -318,16 +318,9 @@ Each bullet names the Planning Contract entry or unit that settles it.
 
 ### Key Technical Decisions
 
-- KTD1. **The transport is settled by a spike between two candidates, not by argument.** Candidate A is protobuf-defined messages carried over framed connections without the gRPC stack; candidate B is gRPC bidirectional streaming. The reasoning previously recorded against a streaming RPC framework — that it is materially harder under GraalVM native image — was verified false: gRPC's reachability metadata tracks its current release and covers bidirectional streaming in a CI-verified native test, while Vert.x removed its own metadata in 2026 and the shared repository's coverage lags its release and never exercises an HTTP or WebSocket server. On the published evidence native image does not discriminate; toolchain weight against free HTTP/2 flow control does. The spike still builds an image per candidate, because that evidence is desk research about metadata coverage and the gate is an empirical check on our own code - the conclusion is what makes the check cheap to run, not a reason to skip it. (session-settled: user-directed — chosen over settling on gRPC immediately: the threading-model and generated-API concerns Confluent recorded when ksqlDB made this same choice are worth testing against our own design rather than accepted on their say-so.) Governs R1, R13, R23, R25, R29.
+- KTD1. **The transport is gRPC bidirectional streaming.** Chosen over protobuf-defined messages carried over framed connections without the gRPC stack. The reasoning previously recorded against a streaming RPC framework — that it is materially harder under GraalVM native image — was verified false: gRPC's reachability metadata tracks its current release and covers bidirectional streaming in a CI-verified native test, while Vert.x removed its own metadata in 2026 and the shared repository's coverage lags its release and never exercises an HTTP or WebSocket server. With that objection gone the remaining comparison favours gRPC on every axis this protocol cares about: HTTP/2 gives per-stream flow control for free, which is R23's credit mechanism in the transport rather than in our code; `:authority` is a declarable connection authority, so R29's allowlist has something to reject on, where raw framing would need a connect frame invented for the purpose; and a `.proto` is a machine-readable schema with mature generators for both Python and Go, which is what R13 asks for and what KTD2's in-repo generated clients ride on. The cost is protobuf's reflective codegen under native image, which is bounded and solved by an off-the-shelf hints library. (session-settled: user-directed — chosen over settling it by spike with recorded effort as the tiebreaker: the deciding evidence is qualitative and already in hand, and the effort figure a spike would produce could not be measured meaningfully by the party running it.) Governs R1, R13, R23, R25, R29.
 
-  **The spike decides in three stages, and effort is the last of them.** Two gates run first, and a candidate that fails either is eliminated before any figure is compared:
-
-  1. **Declarable authority (R29).** Each candidate must expose a per-connection authority the server can reject on. R29 disqualifies a transport that carries none, so this is a pass/fail gate rather than a cost. Candidate A is the one at risk: raw framing over a socket has no authority to declare unless the candidate adds a connect frame that carries one.
-  2. **Native image (R25).** Each candidate's hand-out loop must build as a GraalVM native image during the spike. R25 says the native-image path wins any conflict, so discovering this after the transport is chosen means replacing it after clients exist in two languages, which R38 forbids doing by removal.
-  3. **Generation, then effort.** The primary criterion is whether a schema-driven generator emits each client's transport with no hand-written framing — that is the slope every later language rides on, where a one-off hand-build measures only the intercept. Wall-clock effort per candidate breaks the tie only when both candidates generate. Median and p99 hand-out-to-report latency are recorded beside the effort figures so KD3's constraint is evidence at the moment of decision rather than a Phase 2 discovery.
-
-  The tiebreaking effort is **U1's own recorded figures**, not R16's. R16 measures U10's independent Go client against ASM1's budget two phases later and cannot inform a Phase 1 decision. Spike client effort does not count against ASM1.
-
+  Two things the discarded spike would have proven are still owed, and U1 owes them: that gRPC exposes an authority the server can reject on per R29, and that the hand-out loop builds as a GraalVM native image per R25. Both are cheap empirical checks on our own code rather than desk research, and R25 makes the second unrecoverable if discovered after clients ship, because R38 forbids fixing it by removal.
 - KTD2. **Client libraries are generated and live in this repository.** A new language arrives as a pull request here, so the build owns the code-generation toolchain and CI covers every client. This is why no conformance suite is scoped and why R13's bar is generation quality rather than implementability from prose. (session-settled: user-directed — chosen over independent downstream client projects proving themselves against a conformance suite: there are no third-party implementations to police.) Governs R13, R14, R15.
 
 - KTD3. **The module overrides `release.target` to 17.** The build compiles Java 17 source to Java 8 bytecode via Jabel, so modern networking APIs are invisible to a wire-protocol module. `parallel-consumer-mutiny/pom.xml` already models the override and records why it must be deliberate — at the wrong target that module compiled happily and failed at runtime, because nothing in the build detects the mistake. Governs R1, R23 — the wire-protocol requirements the modern networking APIs actually serve. It does not govern R37, which is a buffering bound and is owned by U5.
@@ -377,27 +370,26 @@ Fourteen units in three phases. Two of them — U2 and U7 — were added after r
 
 ### Phase 1 — settle the transport and prove the crux
 
-### U1. Transport spike
+### U1. Adopt gRPC and clear its two gates
 
-**Goal:** Settle KTD1 with evidence.
-**Requirements:** R1, R23, R25, R29. **Dependencies:** none.
-**Files:** `docs/inflight/branch-language-proxy.md` (record the outcome), throwaway spike code not merged.
-**Approach:** Build each candidate far enough to hand a record out, take a result, and carry credit on the result message, then apply KTD1's three stages in order.
-1. Eliminate any candidate that cannot expose a per-connection declarable authority the server rejects on. R29 disqualifies it outright, so this happens before any figure is compared.
-2. Eliminate any candidate whose hand-out loop will not build as a GraalVM native image.
-3. Of what survives, prefer the candidate whose Python and Go client transports are emitted by a schema-driven generator with no hand-written framing. Wall-clock effort per candidate breaks the tie only when both generate.
-Record, for each surviving candidate: generator coverage, wall-clock effort, and median and p99 hand-out-to-report latency against an in-process PC baseline measured by the same throwaway harness on the same synthetic workload.
-**Execution note:** This is a decision instrument, not a deliverable — do not harden it. Spike client effort does not count against ASM1's Go budget, which U10 measures independently. Writing a spike client does not disqualify an author from U10 under KD5, because the spike is discarded and the specification U2 freezes is what U10's author works from.
-**Test scenarios:** Test expectation: none — spike code is discarded.
-**Verification:** KTD1 names a winner, with the authority and native-image gate outcomes, the generator-coverage finding, the effort figures and the latency figures written into the inflight note.
+**Goal:** Prove gRPC clears the two gates KTD1 makes load-bearing, before anything is built on it.
+**Requirements:** R25, R29. **Dependencies:** none.
+**Files:** `docs/inflight/branch-language-proxy.md` (record the outcomes), plus a throwaway probe not merged.
+**Approach:** Two empirical checks on our own code, not desk research:
+1. **Declarable authority (R29).** Stand up a minimal gRPC service and confirm the server can read the connection's declared `:authority` and reject on it before any application message is handled. R29 disqualifies a transport that carries none, and the allowlist in U6 has nothing to enforce against if this does not hold.
+2. **Native image (R25).** Build a minimal bidirectional-streaming hand-out loop as a GraalVM native image. R25 says the native-image path wins any conflict, and R38 forbids fixing a transport mistake by removal once clients ship — so this is unrecoverable if left until later.
+Record both outcomes, and the protobuf native-image hints needed for the second, in the inflight note.
+**Execution note:** A gate check, not a deliverable — do not harden it. If either gate fails, stop and reopen KTD1 rather than working around it; that is the whole reason the checks run before U2 authors a schema against the choice.
+**Test scenarios:** Test expectation: none — the probe is discarded. The gate outcomes are the output.
+**Verification:** Both gates recorded as cleared in the inflight note, with the native-image hints the build will need.
 
 ### U2. Protocol specification and code generation
 
 **Goal:** A durable, machine-readable protocol specification the build generates clients from.
 **Requirements:** R13, R38. **Dependencies:** U1, U3 — the module must exist before its pom can carry a codegen plugin.
-**Files:** the schema artifact under `parallel-consumer-proxy/src/main/` (its format follows U1's transport choice), `parallel-consumer-proxy/pom.xml`, `.github/workflows/maven.yml`.
-**Approach:** Author the schema, add the transport dependency and the code-generation plugin to the module pom, and make `bin/build.sh -pl parallel-consumer-proxy -am` regenerate and compile the generated sources. Define the message set the schema must carry: record delivery, credit request, per-record outcome including the R5 state projection, the R6 reserved produce payload, and a connect exchange carrying the R29 authority and an R38 revision declaration. Exclude the generated sources from the duplicate-code detector, since generated framing is duplication the gate should not count. Freeze the schema at the end of this unit; U10's independence test measures an author working from it alone.
-**Execution note:** This unit exists because a specification consumed by U6, U8 and U10 cannot be produced by U1, whose output is discarded by design.
+**Files:** `parallel-consumer-proxy/src/main/proto/proxy.proto`, `parallel-consumer-proxy/pom.xml`, `.github/workflows/maven.yml`.
+**Approach:** Author the `.proto`, add the transport dependency and the code-generation plugin to the module pom, and make `bin/build.sh -pl parallel-consumer-proxy -am` regenerate and compile the generated sources. Define the message set the schema must carry: record delivery, credit request, per-record outcome including the R5 state projection, the R6 reserved produce payload, and a connect exchange carrying the R29 authority and an R38 revision declaration. Exclude the generated sources from the duplicate-code detector, since generated framing is duplication the gate should not count. Freeze the schema at the end of this unit; U10's independence test measures an author working from it alone.
+**Execution note:** This unit exists because a specification consumed by U6, U8 and U10 was owned by no unit — U1 only clears gates and its probe is discarded.
 **Test scenarios:**
 - The generator emits a compiling client transport for Python from the schema alone.
 - An unknown optional field on an inbound message is ignored rather than rejected, so an older client keeps working. Covers R38.
@@ -437,7 +429,7 @@ Record, for each surviving candidate: generator coverage, wall-clock effort, and
 ### U5. The sidecar engine
 
 **Goal:** PC hands out only what workers have asked for, and no more than it can buffer.
-**Requirements:** R2, R23, R26, R37. **Dependencies:** U3, U4.
+**Requirements:** R1, R2, R23, R26, R37. **Dependencies:** U3, U4.
 **Files:** `parallel-consumer-proxy/src/main/java/io/confluent/parallelconsumer/proxy/ProxyProcessor.java`, `.../proxy/CreditLedger.java`, `parallel-consumer-proxy/src/test/java/io/confluent/parallelconsumer/proxy/CreditLedgerTest.java`.
 **Approach:** Extend `ExternalEngine`; override the per-pass target to **outstanding credit plus the current in-flight count**, per KTD6 — core subtracts the in-flight count from whatever the hook returns, so returning bare credit stops hand-out after the first fill. Wake the control loop when credit arrives rather than waiting for the next tick. Allocate scarce supply round-robin across connections holding credit, resuming from the last served connection, per KTD9. Set message buffer size per R37, which pins the load factor and makes the buffered ceiling track that figure rather than the concurrency setting.
 **Patterns to follow:** `parallel-consumer-vertx`'s processor for the engine shape; its unit-test base for exercising an engine without a broker.
@@ -596,7 +588,7 @@ Always pass `-am`; `-pl` alone fails the reactor-convergence enforcer and the mo
 - Every unit's test scenarios pass, and U9 fails when run single-worker.
 - The in-flight counter returns to baseline across every return path in U4, and steady-state hand-out in U5 continues past the first fill.
 - Every requirement in the Product Contract is named by at least one unit's Requirements line, and every acceptance example by at least one test scenario.
-- KTD1 names a transport, with the authority and native-image gate outcomes, the generator-coverage finding, and the effort and latency figures that decided it recorded.
+- U1's two gate outcomes are recorded in the inflight note before U2 authors a schema against gRPC.
 - ASM1's budget outcome is recorded whether or not it was met.
 - ASM2's benchmark workload is named alongside its measured multiple.
 - `bin/ci-build.sh` is green, and `docs/inflight/branch-language-proxy.md` is deleted by the PR that lands the last unit — after its transport figures are copied into KTD1 and its budget outcome into ASM1 in this plan, so nothing the Definition of Done depends on lives only in a deleted file.
