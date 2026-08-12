@@ -1,10 +1,10 @@
-package io.confluent.parallelconsumer.integrationTests.chaostests;
+package bz.stub.parallelconsumer.integrationTests.chaostests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;

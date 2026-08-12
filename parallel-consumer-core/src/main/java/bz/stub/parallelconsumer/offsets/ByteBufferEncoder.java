@@ -1,15 +1,16 @@
-package io.confluent.parallelconsumer.offsets;
+package bz.stub.parallelconsumer.offsets;
 
 /*-
  * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import lombok.ToString;
 
 import java.nio.ByteBuffer;
 
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.ByteArray;
-import static io.confluent.parallelconsumer.offsets.OffsetEncoding.ByteArrayCompressed;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.ByteArray;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.ByteArrayCompressed;
 
 /**
  * Encodes offsets into a {@link ByteBuffer}. Doesn't have any advantage over  the {@link BitSetEncoder} and
