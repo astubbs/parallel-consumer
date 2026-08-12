@@ -1,7 +1,8 @@
-package io.confluent.parallelconsumer.sanity;
+package bz.stub.parallelconsumer.sanity;
 
 /*-
  * Copyright (C) 2020-2021 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import org.junit.jupiter.api.Test;

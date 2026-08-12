@@ -1,15 +1,15 @@
-package io.confluent.parallelconsumer;
+package bz.stub.parallelconsumer;
 
 /*-
  * Copyright (C) 2020-2024 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import io.confluent.csid.utils.*;
-import io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import io.confluent.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import io.confluent.parallelconsumer.internal.ProducerManager;
-import io.confluent.parallelconsumer.internal.State;
+import bz.stub.parallelconsumer.internal.utils.*;
+import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.State;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
@@ -39,14 +39,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
-import static io.confluent.csid.utils.GeneralTestUtils.time;
-import static io.confluent.csid.utils.KafkaTestUtils.checkExactOrdering;
-import static io.confluent.csid.utils.KafkaUtils.toTopicPartition;
-import static io.confluent.csid.utils.LatchTestUtils.awaitLatch;
-import static io.confluent.csid.utils.LatchTestUtils.constructLatches;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.*;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
+import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
+import static bz.stub.parallelconsumer.internal.utils.KafkaTestUtils.checkExactOrdering;
+import static bz.stub.parallelconsumer.internal.utils.KafkaUtils.toTopicPartition;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.constructLatches;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.*;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static org.assertj.core.api.Assertions.*;
@@ -256,7 +256,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
      * <p>
      * Under KEY ordering the key="1" record sits on a shard independent of the blocked key="0" shard, so it
      * completes while v1 is still latched. Its completion marks the partition dirty, but cannot advance the
-     * committable offset - {@link io.confluent.parallelconsumer.state.PartitionState#getOffsetToCommit()} is
+     * committable offset - {@link bz.stub.parallelconsumer.state.PartitionState#getOffsetToCommit()} is
      * the highest <em>sequentially</em> succeeded offset plus one, and offset 1 is still in flight. PC
      * therefore commits base offset 1 a second time, carrying updated incomplete-offset encoding.
      * <p>

@@ -1,4 +1,4 @@
-package io.confluent.csid.utils;
+package bz.stub.parallelconsumer.internal.utils;
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static io.confluent.csid.utils.KafkaTestUtils.collapseRepeatedCommits;
+import static bz.stub.parallelconsumer.internal.utils.KafkaTestUtils.collapseRepeatedCommits;
 import static org.assertj.core.api.Assertions.assertThat;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
