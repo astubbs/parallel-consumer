@@ -150,8 +150,6 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
     instead of dying in the Maven step and taking the summary with it.
     `bin/test-check-ossindex-audit.sh` runs first.
 - **`release.yml`** - the dispatch-triggered release. See [`docs/releasing.md`](releasing.md).
-- **`.semaphore/`** - legacy Confluent internal CI/release pipelines, retained but inactive on the
-  fork.
 
 ## The automated review
 

@@ -17,7 +17,6 @@
     <name>Parallel Consumer - Examples - Metrics</name>
 
     <dependencies>
-        <!-- tag::exampleDep[] -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
@@ -32,7 +31,6 @@
                  See docs/inflight/deps-deferred-majors.md, the micrometer-core row. -->
             <version>1.12.13</version>
         </dependency>
-        <!-- end::exampleDep[] -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
@@ -75,14 +73,4 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
-    <repositories>
-        <!-- tag::exampleRepo[] -->
-        <repository>
-            <name>Confluent</name>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-        </repository>
-        <!-- end::exampleRepo[] -->
-    </repositories>
 </project>
