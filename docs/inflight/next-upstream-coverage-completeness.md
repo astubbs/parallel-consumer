@@ -13,16 +13,12 @@ lost. That is the whole argument for doing this exhaustively rather than opportu
 
 ## Why the tooling does not already answer this
 
-`scripts/upstream-sweep.sh --audit` finds *bulk* closures and *zero-reply* discussions. Both are
-proxies, and each one misses a whole shape of problem:
-
-- A PR closed alone on a quiet day looks like nothing. confluentinc#508 (our own docs work) and
-  confluentinc#650 were only found because they happened to sit inside a dependabot batch.
-- A discussion with one dismissive reply is not "zero reply", so it never appears.
-- An issue closed with `COMPLETED` and no linked merged PR is indistinguishable from a real fix
-  without reading it.
-
-So the audit narrows the field; it does not discharge the obligation. Only reading does.
+`--audit` finds *bulk* closures and *zero-reply* discussions - both proxies. Its blind spots are
+documented durably in [`docs/upstream.md`](../upstream.md), "`--audit` - closures the window cannot
+see". The audit narrows the field; it does not discharge the obligation. Only reading does. (An
+issue closed `COMPLETED` with no linked merged PR is indistinguishable from a real fix without
+reading it - see
+[`docs/solutions/workflow-issues/closed-as-completed-is-not-completed-2026-08-12.md`](../solutions/workflow-issues/closed-as-completed-is-not-completed-2026-08-12.md).)
 
 ## State of each surface
 
@@ -45,14 +41,6 @@ read them.
 
 ## Ruled out - do not re-investigate
 
-- **Wiki** - disabled upstream (`has_wiki: false`).
-- **Security advisories** - none published.
-- **Milestones** - three still open (0.3.1, 0.5.1, 0.6); their only open issues are confluentinc#27,
-  confluentinc#192 and confluentinc#78, and all three are already mirrored.
-- **Orphan branches never attached to a PR** - `v0.6.x`, `v0.6.x-dev`, `0.5.3.x`, `v0.5.2.x-dev`,
-  `DP-12547`. `v0.6.x-dev` is 78 non-release commits of the lambda-actor-bus work already captured
-  via the swept PRs confluentinc#325 and confluentinc#524. `0.5.3.x`'s regression fix
-  (confluentinc#362, state truncation vs commit order) **is** on master as `a908e1663` - verified,
-  not a lost fix. `DP-12547` shares no ancestor with master; it is Confluent-internal service config.
-- **"Upstream pushed today"** - misleading. `pushed_at` moves on branch and tag activity; the newest
-  actual commit is 2026-05-28 (`rmoff`, "Add link to fork"). No new upstream code activity.
+Wiki, security advisories, open milestones, orphan branches and the misleading `pushed_at`
+timestamp are all accounted for. Those facts are permanent, so they live in
+[`docs/upstream.md`](../upstream.md), "Surfaces checked and ruled out" - not here.

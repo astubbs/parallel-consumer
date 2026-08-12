@@ -71,6 +71,14 @@ Every open upstream issue has a **fork mirror** here (astubbs#44, astubbs#117-as
 `upstream-mirror`), so a reference has a fork-local number a reader can click. Find one with
 `gh issue list -R astubbs/parallel-consumer --label upstream-mirror --search "confluentinc#NNN"`.
 
+Mirrors astubbs#227-254 carry `upstream-admin-closed` alongside `upstream-mirror`: the 28 issues
+upstream bulk-closed as COMPLETED on 2023-07-07 without triage. The full record - what the two 2023
+sweeps were, why they were invisible to our tooling for three years, and why the cohort was
+mirrored in full including the low-value items - lives in the `THE 2023 ADMINISTRATIVE SWEEPS`
+section header of `upstream-map.yaml`; keep it there, not here. The practical rule it leaves
+behind: **do not trust the closure state of any 2023-era upstream item** - several of those issue
+bodies claim "implemented in #NNN" where #NNN was itself closed unmerged.
+
 ### Mirror format
 
 When you create or edit a mirror:
@@ -140,6 +148,26 @@ summary.
 When the mirror turns out to be wrong, say so in the PR **and correct the mirror**, or the next
 reader inherits the same error.
 
+## Discussions are not mirrored
+
+Upstream also has ~74 GitHub Discussions - a third content type, outside both the manifest and the
+mirror set. Decided 2026-08-07: **we do not mirror them.** Discussions are not a queue to be
+converted - there is no pipeline turning threads into issues, and most should never become one:
+questions, doc gaps and chat stay exactly where they are.
+
+The rule is a judgement, not a mapping: **if reading a discussion makes us think there is an
+issue, we raise one** - a normal fork issue on its own merits, no `upstream-mirror` label and no
+"Mirror of" header, citing the discussion as where it came from so the thread can be linked
+forward to it. The issue exists because we believe the problem is real, not because a discussion
+existed.
+
+That also keeps `upstream-mirror` meaning one precise thing - "an upstream *issue* we carry" -
+which is what makes the mirror set verifiable against upstream.
+
+`scripts/upstream-sweep.sh --audit` lists the zero-reply discussions. The unread backlog and the
+threads worth acting on are tracked in
+[`docs/inflight/next-upstream-discussions-unanswered.md`](inflight/next-upstream-discussions-unanswered.md).
+
 ## Backlinking upstream
 
 **Done, and there is no tooling for it.** All 78 open upstream issues are mirrored here and every
@@ -175,3 +203,38 @@ without it the report is the tracker read back to you.
 
 `last_swept` lives at the top of `upstream-map.yaml`. Bump it after acting on a sweep, or every run
 re-reports the same items.
+
+### `--audit` - closures the window cannot see
+
+The default sweep is windowed (`updated:>=last_swept`), so anything last touched before the window
+can **never** appear in it - which is exactly how upstream's 2023 administrative closures stayed
+invisible for three years. `--audit` takes no window. It asks which *closed* upstream issues are
+neither tracked in the manifest nor mirrored in the fork, flags days where an implausible number of
+items closed at once, and lists zero-reply discussions (excluding release-announcement threads by
+title). Bots are filtered from the PR analysis: dependabot self-closes superseded bumps in batches
+that look identical to a sweep, and unfiltered they bury the real ones. Run against the live repo it
+rediscovers both 2023 sweeps from scratch; "zero unaccounted" doubles as an end-to-end check that
+the manifest's `fork_issues` linkage is correct.
+
+Known blind spots, recorded so a clean audit is not mistaken for completeness: a PR closed *alone*
+on a quiet day never trips the bulk-day heuristic, and a discussion with one dismissive reply is not
+"zero reply". The audit narrows the field; only reading discharges the coverage obligation, which is
+tracked in
+[`docs/inflight/next-upstream-coverage-completeness.md`](inflight/next-upstream-coverage-completeness.md).
+
+### Surfaces checked and ruled out
+
+Recorded here so they are not re-investigated (established 2026-08-07):
+
+- **Wiki** - disabled upstream (`has_wiki: false`).
+- **Security advisories** - none published.
+- **Milestones** - three still open (0.3.1, 0.5.1, 0.6); their only open issues (confluentinc#27,
+  confluentinc#192, confluentinc#78) are all already mirrored.
+- **Orphan branches never attached to a PR** - `v0.6.x`, `v0.6.x-dev`, `0.5.3.x`, `v0.5.2.x-dev`,
+  `DP-12547`. `v0.6.x-dev` is 78 non-release commits of the lambda-actor-bus work already captured
+  via the swept PRs confluentinc#325 and confluentinc#524. `0.5.3.x`'s regression fix
+  (confluentinc#362, state truncation vs commit order) **is** on master as `a908e1663` - verified,
+  not a lost fix. `DP-12547` shares no ancestor with master; it is Confluent-internal service
+  config.
+- **"Upstream pushed today"** - misleading. `pushed_at` moves on branch and tag activity; the
+  newest actual commit is 2026-05-28 (`rmoff`, "Add link to fork"). No new upstream code activity.

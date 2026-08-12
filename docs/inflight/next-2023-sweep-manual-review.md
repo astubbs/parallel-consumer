@@ -24,9 +24,10 @@ as the threads show. confluentinc#508 is our own writing. **Decision needed:** r
 decide whether to carry them into the fork. If yes they are cherry-picks, not mirrors - the content
 is the value, not the thread.
 
-Not yet checked: whether other *individually* closed human PRs were dismissed the same way. The audit
-only surfaces bulk days, so a PR closed alone on a quiet day is still invisible. That is a genuine
-remaining hole in the tooling, not an oversight in the data.
+Not yet checked: whether other *individually* closed human PRs were dismissed the same way. The
+audit only surfaces bulk days (a documented blind spot - see [`docs/upstream.md`](../upstream.md),
+"`--audit` - closures the window cannot see"), so a PR closed alone on a quiet day is still
+invisible.
 
 ## 2. ~139 closed upstream issues are neither tracked nor mirrored
 
