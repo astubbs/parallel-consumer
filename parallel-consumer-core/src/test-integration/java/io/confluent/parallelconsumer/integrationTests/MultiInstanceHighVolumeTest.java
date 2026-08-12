@@ -21,6 +21,7 @@ import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -50,6 +51,33 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
     ProcessingOrder order = ProcessingOrder.KEY;
 
 
+    static final int GATING_VOLUME = 3_000_000;
+
+    /**
+     * The volume this test runs at. Unlike the other recovered sites, the {@code //10_000_000} that
+     * sat above this line <em>was</em> live - at {@code 04cd4d81} (2020-12-14) - and was commented
+     * out at {@code ad3636a5} (2021-07-02) when the value was reduced. Git holds that history, so
+     * the comment was residue and stays deleted.
+     * <p>
+     * What was not residue is the reason for the reduction. The wait below was hard-coded at 60
+     * seconds, so the higher volume could not be met regardless of whether the run was healthy -
+     * the volume was lowered to fit a deadline rather than because 10M was wrong. With the deadline
+     * scaling, the original volume is reachable again:
+     *
+     * <pre>./mvnw verify -Pci -Dmultiinstance.messages=10000000</pre>
+     */
+    private static int volume() {
+        return Integer.getInteger("multiinstance.messages", GATING_VOLUME);
+    }
+
+    /**
+     * A completion ceiling, not a throughput assertion. Exactly the 60 seconds this test has always
+     * had at its own volume, scaling proportionally above it.
+     */
+    private static Duration completionCeiling(int messages) {
+        return ofSeconds(Math.max(60, (long) messages * 60 / GATING_VOLUME));
+    }
+
     // todo multi commit mode, multi partition count, multi instance count? 2,3,10,100? more instances than partitions, more partitions than instances
     @SneakyThrows
     @Test
@@ -57,8 +85,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         numPartitions = 12;
         String inputTopicName = setupTopic(this.getClass().getSimpleName() + "-input");
 
-        // Reduced from 10_000_000; the 60s wait below cannot be met at higher volumes on a CI runner.
-        int expectedMessageCount = 3_000_000;
+        int expectedMessageCount = volume();
         log.info("Producing {} messages before starting test", expectedMessageCount);
 
         List<String> expectedKeys = getKcu().produceMessages(inputTopicName, expectedMessageCount);
@@ -83,7 +110,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(ofSeconds(60))
+            waitAtMost(completionCeiling(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     // .failFast( () -> pcThree.getFailureCause(), () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .failFast("PC died - check logs", () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
