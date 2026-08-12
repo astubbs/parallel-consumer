@@ -1,5 +1,8 @@
 # Refactoring backlog
 
+This doc owns the deferred-work backlog - internal refactors, the release-gated breaking-change
+queue, and `TODO`/`FIXME`/`XXX` triage. AGENTS.md routes here and keeps only the one-line rule.
+
 Deferred internal refactors - improvements noticed while working that are too big
 or too risky to fold into the change at hand, to be picked up **when things are
 quiet**. This is a solo-maintainer backlog, not an issue tracker: entries live

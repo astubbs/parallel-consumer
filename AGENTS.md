@@ -42,7 +42,8 @@ an older one has been superseded, absorbed by tooling, or is now stated twice.
 - **Never state a fact twice** - duplicates drift apart. Cross-reference whichever doc owns it, and
   **name the owner in the pointer**: "X owns this; what is here is the part that binds every
   session". A pointer that only lists adjacent topics reads as *further detail*, so a reader who
-  found a complete-looking rule here stops - and then edits the copy instead of the original.
+  found a complete-looking rule here stops - and then edits the copy instead of the original. The
+  doc it routes to states the same contract from its side, so either entrance reveals the owner.
 - **Do not pre-empt misreadings.** A rule needing three paragraphs to defend it against
   misinterpretation is a rule that needs rewriting.
 - **Before you move or rename any labelled block, grep the whole repo for its text** -
@@ -111,7 +112,8 @@ config key, a quoted literal; a long quotation is brittle the other way, breakin
 the grep before you commit the citation.
 
 Repairing one that has already gone stale in a dated record is its own procedure, because those
-documents may not be rewritten to match today's code: [`docs/citations.md`](docs/citations.md).
+documents may not be rewritten to match today's code - [`docs/citations.md`](docs/citations.md)
+**owns that procedure**.
 
 ## `gh` defaults to the WRONG repo here - fix it before your first command
 
@@ -235,8 +237,8 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 
 ## Testing
 
-Suite mechanics, the quarantine lane, the chaos suite and the ambient probe are in
-[`docs/testing.md`](docs/testing.md). Four rules bind regardless:
+[`docs/testing.md`](docs/testing.md) **owns this topic** - suite mechanics, the quarantine lane, the
+chaos suite, the ambient probe - and wins where the two disagree. Four rules bind regardless:
 
 - **⚠️ Be EXTREMELY careful modifying tests to make them pass, especially under
   parallelism/stress.** A test failing under concurrent load may be exposing a **real main-code bug
@@ -275,7 +277,8 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 - **Google Truth** for test assertions, with JUnit 5 and Mockito.
 - **License headers** are enforced by `bin/check-copyright-headers.sh`, and there is no tool that
   writes them - which header a new, modified, renamed or extracted file gets depends on its
-  provenance: [`docs/copyright.md`](docs/copyright.md). Two rules bind before you get there: do not
+  provenance, and [`docs/copyright.md`](docs/copyright.md) **owns that call**. Two rules bind
+  before you get there: do not
   touch an existing file's header unless that commit also changes the file substantively, and never
   bump a copyright year as an incidental or standalone change.
 
@@ -291,8 +294,9 @@ the model: an entry claimed a dependency version the pom had moved past). The te
 are *changing an existing claim to be true* (allowed) or *adding information about a change* (the
 generator's job).
 
-Write commit messages that can feed that generator - see [Commits](#commits). How generation works,
-and the state of each section: [`docs/releasing.md`](docs/releasing.md).
+Write commit messages that can feed that generator - see [Commits](#commits).
+[`docs/releasing.md`](docs/releasing.md) **owns the rest** - how generation works, the state of each
+section - and wins where the two disagree.
 
 ## Issue references
 
@@ -309,7 +313,8 @@ flip - `#29` and `#114` mean different things in each repo.
 - **Run `bin/check-issue-refs.sh` before you push.** It calls the same gate module CI does, so the
   rule cannot drift; a red run is always real. CI additionally scans the PR body.
 
-The threshold, the exemptions, and the reasoning: [`docs/issue-references.md`](docs/issue-references.md).
+[`docs/issue-references.md`](docs/issue-references.md) **owns this topic** - the threshold, the
+exemptions, the reasoning - and wins where the two disagree.
 
 ## Commits
 
