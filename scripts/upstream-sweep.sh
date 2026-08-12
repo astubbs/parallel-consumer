@@ -127,21 +127,32 @@ if [ "$do_audit" -eq 1 ]; then
   # are excluded by title rather than counted as neglect.
   echo "## Upstream discussions with no reply at all (excluding release announcements)"
   echo
-  disc="$(gh api graphql --paginate --slurp -f query='
-    query($cursor: String) {
+  # `gh --paginate` only ever substitutes a variable literally named `endCursor`
+  # (`gh help api`). Name it anything else and the cursor is never fed back: gh
+  # re-requests page 1 forever instead of advancing. Do not rename it.
+  #
+  # A failure here must not be reported as "(none)" either - an empty result is the
+  # answer this mode exists to produce, so swallowing the error would turn a broken
+  # query into a clean bill of health.
+  if ! disc_json="$(gh api graphql --paginate --slurp -f query='
+    query($endCursor: String) {
       repository(owner: "confluentinc", name: "parallel-consumer") {
-        discussions(first: 100, after: $cursor) {
+        discussions(first: 100, after: $endCursor) {
           pageInfo { hasNextPage endCursor }
           nodes { number title createdAt isAnswered author { login }
                   category { name } comments { totalCount } }
         }
       }
-    }' 2>/dev/null \
+    }')"; then
+    echo "error: upstream discussions query failed - cannot report this section" >&2
+    exit 1
+  fi
+  disc="$(printf '%s' "$disc_json" \
     | jq -r '[.[] | .data.repository.discussions.nodes[]]
              | [.[] | select(.comments.totalCount == 0)
                     | select((.title | test("^[0-9]+\\.[0-9]+\\.[0-9]"))  | not)]
              | sort_by(.createdAt) | .[]
-             | "  #\(.number)  \(.createdAt[0:10])  [\(.author.login)]  \(.title[0:64])"' 2>/dev/null || true)"
+             | "  #\(.number)  \(.createdAt[0:10])  [\(.author.login)]  \(.title[0:64])"')"
   if [ -z "$disc" ]; then
     echo "  (none)"
   else

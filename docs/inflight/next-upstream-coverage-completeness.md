@@ -22,15 +22,17 @@ reading it - see
 
 ## State of each surface
 
-| Surface | Count | Status |
-|---|---|---|
-| Issues - closed, neither tracked nor mirrored | ~139 | **unread**, listed by `--audit` |
-| Issues - open upstream | ~100 | partially mirrored; no completeness check has ever been run |
-| PRs - closed unmerged, human-authored | see `--audit` | only the 2023-06-15 sweep examined |
-| Discussions | 74 | 6 zero-reply read; the other 68 unread |
+Run `scripts/upstream-sweep.sh --audit` for the lists and the totals - they move, and a copy here
+would be wrong within a day. What the audit cannot tell you is how much of each surface a human has
+actually *read*, which is the only thing recorded below:
 
-Do not re-derive these lists here - run the audit. Recorded here is only the fact that nobody has
-read them.
+- **Issues - closed, neither tracked nor mirrored.** Listed by `--audit`, **none read**.
+- **Issues - open upstream.** Mirrored (see [`docs/upstream.md`](../upstream.md)), but no
+  completeness check has ever been run against the live list.
+- **PRs - closed unmerged, human-authored.** Only the 2023-06-15 sweep has been examined; the rest
+  are unread.
+- **Discussions.** Only the zero-reply ones surfaced by `--audit` have been read; the remainder are
+  unread.
 
 ## Also unchecked
 

@@ -357,8 +357,8 @@ entries:
   - id: sweep-2023-admin-closure
     group: governance
     summary: Two upstream bulk closures (2023-06-15 PRs, 2023-07-07 issues) that closed live work as done
-    fork: {branches: [docs/mirror-2023-admin-sweep], prs: [], fork_issues: [227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254], status: in-progress}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 29, 34, 40, 41, 48, 49, 50, 53, 57, 65, 119, 144, 154, 175, 183, 187, 191, 199, 203, 205, 246, 267, 319, 320, 372], prs: [22, 45, 46, 66, 81, 106, 143, 179, 181, 204, 220, 270, 271, 291, 300, 303, 316, 325, 345, 346, 356, 366, 390, 405, 408, 441, 442, 443, 464, 473, 488, 492, 494, 496, 506, 524], status: closed, last_checked: 2026-08-07}
+    fork: {branches: [docs/mirror-2023-admin-sweep], prs: [258], fork_issues: [227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254], status: pr-open}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 29, 34, 40, 41, 48, 49, 50, 53, 57, 65, 119, 144, 154, 175, 183, 187, 191, 199, 203, 205, 246, 267, 319, 320, 372], prs: [22, 45, 46, 81, 106, 143, 179, 181, 204, 220, 270, 271, 291, 300, 303, 316, 325, 345, 346, 356, 366, 390, 405, 408, 441, 442, 443, 464, 473, 488, 492, 494, 496, 506, 524], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
       Meta-entry for the cohort; the individual work items follow. All 28 issues were
@@ -367,6 +367,11 @@ entries:
       already fixed (#41, #319), 6 partially addressed (#48, #53, #57, #65, #199,
       #203), 20 fully open. Mirrored into the fork tracker under label
       `upstream-admin-closed`.
+      The PR list is exactly the 35 closed on 2023-06-15 and nothing else. Listing a
+      ref here marks it accounted for, so an unrelated PR added to this cohort would
+      be hidden from every future audit: confluentinc#66 was carried here in error
+      (closed 2022-10-19, a different event) and has been removed, which is why the
+      audit may now report it as untracked.
 
   - id: sweep-2023-already-fixed
     group: governance
