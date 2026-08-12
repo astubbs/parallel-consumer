@@ -318,7 +318,19 @@ public class ChaosConductor {
         return true; // candidate for join-after-drain bias
     }
 
-    private void doStopNoDrain(int targetRoll) {
+    /**
+     * The conductor's own state for an instance. Package-private: a test asserting a refused restart
+     * leaves the instance redrawable has to be able to see this, and {@code states} is otherwise
+     * private with no accessor.
+     */
+    InstanceState stateOf(int instanceId) {
+        return states.get(instanceId);
+    }
+
+    // doStopNoDrain and doRestart are package-private rather than private so ChaosConductorRestartRefusalIT
+    // can drive them directly. loop() picks actions from a seeded RNG on its own thread, so reaching a
+    // specific action from a test any other way means racing the draw sequence.
+    void doStopNoDrain(int targetRoll) {
         ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return;
         states.put(victim.getInstanceId(), InstanceState.STOPPED);
@@ -328,7 +340,7 @@ public class ChaosConductor {
         victim.stopAsync();
     }
 
-    private void doRestart(int targetRoll) {
+    void doRestart(int targetRoll) {
         ManagedPCInstance target = pickInState(InstanceState.STOPPED, targetRoll);
         if (target == null) return;
         // start() first: it can throw (the unexpected-failure-cause canary), in which case the
