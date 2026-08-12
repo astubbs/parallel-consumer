@@ -21,14 +21,16 @@ Tips are short SHAs. "ahead" means local commits not on origin.
 All nine are on origin at those SHAs, re-derived rather than copied. The six previously marked LOCAL were
 pushed after this file was written, and the base moved by one commit - this file's own.
 
-Three branches were added afterwards and are not part of the nine above:
+Five branches were added afterwards and are not part of the nine above:
 
 | Branch | Off | What it is |
 |---|---|---|
 | `feats/ks-streams-punctuator-commit-coverage` | `…stream-time-lowwater` | Evidence that the Kafka Streams commit sensor is blind on the PC path. Four arms. |
 | `feats/ks-streams-postcommit-checkpoint-gap` | `…punctuator-commit-coverage` | Refutes "the PC path never checkpoints" with the 12,000-record run that disproves it. |
-| `feats/ks-streams-punctuator-effect-survival` | `…postcommit-checkpoint-gap` | Answers defect 1: punctuator forwards and store writes survive a hard abort with no commit in the window. |
+| `feats/ks-streams-punctuator-effect-survival` | `…postcommit-checkpoint-gap` | Punctuator effects reach the broker independently of any commit, with a linger-held negative control. **Not** a process-death test - see defect 2. |
+| `feats/ks-streams-punctuator-refire-on-restart` | `…punctuator-effect-survival` | **Confirms defect 1.** Stream time is not restored on a PC-written group, so STREAM_TIME punctuators re-fire over covered event time. |
 | `docs/ks-streams-correct-commit-coverage-claims` | `…punctuator-commit-coverage` | Shrinks the U13 inflight entry to what measurement left of it. |
+| `docs/ks-handover-rerank-defect-one` | base | This file's corrections. |
 
 **Topology.** All descend from the base. Not a linear stack: each was cut from a different point and they were reconciled by merging the base forward, not rebasing. **Always merge, never rebase** - other work builds on these and rebasing forces a force-push.
 
@@ -50,7 +52,13 @@ Every branch carries `8a0762a4` (the cross-thread fix) and everything before it.
 
 ## Open defects, ranked
 
-1. **Whether a punctuator's own effects survive an actual process death, and whether they re-fire over already-covered event time on rebalance.** Both still open. `WALL_CLOCK_TIME` punctuators also fire unwarned where `STREAM_TIME` logs - pre-existing rather than introduced by U13. U10's territory.
+1. **CONFIRMED: STREAM_TIME punctuators re-fire over already-covered event time after a restart.** Measured on `feats/ks-streams-punctuator-refire-on-restart`. Run 1 climbs event time and commits; run 2 restarts the same application id with records whose event times are below run 1's base. Stock punctuates at the restored mark; **PC punctuates 60s and 56s below run 1's base** - the mark is lost, the punctuation queue re-anchors on the late record, and the punctuator fires over event time run 1 already covered. Asserted below run 1's *base*, not merely its highest, so a replayed run-1 record cannot satisfy it.
+
+   **Cause, already written down in `pc-streams.patch`'s own `seedStreamTime` comment:** a group whose commits were written by this module carries PC's frontier payload, not Streams' `TopicPartitionMetadata`, so the decode yields UNKNOWN and there is nothing to seed from. `seedStreamTime` restores the mark for a stock-written group and not for the real case. Its call site had no coverage - `PcTaskDispatcherTest` calls the method directly, pinning arithmetic and not wiring - and the module had no STREAM_TIME punctuator test at all.
+
+   **Fix direction, per `docs/solutions/architecture-patterns/one-owner-per-metadata-field-with-an-opaque-rider.md`:** populate PC's own opaque rider (KTD-S7). Do **not** reintroduce Streams' `TopicPartitionMetadata` as a second writer.
+
+2. **Whether a punctuator's own effects survive an actual process death.** Still open - see below. `WALL_CLOCK_TIME` punctuators also fire unwarned where `STREAM_TIME` logs, pre-existing rather than introduced by U13. U10's territory.
 
    **A previous revision of this entry downgraded this to "a missing warning, not data loss" on the strength of a test that was measuring its own shutdown. Retracted.** `feats/ks-streams-punctuator-effect-survival` read the topics *after* `streams.close()`, and close runs a clean shutdown - `prepareCommit()` -> `flush()` -> `streamsProducer.flush()` -> commit -> `producer.close()`, which blocks until every buffered record is sent. Setting `linger.ms` to five minutes made the point: the old shape still passed, in an eleven-second run. Two of its premises were false as well - `StreamThread.lastCommitMs` starts at zero, so Streams commits on its first run-loop iteration rather than 30s in, and nothing reached the broker "without a flush".
 
@@ -58,11 +66,10 @@ Every branch carries `8a0762a4` (the cross-thread fix) and everything before it.
 
    **Also measured and does not hold:** *offsets never commit* - they do; and *no checkpoint* - `postCommit` runs under load (12,000 records checkpointed at changelog 11,862-11,929 against stock's 11,999). `TaskExecutor` walks its tasks twice; loop 2 re-asks `commitNeeded()` after `onCommitSuccess` has cleared it, so the *sensor* misses the commit rather than the commit not happening. What survives is an idle-window tail bounded by the final commit round, with clean `close()` checkpointing regardless. The `|| commitNeeded` candidate cannot be evidenced through commit cadence - `commit-total` is pinned at zero on an idle PC task. Evidence on `feats/ks-streams-punctuator-commit-coverage` and `feats/ks-streams-postcommit-checkpoint-gap`; three rejected observables are recorded in `PunctuatorCommitCoverageTest`'s javadoc.
 
-   **Re-ranked down from "their effects never become commit-covered", which measurement did not support.** Offsets commit on the PC path, and `postCommit` runs under load - 12,000 records through a stateful topology checkpointed at changelog 11,862-11,929 against stock's 11,999. `TaskExecutor` walks its tasks twice; loop 1 commits PC's frontier, and loop 2 re-asks `commitNeeded()` after `onCommitSuccess` has cleared it, so the *sensor* misses the commit rather than the commit not happening. What survives is an idle-window tail: no work completing between the commit and loop 2 skips that round's `postCommit`, bounded by the final commit round, with clean `close()` checkpointing regardless. The `|| commitNeeded` candidate also cannot be evidenced through commit cadence - `commit-total` is pinned at zero on an idle PC task. Evidence on `feats/ks-streams-punctuator-commit-coverage` and `feats/ks-streams-postcommit-checkpoint-gap`; the reasoning and three rejected observables are in `PunctuatorCommitCoverageTest`'s javadoc.
-2. **U14: `countRecordsPcWillQueue` counts re-delivered offsets that `ProcessingShard` drops** - permanent-pause residue. U14's own "pick this up first".
-3. **U14's U4 memory-bound proof was never built.** The headline requirement of that unit. Pile C tests are the check on the fix, not the goal.
-4. **U13's three recorded open items** - the seed not reaching `pcRecordQueues` (breaks `UsePartitionTimeOnInvalidTimestamp` after restart), `close()`'s drain advancing over work a forced shutdown killed, and a `RejectedExecutionException` hold leak that pins the mark forever.
-5. **The per-instance dispatch test is orphaned.** `feats/streams-dispatch-streamsconfig-property` has the implementation (`PcDispatchSettings`, precedence config > system property > default ON) but not the test proving two `KafkaStreams` instances in one JVM get different settings - which is the whole point, since the old process-global design passes any single-instance test. **Three agents died at that exact point on an API content filter.** Reproducible trigger.
+3. **U14: `countRecordsPcWillQueue` counts re-delivered offsets that `ProcessingShard` drops** - permanent-pause residue. U14's own "pick this up first".
+4. **U14's U4 memory-bound proof was never built.** The headline requirement of that unit. Pile C tests are the check on the fix, not the goal.
+5. **U13's three recorded open items** - the seed not reaching `pcRecordQueues` (breaks `UsePartitionTimeOnInvalidTimestamp` after restart), `close()`'s drain advancing over work a forced shutdown killed, and a `RejectedExecutionException` hold leak that pins the mark forever.
+6. **The per-instance dispatch test is orphaned.** `feats/streams-dispatch-streamsconfig-property` has the implementation (`PcDispatchSettings`, precedence config > system property > default ON) but not the test proving two `KafkaStreams` instances in one JVM get different settings - which is the whole point, since the old process-global design passes any single-instance test. **Three agents died at that exact point on an API content filter.** Reproducible trigger.
 
 ## Decisions already settled - do not relitigate
 
