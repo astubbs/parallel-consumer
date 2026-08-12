@@ -8,15 +8,26 @@ Tips are short SHAs. "ahead" means local commits not on origin.
 
 | Branch | Tip | Remote | What it is |
 |---|---|---|---|
-| `feats/ks-on-pc-spike` | `e3a7b1f8` | pushed+ahead | **The base.** PR astubbs#271. Dispatch seam, crash safety (U9), module README. |
-| `feats/ks-streams-wake-on-work` | `e735cdbc` | pushed+ahead | Split poll wait. Single-key control 0.69x -> 0.99x. |
-| `feats/ks-streams-refuse-unsupported-surface` | `801c8742` | pushed+ahead | Refuses joins/windows/suppression/EOS. 460-line README lives here. |
-| `feats/ks-streams-task-lifecycle-and-rebalance` | `3770afe2` | LOCAL | U10. Pile B 4->1. Multi-instance rebalance test. |
-| `feats/ks-streams-stream-time-lowwater` | `41df54fb` | LOCAL | U13. Stream time via in-flight low-water mark. |
-| `feats/ks-streams-backpressure-and-error-surfacing` | `9895a1b2` | LOCAL | U14. `maxBufferedSize` backpressure, error surfacing. |
-| `test/ks-streams-realistic-domain-benchmark` | `24928ab8` | LOCAL | Realistic + synthetic benchmark suite, `DEMO.md`. |
-| `feats/ks-streams-pc-example` | `354711c6` | pushed+ahead | Runnable demo module, 20-30s. |
-| `feats/streams-dispatch-streamsconfig-property` | `0ce15fc3` | LOCAL | Per-instance `StreamsConfig` dispatch switch. **Unfinished.** |
+| `feats/ks-on-pc-spike` | `abcc811e` | pushed | **The base.** PR astubbs#271. Dispatch seam, crash safety (U9), module README. |
+| `feats/ks-streams-wake-on-work` | `e735cdbc` | pushed | Split poll wait. Single-key control 0.69x -> 0.99x. |
+| `feats/ks-streams-refuse-unsupported-surface` | `801c8742` | pushed | Refuses joins/windows/suppression/EOS. 460-line README lives here. |
+| `feats/ks-streams-task-lifecycle-and-rebalance` | `3770afe2` | pushed | U10. Pile B 4->1. Multi-instance rebalance test. |
+| `feats/ks-streams-stream-time-lowwater` | `41df54fb` | pushed | U13. Stream time via in-flight low-water mark. |
+| `feats/ks-streams-backpressure-and-error-surfacing` | `9895a1b2` | pushed | U14. `maxBufferedSize` backpressure, error surfacing. |
+| `test/ks-streams-realistic-domain-benchmark` | `24928ab8` | pushed | Realistic + synthetic benchmark suite, `DEMO.md`. |
+| `feats/ks-streams-pc-example` | `354711c6` | pushed | Runnable demo module, 20-30s. |
+| `feats/streams-dispatch-streamsconfig-property` | `0ce15fc3` | pushed | Per-instance `StreamsConfig` dispatch switch. **Unfinished.** |
+
+All nine are on origin at those SHAs, re-derived rather than copied. The six previously marked LOCAL were
+pushed after this file was written, and the base moved by one commit - this file's own.
+
+Three branches were added afterwards and are not part of the nine above:
+
+| Branch | Off | What it is |
+|---|---|---|
+| `feats/ks-streams-punctuator-commit-coverage` | `…stream-time-lowwater` | Evidence that the Kafka Streams commit sensor is blind on the PC path. Four arms. |
+| `feats/ks-streams-postcommit-checkpoint-gap` | `…punctuator-commit-coverage` | Refutes "the PC path never checkpoints" with the 12,000-record run that disproves it. |
+| `docs/ks-streams-correct-commit-coverage-claims` | `…punctuator-commit-coverage` | Shrinks the U13 inflight entry to what measurement left of it. |
 
 **Topology.** All descend from the base. Not a linear stack: each was cut from a different point and they were reconciled by merging the base forward, not rebasing. **Always merge, never rebase** - other work builds on these and rebasing forces a force-push.
 
@@ -38,7 +49,9 @@ Every branch carries `8a0762a4` (the cross-thread fix) and everything before it.
 
 ## Open defects, ranked
 
-1. **`WALL_CLOCK_TIME` punctuators fire today with no warning, and their effects never become commit-covered.** Both punctuate methods set `commitNeeded`; `pcAwareCommitNeeded()` discards it. A punctuate-only interval does no flush and no checkpoint, and punctuators re-fire over already-covered event time on every rebalance. One-line candidate (`|| commitNeeded`) closes it but changes commit cadence for every PC-path caller - needs its own evidence. U13 found it; U10's territory.
+1. **Whether a punctuator's own effects survive a crash on the PC path** - a store write, a forward. Untested, and it is the question the entry below used to be. `WALL_CLOCK_TIME` punctuators do still fire unwarned where `STREAM_TIME` logs, which is pre-existing rather than introduced by U13. The direct experiment nobody has run: punctuator writes, `abortAllActive()`, restart, check what survived. U10's territory.
+
+   **Re-ranked down from "their effects never become commit-covered", which measurement did not support.** Offsets commit on the PC path, and `postCommit` runs under load - 12,000 records through a stateful topology checkpointed at changelog 11,862-11,929 against stock's 11,999. `TaskExecutor` walks its tasks twice; loop 1 commits PC's frontier, and loop 2 re-asks `commitNeeded()` after `onCommitSuccess` has cleared it, so the *sensor* misses the commit rather than the commit not happening. What survives is an idle-window tail: no work completing between the commit and loop 2 skips that round's `postCommit`, bounded by the final commit round, with clean `close()` checkpointing regardless. The `|| commitNeeded` candidate also cannot be evidenced through commit cadence - `commit-total` is pinned at zero on an idle PC task. Evidence on `feats/ks-streams-punctuator-commit-coverage` and `feats/ks-streams-postcommit-checkpoint-gap`; the reasoning and three rejected observables are in `PunctuatorCommitCoverageTest`'s javadoc.
 2. **U14: `countRecordsPcWillQueue` counts re-delivered offsets that `ProcessingShard` drops** - permanent-pause residue. U14's own "pick this up first".
 3. **U14's U4 memory-bound proof was never built.** The headline requirement of that unit. Pile C tests are the check on the fix, not the goal.
 4. **U13's three recorded open items** - the seed not reaching `pcRecordQueues` (breaks `UsePartitionTimeOnInvalidTimestamp` after restart), `close()`'s drain advancing over work a forced shutdown killed, and a `RejectedExecutionException` hold leak that pins the mark forever.
