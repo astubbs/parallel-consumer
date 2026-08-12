@@ -55,7 +55,6 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 
 IMPORTANT: This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under different Maven coordinates (`io.github.astubbs.parallelconsumer`). The original upstream project is no longer actively maintained.
 
-Confluent's https://www.confluent.io/confluent-accelerators/#parallel-consumer[product page for the original project is here].
 
 TIP: If you like this project, please ⭐ Star it in GitHub to show your appreciation, help us gauge popularity of the project and allocate resources.
 
