@@ -93,6 +93,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires a diagnosis, or a recorded owner-granted exception |
+| **`docs/test-hardening/`** | Dated audits of tests that do not run, do not assert, or were never written - per-test evidence and the commit that disabled each one | A live or generated registry - each audit is point-in-time; triage goes in `refactoring.md` |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
@@ -293,6 +294,14 @@ chaos suite, the ambient probe - and wins where the two disagree. Four rules bin
 - **Quarantine is master-state, not PR-state.** A test red on only one PR is that PR's problem, not
   a quarantine candidate - and nothing enforces this, so it is on you. The rest of the quarantine
   discipline is in [`docs/testing.md`](docs/testing.md).
+- **A test that never runs is not a passing test, and nothing goes red to tell you.** Tests that are
+  disabled, assumption-skipped, assert nothing, or were never written are recorded in dated audits
+  under [`docs/test-hardening/`](docs/test-hardening/) - per-test evidence and the commit that
+  disabled each one; the current one is
+  [`inactive-tests-audit-2026-08-08.md`](docs/test-hardening/inactive-tests-audit-2026-08-08.md).
+  Read the newest before re-enabling, deleting, or rewriting a dark test - the reason it went dark
+  is usually already established there. Each audit is point-in-time: add a new dated one rather than
+  editing an old one.
 
 Unit tests are surefire (`src/test/java/`); integration tests are failsafe and need Docker
 (`src/test-integration/java/`).
