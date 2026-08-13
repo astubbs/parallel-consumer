@@ -13,6 +13,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.SaslAuthenticationException;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -21,6 +22,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -33,7 +35,8 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *
  * The offsetCommitTimeout as well as the saslAuthenticationRetryTimeout had been set to infinity as well.
  *
- * After 5 seconds PC will be requested to close. The expected behavior is that the PC can be shutdown cleanly.
+ * Once PC is observably retrying the failing broker, it is requested to close. The expected behavior is that the PC can
+ * be shutdown cleanly.
  */
 @Slf4j
 @Timeout(60000L)
@@ -48,12 +51,18 @@ class MockConsumerEarlyCloseTest {
     void mockConsumer() {
         final AtomicLong startFail = new AtomicLong(System.currentTimeMillis() + 2000L); // start failing after 2 seconds
         final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 200000000L); // never recover
+        // Counts the auth failures served on the POLL path specifically. Poll-only on purpose: the commit
+        // path fails too, from a different thread, so a combined counter reaching two proves only that two
+        // calls failed somewhere - possibly one of each, concurrently, with no retry in between. It is the
+        // second POLL failure that can only follow a completed poll retry back-off.
+        final AtomicInteger pollAuthFailures = new AtomicInteger();
         var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized ConsumerRecords<String, String> poll(Duration timeout) {
                 long now = System.currentTimeMillis();
                 if(now > startFail.get() && now < failUntil.get()) {
                     log.info("Mocking failure before 20 seconds");
+                    pollAuthFailures.incrementAndGet();
                     throw new SaslAuthenticationException("Invalid username or password");
                 }
                 return super.poll(timeout);
@@ -104,14 +113,16 @@ class MockConsumerEarlyCloseTest {
                     records.add(recordContext);
                 });
             });
-            try {
-                Thread.sleep(5000L);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+            // Close from the state the test is about: the broker is failing every call and PC is retrying.
+            // Waiting for failures to actually have been served beats sleeping for a duration in which we
+            // hope some were. Two POLL failures, not one, and not two failures of any kind: only a second
+            // failure on the same path can be behind a completed retry back-off, so by then the poll loop is
+            // demonstrably retrying - and close lands mid-back-off, which is where the 5s sleep used to
+            // (accidentally) put it.
+            Awaitility.await().atMost(Duration.ofSeconds(60)).until(() -> pollAuthFailures.get() >= 2);
 
             log.info("Trying to close...");
-            parallelConsumer.close(); // request close after 5 seconds
+            parallelConsumer.close(); // request close while the consumer is failing every call
             log.info("Close successful!");
         } finally {
             recordAdder.interrupt();
