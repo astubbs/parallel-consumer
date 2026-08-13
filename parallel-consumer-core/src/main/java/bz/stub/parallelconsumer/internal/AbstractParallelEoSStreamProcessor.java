@@ -1512,10 +1512,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * from; and anything routed through {@link UserFunctions} reports that class's constant, so the user's own message
      * sits one level down. Naming the root cause keeps both signals - that it came from user code, and what it said.
      */
-    private static String describeWithRootCause(Throwable t) {
+    static String describeWithRootCause(Throwable t) {
+        // Identity set rather than a self-reference check, because a cause chain can cycle without any link pointing
+        // at itself: initCause refuses self-causation, but A -> B -> A is buildable and a chain read back from
+        // deserialization has no such guard at all. This runs in the control loop's catch block BEFORE doClose, so a
+        // spin here is not a bad log line - it is a consumer that never shuts down and a caller that waits forever.
+        // The JDK's own printStackTrace keeps an identity "dejaVu" set for exactly this.
+        var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
         var root = t;
-        while (root.getCause() != null && root.getCause() != root) {
-            root = root.getCause();
+        seen.add(root);
+        for (var cause = root.getCause(); cause != null && seen.add(cause); cause = cause.getCause()) {
+            root = cause;
         }
         return root == t
                 ? String.valueOf(t.getMessage())

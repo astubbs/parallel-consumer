@@ -631,6 +631,41 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 assertCommitLists(of(of(2), of(2, 3, 4))));
     }
 
+    /**
+     * A callback throwing an exception whose cause chain is a cycle must still shut the consumer down.
+     *
+     * <p>The failure path reads the cause chain to name the root cause in its message. Walking that chain by
+     * following {@code getCause} terminates for every chain a program means to build - but not for every chain it
+     * can build. {@code initCause} refuses self-causation, so {@code A -> A} is impossible and a
+     * self-reference check looks sufficient; {@code A -> B -> A} is not impossible, and defeats it.
+     *
+     * <p>What makes that worth a test rather than a code comment is where the walk happens: in the control loop's
+     * catch block, before {@code doClose}. A spin there is not a missing log line - the consumer never reaches
+     * shutdown and {@code closeDrainFirst} never returns, so the symptom is a hang, which is the one failure mode
+     * that cannot be diagnosed from a stack trace after the fact.
+     *
+     * <p>The timeout is the assertion. If the walk regresses this does not fail with a message, it hangs, and only
+     * the deadline distinguishes it from a slow test.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void controlLoopSurvivesACyclicCauseChain() {
+        var head = new FakeRuntimeException("cycle head");
+        var tail = new RuntimeException("cycle tail", head);
+        head.initCause(tail); // head -> tail -> head, which no self-reference check catches
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            throw head;
+        });
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        // the outcome that matters is that this returns at all
+        assertThatThrownBy(() -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)))
+                .as("the failure is reported rather than spun on")
+                .hasMessageContainingAll("Error", "poll", "thread");
+    }
+
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {
