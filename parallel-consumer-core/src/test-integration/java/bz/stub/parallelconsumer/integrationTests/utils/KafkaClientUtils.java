@@ -30,6 +30,7 @@ import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.kafka.KafkaContainer;
@@ -123,8 +124,11 @@ public class KafkaClientUtils implements AutoCloseable {
     private KafkaConsumer<String, String> lastConsumerConstructed;
 
     public KafkaClientUtils(KafkaContainer kafkaContainer) {
-        kafkaContainer.addEnv("KAFKA_transaction_state_log_replication_factor", "1");
-        kafkaContainer.addEnv("KAFKA_transaction_state_log_min_isr", "1");
+        // No broker tuning here. BrokerIntegrationTest starts the singleton container in a static
+        // initialiser, so any addEnv() at this point lands on an already-running broker and does
+        // nothing - which is how the transaction.state.log settings that used to sit here went on
+        // reading as load-bearing long after the container started defaulting them to 1 itself.
+        // Broker config has exactly one owner: BrokerIntegrationTest#createKafkaContainer.
         kafkaContainer.start();
         this.kContainer = kafkaContainer;
     }
@@ -324,6 +328,15 @@ public class KafkaClientUtils implements AutoCloseable {
     private static final int TOPIC_CREATE_TIMEOUT_SECONDS = 60;
 
     /**
+     * Bound on ONE admin round trip inside the readiness poll, deliberately much smaller than the overall
+     * {@link #TOPIC_CREATE_TIMEOUT_SECONDS} budget the poll runs under. Sharing one constant between the two
+     * means a single slow call can spend the entire budget without the loop ever polling again, and the
+     * failure then reports as "partition leaders never elected" when what actually happened was one stalled
+     * admin request.
+     */
+    private static final int ADMIN_CALL_TIMEOUT_SECONDS = 10;
+
+    /**
      * Shared blocking topic create: submits the topics and waits for the broker to confirm creation.
      * Tolerates {@link TopicExistsException} so callers can "ensure" a topic idempotently; any other
      * failure propagates as a {@link RuntimeException} rather than being silently swallowed.
@@ -371,11 +384,19 @@ public class KafkaClientUtils implements AutoCloseable {
      * {@code docs/solutions/test-flakiness/topic-created-is-not-topic-writable-kraft-2026-08-12.md}.
      */
     private void awaitPartitionLeaders(List<String> topicNames) {
-        Awaitility.await("partition leaders serving for " + topicNames)
-                .atMost(ofSeconds(TOPIC_CREATE_TIMEOUT_SECONDS))
-                .pollInterval(ofMillis(50))
-                .pollDelay(Duration.ZERO)
-                .until(() -> everyPartitionServesALeaderOnlyRequest(topicNames));
+        try {
+            Awaitility.await("partition leaders serving for " + topicNames)
+                    .atMost(ofSeconds(TOPIC_CREATE_TIMEOUT_SECONDS))
+                    .pollInterval(ofMillis(50))
+                    .pollDelay(Duration.ZERO)
+                    .until(() -> everyPartitionServesALeaderOnlyRequest(topicNames));
+        } catch (ConditionTimeoutException e) {
+            throw new RuntimeException("Timed out after " + TOPIC_CREATE_TIMEOUT_SECONDS
+                    + "s waiting for every partition of " + topicNames + " to serve a leader-only request. "
+                    + "The topics exist - the controller accepted them - but no leader is answering, so "
+                    + "producing to them now would desynchronise an idempotent producer. Raise log level to "
+                    + "debug on this class for the per-poll broker error.", e);
+        }
     }
 
     /**
@@ -388,21 +409,31 @@ public class KafkaClientUtils implements AutoCloseable {
      * open - measured, not assumed: it cut the trigger from 25 occurrences per suite run to 2, not to zero.
      * Serving a leader-only request is the property the producer actually needs, so that is what is asserted.
      */
-    private boolean everyPartitionServesALeaderOnlyRequest(List<String> topicNames) throws Exception {
-        var partitions = getAdmin()
-                .describeTopics(TopicCollection.ofTopicNames(topicNames))
-                .allTopicNames().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .values().stream()
-                .flatMap(topic -> topic.partitions().stream()
-                        .map(partition -> new TopicPartition(topic.name(), partition.partition())))
-                .collect(Collectors.toMap(tp -> tp, tp -> OffsetSpec.latest()));
-
+    private boolean everyPartitionServesALeaderOnlyRequest(List<String> topicNames) {
         try {
-            getAdmin().listOffsets(partitions).all().get(TOPIC_CREATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            // Both round trips are inside the try on purpose. The serving broker can still answer the DESCRIBE
+            // with UnknownTopicOrPartition in the same window this method exists to wait out - it learns the
+            // assignment from the metadata log after the controller accepted the create - so a describe failure
+            // is the "not ready yet" signal too, not a reason to give up. Awaitility does not ignore exceptions
+            // from a polled condition by default, so anything escaping here kills the wait outright.
+            var partitions = getAdmin()
+                    .describeTopics(TopicCollection.ofTopicNames(topicNames))
+                    .allTopicNames().get(ADMIN_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .values().stream()
+                    .flatMap(topic -> topic.partitions().stream()
+                            .map(partition -> new TopicPartition(topic.name(), partition.partition())))
+                    .collect(Collectors.toMap(tp -> tp, tp -> OffsetSpec.latest()));
+
+            getAdmin().listOffsets(partitions).all().get(ADMIN_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             return true;
-        } catch (ExecutionException notReadyYet) {
+        } catch (ExecutionException | TimeoutException notReadyYet) {
             log.debug("Partitions of {} not yet serving as leader, retrying", topicNames, notReadyYet);
             return false;
+        } catch (InterruptedException e) {
+            // Not a "not ready yet": the test is being torn down, so polling again is the wrong answer.
+            // Restore the flag before abandoning the wait, matching createTopicsBlocking above.
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted waiting for partition leaders of " + topicNames, e);
         }
     }
 

@@ -206,6 +206,7 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
 
 
         String outputTopic = getTopic() + "-output";
+        ensureTopic(outputTopic, 1);
 
         pc.pollAndProduce(recordContexts -> {
             log.debug("Processing {}", recordContexts.offset());
@@ -324,6 +325,7 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
         // pc
         AtomicInteger retryCount = new AtomicInteger();
         final String OUTPUT_TOPIC = getTopic() + "-output";
+        ensureTopic(OUTPUT_TOPIC, 1);
         pc.pollAndProduce(recordContexts -> {
             long offset = recordContexts.offset();
             log.debug("Processing {}", recordContexts.offset());

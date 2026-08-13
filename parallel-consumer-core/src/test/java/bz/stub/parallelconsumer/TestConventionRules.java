@@ -51,11 +51,12 @@ public class TestConventionRules {
                     // of classes the rule can see did.
                     .and().resideOutsideOfPackages("..internal.testcontainers..")
                     .should().beAssignableTo("bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest")
-                    // org.testcontainers.kafka is where the modern module-specific containers live
-                    // (KafkaContainer for apache/kafka, ConfluentKafkaContainer for the vendor images);
-                    // org.testcontainers.containers holds GenericContainer and the deprecated originals.
-                    // Both need naming, or a test can reach Docker from the unit suite through the new package.
-                    .orShould().dependOnClassesThat().resideInAnyPackage("org.testcontainers.containers..", "org.testcontainers.kafka..", "org.testcontainers.junit..")
+                    // The whole namespace, not a list of the packages we happen to use today. Testcontainers
+                    // moves containers between packages - the apache/kafka swap needed KafkaContainer from the
+                    // new org.testcontainers.kafka, where the deprecated original lived in
+                    // org.testcontainers.containers - and an enumerated list reopens this hole silently every
+                    // time that happens: a Docker-touching test lands in the surefire suite and the rule passes.
+                    .orShould().dependOnClassesThat().resideInAnyPackage("org.testcontainers..")
                     .because("integration tests (extend BrokerIntegrationTest or use Testcontainers) must live in "
                             + "an 'integrationTest' package so failsafe runs them (with Docker), not surefire");
 

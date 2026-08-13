@@ -143,6 +143,13 @@ public abstract class BrokerIntegrationTest<K, V> {
         // rebalance delay is pinned to the value the Confluent image was configured with, so that moving
         // image does not also silently retune consumer-group formation.
         KafkaContainer base = new KafkaContainer(DockerImageName.parse(deriveKafkaImage()))
+                // Makes createTopicsBlocking the ONLY way to get a topic, which is what turns its
+                // partition-leader wait from advice into an invariant. With auto-creation on (Kafka's default,
+                // and the container does not override it), a test that just produces to a name gets a topic
+                // the readiness wait never saw - the leaderless window this suite moved to KRaft to stop
+                // losing races in. Off, that same mistake fails immediately at the call site with
+                // UNKNOWN_TOPIC_OR_PARTITION instead of expiring a producer two minutes later.
+                .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false") //auto.create.topics.enable
                 .withEnv("KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS", "1") //transaction.state.log.num.partitions
                 //todo need to customise this for this test
                 // default produce batch size is - must be at least higher than it: 16KB

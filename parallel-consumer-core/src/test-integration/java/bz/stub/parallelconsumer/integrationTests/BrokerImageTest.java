@@ -31,10 +31,17 @@ class BrokerImageTest extends BrokerIntegrationTest<String, String> {
     /**
      * Asserts against the container that is running, not against the source that names it, so that a
      * change which silently failed to take effect is distinguishable from one that worked.
+     * <p>
+     * <b>Not {@code getDockerImageName()}.</b> That returns the image this process <i>asked</i> for - the
+     * value {@link BrokerIntegrationTest#deriveKafkaImage()} produced - so asserting on it only re-checks the
+     * derivation the tests below already cover, and the one failure this class exists for (the swap did not
+     * take effect) reads green. {@code getContainerInfo()} is a Docker inspect of the container that actually
+     * started, which is the claim being made. It matters more than it looks: the container is created with
+     * {@code withReuse(true)}, so a started container can outlive the run that configured it.
      */
     @Test
     void theBrokerUnderTestIsTheApacheKafkaImage() {
-        String running = kafkaContainer.getDockerImageName();
+        String running = runningImage();
         log.info("Broker under test: {}", running);
 
         assertThat(running)
@@ -50,11 +57,38 @@ class BrokerImageTest extends BrokerIntegrationTest<String, String> {
     void theBrokerVersionMatchesTheClientOnTheClasspath() {
         String clientVersion = AppInfoParser.getVersion().split("-")[0];
 
-        assertThat(kafkaContainer.getDockerImageName())
+        assertThat(runningImage())
                 .as("broker image must carry the client's own Kafka version. If this fails after a " +
                         "-Dkafka.version bump, the requested release has no apache/kafka image and the " +
                         "suite silently fell back - the run is testing a mismatched pair, not the one asked for")
                 .isEqualTo("apache/kafka:" + clientVersion);
+    }
+
+    /**
+     * The only assertion here that no image tag can lie about: the running broker's own answer for which
+     * release it speaks. A tag is a mutable label - {@code apache/kafka:3.9.2} can be re-pointed locally, or
+     * served by a mirror - so every check above ultimately trusts a name. This one asks the process.
+     * <p>
+     * Only {@code major.minor} is observable: {@code inter.broker.protocol.version} carries no patch
+     * component, so this cannot catch a wrong patch release. It is deliberately the weaker assertion on a
+     * stronger source, and it pairs with - rather than replaces - the Docker inspect above.
+     */
+    @Test
+    void theRunningBrokerReportsTheClientsKafkaRelease() {
+        String[] client = AppInfoParser.getVersion().split("-")[0].split("\\.");
+        String clientMajorMinor = client[0] + "." + client[1];
+
+        assertThat(describeTheRunningBroker().get("inter.broker.protocol.version").value())
+                .as("the broker's OWN reported protocol version must match the client's release. A tag can be " +
+                        "re-pointed or mirrored; this asks the running process instead of trusting its label")
+                .startsWith(clientMajorMinor);
+    }
+
+    /**
+     * The image of the container that is actually running, from a Docker inspect.
+     */
+    private String runningImage() {
+        return kafkaContainer.getContainerInfo().getConfig().getImage();
     }
 
     /**
@@ -76,6 +110,13 @@ class BrokerImageTest extends BrokerIntegrationTest<String, String> {
                 .isEqualTo("1");
         assertThat(brokerConfig.get("transaction.state.log.replication.factor").value())
                 .as("a single-node broker cannot replicate the transaction log more than once")
+                .isEqualTo("1");
+        // Pinned for the same reason as the replication factor, and it is the sharper of the two: Kafka's own
+        // default is 2, so a container that stopped supplying 1 would leave a single-node broker unable to
+        // commit any transaction. That arrives as a wall of coordinator errors across the EoS suite, nowhere
+        // near the image change that caused it - which is exactly what this test exists to prevent.
+        assertThat(brokerConfig.get("transaction.state.log.min.isr").value())
+                .as("a single-node broker cannot require more than one in-sync replica for the transaction log")
                 .isEqualTo("1");
     }
 
