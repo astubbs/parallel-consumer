@@ -93,7 +93,12 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
      * aspiration, someone recording the volume they wanted this test to reach. {@code e67d8b89}
      * deleted it as stale, which is not what the audit found. Reach it with:
      *
-     * <pre>./mvnw verify -Pci -Dincluded.groups=performance -Dvolume.messages=2000000</pre>
+     * <pre>bin/performance-test.sh -Dvolume.messages=2000000</pre>
+     *
+     * Through the script, not {@code -Dincluded.groups=performance} alone: exclusion beats inclusion in JUnit
+     * Platform, and the default {@code excluded.groups} already contains {@code performance}, so the include on
+     * its own selects nothing and the run exits BUILD SUCCESS having tested nothing. The script passes
+     * {@code -Dexcluded.groups=} as well.
      *
      * If it does not pass, the diagnosis is the deliverable - not a lowered rung.
      */

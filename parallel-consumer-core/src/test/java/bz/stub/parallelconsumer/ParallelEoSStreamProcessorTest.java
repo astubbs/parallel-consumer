@@ -523,23 +523,26 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // 0, 1 and 2 are now contiguously complete, so the frontier jumps straight to 3 - the next offset to
         // consume. It is 3 and not 2 because a committed offset is exclusive: it names where to resume, not
         // the last record done.
-        // The expectations below are CUMULATIVE - assertCommits compares the whole commit history, not the
-        // latest entry - so each step adds to the set rather than replacing it.
-        awaitForCommit(3);
-        assertCommits(of(3), "0,1,2 contiguously complete - resume at 3");
+        //
+        // Asserted as the FRONTIER, not as the whole commit history, for the same reason processInKeyOrder is -
+        // and this test is where that reason was proven twice. Every record here is on partition 0, and which
+        // intermediate offsets the commit ticks happen to capture on the way to a frontier is timing, not
+        // behaviour: releasing 4 and 5 together does not guarantee they coalesce into one advance, and
+        // completing 0 does not guarantee 1 and 2 are drained before the next tick. MEASURED on this branch -
+        // the exact-history form failed 3 of 10 runs, as [1, 3] where [3] was expected and [3, 4, 5, 6] where
+        // [3, 4, 6] was, in two different commit modes. Both are correct PC behaviour.
+        awaitFrontier(0, 3);
 
         // finish 3
         releaseAndWait(locks, 3);
 
-        awaitForCommit(4);
-        assertCommits(of(3, 4), "3 done, resume at 4");
+        awaitFrontier(0, 4);
 
         // finish 4,5
         releaseAndWait(locks, of(4, 5));
 
-        // 4 and 5 coalesce into one advance rather than committing twice
-        awaitForCommit(6);
-        assertCommits(of(3, 4, 6), "4 and 5 done, resume at 6");
+        // both complete, so the frontier ends at 6 - whether that took one commit or two is not this test's
+        awaitFrontier(0, 6);
 
         // close
         parallelConsumer.close();
@@ -775,14 +778,19 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 .as("blocked by 0 (1 shouldn't be run until 0 is complete, due to key order processing)")
                 .isFalse();
 
-        // nothing committed at all yet - not even partition 1's bootstrap
-        assertCommits(of());
+        // No "nothing is committed yet" check here. Record 8 is unlocked at test start and completes at once,
+        // marking partition 1 dirty, so whether its bootstrap commit at 4 has landed by this line is a race with
+        // the 100ms commit tick - and the awaited per-partition assertion below expects that very commit to
+        // exist. Asserting its absence here would be asserting how fast the tick was.
 
         // finish 2 process clear, but commit blocked by 0
         log.debug("Unlocking 2...");
         msg2Lock.countDown();
-        awaitForSomeLoopCycles(2);
-        assertThat(processedState.get(2)).isTrue();
+        // Awaited, not point-checked: processedState is written by the worker thread after it wakes from the
+        // latch, and the control loop can turn twice before that worker is scheduled. Same pattern as records
+        // 5 and 6 below. MEASURED - the point check failed 1 of 10 runs under PERIODIC_CONSUMER_ASYNCHRONOUS.
+        awaitUntilTrue(() -> processedState.get(2));
+        assertThat(processedState.get(2)).as("2 is not blocked by 0 - different key").isTrue();
 
 
         // Still nothing has advanced on partition 0 - 0 is in flight and blocks its key. Partition 1 has by now

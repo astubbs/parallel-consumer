@@ -914,10 +914,13 @@
                          dedicated hardware: what actually runs them is the "Performance Tests" leg of
                          maven.yml (ubuntu-latest, a REQUIRED check on every PR, via bin/performance-test.sh)
                          and the highcpu lane of pr-highcpu-fast-feedback.yml on the self-hosted runner.
-                         Select them with -Dincluded.groups=performance, or -Dexcluded.groups= to run
-                         everything. NOT -Dgroups=performance: the groups element below is pinned to
-                         ${included.groups}, so the explicit pom value wins and a bare -Dgroups is silently
-                         ignored - the same trap as -DforkCount vs -Dsurefire.forkCount. -->
+                         Select them with BOTH -Dincluded.groups=performance AND -Dexcluded.groups= - which is
+                         what bin/performance-test.sh does, and the reason to use it rather than a hand-rolled
+                         mvnw line. The include alone selects nothing: exclusion beats inclusion in JUnit
+                         Platform and excluded.groups already contains performance, so the run exits BUILD
+                         SUCCESS having tested nothing. NOT -Dgroups=performance either: the groups element
+                         below is pinned to ${included.groups}, so the explicit pom value wins and a bare
+                         -Dgroups is silently ignored - the same trap as -DforkCount vs -Dsurefire.forkCount. -->
                     <groups>${included.groups}</groups>
                     <excludedGroups>${excluded.groups}</excludedGroups>
                 </configuration>

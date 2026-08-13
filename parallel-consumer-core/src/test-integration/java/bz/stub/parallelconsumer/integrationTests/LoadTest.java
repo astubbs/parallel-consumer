@@ -139,13 +139,17 @@ public class LoadTest extends DbTest {
      * ceiling of 600s. So the code is not the problem at this volume, and it is nowhere near the
      * deadline - by that rule, failures in this family are contention.
      * <p>
-     * Which leaves the one thing the measurement could not clear: the performance lane does
-     * <em>not</em> give it an uncontended broker. Failsafe declares no {@code forkCount}, so all
-     * four {@code @Tag("performance")} classes share one JVM - and therefore the one static
-     * {@code BrokerIntegrationTest.kafkaContainer} - with {@code <parallel>methods</parallel>}. The
-     * gating integration lane already solves exactly this by forking
-     * ({@code -DforkCount=4 -DreuseForks=true}, so each fork gets its own broker); this lane does
-     * not. If this case does flake in CI, that is the first thing to reach for, not the deadline.
+     * Which leaves what the measurement could not clear: the performance lane does <em>not</em> give it a
+     * JVM of its own. Failsafe declares no {@code forkCount}, so all four {@code @Tag("performance")}
+     * classes run in one fork, sharing one heap and the static {@code BrokerIntegrationTest.kafkaContainer} -
+     * and, because this class extends {@code DbTest}, a Postgres container that none of its tests use.
+     * <p>
+     * They run <em>sequentially</em> in that fork, not concurrently: {@code -Pci} sets
+     * {@code parallel-tests=false}, and failsafe's {@code <parallel>} element is not read by the JUnit
+     * Platform provider at all. So if this case flakes, reach for heap accumulated across the four classes
+     * under {@code reuseForks}, container start-up, or the lane's 60-minute cap - <b>not</b> for broker
+     * contention between concurrent tests, which cannot occur here. The gating integration lane forks
+     * ({@code -DforkCount=4 -DreuseForks=true}) and would give each class its own broker; this lane does not.
      */
     @SneakyThrows
     @Test

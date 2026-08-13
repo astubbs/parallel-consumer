@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.toMap;
@@ -252,11 +253,30 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 return "***";
             }
         }
-        return value.replace("\n", "\\n").replace("\r", "\\r");
+        if (value != null && SECRET_IN_VALUE.matcher(value).find()) {
+            return "*** (value matched a credential pattern)";
+        }
+        return value == null ? "null" : value.replace("\n", "\\n").replace("\r", "\\r");
     }
 
     private static final String[] SECRET_KEY_MARKERS =
-            {"password", "passwd", "secret", "token", "credential", "apikey", "api.key", "accesskey", "access.key"};
+            {"password", "passwd", "pwd", "passphrase", "secret", "token", "credential",
+                    "apikey", "api.key", "accesskey", "access.key", "privatekey", "private.key"};
+
+    /**
+     * Matching the key name alone leaves the more likely leak wide open: people name a property for what it
+     * configures, not for the fact that a credential happens to be inside it. A JDBC URL
+     * ({@code ...?user=svc&password=hunter2}) or a URL with userinfo ({@code https://user:tok3n@host/x}) sails
+     * past every marker above, because {@code test.db.url} contains none of them.
+     * <p>
+     * So the value is scanned too, for embedded {@code key=value} credential pairs and for URL userinfo. This
+     * is a denylist and denylists fail open, which is the wrong direction for a masking control - but the
+     * alternative here is an allowlist of interesting properties, which fails the diagnostic instead, and the
+     * dump exists to be complete. Two overlapping checks narrow the gap without capping what can be reported.
+     */
+    private static final Pattern SECRET_IN_VALUE = Pattern.compile(
+            "(?i)(password|passwd|passphrase|secret|token|credential|api[._-]?key)\\s*[=:]\\s*\\S"
+                    + "|://[^/@\\s]+:[^/@\\s]+@");
 
     /**
      * Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. Resets the

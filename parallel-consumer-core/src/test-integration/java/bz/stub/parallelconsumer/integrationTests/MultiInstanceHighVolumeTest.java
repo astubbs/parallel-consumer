@@ -64,7 +64,13 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
      * the volume was lowered to fit a deadline rather than because 10M was wrong. With the deadline
      * scaling, the original volume is reachable again:
      *
-     * <pre>./mvnw verify -Pci -Dmultiinstance.messages=10000000</pre>
+     * <pre>bin/performance-test.sh -Dmultiinstance.messages=10000000</pre>
+     *
+     * Through the script, not a bare {@code ./mvnw verify -Pci}: this class is {@code @Tag("performance")} and
+     * the default {@code excluded.groups} is {@code performance,chaos,quarantined}, so a plain run deselects the
+     * very test the property configures - and exits BUILD SUCCESS having run nothing. Exclusion also beats
+     * inclusion, so {@code -Dincluded.groups=performance} alone is not enough either; the script passes both
+     * that and {@code -Dexcluded.groups=}, which is why the CI lane works.
      */
     private static int volume() {
         return Integer.getInteger("multiinstance.messages", GATING_VOLUME);

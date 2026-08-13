@@ -174,6 +174,47 @@ class AmbientProbeExtensionTest {
         assertThat(autopsy).contains("ambient.probe.test.plain=not-a-secret");
     }
 
+    /**
+     * The likelier leak: people name a property for what it configures, so the credential rides in the VALUE
+     * under a key that announces nothing. Matching key names alone would print these verbatim.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.db.url", value = "jdbc:postgresql://h/db?user=svc&password=hunter2")
+    @SetSystemProperty(key = "ambient.probe.test.hook", value = "https://user:tok3n@hooks.example.com/x")
+    @SetSystemProperty(key = "ambient.probe.test.gpg.passphrase", value = "correct-horse")
+    void environmentDumpMasksCredentialsCarriedInsideValues() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        // embedded key=value credential, and URL userinfo - neither key contains a secret marker
+        assertThat(autopsy).doesNotContain("hunter2");
+        assertThat(autopsy).doesNotContain("tok3n");
+        // gpg.passphrase is a real Maven release flag, and "passphrase" is not "password"
+        assertThat(autopsy).doesNotContain("correct-horse");
+        // the keys still print - knowing the property was set is the diagnostic
+        assertThat(autopsy).contains("ambient.probe.test.db.url=");
+        assertThat(autopsy).contains("ambient.probe.test.hook=");
+    }
+
+    /**
+     * The masking must not eat the dump it protects. {@code java.library.path} is why {@code pat} was rejected
+     * as a key marker - it would have masked every path property on the JVM.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void environmentDumpDoesNotOverMaskOrdinaryProperties() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("java.version=" + System.getProperty("java.version"));
+        assertThat(autopsy).contains("java.library.path=" + System.getProperty("java.library.path"));
+    }
+
     // --- autopsy rendering ---
 
     @Test
