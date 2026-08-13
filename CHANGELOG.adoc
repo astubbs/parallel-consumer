@@ -20,7 +20,7 @@ endif::[]
 
 == 0.6.0.0 (unreleased)
 
-First release of the community fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer] (upstream is no longer actively maintained). Source compatible with upstream 0.5.x apart from one removed accessor — two mechanical changes are required, the Maven groupId and the Java packages every import names, plus that one method if you called it (see Breaking below). Includes upstream fixes and features merged after upstream's last release (0.5.3.3) that were never published there.
+First release of the community fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer] (upstream is no longer actively maintained). Source compatible with upstream 0.5.x apart from one removed accessor — two changes are required of every codebase: the Maven groupId, and the Java packages every import names; plus that one method, if you called it (see Breaking below). Includes upstream fixes and features merged after upstream's last release (0.5.3.3) that were never published there.
 
 === Breaking
 
