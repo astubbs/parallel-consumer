@@ -19,7 +19,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * deque for the life of the instance. Both processors need identical backlog-warning and clear-on-close
  * behaviour, and they share no common supertype, so it lives here rather than being copied into each.
  *
- * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+ * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
 @Slf4j
 @UtilityClass
@@ -47,7 +48,7 @@ public class JStreamResultDeques {
             if (size >= BACKLOG_WARN_INTERVAL) {
                 log.warn("Result stream backlog: {} items. Unconsumed results accumulate in memory - consume the " +
                         "stream, or use the callback-based API. " +
-                        "See https://github.com/confluentinc/parallel-consumer/issues/912", size);
+                        "See https://github.com/astubbs/parallel-consumer/issues/122", size);
             }
         }
     }

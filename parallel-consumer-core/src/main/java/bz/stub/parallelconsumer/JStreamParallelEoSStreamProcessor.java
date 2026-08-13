@@ -23,7 +23,7 @@ import java.util.stream.Stream;
 /**
  * @deprecated Being removed — the JStream interface is not widely used and its unbounded result deque
  * can cause memory leaks if the stream is not actively consumed. Use the callback-based API instead.
- * See <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>.
+ * See <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a> (mirrors <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>).
  */
 @Slf4j
 @Deprecated
@@ -63,13 +63,21 @@ public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamPr
      * <p>
      * The clear happens <b>after</b> the shutdown completes, not before: a {@link DrainingMode#DRAIN} close
      * keeps processing in-flight work, and that work enqueues more results.
+     * <p>
+     * It runs in a {@code finally} because a close that fails - a drain that times out, an exception off the
+     * control thread - is exactly when the backlog is largest, and releasing it does not depend on the
+     * shutdown having succeeded.
      *
-     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
      */
     @Override
     public void close(DrainingMode drainMode) {
-        super.close(drainMode);
-        JStreamResultDeques.clearOnClose(userProcessResultsStream);
+        try {
+            super.close(drainMode);
+        } finally {
+            JStreamResultDeques.clearOnClose(userProcessResultsStream);
+        }
     }
 
 }

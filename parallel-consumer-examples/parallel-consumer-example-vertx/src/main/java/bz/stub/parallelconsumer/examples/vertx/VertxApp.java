@@ -61,8 +61,12 @@ public class VertxApp {
             return new RequestInfo("localhost", port, "/api", params); // <1>
         }, onSend -> {
             // <2>
-        }, onComplete -> {
-            log.info("Response from the HTTP request: {}", onComplete.result()); // <3>
+        }, onComplete -> { // <3>
+            if (onComplete.succeeded()) {
+                log.info("Response from the HTTP request: {}", onComplete.result());
+            } else {
+                log.error("HTTP request failed", onComplete.cause());
+            }
         });
         // end::example[]
 

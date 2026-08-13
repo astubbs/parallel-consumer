@@ -34,7 +34,7 @@ import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 /**
  * @deprecated Being removed — the JStream interface is not widely used and its unbounded result deque
  * can cause memory leaks if the stream is not actively consumed. Use the callback-based API instead.
- * See <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>.
+ * See <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a> (mirrors <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>).
  */
 @Slf4j
 @Deprecated
@@ -48,7 +48,8 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
      * will accumulate in memory indefinitely. If you don't need the result stream, use the
      * callback-based API instead.
      *
-     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
      */
     private final Stream<VertxCPResult<K, V>> stream;
 
@@ -167,14 +168,23 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
      * <p>
      * Overrides the {@link DrainingMode}-taking close, which is the single method every other entry point
      * funnels through - see the sibling override in {@code JStreamParallelEoSStreamProcessor}. The clear
-     * happens after shutdown, since a draining close keeps enqueueing results while it finishes.
+     * happens after shutdown, since a draining close keeps enqueueing results while it finishes, and in a
+     * {@code finally} so a failed close still releases the backlog.
+     * <p>
+     * On the {@link java.time.Duration}-taking paths the clear lands after the core shutdown but before
+     * {@code VertxParallelEoSStreamProcessor} closes the web client and Vert.x instance, because that class
+     * does its own teardown after delegating to {@code super}.
      *
-     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
      */
     @Override
     public void close(DrainingMode drainMode) {
-        super.close(drainMode);
-        JStreamResultDeques.clearOnClose(userProcessResultsStream);
+        try {
+            super.close(drainMode);
+        } finally {
+            JStreamResultDeques.clearOnClose(userProcessResultsStream);
+        }
     }
 
     /**

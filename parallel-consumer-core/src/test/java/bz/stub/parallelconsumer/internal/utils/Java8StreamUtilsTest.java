@@ -4,13 +4,14 @@ package bz.stub.parallelconsumer.internal.utils;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Collectors;
+
+import static com.google.common.truth.Truth.assertThat;
 
 /**
  * The stream handed back by the deprecated {@code JStream*} processors declares itself
@@ -19,7 +20,8 @@ import java.util.stream.Collectors;
  *
  * @author Antony Stubbs
  * @see Java8StreamUtils
- * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+ * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
 class Java8StreamUtilsTest {
 
@@ -29,8 +31,8 @@ class Java8StreamUtilsTest {
 
         List<String> collected = Java8StreamUtils.setupStreamFromDeque(deque).collect(Collectors.toList());
 
-        Assertions.assertThat(collected).containsExactly("a", "b");
-        Assertions.assertThat(deque).isEmpty();
+        assertThat(collected).containsExactly("a", "b").inOrder();
+        assertThat(deque).isEmpty();
     }
 
     /**
@@ -52,6 +54,6 @@ class Java8StreamUtilsTest {
         var stream = Java8StreamUtils.setupStreamFromDeque(emptiedUnderneath);
 
         // map dereferences every element, so a null reaches the test as an NPE rather than as a quiet pass
-        Assertions.assertThat(stream.map(String::length).collect(Collectors.toList())).isEmpty();
+        assertThat(stream.map(String::length).collect(Collectors.toList())).isEmpty();
     }
 }

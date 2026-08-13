@@ -17,7 +17,12 @@ import java.util.stream.Stream;
  * @deprecated Being removed. The deque behind {@link #pollProduceAndStream} is unbounded and drains only as
  * the caller consumes the returned stream, so a slow or absent consumer grows it until the JVM runs out of
  * memory. Take results through {@link ParallelStreamProcessor#pollAndProduceMany} and its callback instead.
- * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+ * <p>
+ * Note that closing <b>discards</b> whatever the caller has not consumed by then: every {@code close} entry
+ * point clears the backing deque once shutdown finishes, so results still sitting in it are dropped rather
+ * than delivered. Drain the stream before closing if you need them.
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+ * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
 @Deprecated
 public interface JStreamParallelStreamProcessor<K, V> extends DrainingCloseable {

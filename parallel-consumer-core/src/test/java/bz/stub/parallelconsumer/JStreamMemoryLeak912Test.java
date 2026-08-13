@@ -25,7 +25,8 @@ import static org.mockito.Mockito.mock;
  * the returned Stream is not actively consumed. On close, the deque was never cleared,
  * leaving all accumulated results in memory until GC.
  *
- * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+ * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
 @Slf4j
 class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {

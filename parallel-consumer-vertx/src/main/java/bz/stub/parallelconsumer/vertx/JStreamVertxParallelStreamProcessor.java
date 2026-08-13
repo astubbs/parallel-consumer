@@ -25,7 +25,12 @@ import java.util.stream.Stream;
  * until something reads the stream back, which nothing bounds. Prefer
  * {@link VertxParallelStreamProcessor#vertxHttpReqInfo}, which hands each response to a callback as it
  * completes.
- * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+ * <p>
+ * Note that closing <b>discards</b> whatever the caller has not consumed by then: every {@code close} entry
+ * point clears the backing deque once shutdown finishes, so results still sitting in it are dropped rather
+ * than delivered. Drain the stream before closing if you need them.
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
+ * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
 @Deprecated
 public interface JStreamVertxParallelStreamProcessor<K, V> extends ParallelConsumer<K, V> {
