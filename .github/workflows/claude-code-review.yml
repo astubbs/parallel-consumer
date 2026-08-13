@@ -4,6 +4,24 @@ name: review gate
 # invocation, no JDK, no build. It asserts that this PR HAS HAD a deliberate review, and goes
 # red when it has not.
 #
+# IT ASSERTS TWO HALVES, AND NAMES THEM SEPARATELY WHEN THEY FAIL:
+#
+#   1. AN AUTOMATED REVIEW happened and finished          - bin/check-review-posted.sh
+#   2. THE REPOSITORY OWNER LEFT A HUMAN LGTM on the PR   - bin/check-human-lgtm.sh
+#
+# The second half is a MEMORY AID, not a security control - the owner is the person it asserts
+# about and the person who wants the merge, so it stops nobody, and its own script says so at
+# length. What it buys is that "I have not read this one myself yet" stops being a thing to
+# hold in your head across a dozen open PRs and becomes a red check that says which half is
+# missing. Both halves report even when the other has already failed, so one look at the PR
+# tells you what is outstanding.
+#
+# NEITHER HALF IS HEAD-SENSITIVE. A review, or an LGTM, on ANY commit of the PR counts for the
+# whole PR, permanently. See "IT NO LONGER ASKS..." below for the automated half; the human
+# half matches it deliberately, and was asked for that way ("it doesn't need to be on the
+# latest head because I won't say LGTM until I'm confident that we're near the merge point
+# anyway").
+#
 # The reviewer itself is on demand, two ways - dispatched, or asked for by comment:
 #
 #   gh workflow run claude-code-review-dispatch.yml -R astubbs/parallel-consumer --ref master \
@@ -29,10 +47,19 @@ name: review gate
 # enforcing strictness here cost a write-scoped job on every review route plus a page of
 # timestamp plumbing. Do not re-add it without reading that entry.
 #
-# THE JOB NAME `claude-review` IS AN API. It is a required status check in the master ruleset
-# (`gh api repos/astubbs/parallel-consumer/rules/branches/master`), matched by name. Rename the
-# job and the ruleset silently stops being satisfied by anything - same convention, and same
-# hazard, as the job names in repo-hygiene.yml.
+# THE JOB NAME IS AN API. It is a required status check in the master ruleset
+# (`gh api repos/astubbs/parallel-consumer/rules/branches/master`), matched by name. Rename a
+# job here and the ruleset silently stops being satisfied by anything - same convention, and
+# same hazard, as the job names in repo-hygiene.yml.
+#
+# WHICH IS WHY THERE ARE CURRENTLY TWO JOBS, AND WHY THE SECOND ONE IS TEMPORARY. The gate's
+# check used to be called `claude-review`, which no longer describes what it asserts now that a
+# human LGTM is half of it. A rename cannot be done in one step: drop the old name and the
+# ruleset requires a context nothing produces, which blocks EVERY open PR including the one
+# doing the rename. So during the cutover both names report - the real job under its new name,
+# and `claude-review` below under the old contract - the ruleset is swapped from one to the
+# other in a single atomic edit, and only then is the old job deleted. The exact commands and
+# ordering are in the description of the PR that introduced the human half.
 #
 # One thing the on-demand split quietly fixes: because this file no longer invokes
 # `claude-code-action`, the action's workflow-validation guard no longer applies to it. A PR
@@ -45,26 +72,41 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
-# Newest push wins. A superseded run has nothing to say. Keyed on the PR number rather than the
-# ref so it also covers reopened PRs.
+# DELIBERATELY NOT `pull_request_review`. Re-running the gate when a review is submitted would
+# be the obvious way to clear the human half the moment the LGTM lands, and it is a trap: on
+# that event the sender is the reviewer, so a review submitted by a BOT would skip the job
+# below on its `sender.type` guard - and a skipped job reports a `skipped` check run, which
+# GitHub counts as satisfying a required check. That is the same mechanism that makes the
+# Dependabot exemption work, pointed the wrong way: any bot review would turn the gate green
+# without either half being asserted. Clearing the gate after a late review is instead the
+# `refresh-gate` jobs' business (claude.yml, claude-code-review-dispatch.yml), and after a
+# human LGTM it is a re-run - see docs/ci.md, "if a review posts and the gate stays red anyway".
 concurrency:
   group: claude-review-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  claude-review:
+  review-gate:
+    # The check context is this NAME, not the job id - which is what makes renaming it a
+    # ruleset migration rather than an edit. Chosen to say what the check asserts: the two
+    # operands are the two halves, so a red entry in the checks list already tells you which
+    # question is outstanding before you open anything.
+    name: "review: bot + human LGTM"
     # Unchanged from the reviewer this replaces: a bot-raised PR (Dependabot and friends) is
-    # not held to the review requirement. Widening that is a separate decision from this one.
+    # not held to the review requirement - including the human half, deliberately. Widening
+    # that is a separate decision from this one.
     if: github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
-    # One `gh api` call and a shell script. If it has not finished in five minutes something is
-    # wrong, and a wedged required check is worse than a failed one.
+    # Two `gh api` calls and two shell scripts. If it has not finished in five minutes
+    # something is wrong, and a wedged required check is worse than a failed one.
     timeout-minutes: 5
     # Read-only, and deliberately narrow: this job posts nothing, so it holds no write scope and
     # no `id-token`. `checks: read` went with the freshness rule - it existed only to read when
     # GitHub first raised check suites for the head SHA, and nothing compares timestamps now.
+    # The human half needs no new scope: `pull-requests: read` already covers the reviews
+    # endpoint as well as the comments one.
     #   contents        - checkout, for bin/
-    #   pull-requests   - reading the PR's comments
+    #   pull-requests   - reading the PR's comments and its reviews
     permissions:
       contents: read
       pull-requests: read
@@ -81,11 +123,11 @@ jobs:
       # cannot turn the gate green".
       #
       # This check lives here rather than being left implicit, and it became load-bearing when
-      # the freshness rule was removed. The gate asks only "has `claude[bot]` posted a finished
-      # comment on this PR?", and `claude.yml` answers `@claude` on fork PRs - so a maintainer
-      # ASKING AN ORDINARY QUESTION on a fork PR would otherwise satisfy the gate on the next
-      # push. That is the self-asserted escape docs/ci.md rejects by name: the person who wants
-      # the merge would also be the person certifying the review.
+      # the freshness rule was removed. The automated half asks only "has `claude[bot]` posted a
+      # finished comment on this PR?", and `claude.yml` answers `@claude` on fork PRs - so a
+      # maintainer ASKING AN ORDINARY QUESTION on a fork PR would otherwise satisfy that half on
+      # the next push. That is the self-asserted escape docs/ci.md rejects by name: the person
+      # who wants the merge would also be the person certifying the review.
       #
       # Under the old strict rule this was harder to hit but never actually closed, because the
       # gate has always judged comments rather than provenance. Leniency made it reachable, so
@@ -100,7 +142,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           echo "::error::This PR's head is in '${HEAD_REPO:-<deleted fork>}', not $REPO." \
-               "A fork PR cannot turn claude-review green: the reviewer refuses fork heads" \
+               "A fork PR cannot turn this gate green: the reviewer refuses fork heads" \
                "(it would run untrusted code beside a credential), and this gate will not" \
                "accept an ordinary @claude answer as a review. Push the same commits to a" \
                "branch in this repo to get a review, or merge with this check red after" \
@@ -108,13 +150,17 @@ jobs:
           exit 1
 
       # The gate is the only thing standing between "nobody reviewed this" and a green
-      # required check, so it is tested before it is trusted. Seconds, no JDK.
-      - name: Self-test the review gate
+      # required check, so both halves are tested before either is trusted. Seconds, no JDK.
+      - name: Self-test the automated-review half
         run: bash bin/test-check-review-posted.sh
+
+      - name: Self-test the human-LGTM half
+        run: bash bin/test-check-human-lgtm.sh
 
       # Rationale, the two matching rules, why freshness was removed, and what this
       # deliberately does NOT prove: bin/check-review-posted.sh.
-      - name: Assert a review exists for this PR
+      - name: Assert an automated review exists for this PR
+        id: automated-review
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -135,6 +181,105 @@ jobs:
           # One marker line per comment, then that comment's body. The created-at is carried
           # for the human-readable message only; nothing compares it to anything. Keep this
           # marker in step with bin/check-review-posted.sh and bin/test-check-review-posted.sh.
+          gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+              --jq '.[] | "<!-- check-review-posted \(env.MARKER_TOKEN) \(.created_at) \(.user.login) -->", (.body // "")' \
+            | bash bin/check-review-posted.sh "$MARKER_TOKEN"
+
+      # RUNS EVEN WHEN THE HALF ABOVE FAILED, because the whole request behind this half was
+      # "I want to see, at a glance, whether I still owe this PR a review" - and a job that
+      # stopped at the first red would answer that question only half the time. It is skipped
+      # only when the automated half never ran at all (fork refusal, failed self-test), where
+      # there is nothing useful to add and a second error would just be noise.
+      #
+      # The matching rule in full - what counts as an LGTM, why an empty APPROVED does not, and
+      # why a DISMISSED review still does: bin/check-human-lgtm.sh.
+      - name: Assert the repository owner has left an LGTM
+        if: ${{ !cancelled() && steps.automated-review.conclusion != 'skipped' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Same unguessable-token discipline as the half above, and for the same reason: a
+          # review body carrying a predictable marker could otherwise open a segment with an
+          # author field of its own choosing, and mint an owner LGTM out of anybody's comment.
+          MARKER_TOKEN=$(openssl rand -hex 16)
+          export MARKER_TOKEN
+
+          # THE REVIEWS ENDPOINT, NOT THE COMMENTS ONE. That is the rule, not an implementation
+          # detail: a passing "lgtm" in the ordinary comment box is not the deliberate act this
+          # half is asking for. bin/test-check-human-lgtm.sh asserts this line still reads
+          # `/reviews`, so the two cannot drift apart silently.
+          #
+          # One marker line per review, then that review's body. The submitted-at is carried for
+          # the human-readable message only; nothing compares it to anything - this half is
+          # head-insensitive by design. Keep this marker in step with bin/check-human-lgtm.sh
+          # and bin/test-check-human-lgtm.sh.
+          gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+              --jq '.[] | "<!-- check-human-lgtm \(env.MARKER_TOKEN) \(.submitted_at // "unknown") \(.user.login // "unknown") \(.state // "UNKNOWN") -->", (.body // "")' \
+            | bash bin/check-human-lgtm.sh "$MARKER_TOKEN"
+
+  # ---------------------------------------------------------------------------------------
+  # TRANSITIONAL. DELETE THIS JOB once the master ruleset requires "review: bot + human LGTM"
+  # instead of `claude-review`, and not before.
+  #
+  # It exists for exactly one reason: `claude-review` is currently a required status check, and
+  # a required context that nothing reports blocks every open PR with no way to clear it. So
+  # the old name keeps reporting, under the OLD contract - the automated half only - until the
+  # ruleset is pointed at the new one. That ordering is not a nicety; reversing it bricks the
+  # repo until somebody with admin rights notices.
+  #
+  # It is deliberately NOT a `needs:`-based mirror of the job above. A job that skips when its
+  # dependency fails reports a `skipped` check run, and GitHub counts `skipped` as satisfying a
+  # required check - so the mirror would have gone GREEN precisely when the gate went red. That
+  # is this repo's most-repeated defect wearing a new hat
+  # (docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md), and it
+  # is why the steps are duplicated rather than shared.
+  #
+  # Duplicated steps also mean this job cannot get quietly stricter than the check the ruleset
+  # is still enforcing: it is a frozen copy of the old contract, with a short life.
+  # ---------------------------------------------------------------------------------------
+  claude-review:
+    if: github.event.sender.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Refuse fork heads
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "::error::This PR's head is in '${HEAD_REPO:-<deleted fork>}', not $REPO." \
+               "A fork PR cannot turn claude-review green: the reviewer refuses fork heads" \
+               "(it would run untrusted code beside a credential), and this gate will not" \
+               "accept an ordinary @claude answer as a review. Push the same commits to a" \
+               "branch in this repo to get a review, or merge with this check red after" \
+               "reviewing by hand. See docs/ci.md."
+          exit 1
+
+      - name: Self-test the review gate
+        run: bash bin/test-check-review-posted.sh
+
+      - name: Assert a review exists for this PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          MARKER_TOKEN=$(openssl rand -hex 16)
+          export MARKER_TOKEN
+
           gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
               --jq '.[] | "<!-- check-review-posted \(env.MARKER_TOKEN) \(.created_at) \(.user.login) -->", (.body // "")' \
             | bash bin/check-review-posted.sh "$MARKER_TOKEN"

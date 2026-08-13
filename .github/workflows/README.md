@@ -8,7 +8,7 @@ What each file is, so you can pick the right one without opening every one of th
 
 | File | Runs when | What it is |
 |---|---|---|
-| `claude-code-review.yml` | every PR push | **the gate** - judges, never reviews. Produces the required check `claude-review` |
+| `claude-code-review.yml` | every PR push | **the gate** - judges, never reviews. Produces the required check `review: bot + human LGTM` |
 | `claude-code-review-dispatch.yml` | `workflow_dispatch` | **the dispatched reviewer** - packaged procedure, takes a `focus` steer, cannot open inline threads |
 | `claude.yml` | an `@claude` comment | **the comment reviewer** - same tools, free-form, and the only route that can open inline review threads |
 
@@ -38,7 +38,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 
 ## Two conventions that will bite you
 
-- **Job names are an API.** `claude-review`, `shell: sigpipe`, `workflows: action versions`,
+- **Job names are an API.** `review: bot + human LGTM`, `shell: sigpipe`, `workflows: action versions`,
   `Check PR Dependencies` and the `maven.yml` suites are required status checks matched **by
   name** in the master ruleset. Rename a job and the ruleset silently stops being satisfied by
   anything - it does not fail, it just never passes.

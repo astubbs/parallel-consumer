@@ -5,6 +5,12 @@
 
 # Assert that this PR HAS HAD a deliberate automated review.
 #
+# ONE OF THE REVIEW GATE'S TWO HALVES. This one is about the machine; bin/check-human-lgtm.sh
+# asserts the other half, that the repository owner has left a human LGTM. They run as separate
+# steps of the same job so that both report on every run and their failures never read alike -
+# whichever is missing, the check says which. Neither is head-sensitive; see below for this
+# half's reasoning and that script's header for the other's.
+#
 # WHAT THIS PROVES, AND WHAT IT DELIBERATELY DOES NOT
 #
 # Two rules, both about a single comment:
@@ -38,7 +44,7 @@
 #   2. astubbs/parallel-consumer#124 edited .github/workflows/claude-code-review.yml itself,
 #      which tripped the action's workflow-validation guard - it refuses to run unless the
 #      workflow file matches the default branch. It logged "Exiting due to workflow validation
-#      skip", exited 0, and the PR sat mergeable with a green `claude-review` and no review of
+#      skip", exited 0, and the PR sat mergeable with a green gate and no review of
 #      any kind.
 #   3. The reviewer announced it would review in the background, and then the job ended -
 #      header claiming "Claude finished ... in 4m 10s" over a task list with unticked boxes.
@@ -80,7 +86,7 @@
 # not having the gate. The honest escape already exists and is loud: merge with the required
 # check red, which leaves a permanent record that somebody chose to merge unreviewed.
 #
-# A red `claude-review` on a PR nobody has asked to review yet remains the EXPECTED state, not a
+# A red gate on a PR nobody has asked to review yet remains the EXPECTED state, not a
 # fault, and not something to fix by editing this script. It is fixed by asking for a review.
 # See docs/ci.md.
 #
