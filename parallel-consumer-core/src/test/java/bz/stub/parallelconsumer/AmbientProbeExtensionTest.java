@@ -16,6 +16,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junitpioneer.jupiter.ClearSystemProperty;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junitpioneer.jupiter.SetSystemProperty;
 import org.slf4j.LoggerFactory;
 
@@ -50,6 +51,15 @@ import static org.mockito.Mockito.when;
  * ({@code getRequiredTestInstance()} throwing) and by the ITs themselves.
  */
 class AmbientProbeExtensionTest {
+
+    /**
+     * Every {@link AmbientProbeExtension#buildAutopsy} call mutates the same static once-per-JVM
+     * environment-dump guard, whether or not the test cares about the dump - the first caller wins it
+     * and every later one gets the "already dumped" line. This module runs JUnit thread-parallel
+     * outside {@code -Pci}, so any two of them that are not serialised can red each other. Hold this
+     * lock on every test that calls {@code buildAutopsy}, not just the two asserting on the dump.
+     */
+    private static final String ENVIRONMENT_DUMP_LOCK = "ambient-probe-environment-dump";
 
     // --- fixtures for the isDisabled() matrix ---
 
@@ -111,9 +121,104 @@ class AmbientProbeExtensionTest {
         assertThat(AmbientProbeExtension.isDisabled(contextFor(MethodOptOutFixture.class, "optedOutMethod"))).isTrue();
     }
 
+    // --- environment dump (what JavaEnvTest used to do by hand) ---
+
+    /** Asserts on the guard itself, so it resets it first - see {@link #ENVIRONMENT_DUMP_LOCK}. */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyCarriesTheEnvironmentDumpOncePerRun() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+        var probe = observerProbe();
+        var context = contextFor(PlainFixture.class, "plainMethod");
+
+        String first = AmbientProbeExtension.buildAutopsy(context, probe, new AssertionError("first failure"));
+        String second = AmbientProbeExtension.buildAutopsy(context, probe, new AssertionError("second failure"));
+
+        // the first autopsy of a run carries the dump
+        assertThat(first).contains("environment (once per JVM):");
+        assertThat(first).contains("java.version=");
+        // a second failing test does not repeat a few hundred lines
+        assertThat(second).contains("environment: dumped in this JVM's first autopsy");
+        assertThat(second).doesNotContain("environment (once per JVM):");
+    }
+
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.multiline", value = "alpha\nbeta")
+    void environmentDumpEscapesNewlinesSoOneLinePerProperty() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("ambient.probe.test.multiline=alpha\\nbeta");
+    }
+
+    /**
+     * The autopsy goes straight to CI logs, so a property whose name reads like a credential is masked - while the
+     * key itself still prints, because knowing it was set is the diagnostic.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.password", value = "hunter2")
+    @SetSystemProperty(key = "ambient.probe.test.plain", value = "not-a-secret")
+    void environmentDumpMasksValuesOfCredentialLookingKeys() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("ambient.probe.test.password=***");
+        assertThat(autopsy).doesNotContain("hunter2");
+        // an ordinary knob is untouched - the masking is by key name, not a blanket filter
+        assertThat(autopsy).contains("ambient.probe.test.plain=not-a-secret");
+    }
+
+    /**
+     * The likelier leak: people name a property for what it configures, so the credential rides in the VALUE
+     * under a key that announces nothing. Matching key names alone would print these verbatim.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.db.url", value = "jdbc:postgresql://h/db?user=svc&password=hunter2")
+    @SetSystemProperty(key = "ambient.probe.test.hook", value = "https://user:tok3n@hooks.example.com/x")
+    @SetSystemProperty(key = "ambient.probe.test.gpg.passphrase", value = "correct-horse")
+    void environmentDumpMasksCredentialsCarriedInsideValues() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        // embedded key=value credential, and URL userinfo - neither key contains a secret marker
+        assertThat(autopsy).doesNotContain("hunter2");
+        assertThat(autopsy).doesNotContain("tok3n");
+        // gpg.passphrase is a real Maven release flag, and "passphrase" is not "password"
+        assertThat(autopsy).doesNotContain("correct-horse");
+        // the keys still print - knowing the property was set is the diagnostic
+        assertThat(autopsy).contains("ambient.probe.test.db.url=");
+        assertThat(autopsy).contains("ambient.probe.test.hook=");
+    }
+
+    /**
+     * The masking must not eat the dump it protects. {@code java.library.path} is why {@code pat} was rejected
+     * as a key marker - it would have masked every path property on the JVM.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void environmentDumpDoesNotOverMaskOrdinaryProperties() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("java.version=" + System.getProperty("java.version"));
+        assertThat(autopsy).contains("java.library.path=" + System.getProperty("java.library.path"));
+    }
+
     // --- autopsy rendering ---
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyReportsProbeCleanWhenNothingObserved() {
         var probe = observerProbe();
 
@@ -127,6 +232,7 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyListsViolationsWithCount() {
         var probe = observerProbe();
         probe.getViolations().add("ZOMBIE_MEMBER/REBALANCE_BLOCKED: synthetic dwell violation");
@@ -142,6 +248,7 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyShowsFrozenPartitionDetailWhenNoViolationCrossedBounds() {
         var probe = observerProbe();
         var tp = new TopicPartition("in-topic", 12);

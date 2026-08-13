@@ -350,33 +350,41 @@ Only the items needing a decision are listed here - do not restate the inventory
 
 **Outright defects, cheap to fix:**
 
-- **`@Timeout(60000L)` means 16h40m, not 60s** - in `MockConsumerEarlyCloseTest`,
-  `MockConsumerSaslAuthenticationTest` and `MockConsumerCommitTimeoutTest`. JUnit 5's `@Timeout`
-  defaults to seconds. This is not cosmetic: `MockConsumerEarlyCloseTest.mockConsumer` has **no
-  assertion at all** - the timeout *is* its assertion - so it currently cannot fail by hanging within
-  any realistic CI budget. Everywhere else in the tree writes it correctly.
 - **`assumeWorkingCodec` is not an assumption** - it is `return !encodingsThatFail.contains(encoding)`.
   Five `OffsetEncoding` values run `OffsetEncodingTests.ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential`
-  with most assertions branched around and **report green rather than skipped**. Rename it to
-  `isWorkingCodec`, or convert the sites to real per-value assumptions so the skips appear in the
-  report.
+  with most assertions branched around and **report green rather than skipped**. Of the enum's 12
+  values, **3 run the full positive assertion path** - 4 are dropped by the real assumption, 5 are
+  branched around. Rename it to `isWorkingCodec`, or convert the sites to real per-value assumptions
+  so the skips appear in the report. **Same test, second problem:** it asserts
+  `doesNotContain(2500L)`, and 2500 is never a record offset there - so that assertion passes for a
+  working codec and a broken one alike. Delete it or re-target it at an offset the test produces.
 - **`OffsetEncodingTests` imports JUnit 4's `org.junit.Assume` in a Jupiter test.** No pom declares
   JUnit 4 - it arrives transitively via testcontainers, and works only because the Jupiter engine
   reflectively recognises JUnit 4's assumption exception when it happens to be on the classpath. The
   day it falls off, that skip becomes a hard failure for four enum values. One-line fix to
   `org.junit.jupiter.api.Assumptions`.
-- **`MultiInstanceHighVolumeTest` underscore typo** - `30_000_00` is 3M, not 30M.
+- **`MultiInstanceHighVolumeTest` underscore misgrouping** - `30_000_00`. Read once as a typo that
+  lost a zero off 30M; it is not. History shows the value was **reduced from `10_000_000`** and the
+  intended value is **3,000,000**, which is what the literal already evaluates to. Regrouping it to
+  `3_000_000` is **byte-identical at runtime** - a legibility fix, nothing more. Raising the volume
+  is a separate and larger question, blocked by a **hard-coded 60-second `waitAtMost`** in the same
+  method.
 
 **Coverage decisions:**
 
-- **`ParallelEoSStreamProcessorTest.processInKeyOrder`** (`@Disabled`, no reason recorded) - the one
-  real gap in the audit. Key ordering is well covered at the shard layer by `WorkManagerTest`, but
-  nothing asserts end-to-end, per-`CommitMode`, that offset *commits* respect key-order blocking
-  across partitions. Re-enabling means reconciling it with the commit semantics `c1fefbc64`
-  introduced in 2020 - which is what disabled it.
+- **`ParallelEoSStreamProcessorTest.processInKeyOrder`** (`@Disabled`, no message on the annotation) -
+  the one real gap in the audit. Key ordering is well covered at the shard layer by `WorkManagerTest`,
+  but nothing asserts end-to-end, per-`CommitMode`, that offset *commits* respect key-order blocking
+  across partitions. `TransactionAndCommitModeTest`'s KEY arm does not close it: it produces **30,000
+  unique keys for 30,000 records**, so there is one record per shard and nothing ever blocks on a key.
+  **The cause is settled**: the abandoned branch `origin/bugs/turn-on-commit-tests` @ `009bb7122` is a
+  single commit deleting exactly this `@Disabled` and the next one, titled *"…which were dibbled when
+  the offset map feature was added"*. Re-enabling means reconciling the test with the commit semantics
+  `c1fefbc64` introduced in 2020 - **and that branch shows removing the annotation alone was tried and
+  abandoned at WIP**, so budget for the reconciliation.
 - **`ParallelEoSStreamProcessorTest.offsetsAreNeverCommittedForMessagesStillInFlightLong`** - same
-  commit, same reconciliation. Its siblings cover the invariant at lower volume; the deeper
-  in-flight interleaving is not covered elsewhere.
+  commit, same branch, same reconciliation. Its siblings cover the invariant at lower volume; the
+  deeper in-flight interleaving is not covered elsewhere.
 - **`closeWithoutRunningShouldBeEventBasedFast` never measures "fast"** - add the timing assertion
   from the test three lines above it, which already does `time(...)` + `assertThat(...).isLessThan(...)`.
 - **Assertions commented out, implying coverage that does not exist** -
@@ -387,16 +395,71 @@ Only the items needing a decision are listed here - do not restate the inventory
   ran, cannot pass), `sanity/StreamTest.test` (commented-out `@Test` over an infinite stream),
   `SampleTestingFailsafePluginInclusionCore` (empty body), `JavaEnvTest.checkJavaEnvironment`
   (`log.error` dump on every run).
-- **`LargeVolumeInMemoryTests` runs 500 messages, not 1,000,000** - the 1M line is commented out
-  directly above, `git blame`d to 2020 and untouched since. Previously recorded as fixed by
-  astubbs#49; that PR never touched the file. The restore-to-1M commit and the OOM diagnostics from running it
-  live on `origin/refactor/test-hardening` - **salvage both before deleting that branch**.
-- **Kneecapped volumes still undecided** - `VeryLargeMessageVolumeTest` (1M vs 2M), `LoadTest` (4K vs
-  commented alternatives), `TransactionAndCommitModeTest.numThreads` (64 vs 1000) and `.roundsAllowed`
-  (10, with a TODO). The last two likely mask real issues rather than being tuning choices.
+- **`LargeVolumeInMemoryTests` runs 500 messages, not 1,000,000 - and restoring it is real work, not
+  a value change.** The 1M line is commented out directly above, `git blame`d to 2020 and untouched
+  since. Previously recorded as fixed by astubbs#49; that PR never touched the file. **The OOM
+  diagnostics are now salvaged** into
+  [`docs/test-hardening/large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md`](test-hardening/large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md)
+  (they existed only on `origin/refactor/test-hardening`, which is on the safe-to-delete list). They
+  show 1M producing `java.lang.OutOfMemoryError: Java heap space` in the PC close path. Anyone
+  picking this up needs **three changes, not one**:
+    1. **Stop retaining the producer history.** The test asserts
+       `producerSpy.history().hasSize(quantityOfMessagesToProduce)`, which forces every one of the 1M
+       produced records to be held live for the whole run. Replace it with a counter (and, if
+       ordering still needs checking, a small sampling buffer) so the assertion survives without the
+       retention.
+    2. **Raise the 30-second latch timeout *and actually check it*.** It is
+       `allMessagesConsumedLatch.await(defaultTimeoutSeconds, SECONDS)` and **the boolean return is
+       discarded**, so a timeout reads as a pass on the way to whatever fails next. Fix both
+       together - raising a timeout whose result is ignored achieves nothing. Note
+       `defaultTimeoutSeconds` is a shared static on `AbstractParallelEoSStreamProcessorTestBase`
+       (30s, used tree-wide), so this wants a test-local value, not a bump to the shared constant.
+    3. **Size the heap.** The diagnostics estimate **2-4GB**; surefire/failsafe defaults are far
+       below that. Set it explicitly, with a comment saying why.
+  - **Budget it x3.** This is a `@ParameterizedTest` over three `CommitMode`s, so both the runtime
+    and the peak memory cost are per-run times three - the heap figure is per fork, but the wall
+    clock is not.
+- **Should `TransactionAndCommitModeTest` tolerate any round without progress?** The test carried
+  `// todo rounds should be 1? progress should always be made` next to a `roundsAllowed` variable
+  that was assigned and never read - `ProgressTracker` is built with null rounds, and it rejects
+  being given both a round count and a timeout, so the rounds mechanism was structurally off. The
+  dead variable is gone; the question it was attached to is real and unanswered, so it lives here
+  now. Deciding it means choosing whether progress-per-round or total duration is the right
+  liveness signal for this test.
+- **The one deleted stub worth writing: `userSucceedsButProduceToBrokerFails`.** Ten test stubs were
+  deleted rather than implemented by upstream `confluentinc#493`, and audit §4 classifies all ten.
+  Nine need no test work (see below). This one does: the produce-failure path is reachable, but only
+  the `InvalidPidMappingException` special case is covered, by
+  `ParallelEoSStreamProcessorTest.closePCWhenInvalidPidMappingException`. **The general
+  produce-failure path, and its consequence - the offset is not committed and the work is retried -
+  are untested.**
+- **Three deleted stubs are missing *features*, not missing tests** - record them as issues, never as
+  test debt. `poisonPillGoesToDeadLetterQueue`: PC has no dead-letter-queue concept and never has
+  (zero DLQ occurrences in any `src/main/java`); tracked as astubbs#149, and already the
+  most-demanded missing feature in `docs/inflight/next-candidates.md`. `maxPerPartition` and
+  `maxPerTopic`: no per-partition or per-topic in-flight limit exists - `ParallelConsumerOptions` has
+  only the global `maxConcurrency`, and `ShardKey` never keys by topic. Nearest tracked: astubbs#160
+  and astubbs#236. **They were written as a trio with `maxOverall`, and only the global scope was
+  ever built** - it is `WorkManagerTest.maxInFlight` today. Neither adjacent issue is literally a
+  scoped in-flight cap, so if that debt should be visible it is **one new issue about scoped
+  concurrency limits**, not two test methods.
+- **Volumes checked and found not to need changing** (recorded so nobody re-flags them):
+  `VeryLargeMessageVolumeTest` was never reduced - it went `1_000_000` to `100_0000`, the same
+  number, to `1_000_000`, and the `2_000_000` was only ever an aspirational comment.
+  `TransactionAndCommitModeTest.numThreads = 64` was an *increase* for stability, not a reduction.
+  `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
+  listed member of the load-tightness flake family at that volume.
 
-Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29, and `ProgressBarTest.width`
-is a deliberate manual check.
+Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29. The three
+`@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
+`MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
+`@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
+`MockConsumerEarlyCloseTest` was missing - and **`@Timeout(60)` would have been wrong**, because two
+of those tests wait 45s and 50s internally, so it would have raced them rather than fixing them.
+`ProgressBarTest.width` is a deliberate manual check. Five of the ten deleted stubs (§4 of the audit)
+are already covered by named enabled tests, and `truncationOnCommit` is obsolete - on-commit
+truncation is structurally unreachable, and the truncation that does exist happens on the bootstrap
+poll and is covered by `PartitionStateCommittedOffsetTest`.
 
 A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.sh` shape) was
 considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
