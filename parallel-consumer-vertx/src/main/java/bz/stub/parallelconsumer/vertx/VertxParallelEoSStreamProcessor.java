@@ -41,6 +41,22 @@ import java.util.function.Function;
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 
 
+/**
+ * <b>HTTP status codes are the caller's concern, not this library's.</b> A Vert.x {@code WebClient}
+ * future completes successfully for any response that arrives, whatever its status, and fails only
+ * when the request does not complete at all - connection refused, timeout, TLS failure. This engine
+ * treats that future's outcome as the work's outcome, so a delivered <b>4xx or 5xx marks the record
+ * processed and its offset is committed</b>, while a transport failure marks it failed and the
+ * record is retried.
+ * <p>
+ * That is deliberate, and it matches how parallel-consumer treats the rest of the user's domain: it
+ * hands you the tools and takes no position on what counts as a business failure. To make a status
+ * code retryable, say so in your own function - attach a Vert.x
+ * {@code ResponsePredicate} to the request, or inspect the response and throw.
+ * <p>
+ * Both halves of this boundary are pinned by {@code VertxTest.serverErrorStatusStillCommits} and
+ * {@code VertxTest.transportFailureIsDistinctFromANonSuccessStatus}, so it cannot change silently.
+ */
 @Slf4j
 public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
         implements VertxParallelStreamProcessor<K, V> {
