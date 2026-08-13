@@ -144,6 +144,12 @@ the narrative and found it does not fit:
   `waitAtMost(defaultTimeout).untilAsserted(...)` block asserting the committed offset metadata -
   specifically `Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen)`.
   The `value of: optional.get()` in the failure text is that `Optional`.
+  (Citation repair: "the commit CI ran" is never named, so that 211 cannot be resolved by a reader,
+  and on master today it lands on a *different* `waitAtMost` block - the one asserting
+  `isBlocked()` - which is close enough to the description to be believed. The durable anchor is the
+  assertion already quoted: grep `hasValue(expectedHighestSeen)` in
+  `OffsetEncodingBackPressureTest`, exactly one hit. The number is left in place because it is what
+  the failure report said, not a pointer this note chose.)
 - That block runs **before** the retry section astubbs#265 rewrites. A change downstream of a failing
   assertion cannot fix it.
 

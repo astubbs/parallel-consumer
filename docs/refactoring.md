@@ -1,5 +1,8 @@
 # Refactoring backlog
 
+This doc owns the deferred-work backlog - internal refactors, the release-gated breaking-change
+queue, and `TODO`/`FIXME`/`XXX` triage. AGENTS.md routes here and keeps only the one-line rule.
+
 Deferred internal refactors - improvements noticed while working that are too big
 or too risky to fold into the change at hand, to be picked up **when things are
 quiet**. This is a solo-maintainer backlog, not an issue tracker: entries live
@@ -62,11 +65,12 @@ non-breaking and can land any time - these change the public, user-visible surfa
 so they are **release-gated**: do not fold them into a minor/patch. Collected here
 so a major-release prep can action them in one pass.
 
-- **Remove the deprecated `commitInterval` options** -
-  `internal/AbstractParallelEoSStreamProcessor.java` L87-103.
-- **Remove the accreting deprecated `ParallelConsumerOptions` fields** (L282-286,
-  L361-363, L500-502) **and retire the temporary Kafka-compat work-around flag**
-  (L564) - `ParallelConsumerOptions.java`.
+- **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
+  `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
+- **Remove the accreting deprecated `ParallelConsumerOptions` fields**
+  (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
+  `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
+  (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
 - **Remove the JStream API** (deprecate first) - design ref
   `origin/refactor/deprecate-jstream` @8a8f6508.
 - **Rename the enum to the standard pattern** (public enum rename) -
@@ -167,8 +171,10 @@ Do not start one casually.
   but the observations stand, all verified still present on master 2026-08-04):
   - `AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE` (8) - non-atomic read-modify-write
     on a shared field: `AbstractParallelEoSStreamProcessor.numberOfAssignedPartitions`
-    (L420/448/463) and `ConsumerManager`'s `noWakeups`, `erroneousWakups`,
-    `correctPollWakeups` counters.
+    (written in `onPartitionsRevoked(Collection<TopicPartition> partitions)`,
+    `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
+    `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
+    `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
     be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
     `ConsumerManager.commitRequested`, `RetryQueue.closed`.
@@ -193,58 +199,72 @@ Do not start one casually.
 ### offsets/OffsetMapCodecManager.java — confluentinc#233 (central)
 *Mirror: [#117](https://github.com/astubbs/parallel-consumer/issues/117).*
 - Encoding and decoding are conflated; the class needs a `Consumer` only for one
-  decode-on-assignment method (L131), is passed `null` elsewhere, and is created as
-  throwaway instances. Refactor: split encode/decode, drop the consumer dependency,
-  remove the `null` usage. (static-state at L51-65; see "Remove static state".)
-- L30: prune the "keep multiple encodings for comparison" analysis-only code once
-  the encoding choice is settled. L33/L35: `sneaky throws` IO handling; missing
-  `max-uncommitted < Short.MAX` bound.
+  decode-on-assignment method (`todo this is the only method that needs the consumer`), is
+  passed `null` elsewhere, and is created as throwaway instances. Refactor: split
+  encode/decode, drop the consumer dependency, remove the `null` usage. (static-state at
+  `todo remove static state manipulation from tests` and
+  `todo refactored to constant in the remove statics branch`; see "Remove static state".)
+- `can refactor other options out for analysis only`: prune the "keep multiple encodings for
+  comparison" analysis-only code once the encoding choice is settled.
+  `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
+  missing `max-uncommitted < Short.MAX` bound.
 
 ### offsets/OffsetSimultaneousEncoder.java
-- L218: large offset ranges (→ `Integer.MAX_VALUE`) are slow - scans could be
-  skipped by passing in the known incompletes map (draft: `origin/refactor/encode-with-incompletes-direct` @fa56ff18).
-- L214: run-length range capped at `Short.MAX_VALUE`, could double. L227: move the
-  per-offset loop into the encoder subtypes. L212: inline into the WorkManager
-  partition loop. L90-91: static state for test serialisation (see cross-cutting).
+- `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -
+  scans could be skipped by passing in the known incompletes map (draft:
+  `origin/refactor/encode-with-incompletes-direct` @fa56ff18).
+- `could double the run-length range`: run-length range capped at `Short.MAX_VALUE`, could double.
+  `todo refactor this loop into the encoders`: move the per-offset loop into the encoder subtypes.
+  `inline this into the partition iteration loop`: inline into the WorkManager partition loop.
+  `COMPRESSION_FORCED_RESOURCE_LOCK`: static state for test serialisation (see cross-cutting).
 
 ### offsets/BitSetEncoder.java & OffsetBitSet.java
-- Unify the V1/V2 init paths (BitSetEncoder L90); merge/clarify why `OffsetBitSet`
-  is separate at all (OffsetBitSet L21).
+- Unify the V1/V2 init paths (BitSetEncoder `TODO refactor inivtV2 and V1 together`);
+  merge/clarify why `OffsetBitSet` is separate at all (OffsetBitSet
+  `todo unify or refactor with`).
 
 ### offsets/OffsetRunLength.java
-- L92: possibly avoid creating offset metadata at all in some cases.
+- `maybe in those cases we should not create metadata at all`: possibly avoid creating offset
+  metadata at all in some cases.
 
 ### offsets/OffsetDecodingError.java
-- L13: should it extend `java.lang.Error`? (exception-hierarchy design)
+- `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
+  (exception-hierarchy design)
 
 ### state/PartitionState.java (715 lines)
-- L96: concurrent commit-data collection exists only because control/poller threads
-  share state - removed under shared-nothing (confluentinc#200). L491: `null` passed to
-  the codec manager (confluentinc#233). L327: visibility widened for legacy tests.
+- `Needs to be concurrent because`: concurrent commit-data collection exists only because
+  control/poller threads share state - removed under shared-nothing (confluentinc#200).
+  `todo refactor use of null shouldn't be needed`: `null` passed to the codec manager
+  (confluentinc#233). `visible for legacy testing`: visibility widened for legacy tests.
 
 ### state/PartitionStateManager.java
-- L123 was a throwaway `OffsetMapCodecManager` per assignment (confluentinc#233); PR astubbs#57
+- There was a throwaway `OffsetMapCodecManager` per assignment
+  (`todo remove throw away instance creation`, confluentinc#233); PR astubbs#57
   cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)
   (mirror astubbs#117) refactor remains.
 
 ### state/WorkContainer.java
 *Mirror: [#143](https://github.com/astubbs/parallel-consumer/issues/143) - and see the index above: the field is read by nobody, so deletion beats an enum.*
-- L42: instance field working around static state - folds into static-state removal.
+- `Instance reference to otherwise static state`: instance field working around static state -
+  folds into static-state removal.
 
 ### internal/AbstractParallelEoSStreamProcessor.java
-- God class (see cross-cutting). L930: `todo move into WorkManager` (misplaced
-  "enough work?" check). L531: brittle Kafka-consumer-by-classname string check.
-  Deprecated `commitInterval` options to delete (L87-103) - **breaking**, see
+- God class (see cross-cutting). `todo move into {@link WorkManager}` (misplaced
+  "enough work?" check). `LegacyKafkaConsumer`: brittle Kafka-consumer-by-classname string check
+  in `private static Optional<Boolean> getAutoCommitEnabled`.
+  Deprecated `commitInterval` options to delete (`public void setTimeBetweenCommits` /
+  `public Duration getTimeBetweenCommits`) - **breaking**, see
   [Breaking changes queued for next major version](#breaking-changes-queued-for-next-major-version).
 
 ### internal/ConsumerOffsetCommitter.java
-- L154: `commitAndWait()` blocks for `commitTimeout` but interpolates
+- `DEFAULT_TIMEOUT`: `commitAndWait()` blocks for `commitTimeout` but interpolates
   `DEFAULT_TIMEOUT` into the timeout message, so every such error misstates the wait
   (reports `PT30S` for an actual 10s). Tiny standalone fix + unit test.
 
 ### Double-release of the produce lock (transactional poll-and-produce) - OPEN QUESTION
 - `WorkContainer#onPostAddToMailBox` (via `finishProducing`) and
-  `AbstractParallelEoSStreamProcessor#cleanUpContext` (L1419) both unconditionally
+  `AbstractParallelEoSStreamProcessor#cleanUpContext` (`private void cleanUpContext`) both
+  unconditionally
   unlock the *same* `PollContextInternal#producingLock`, and nothing resets that
   `Optional` between them - `cleanUpContext` runs in the enclosing `finally`
   immediately after the success path already released it. By JDK contract a
@@ -256,28 +276,34 @@ Do not start one casually.
   second is harmless - or, if it is not, what is swallowing it.
 
 ### internal/ProducerManager.java
-- L162: `syncBeginTransaction()` is `private synchronized` (locks on `this`) -
+- `private synchronized void syncBeginTransaction` locks on `this` -
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
-  fix); low priority, separate concern. L265: brute-force transaction-commit retry.
+  fix); low priority, separate concern. `alternatives to this brute force approach`:
+  brute-force transaction-commit retry.
 
 ### internal/DynamicLoadFactor.java
-- L90: `doStep()` is `private synchronized` (locks on `this`) - same lock-hygiene
-  note as ProducerManager; low priority.
+- `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
+  ProducerManager; low priority.
 
 ### internal/ExternalEngine.java
-- L52: avoid the extra thread (go straight from the control thread). L91: method may
-  be redundant now that modules don't use the internal threading system.
+- `TODO optimise thread usage`: avoid the extra thread (go straight from the control thread).
+  `is this method redundant`: method may be redundant now that modules don't use the internal
+  threading system.
 
 ### ParallelConsumerOptions.java (573 lines)
-- Accreting deprecated fields (L282-286, L361-363, L500-502) and the L564 temporary
+- Accreting deprecated fields (`public void setCommitInterval`,
+  `private final Duration defaultMessageRetryDelay`, `isUsingTransactionalProducer`) and the
+  `ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck` temporary
   Kafka-compat work-around flag - both **breaking to remove**, see
   [Breaking changes queued for next major version](#breaking-changes-queued-for-next-major-version).
 
 ### ParallelEoSStreamProcessor.java
-- L80: extract the wrapping function into its own class so it's directly reusable.
+- `todo refactor to it's own class`: extract the wrapping function into its own class so it's
+  directly reusable.
 
 ### metrics/PCMetricsDef.java
-- L43/L46: two unimplemented metric definitions - implement or drop.
+- `AVERAGE_USER_PROCESSING_TIME` / `AVERAGE_WAITING_TIME`: two unimplemented metric definitions -
+  implement or drop.
 
 ---
 
@@ -290,6 +316,67 @@ Do not start one casually.
   shutdown-commit flake fixed in astubbs#101) - a loaded machine changes how much happens per cycle. Converting
   to event/trigger-based waits removes the flake class and speeds the suite up. Related to *Remove
   static state* above, which is the other half of why these tests cannot run cleanly in parallel.
+
+### Test infrastructure - tests that do not run, or do not check anything
+
+Full per-test evidence, the disabling commit for each, and what coverage is actually lost:
+[`docs/test-hardening/inactive-tests-audit-2026-08-08.md`](test-hardening/inactive-tests-audit-2026-08-08.md).
+Only the items needing a decision are listed here - do not restate the inventory.
+
+**Outright defects, cheap to fix:**
+
+- **`@Timeout(60000L)` means 16h40m, not 60s** - in `MockConsumerEarlyCloseTest`,
+  `MockConsumerSaslAuthenticationTest` and `MockConsumerCommitTimeoutTest`. JUnit 5's `@Timeout`
+  defaults to seconds. This is not cosmetic: `MockConsumerEarlyCloseTest.mockConsumer` has **no
+  assertion at all** - the timeout *is* its assertion - so it currently cannot fail by hanging within
+  any realistic CI budget. Everywhere else in the tree writes it correctly.
+- **`assumeWorkingCodec` is not an assumption** - it is `return !encodingsThatFail.contains(encoding)`.
+  Five `OffsetEncoding` values run `OffsetEncodingTests.ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential`
+  with most assertions branched around and **report green rather than skipped**. Rename it to
+  `isWorkingCodec`, or convert the sites to real per-value assumptions so the skips appear in the
+  report.
+- **`OffsetEncodingTests` imports JUnit 4's `org.junit.Assume` in a Jupiter test.** No pom declares
+  JUnit 4 - it arrives transitively via testcontainers, and works only because the Jupiter engine
+  reflectively recognises JUnit 4's assumption exception when it happens to be on the classpath. The
+  day it falls off, that skip becomes a hard failure for four enum values. One-line fix to
+  `org.junit.jupiter.api.Assumptions`.
+- **`MultiInstanceHighVolumeTest` underscore typo** - `30_000_00` is 3M, not 30M.
+
+**Coverage decisions:**
+
+- **`ParallelEoSStreamProcessorTest.processInKeyOrder`** (`@Disabled`, no reason recorded) - the one
+  real gap in the audit. Key ordering is well covered at the shard layer by `WorkManagerTest`, but
+  nothing asserts end-to-end, per-`CommitMode`, that offset *commits* respect key-order blocking
+  across partitions. Re-enabling means reconciling it with the commit semantics `c1fefbc64`
+  introduced in 2020 - which is what disabled it.
+- **`ParallelEoSStreamProcessorTest.offsetsAreNeverCommittedForMessagesStillInFlightLong`** - same
+  commit, same reconciliation. Its siblings cover the invariant at lower volume; the deeper
+  in-flight interleaving is not covered elsewhere.
+- **`closeWithoutRunningShouldBeEventBasedFast` never measures "fast"** - add the timing assertion
+  from the test three lines above it, which already does `time(...)` + `assertThat(...).isLessThan(...)`.
+- **Assertions commented out, implying coverage that does not exist** -
+  `WorkManagerOffsetMapCodecManagerTest.stringVsByteVsBitSetEncoding` (computes four unused values,
+  asserts nothing), `MultiTopicTest.assertCommit` (waits on a branch that does not exist on master),
+  `VertxConcurrencyIT.assertNumberOfThreads`. Restore or delete - leaving them is the worst option.
+- **Delete candidates** - `VertxTest.handleHttpResponseCodes` (`assertThat(true).isFalse()`, never
+  ran, cannot pass), `sanity/StreamTest.test` (commented-out `@Test` over an infinite stream),
+  `SampleTestingFailsafePluginInclusionCore` (empty body), `JavaEnvTest.checkJavaEnvironment`
+  (`log.error` dump on every run).
+- **`LargeVolumeInMemoryTests` runs 500 messages, not 1,000,000** - the 1M line is commented out
+  directly above, `git blame`d to 2020 and untouched since. Previously recorded as fixed by
+  astubbs#49; that PR never touched the file. The restore-to-1M commit and the OOM diagnostics from running it
+  live on `origin/refactor/test-hardening` - **salvage both before deleting that branch**.
+- **Kneecapped volumes still undecided** - `VeryLargeMessageVolumeTest` (1M vs 2M), `LoadTest` (4K vs
+  commented alternatives), `TransactionAndCommitModeTest.numThreads` (64 vs 1000) and `.roundsAllowed`
+  (10, with a TODO). The last two likely mask real issues rather than being tuning choices.
+
+Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29, and `ProgressBarTest.width`
+is a deliberate manual check.
+
+A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.sh` shape) was
+considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
+such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
+revisiting once the audit has been in use.
 
 ### Build - jacoco coverage under forked surefire
 
@@ -335,7 +422,8 @@ Cross-cutting above; the rest:
 
 **Offset encoding** → relevant to the offsets/*Encoder items above:
 - `origin/refactor/encode-with-incompletes-direct` @fa56ff18 - invoke the encoder with known
-  incompletes directly instead of iterating (the `OffsetSimultaneousEncoder` L218 hot-spot).
+  incompletes directly instead of iterating (the `OffsetSimultaneousEncoder`
+  `TODO VERY large offset ranges is slow` hot-spot).
 - `origin/refactor/continuous-encode-22` @0b98d4de, `origin/continuous-encode` @25340f89 - split
   run-length sequence/entry; continuous encoding (draft `confluentinc#46`).
 - `origin/encoders-truncate-themselves` @8d3903b9 - push truncation into the encoders.
@@ -365,8 +453,18 @@ Cross-cutting above; the rest:
 - `origin/refactor/chaos-broker` @1b9bd385, `.../chaos-broker-challage-test` @c9acb00c,
   `.../test-consumer-disconnect` @6a968074 - ChaosBroker / broker-disconnect testing (draft
   `confluentinc#345`, issue `confluentinc#203`).
-- `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M.
-- `origin/refactor/empty-tests` @5f8b3dba - remove/implement the empty placeholder tests (draft `confluentinc#496`).
+- `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M,
+  plus a restore-to-1M commit. It **also** carried a 455-line audit of disabled/kneecapped/weakened
+  tests that this entry never mentioned, which is why nobody triaged it for four months. That audit
+  is now absorbed into [`docs/test-hardening/inactive-tests-audit-2026-08-08.md`](test-hardening/inactive-tests-audit-2026-08-08.md)
+  on master, with the two reasons its own git history refutes corrected - so the branch now holds
+  nothing the master copy lacks, and only the 1M/OOM work is left to salvage.
+- `origin/refactor/empty-tests` @5f8b3dba - **the removal half already landed** on master via
+  upstream `confluentinc#493`, which deleted `ParallelEoSStreamProcessorTest.avro`,
+  `WorkManagerOffsetMapCodecManagerTest.truncationOnCommit`, `WorkManagerTest.maxPerPartition` and
+  `.maxPerTopic`. What this branch (draft `confluentinc#496`) still holds is the *implement* half:
+  restoring them as `NotImplementedException` stubs so the debt is visible rather than absent. Never
+  merged; no PR on the fork.
 - `origin/improvements/test-perf` @932210b6, `.../multi-topic-test` @dd3ad77b - test perf / multi-topic.
 - `origin/client-factory` @9636c33d - client-factory config to prevent client reuse (draft `confluentinc#106`).
 - `origin/slf4j-no-logger` @9c9396b8 - warn when no SLF4J logger is bound (→ `confluentinc#139`; UX, not a refactor).

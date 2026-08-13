@@ -47,7 +47,7 @@ public @interface Quarantined {
     String reason();
 
     /**
-     * Where the diagnosis is rostered - typically a {@code docs/inflight.md} entry or a
+     * Where the diagnosis is rostered - typically a note under {@code docs/inflight/} or a
      * {@code docs/solutions/} write-up.
      */
     String tracking();
