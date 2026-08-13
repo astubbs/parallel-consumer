@@ -5,24 +5,17 @@ and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any
 
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
-which also has the scan method. What is open is the three tests themselves.
+which also has the scan method. What is open is the tests themselves - two of the scan's three, plus
+one met later. The scan's third,
+`ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+(3/45), is fixed and gone from this ledger: astubbs#260 established the extra commit was correct
+product behaviour and the assertion was wrong, so no product change was needed.
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
-| `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` | 3/45 | **A regression** - see below |
 | `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined (owner astubbs#265) - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#262**; quarantine lifted and registry entry deleted when that branch merged master - see below |
-
-**Start with the regression.** astubbs#101 fixed this exact test as "the shutdown-commit flake that
-was aborting PIT", and it is back. It has the best starting position of the three: a known prior fix
-to diff against, and a documented consequence -
-`docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md` §1 records that instability in
-this test made the PIT mutation lane report *suite stability* rather than mutation coverage. While it
-flakes, a green PIT lane means less than it appears to.
-
-Failures surface as `AbstractParallelEoSStreamProcessorTestBase.assertCommits`, so the assertion
-helper is where the message comes from, not necessarily where the cause is.
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third

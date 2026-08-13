@@ -63,6 +63,11 @@ public abstract class BrokerIntegrationTest<K, V> {
     int numPartitions = 1;
     int partitionNumber = 0;
 
+    /** @see CompletionCeiling#completionCeiling(long, long, Duration) */
+    public static Duration completionCeiling(long units, long gatingUnits, Duration ceilingAtGating) {
+        return CompletionCeiling.completionCeiling(units, gatingUnits, ceilingAtGating);
+    }
+
     @Getter
     String topic;
 
