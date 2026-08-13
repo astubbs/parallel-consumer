@@ -1426,25 +1426,36 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * offsets placed into the commit payload (offset map).
      * <p>
      * This runs in the {@code finally} of {@link #runUserFunction}, which is strictly after the whole batch has been
-     * added to the mailbox on the success path, after the failure handler's re-add on the error path, and is the only
-     * release for work handed to an external engine ({@link ExternalEngine}) that never reaches the mailbox here at
-     * all. Releasing per-{@link WorkContainer} instead would release after the *first* record of a batch, leaving the
-     * rest of it exposed to exactly the commit window this lock exists to close - and would owe one release per record
-     * against a lock acquired once per context.
+     * added to the mailbox on the success path and after the failure handler's re-add on the error path. Releasing
+     * per-{@link WorkContainer} instead would release after the *first* record of a batch, leaving the rest of it
+     * exposed to exactly the commit window this lock exists to close - and would owe one release per record against a
+     * lock acquired once per context.
+     * <p>
+     * An {@link ExternalEngine} never reaches here holding one: its constructor rejects
+     * {@link ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} outright, so there is no produce lock
+     * in that path to release.
      */
     private void cleanUpContext(final PollContextInternal<K, V> context) {
-        context.takeProducingLock().ifPresent(lock -> producerManager
+        context.takeProducingLock().ifPresent(lock -> {
+            try {
                 // a lock can only exist because a ProducerManager handed it out
-                .orElseThrow(() -> {
-                    // Logged as well as thrown, deliberately. This runs in runUserFunction's finally, on a worker
-                    // thread, and an exception thrown from here is captured into WorkContainer#future - which
-                    // nothing in main reads (docs/inflight/bug-worker-future-swallows-framework-exceptions.md).
-                    // Without this line the loudest signal available for an impossible state would be silent.
-                    log.error("Produce lock held for {}, but there is no producer manager to return it to - the "
-                            + "lock cannot be released and the next transaction commit will block on it", context);
-                    return new InternalRuntimeException("Produce lock held, but there is no producer manager to return it to");
-                })
-                .finishProducing(lock));
+                producerManager
+                        .orElseThrow(() -> new InternalRuntimeException(
+                                "Produce lock held, but there is no producer manager to return it to"))
+                        .finishProducing(lock);
+            } catch (RuntimeException e) {
+                // Reported, never rethrown. This runs in runUserFunction's finally, and an exception thrown from a
+                // finally REPLACES the one the catch above is propagating - plain try/finally does not attach it as
+                // suppressed the way try-with-resources would. Throwing here would therefore destroy the user
+                // function's real failure and report this in its place, which is strictly worse: by this point the
+                // lock is already unrecoverable either way, because takeProducingLock has claimed it out of the
+                // context. So the log is the whole signal, and it has to carry everything - the more so because the
+                // alternative destination, WorkContainer#future, is read by nothing in main
+                // (docs/inflight/bug-worker-future-swallows-framework-exceptions.md).
+                log.error("Could not return the produce lock for {} - it cannot be released now, and the next "
+                        + "transaction commit will block on it", context, e);
+            }
+        });
     }
 
     protected void addToMailBoxOnUserFunctionSuccess(PollContextInternal<K, V> context, WorkContainer<K, V> wc, List<?> resultsFromUserFunction) {

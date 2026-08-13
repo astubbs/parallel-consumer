@@ -31,6 +31,7 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIOD
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static org.awaitility.Awaitility.await;
+import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -116,9 +117,9 @@ class ProduceLockReleaseTest {
                     .isNotNull();
 
             // released zero times -> the read lock is still held and no transaction could ever commit
-            Truth.assertWithMessage("the produce lock must actually be given back, or commits would block forever")
-                    .that(producerManager.getProducerTransactionLock().getReadLockCount())
-                    .isEqualTo(0);
+            assertWithMessage("the produce lock must actually be given back, or commits would block forever")
+                    .that(producerManager)
+                    .hasNoProduceLockHolders();
 
             Truth.assertWithMessage("record processed successfully")
                     .that(results.get(0).isUserFunctionSucceeded())
@@ -164,9 +165,9 @@ class ProduceLockReleaseTest {
                         .isTrue();
             }
 
-            Truth.assertWithMessage("the produce lock must actually be given back, or commits would block forever")
-                    .that(producerManager.getProducerTransactionLock().getReadLockCount())
-                    .isEqualTo(0);
+            assertWithMessage("the produce lock must actually be given back, or commits would block forever")
+                    .that(producerManager)
+                    .hasNoProduceLockHolders();
         }
     }
 

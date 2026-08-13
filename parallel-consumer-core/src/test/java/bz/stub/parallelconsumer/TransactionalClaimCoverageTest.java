@@ -201,10 +201,8 @@ class TransactionalClaimCoverageTest {
 
             boolean failsafeCollects = className.contains(".integrationTest")
                     || className.contains(".integrationTests");
-            boolean surefireCollects = simpleName.startsWith("Test")
-                    || simpleName.endsWith("Test")
-                    || simpleName.endsWith("Tests")
-                    || simpleName.endsWith("TestCase");
+            // TestConventionRules owns this rule, so the two gates cannot drift apart
+            boolean surefireCollects = TestConventionRules.surefireCollects(simpleName);
             boolean nested = method.getOwner().isAnnotatedWith("org.junit.jupiter.api.Nested");
 
             if (!failsafeCollects && !surefireCollects && !nested) {

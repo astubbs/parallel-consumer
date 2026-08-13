@@ -87,17 +87,30 @@ public class TestConventionRules {
                 }
             };
 
+    /**
+     * Whether surefire's default includes would collect a class with this simple name.
+     * <p>
+     * The single source of truth for that question. It is asked from two places that must not be allowed to drift -
+     * the {@link #HAVE_A_NAME_SUREFIRE_COLLECTS} condition below, and
+     * {@code TransactionalClaimCoverageTest#claimProofsMustLiveWhereATestRunnerWillFindThem}, which asks it of the
+     * class owning a claim proof. If surefire's includes or this repo's convention ever change, they change here
+     * once rather than in each copy, so a class cannot pass one gate while failing the other.
+     *
+     * @param simpleName the class's simple name, not its fully qualified one
+     */
+    public static boolean surefireCollects(String simpleName) {
+        // mirrors surefire's default includes
+        return simpleName.startsWith("Test")
+                || simpleName.endsWith("Test")
+                || simpleName.endsWith("Tests")
+                || simpleName.endsWith("TestCase");
+    }
+
     private static final ArchCondition<JavaClass> HAVE_A_NAME_SUREFIRE_COLLECTS =
             new ArchCondition<JavaClass>("be named so surefire collects it") {
                 @Override
                 public void check(JavaClass javaClass, ConditionEvents events) {
-                    String name = javaClass.getSimpleName();
-                    // mirrors surefire's default includes
-                    boolean collected = name.startsWith("Test")
-                            || name.endsWith("Test")
-                            || name.endsWith("Tests")
-                            || name.endsWith("TestCase");
-                    if (!collected) {
+                    if (!surefireCollects(javaClass.getSimpleName())) {
                         events.add(SimpleConditionEvent.violated(javaClass, javaClass.getName()
                                 + " has test methods but its name matches none of surefire's default includes "
                                 + "(Test*, *Test, *Tests, *TestCase), so it is never executed - rename it"));
