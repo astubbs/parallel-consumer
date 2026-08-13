@@ -38,15 +38,6 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
 
     @Test
     @SneakyThrows
-    @Quarantined(
-            reason = "Compares a registry gauge against an expectation built from a test-side counter "
-                    + "snapshot taken earlier in the method, so two independently-advancing values are read "
-                    + "at different instants with nothing holding processing still between them. Seen as "
-                    + "PARTITION_HIGHEST_COMPLETED_OFFSET expected 203.0 but was 207.0 - four more records "
-                    + "completed in the gap. The metric was more current than the expectation testing it.",
-            tracking = "docs/inflight/test-untracked-ci-flakes.md",
-            fixedBy = "astubbs#265",
-            flapping = true)
     void metricsRegisterBinding() {
         final int quantityP0 = 1000;
         final int quantityP1 = 500;
