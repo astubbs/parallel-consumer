@@ -1,0 +1,176 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: documentation-data-schema
+consumer_contract:
+  source_of_truth: These files are hand-maintained release-documentation data, not site-renderer output.
+  renderer_rule: A renderer may choose presentation but must not strengthen a claim or omit a stated boundary.
+  release_rule: Release-scoped claims are conditional until the release-validation data says their evidence holds.
+kinds:
+  module-maturity:
+    required:
+      - release
+      - axes
+      - release_validation
+      - modules
+    item_contracts:
+      module_required: modules
+    module_required:
+      - artifact
+      - maturity
+      - reliability_confidence
+      - api_expectation
+      - support_posture
+      - evidence_id
+      - use_this_if
+    module_optional:
+      - tracking
+      - minimum_java
+      - opt_in
+      - isolated_from_stable_modules
+      - feature
+  roadmap:
+    required:
+      - reviewed_at_release
+      - reader_contract
+      - concerns
+      - horizons
+      - entries
+      - one_point_zero
+      - update_policy
+    optional:
+      - strategy
+      - not_planned
+      - backlog
+    # An entry is something a reader can watch finish. blocks_1_0 is what separates a 1.0 gate from
+    # something merely targeted at it - the distinction the upstream release train drew, and the
+    # reason its checklist stayed workable.
+    item_contracts:
+      entry_required: entries
+    entry_optional:
+      - pull_request
+      - related
+      - tracking
+      - previewed_in
+      - unblocks
+      - blocked_by
+      - evidence
+      - caveat
+    entry_required:
+      - id
+      - title
+      - serves
+      - horizon
+      - blocks_1_0
+      - why_now
+      - done_when
+  testing-evidence:
+    required:
+      - release
+      - reader_contract
+      - release_claim
+      - v6_stability_exception
+      - claim_boundaries
+      - test_layers
+      - test_harness
+      - module_evidence
+      - quality_system
+      - regression_controls
+      - quarantine
+      - investigation_records
+    item_contracts:
+      test_layer_required: test_layers
+      module_evidence_required: module_evidence
+      quality_system_required: quality_system
+    test_layer_required:
+      - id
+      - command
+      - merge_gate
+      - proves
+      - why_it_matters
+      - limitation
+      - inspect
+    module_evidence_required:
+      - id
+      - artifact
+      - coverage
+      - inspect
+      - limitation
+    quality_system_required:
+      - id
+      - detects
+      - posture
+      - inspect
+  feature:
+    required:
+      - schema_version
+      - kind
+      - title
+      - category
+      - module
+      - maturity
+      - availability
+      - summary
+      - use_this_when
+      - setup
+      - opt_in
+      - boundaries
+    optional:
+      - readme_anchor
+      - references
+      - validation
+      - release_assumptions
+    # opt_in.isolated_from_stable_modules means: this cannot affect an application that does not use
+    # it, BECAUSE its maturity differs from the stable modules. It is a maturity-containment claim,
+    # which is why only the alpha modules carry it in module-maturity.yaml. A stable adapter shipping
+    # as its own artifact is false: separate packaging is not the same claim.
+    field_meanings:
+      opt_in.isolated_from_stable_modules: Maturity containment, not separate packaging.
+    # Closed sets. A value outside them fails bin/check-docs-data.sh. That is deliberate: an open
+    # set drifts into synonyms nobody can group by, which is what happened before these were closed.
+    # If a record genuinely does not fit, change the set here in the same PR and say why - do not
+    # widen it by inventing a value in a feature file.
+    category_values:
+      processing: How records are selected, ordered, grouped and retried.
+      delivery: Commit modes, transactions, offset acknowledgement and recovery.
+      operability: Lifecycle, timeouts, resource limits and tuning.
+      observability: Metrics, diagnostics and warnings.
+      integration: Adapter modules and other frameworks.
+      compatibility: Platform, runtime and dependency constraints.
+    # "stable" was the wrong word and was withdrawn. A module cannot be called stable while a known
+    # defect can lock up a consumer in production, and the honest claim is narrower: it works well,
+    # it is run in production, and every known CRITICAL defect has a resolution ready to land. Note
+    # the qualifier - the claim is about critical defects, never about all defects.
+    maturity_values:
+      production-use: >-
+        Run in production and maintained for it. Every known critical defect has a resolution ready to
+        land before a release ships. Not a claim that no defects exist, that non-critical defects are
+        all fixed, or that behaviour is frozen.
+      reference-example: Runnable illustration of a supported use. Not a compatibility surface.
+      alpha: Experimental. No reliability or API expectation.
+      deprecated: Still present and still works, but a replacement exists and this will be removed.
+    availability:
+      published:
+        required:
+          - status
+          - since
+          - evidence
+        # No commit hash. A version is what a user acts on, and a hash made the record harder to
+        # read without making it more checkable, since nothing verifies it.
+        evidence_required:
+          - tag
+          - path
+          - basis
+        # The escape hatch the checker names when it finds an undeclared evidence field. Empty by
+        # design: add a field here deliberately rather than letting one appear in a single record.
+        evidence_optional: []
+        optional:
+          - documented_since
+          - milestones
+        milestone_required:
+          - release
+          - basis
+      planned:
+        required:
+          - status
+          - target_release

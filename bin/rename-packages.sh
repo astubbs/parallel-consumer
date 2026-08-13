@@ -1610,11 +1610,38 @@ check_prose_guards() {
 $PROSE_GUARDS
 EOF
 
+    # A guard matching NEITHER spelling means one of two very different things, and which one depends
+    # entirely on whether this is master or a branch.
+    #
+    # On master it is the failure this check exists for: somebody reworded the sentence, the guard now
+    # matches nothing, and "none found" reads exactly like a clean tree. Hard refusal.
+    #
+    # On a branch running --defer-prose it usually means the branch simply PREDATES the sentence. The
+    # three guarded claims all arrived in one commit; a branch cut before it never had them to reword.
+    # Refusing there is the guard failing closed on a tree that has nothing to guard - and it cannot be
+    # worked around, because --defer-prose was checked AFTER this die, so the one flag that means
+    # "prose is master's problem" could not reach it. MEASURED on astubbs#38, which had every package
+    # mapped and still could not run.
+    #
+    # So --defer-prose now covers this case too, which is what the flag already promises: the corrected
+    # wording arrives from master at merge. Writing the missing sentence onto the branch would be
+    # authoring master's prose from a branch, which is the thing the guards exist to prevent.
     if [ -n "$orphaned" ]; then
-        echo
-        die "a guarded sentence was reworded rather than corrected:${orphaned}
+        if [ "$DEFER_PROSE" != true ]; then
+            echo
+            die "a guarded sentence was reworded rather than corrected:${orphaned}
      A guard that matches neither spelling reports \"none found\", which reads exactly like a clean
-     tree. Re-point the claim pattern at the new wording, or add the corrected form it should have."
+     tree. Re-point the claim pattern at the new wording, or add the corrected form it should have.
+     On a PR branch that simply predates the sentence, pass --defer-prose."
+        fi
+        echo
+        echo "  --defer-prose: guarded sentence(s) absent in BOTH spellings, carried as follow-ups.${orphaned}"
+        while IFS= read -r line; do
+            [ -n "${line# }" ] || continue
+            note_manual "absent prose guard -${line#      }"
+        done <<EOF
+$orphaned
+EOF
     fi
 
     if [ "$found" -eq 0 ]; then

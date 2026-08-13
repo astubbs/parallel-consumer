@@ -23,12 +23,16 @@
 # judged too, so you find out before `git commit`, not after `git push`. CI necessarily sees only
 # what you pushed.
 #
-# WHERE IT CAN DISAGREE WITH CI, and why that is safe. The rule is shared, but the input is not: CI
-# reads patches from GitHub's `pulls.listFiles`, which omits `patch` on a very large diff, and the
-# gate skips a file it cannot see. This script builds its own patch with `git diff`, so it still
-# checks that file. The divergence is one-directional - this can flag something CI would silently
-# pass, never the reverse - so a red result here is always real, while a green one is not a promise
-# that CI examined every file.
+# WHERE IT CAN DISAGREE WITH CI. The rule is shared, but the input is not, in two ways:
+#
+#   * CI reads patches from GitHub's `pulls.listFiles`, which omits `patch` on a very large diff, and
+#     the gate skips a file it cannot see. This script builds its own patch with `git diff`, so it
+#     still checks that file - it flags something CI would silently pass.
+#   * CI also scans the PR BODY (`gate.prBodyEntry`), which does not exist yet when you run this. So
+#     a bare `#NN` written into the description is CI's to catch, and this cannot pre-empt it.
+#
+# So a red result here is always real, but a green one promises neither that CI examined every file
+# nor that the description you have not written yet will pass.
 #
 # Usage: bin/check-issue-refs.sh [base-ref]      (default base: origin/master, else master)
 # Exit codes: 0 = clean, 1 = unqualified refs found,
