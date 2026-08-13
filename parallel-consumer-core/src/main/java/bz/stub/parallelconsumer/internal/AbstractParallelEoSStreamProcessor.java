@@ -856,8 +856,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     if (Thread.interrupted()) { //clear interrupted flag
                         log.debug("Thread interrupted flag cleared in control loop error handling");
                     }
-                    log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + e.getMessage(), e);
-                    failureReason = new RuntimeException("Error from poll control thread: " + e.getMessage(), e);
+                    log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + describeWithRootCause(e), e);
+                    failureReason = new RuntimeException("Error from poll control thread: " + describeWithRootCause(e), e);
                     doClose(shutdownTimeout); // attempt to close
                     throw failureReason;
                 }
@@ -903,7 +903,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         int loopEndPluginsRun = 0;
         try {
             for (Runnable hook : this.controlLoopHooks) {
-                hook.run();
+                // user code, wrapped as everywhere else - Runnable::run is the Consumer<Runnable> that runs it, so
+                // a throwing hook is reported as user code rather than as an anonymous control-thread failure
+                UserFunctions.carefullyRun(Runnable::run, hook);
                 loopEndPluginsRun++;
             }
         } finally {
@@ -1489,6 +1491,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Safe to call from any thread, including while the consumer is running. The callback itself, however, runs on the
      * control thread - so it must not block, and must not call back into this consumer in a way that waits on the
      * control loop it is currently occupying.
+     * <p>
+     * <b>A callback that throws stops the consumer.</b> It is run through {@link UserFunctions}, as every other piece
+     * of user-supplied code is, so the failure is reported as coming from user code - but it is not swallowed.
      */
     public void addLoopEndCallBack(Runnable r) {
         this.controlLoopHooks.add(r);
@@ -1496,6 +1501,25 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     public void setLongPollTimeout(Duration ofMillis) {
         BrokerPollSystem.setLongPollTimeout(ofMillis);
+    }
+
+    /**
+     * The exception's own message plus its root cause's, because the immediate message is routinely the least
+     * informative one available.
+     * <p>
+     * Two ways that bites, both on the control-loop failure path where this is the sentence a user actually reads: an
+     * NPE thrown from user code carries a null message, which is where "Error from poll control thread: null" comes
+     * from; and anything routed through {@link UserFunctions} reports that class's constant, so the user's own message
+     * sits one level down. Naming the root cause keeps both signals - that it came from user code, and what it said.
+     */
+    private static String describeWithRootCause(Throwable t) {
+        var root = t;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root == t
+                ? String.valueOf(t.getMessage())
+                : t.getMessage() + " - caused by " + root.getClass().getSimpleName() + ": " + root.getMessage();
     }
 
     /**

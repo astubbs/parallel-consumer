@@ -20,11 +20,11 @@ endif::[]
 
 == 0.6.0.0 (unreleased)
 
-First release of the community fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer] (upstream is no longer actively maintained). Source compatible with upstream 0.5.x — the API is unchanged, but two changes are required: the Maven groupId, and the Java packages every import names (see Breaking below). Includes upstream fixes and features merged after upstream's last release (0.5.3.3) that were never published there.
+First release of the community fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer] (upstream is no longer actively maintained). Source compatible with upstream 0.5.x apart from one removed accessor — two mechanical changes are required, the Maven groupId and the Java packages every import names, plus that one method if you called it (see Breaking below). Includes upstream fixes and features merged after upstream's last release (0.5.3.3) that were never published there.
 
 === Breaking
 
-* Maven coordinates rebranded from `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer` (https://github.com/astubbs/parallel-consumer/pull/55[#55]), and the Java packages moved with them — `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer`, with the library's shared internal utilities folded in under `bz.stub.parallelconsumer.internal.utils`. Update your dependency declarations. Rewrite your imports; no signature changed, so nothing else in your code moves. The README's Upgrading section carries the one-line sed.
+* Maven coordinates rebranded from `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer` (https://github.com/astubbs/parallel-consumer/pull/55[#55]), and the Java packages moved with them — `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer`, with the library's shared internal utilities folded in under `bz.stub.parallelconsumer.internal.utils`. Update your dependency declarations. Rewrite your imports; apart from the removal of `WorkManager.getSuccessfulWorkListeners()`, no signature changed, so nothing else in your code moves. The README's Upgrading section carries the one-line sed and that method's replacement.
 
 === Improvements
 

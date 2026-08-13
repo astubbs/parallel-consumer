@@ -174,6 +174,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * <p>
      * A listener registered while a notification is in flight misses that one notification and receives every
      * subsequent success, because {@link #onSuccessResult} iterates the copy-on-write snapshot it started with.
+     * <p>
+     * <b>A listener that throws stops the consumer.</b> It is run through {@link UserFunctions}, as every other piece
+     * of user-supplied code is, so the failure is reported as coming from user code - but it is not swallowed. Catch
+     * what you can handle.
+     * <p>
+     * Notification means the user function returned, <b>not</b> that the offset is committed - listeners fire from the
+     * control loop before the next commit. If the consumer dies in between, the record is redelivered on restart and
+     * the listener sees it again, so listeners must tolerate at-least-once delivery exactly as processing functions
+     * must.
      */
     public void addSuccessfulWorkListener(Consumer<WorkContainer<K, V>> listener) {
         successfulWorkListeners.add(listener);
@@ -190,8 +199,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         pm.onSuccess(wc);
         sm.onSuccess(wc);
 
-        // notify listeners
-        successfulWorkListeners.forEach(c -> c.accept(wc));
+        // notify listeners - user code, so run it through the same wrapper every other user function goes through.
+        // It still propagates and still stops the consumer; what changes is that the failure arrives named
+        // ("Error occurred in code supplied by user") instead of surfacing as "Error from poll control thread: null"
+        successfulWorkListeners.forEach(c -> UserFunctions.carefullyRun(c, wc));
 
         numberRecordsOutForProcessing--;
     }
