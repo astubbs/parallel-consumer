@@ -50,7 +50,6 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MINUTES;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
@@ -633,12 +632,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
      * yet the control loop iterates that same list every cycle. A registration landing mid-iteration therefore breaks
      * the iteration, and the failure escapes the control loop and takes the consumer down with it.
      * <p>
-     * The latches make the race deterministic rather than hoping to land inside a window a few instructions wide: the
-     * first callback parks the control thread mid-iteration until the off-thread registration has provably completed.
-     * <p>
-     * <b>The assertion is on the observable outcome - the consumer keeps running and closes cleanly - not on the
-     * exception type.</b> What a user reports is "it stopped after a while"; a change that swapped one exception for
-     * another would still be that bug, and this test would still fail, which is the point.
+     * How the race is made deterministic, and why the assertion is on the outcome rather than the exception type, is
+     * documented on {@link #assertRegisteringFromAnotherThreadDoesNotStopTheConsumer}.
      *
      * @see <a href="https://github.com/astubbs/parallel-consumer/issues/252">astubbs#252 - the same defect class in
      *         PartitionStateManager, where a plain HashMap of partition state was streamed while another thread
@@ -649,9 +644,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     void loopEndCallBackCanBeRegisteredFromAnotherThread() {
         assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(
                 "off-control-thread-registrar",
-                // runs on the control thread, and holds the iteration open while another thread mutates the hook list
-                parkTheIteratingThread -> parallelConsumer.addLoopEndCallBack(parkTheIteratingThread),
-                () -> parallelConsumer.addLoopEndCallBack(() -> log.trace("Hook registered off the control thread")));
+                parallelConsumer::addLoopEndCallBack);
     }
 
     /**
@@ -665,21 +658,20 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
      * exception type.</b> What a user reports is "it stopped after a while"; a change that swapped one exception for
      * another would still be that bug, and this test would still fail, which is the point.
      *
-     * @param registrarThreadName        names the registering thread, so a failure's stack trace says which race it was
-     * @param registerParkingCallback    registers the given body with the subsystem under test, adapting it to whatever
-     *                                   listener type that subsystem takes
-     * @param registerFromTheOtherThread performs the second registration, off the iterating thread, while the iteration
-     *                                   above is held open
+     * @param registrarThreadName names the registering thread, so a thread dump taken during a hang says which race it
+     *                            was - the stack of the parked control thread does not
+     * @param register            registers the given body with the subsystem under test, adapting it to whatever
+     *                            listener type that subsystem takes. Called twice: once for the callback that parks
+     *                            the iterating thread, then again off that thread while the iteration is held open
      */
     @SneakyThrows
     private void assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(String registrarThreadName,
-                                                                         Consumer<Runnable> registerParkingCallback,
-                                                                         Runnable registerFromTheOtherThread) {
+                                                                         Consumer<Runnable> register) {
         var iterationIsInProgress = new CountDownLatch(1);
         var registrationLanded = new CountDownLatch(1);
         var parkedOnce = new AtomicBoolean(false);
 
-        registerParkingCallback.accept(() -> {
+        register.accept(() -> {
             if (parkedOnce.compareAndSet(false, true)) {
                 iterationIsInProgress.countDown();
                 awaitLatch(registrationLanded);
@@ -688,15 +680,16 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         var registrar = new Thread(() -> {
             awaitLatch(iterationIsInProgress);
-            registerFromTheOtherThread.run();
+            register.accept(() -> log.trace("Registered off the iterating thread"));
             registrationLanded.countDown();
         }, registrarThreadName);
         registrar.start();
 
         parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
 
-        registrar.join(SECONDS.toMillis(defaultTimeoutSeconds));
-        assertThat(registrationLanded.getCount()).as("off-thread registration completed").isZero();
+        // the registrar's last act is to count this down, so awaiting it is awaiting the thread - and it fails with
+        // the latch's remaining count rather than a bare "expected 0 but was 1"
+        awaitLatch(registrationLanded);
 
         // the outcome that matters: the loop kept turning after the concurrent registration, rather than dying on it
         awaitForOneLoopCycle();
@@ -725,9 +718,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(
                 "off-thread-success-listener-registrar",
-                // runs on the control thread, and holds the notify loop open while the list is mutated
-                parkTheNotifyingThread -> wm.addSuccessfulWorkListener(work -> parkTheNotifyingThread.run()),
-                () -> wm.addSuccessfulWorkListener(work -> log.trace("Listener registered off thread")));
+                parkTheNotifyingThread -> wm.addSuccessfulWorkListener(work -> parkTheNotifyingThread.run()));
     }
 
     @ParameterizedTest()
