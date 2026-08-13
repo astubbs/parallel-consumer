@@ -797,9 +797,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         log.debug("Unlocking 0...");
         msg0Lock.countDown();
 
-        // 0, 1 and 2 are all key-1 on partition 0: completing 0 frees 1, and 2 was already done, so the run 0-2
-        // becomes contiguous and partition 0 resumes at 3 - not at 2, because a committed offset says where to
-        // resume, not which record was last done.
+        // On partition 0, offsets 0 and 1 are both key-0 (primeFirstRecord / sendSecondRecord), so 1 was blocked
+        // by 0; offset 2 is key-1 and so completed independently when it was unlocked. Completing 0 therefore
+        // frees 1, and with 2 already done the whole run 0-2 becomes contiguous - partition 0 resumes at 3, not
+        // at 2, because a committed offset says where to resume, not which record was last done.
         //
         // From here the assertions are on the FRONTIER (highest committed offset per partition), not on the exact
         // set of commits. Which intermediate offsets appear depends on where the wall-clock commit ticks fall
