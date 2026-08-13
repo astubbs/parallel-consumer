@@ -151,7 +151,14 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
      * unchanged. Raising concurrency never shortens it.
      */
     private static Duration timeoutFor(int threads) {
-        return defaultTimeout.multipliedBy(Math.max(1, GATING_CONCURRENCY / Math.max(1, threads)));
+        // Scaling is CompletionCeiling's job, not this file's: the units are gating-concurrency's worth of work
+        // spread over `threads`, so fewer threads scales the deadline up, and more floors it at the baseline -
+        // the same "raising concurrency never shortens it" guarantee, for free.
+        //
+        // Doing it by hand truncated, and worst exactly where the ladder is meant to be used: at 40 threads
+        // `GATING_CONCURRENCY / threads` is 64/40 = *1* in integer division, so that rung got no scaling at all
+        // against a true ratio of 1.6 - a 60s deadline where 96s was owed.
+        return completionCeiling(GATING_CONCURRENCY, threads, defaultTimeout);
     }
 
     @SneakyThrows

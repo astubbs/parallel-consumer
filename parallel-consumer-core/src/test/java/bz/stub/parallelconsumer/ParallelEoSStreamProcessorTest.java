@@ -838,8 +838,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // record 4 was in flight, even though 5, 6 and 8 had completed. Now that 4 is done it jumps to 7 - not to
         // 9 - because 8 is complete but not contiguous, so it cannot be resumed past.
         awaitForSomeLoopCycles(1);
-        awaitFrontier(1, 7);
         awaitFrontier(0, 4);
+        awaitFrontier(1, 7);
 
         // unlock 7 (same key as 6), unblocks 8 for commit
         assertThat(processedState.get(7)).isFalse();
@@ -848,8 +848,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         releaseAndWait(locks, 7);
 
         // 7 completing makes 7 and 8 contiguous, so partition 1 finally resumes at 9
-        awaitFrontier(1, 9);
         awaitFrontier(0, 4);
+        awaitFrontier(1, 9);
     }
 
     /**
