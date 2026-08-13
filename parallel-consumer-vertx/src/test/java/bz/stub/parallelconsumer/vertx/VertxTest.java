@@ -301,6 +301,9 @@ class VertxTest extends VertxBaseUnitTest {
         vertxAsync.addVertxOnCompleteHook(latch::countDown);
 
         var latchTwo = new CountDownLatch(1);
+        // signals that a user function is genuinely running and parked on latchTwo - the state we want to
+        // release from
+        var innerFunctionStarted = new CountDownLatch(1);
 
         Checkpoint cp = tc.checkpoint(3);
 
@@ -310,6 +313,7 @@ class VertxTest extends VertxBaseUnitTest {
 
             try {
                 log.info("Waiting");
+                innerFunctionStarted.countDown();
                 latchTwo.await();
             } catch (InterruptedException e) {
                 e.printStackTrace();
@@ -321,8 +325,8 @@ class VertxTest extends VertxBaseUnitTest {
             event.complete();
         }));
 
-        log.info("Pausing");
-        Thread.sleep(1000L);
+        // wait for work to actually be in flight, instead of sleeping and hoping it is
+        awaitLatch(innerFunctionStarted);
         latchTwo.countDown();
         log.info("Counted down");
 
