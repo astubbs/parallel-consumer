@@ -348,30 +348,6 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
                 .untilAsserted(() -> assertCommits(of(offset)));
     }
 
-    /**
-     * Waits until the given offset has been committed for the given partition.
-     * <p>
-     * "Exact" refers to the offset map, not the number of commits: PC legitimately re-commits the same base
-     * offset when a record completes that cannot advance it (see
-     * {@link KafkaTestUtils#collapseRepeatedCommits(List, List)}), so this waits for at least one matching commit
-     * rather than requiring exactly one. Requiring exactly one turns a wait into an assertion about where the
-     * wall-clock commit ticks happened to fall.
-     * <p>
-     * Note the asymmetry with the single-argument {@link #awaitForCommitExact(int)}, which stays strict
-     * because it asserts the whole commit list rather than verifying one interaction.
-     */
-    protected void awaitForCommitExact(int partition, int offset) {
-        log.debug("Waiting for EXACTLY commit offset {} on partition {}", offset, partition);
-        var expectedOffset = new OffsetAndMetadata(offset, "");
-        TopicPartition partitionNumber = new TopicPartition(INPUT_TOPIC, partition);
-        var expectedOffsetMap = UniMaps.of(partitionNumber, expectedOffset);
-        verify(producerSpy, timeout(defaultTimeoutMs)
-                .atLeastOnce())
-                .sendOffsetsToTransaction(
-                        argThat((offsetMap) -> offsetMap.equals(expectedOffsetMap)),
-                        any(ConsumerGroupMetadata.class));
-    }
-
     public void assertCommitsContains(List<Integer> offsets) {
         List<Integer> commits = getCommitHistoryFlattened();
         assertThat(commits).containsAll(offsets);

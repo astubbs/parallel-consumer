@@ -14,7 +14,6 @@ import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.awaitility.Awaitility;
-import org.junit.Assert;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.testcontainers.junit.jupiter.Container;
@@ -28,6 +27,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
 @Slf4j
@@ -57,7 +57,7 @@ public class CoreAppMetricsIntegrationTest {
 
         Awaitility.await().pollDelay(Duration.ofSeconds(1)).untilAsserted(() -> {
             final var metrics = getPrometheusMetrics();
-            Assert.assertTrue(metrics.containsAll(expectedMetrics));
+            assertThat(metrics).containsAll(expectedMetrics);
         });
 
         coreApp.close();
@@ -69,7 +69,7 @@ public class CoreAppMetricsIntegrationTest {
 
         final var url = new URL(String.format("%s/api/v1/metadata", PROMETHEUS_CONTAINER.getPrometheusEndpoint()));
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        Assert.assertEquals(conn.getResponseCode(), 200);
+        assertThat(conn.getResponseCode()).as("Prometheus metadata endpoint response code").isEqualTo(200);
 
         final Map<String, Object> jsonBody = mapper.readValue(new BufferedInputStream(conn.getInputStream()), Map.class);
         return ((Map) jsonBody.get("data")).keySet();
