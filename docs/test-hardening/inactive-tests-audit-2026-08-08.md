@@ -4,7 +4,18 @@
 **Scope:** every test on `master` that does not run, does not assert, or was never written.
 **Supersedes:** `disabled-and-weakened-tests-audit-2026-04-22.md`, which existed only on the
 unmerged branch `refactor/test-hardening`. All of its findings are carried across below, and the
-two it got wrong are corrected with commit evidence. Nothing of it remains only on that branch.
+ones it got wrong are corrected with commit evidence. Nothing of it remains only on that branch -
+its companion `large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md` is salvaged verbatim
+alongside this file.
+
+**Corrected 2026-08-08** against a second research pass. Nine claims in the first draft were refuted
+or under-evidenced and are now restated with their evidence: the disabling cause for §1.1/§1.2, the
+ownership and correct value of the `@Timeout` fix (§9.1), the `30_000_00` reading and
+`VeryLargeMessageVolumeTest`'s volume and `roundsAllowed` (§8.1), which tests the performance
+exclusion actually covers (§8.4), the codec arithmetic and a second vacuous assertion (§5.1), the
+thinness of the KEY cross-product arm (§1.2), and the whole of §4. Where a correction reverses an
+earlier conclusion, the earlier conclusion is stated too - a reader who saw the first draft needs to
+know which claim was withdrawn, not just what the current one is.
 
 This is a point-in-time record, not a generated index. Every number states the command that
 reproduces it, so a future reader re-derives a count instead of rebuilding the analysis. Findings
@@ -18,10 +29,10 @@ are keyed by class and method, never by line number - the predecessor's line num
 | Question | Answer |
 |---|---|
 | **How many tests are disabled?** | **5** test methods. Not 7 - see the grep correction below. |
-| **Why is each disabled?** | **1 of 5 says.** `ProgressBarTest.width` carries `@Disabled("For reference sanity only")`. The other four record no reason anywhere: no annotation message, no comment, and a disabling commit that never names the test. |
+| **Why is each disabled?** | **1 of 5 documents itself in the annotation.** `ProgressBarTest.width` carries `@Disabled("For reference sanity only")`. The other four carry no message and no comment - but the *cause* of two of them is now settled by evidence off to one side: the abandoned branch `origin/bugs/turn-on-commit-tests` names it (see §1.1). So "4 of 5 undocumented" is still true of the annotations; it is no longer true that the reason is unknown. |
 | **How many tests are empty?** | **1** - `SampleTestingFailsafePluginInclusionCore.test`, body `{ }`. |
 | **How many are placeholders?** | **4** - one trivially-false stub, one whose name promises what its body never does, one abandoned mid-write, one diagnostic that cannot fail. |
-| **Tests you intended to write?** | **10 were deleted rather than written**, by upstream `confluentinc#493`. Neither follow-up that would have restored them (`confluentinc#494`, `confluentinc#496`) ever merged. |
+| **Tests you intended to write?** | **10 stubs were deleted rather than written**, by upstream `confluentinc#493`. Checked against current source, **only 1 is real work**: 5 are already covered by named enabled tests, 3 describe features that have never existed, and 1 is obsolete. See §4 - the "ten missing tests" reading is wrong. |
 
 Two further categories nobody asked about, because an annotation grep cannot see them and they are
 the ones that actually mislead:
@@ -129,15 +140,34 @@ every method beneath it, not one. Worth remembering if that ever changes.
 
 - **Annotation message:** none.
 - **Disabled by:** `c1fefbc64`, Antony Stubbs, 2020-08-27, *"Create and commit offset map"*.
-- **Reason:** **none recorded.** The commit body never names the test. What can be said from
-  evidence: the same diff rewrites commit expectations across neighbouring tests in the file (e.g.
-  `assertCommits(of(1), ...)` → `assertCommits(of(0, 2), ...)`), and the commit's own bullets claim
-  "Stabilise tests" and "Faster, more reliable tests". Offset coalescing changed what gets committed,
-  and this test was parked rather than reworked. **That is inference from the commit's stated goals,
-  not a stated reason.**
+- **Reason: the offset map feature changed what gets committed.** Not recorded at the annotation, but
+  recorded by the same author on an abandoned branch, and that settles it.
+
+  **`origin/bugs/turn-on-commit-tests` @ `009bb7122`** (Antony Stubbs, committed 2020-11-23) is a
+  **single commit whose entire diff is the deletion of exactly these two `@Disabled` lines** - one
+  file, two lines removed, nothing else - with the message:
+
+  > *"WIP! Turn back on offset commit tests which were dibbled when the offset map feature was
+  > added"*
+
+  That is a contemporaneous statement from the disabling author naming the cause ("dibbled" for
+  "disabled"), and it identifies both tests as one act. The supporting signal in the disabling commit
+  agrees: the same diff rewrites commit expectations across neighbouring tests in the file (e.g.
+  `assertCommits(of(1), ...)` → `assertCommits(of(0, 2), ...)`). Offset coalescing changed what gets
+  committed, and this test was parked rather than reworked.
+- **Somebody already tried the cheap route and abandoned it.** The branch is titled `WIP!` and never
+  became a PR. Deleting the two annotations is evidently not sufficient - the tests have to be
+  reconciled with the commit semantics the offset map introduced. Anyone re-enabling these should
+  expect to do that work, not just remove an annotation.
+- **Read the dates off `%cd`, not `%ad`, for this branch.** Its *author* date is 2020-05-20, which
+  predates the tests themselves and would make the branch impossible; its *commit* date is
+  2020-11-23 and its parent `00a6a9ed` is on master at that date, which is after the 2020-08-27
+  disable. The author date is stale metadata carried through a rewrite, and taking it at face value
+  inverts the causality.
 - **History:** introduced enabled 2020-05-27 alongside its `Simplest` and `Short` siblings. Ran green
   for three months.
-- **Confidence:** high on attribution, low-to-medium on reason.
+- **Confidence:** high on attribution. **High on reason** - a same-author, single-purpose commit that
+  names the feature responsible.
 - **Covered elsewhere?** Partly. `...Simplest` and `...Short` are both enabled and cover the same
   invariant at lower volume; `Short` asserts the final coalesced offset. What `Long` uniquely covers
   - six records, deeper in-flight interleaving - is not covered elsewhere.
@@ -146,11 +176,14 @@ every method beneath it, not one. Worth remembering if that ever changes.
 
 - **Annotation message:** none.
 - **Disabled by:** `c1fefbc64` - **the same commit as 1.1**. Both disables landed together.
-- **Reason:** **none recorded**, same as 1.1. The test asserts exact commit sets, which is precisely
-  the class of assertion that commit rewrote everywhere else in the file.
+- **Reason: the same one, on the same evidence.** `origin/bugs/turn-on-commit-tests` @ `009bb7122`
+  deletes *this* `@Disabled` and 1.1's, in one two-line diff, under *"…which were dibbled when the
+  offset map feature was added"*. See §1.1 for the full quote. Consistent with the mechanism: the
+  test asserts exact commit sets, which is precisely the class of assertion that commit rewrote
+  everywhere else in the file.
 - **History:** introduced enabled by `17196170a` (2020-05-29, *"Ordered parallel message processing
   by key"*), substantially reworked by `565230cd5` (2020-06-04). Ran green for three months.
-- **Confidence:** high on attribution, low-to-medium on reason.
+- **Confidence:** high on attribution. **High on reason**, on the branch evidence in §1.1.
 - **Covered elsewhere?** **Substantially, yes** - key ordering is not uncovered. Enabled coverage
   includes `WorkManagerTest.orderedByKeyParallel`, `WorkManagerTest.highVolumeKeyOrder`
   (parameterised 1..1000 over 100 keys), `ParallelEoSStreamProcessorTest.processInKeyOrderWorkNotReturnedDoesntBreakCommits`,
@@ -161,6 +194,14 @@ every method beneath it, not one. Worth remembering if that ever changes.
   `@CartesianTest` methods exercise the **full `CommitMode` x `ProcessingOrder` cross-product,
   including KEY**, end-to-end against a real broker. That is real coverage and this audit should not
   undersell it.
+
+  **But its KEY arm is thinner than "asserts only counts" already implies.** The test produces
+  **30,000 unique keys** for 30,000 records - one record per key. Under `KEY` ordering the shard key
+  is the record key, so that is one record per shard: **no two records ever contend for the same
+  shard, and nothing ever blocks on a key.** The KEY cell of the cross-product therefore exercises
+  shard *creation* at scale, not the ordering guarantee that KEY exists to provide. Key-order
+  blocking is the behaviour `processInKeyOrder` was written to assert, and this test cannot observe
+  it even in principle.
 
   **What is genuinely lost, after accounting for all of that:** the end-to-end, multi-partition,
   per-`CommitMode` assertion that offset *commits* respect key-order blocking across partitions.
@@ -194,13 +235,14 @@ every method beneath it, not one. Worth remembering if that ever changes.
 - **Covered elsewhere?** No. Non-200 handling is untested in the vertx module. The nearest real test
   in the file, `testHttp`, asserts `statusCode()` is 200 on the happy path only.
 - This is a **deletion candidate, not a re-enablement candidate** - there is nothing here to restore.
+  *The stub is not worth keeping; the gap it names is worth writing. See §11.*
 
 ### 1.4 `MultiInstanceRebalanceTest.largeNumberOfInstances`
 
 - **Annotation message:** none; the javadoc carries the only prose.
 - **Created and disabled by:** `53052f512`, Antony Stubbs, authored 2022-02-09, *"fix: Concurrency
-  and State improvements"* - the squash of upstream confluentinc#190. Javadoc, `@Disabled`, `@Test`
-  and the whole method arrive in one hunk - **born disabled**, never enabled on master.
+  and State improvements"* - the squash of upstream confluentinc#190. Javadoc, `@Disabled`, `@Test` and the whole method arrive in one
+  hunk - **born disabled**, never enabled on master.
 - **Reason: runtime cost, not failure.** Two independent lines of evidence. Its javadoc, written by
   the same commit, says *"This test takes some time, but seems required in order to expose some race
   conditions without syntehticly creatign them"* - no failure is claimed. And it was authored as part
@@ -231,8 +273,8 @@ every method beneath it, not one. Worth remembering if that ever changes.
 
 | Test | Real coverage lost? | Reason recorded? |
 |---|---|---|
-| `offsetsAreNeverCommitted…Long` | yes, partial | no |
-| `processInKeyOrder` | yes, one specific gap | no |
+| `offsetsAreNeverCommitted…Long` | yes, partial | not at the annotation - offset map, per `origin/bugs/turn-on-commit-tests` |
+| `processInKeyOrder` | yes, one specific gap | same commit, same evidence |
 | `handleHttpResponseCodes` | no - never worked | no |
 | `largeNumberOfInstances` | yes, but owned by `astubbs#29` | cost, via javadoc |
 | `ProgressBarTest.width` | no - not a behaviour test | yes |
@@ -309,30 +351,110 @@ grep -rniE "UnsupportedOperationException|not implemented|notImplemented|\bNYI\b
 
 ---
 
-## 4. Tests intended but never written
+## 4. Tests intended but never written - and what each one is actually worth
 
-**10 were deleted rather than implemented**, and the intent survives only in git history and an
-unmerged branch.
+**10 stubs were deleted rather than implemented.** An earlier draft of this section presented all
+ten as lost intent - ten tests the suite ought to have and does not. **That framing is wrong**, and
+it is wrong in the direction that generates busywork: it invites someone to write ten tests, five of
+which already exist under other names and three of which cannot be written at all.
 
-Upstream `confluentinc#493` - *"minor: tests: Removes empty/not implemented tests"*, merged 2022-12-07
-as `544593edd` - removed ten test methods:
+Each stub was checked against **current** `src/main` and against the enabled suite. The dispositions:
 
-| Test | What it was |
+| Disposition | Count | What it means |
+|---|---|---|
+| **Write it** | **1** | Real reachable behaviour, genuinely uncovered |
+| **Already covered** | **5** | An enabled test does this today, under a different name |
+| **Feature does not exist** | **3** | Nothing to test - these are issues, not tests |
+| **Obsolete** | **1** | The invariant is now structurally unreachable; a test would be vacuous |
+
+They came out in upstream `confluentinc#493` - *"minor: tests: Removes empty/not implemented tests"*,
+merged 2022-12-07 as `544593edd`.
+
+### Write it (1)
+
+**`ParallelEoSStreamProcessorTest.userSucceedsButProduceToBrokerFails`.** The produce-failure path
+**exists and is reachable** in current main: the user function succeeds, the subsequent produce to
+the broker fails, and the record must not be committed. The only part of it under test today is one
+special case - `closePCWhenInvalidPidMappingException` covers `InvalidPidMappingException`
+specifically. **The general produce-failure path, and its consequence (the offset is not committed
+and the work is retried), are uncovered.** This is the one stub that names real work.
+
+### Already covered (5) - by these tests
+
+Naming the covering test for each, so the claim is checkable rather than asserted.
+
+| Stub | Covered today by |
 |---|---|
-| `ParallelEoSStreamProcessorTest.avro` | Five-line comment spec (*"send three messages - 0,1,2 / finish processing 1 / make sure no offsets are committed / finish 0 / make sure offset 1, not 0 is committed"*) then `assertThat(false).isTrue()` |
-| `ParallelEoSStreamProcessorTest.poisonPillGoesToDeadLetterQueue` | dead-letter-queue behaviour |
-| `ParallelEoSStreamProcessorTest.userSucceedsButProduceToBrokerFails` | partial-failure path |
-| `ParallelEoSStreamProcessorTest.failingMessagesDontBreakCommitOrders` | failure vs commit ordering |
-| `ParallelEoSStreamProcessorTest.failingMessagesThatAreRetriedDontBreakProcessingOrders` | retry vs processing ordering |
-| `ParallelEoSStreamProcessorTest.messagesCanBeProcessedOptionallyPartitionOffsetOrder` | optional partition-offset ordering |
-| `ParallelEoSStreamProcessorTest.ifTooManyMessagesAreInFlightDontPollBrokerForMore` | in-flight backpressure |
-| `WorkManagerOffsetMapCodecManagerTest.truncationOnCommit` | `@Disabled("TODO: Blocker: Not implemented yet")` |
-| `WorkManagerTest.maxPerPartition` | empty body |
-| `WorkManagerTest.maxPerTopic` | empty body |
+| `avro` | `ParallelEoSStreamProcessorTest.offsetsAreNeverCommittedForMessagesStillInFlightSimplest` |
+| `failingMessagesDontBreakCommitOrders` | `CloseAndOpenOffsetTest.offsetsOpenClose`, plus `ParallelEoSStreamProcessorTest.failingActionNothingCommitted` and `.processInKeyOrderWorkNotReturnedDoesntBreakCommits` |
+| `failingMessagesThatAreRetriedDontBreakProcessingOrders` | `WorkManagerTest.testOrderedAndDelayed` and `.testUnorderedAndDelayed`, `ShardManagerTest.retryQueueOrdering`, integration `RetriesTest` |
+| `messagesCanBeProcessedOptionallyPartitionOffsetOrder` | `PartitionOrderProcessingTest` and the `@EnumSource` methods in `WorkManagerTest` - ~12 classes exercise `ProcessingOrder.PARTITION` |
+| `ifTooManyMessagesAreInFlightDontPollBrokerForMore` | `BrokerPollerBackpressureTest.brokerPollPausedWhenBlockedInFlightFillsBuffer` |
 
-The six middle rows matter most. Dead-letter queues, retry ordering and in-flight backpressure are
-core library behaviours, and the only surviving record that tests for them were *wanted* is this
-deletion diff.
+Three of these deserve their detail:
+
+- **`avro`** - its five-line comment spec (*"send three messages - 0,1,2 / finish processing 1 / make
+  sure no offsets are committed / finish 0 / make sure offset 1, not 0 is committed"*) is
+  **verbatim what `offsetsAreNeverCommittedForMessagesStillInFlightSimplest` does today**. Nothing is
+  missing. Separately, and worth stating because the name is the misleading part: **the *name*
+  refers to Avro support, which has never existed in PC in any form.** Parallel Consumer is
+  serde-agnostic by design - it hands the user their `ConsumerRecord` and takes no position on how
+  the value was serialised. There is no Avro feature to test and there never was one planned;
+  the body was always about offset commit ordering.
+- **`failingMessagesDontBreakCommitOrders`** - `CloseAndOpenOffsetTest.offsetsOpenClose` is a
+  stronger test than the stub described: it throws for values 2 and 4, closes **without draining**,
+  reopens, and asserts both the replay set and the commit order - **parameterised over every
+  `OffsetEncoding`**.
+- **`ifTooManyMessagesAreInFlightDontPollBrokerForMore`** -
+  `brokerPollPausedWhenBlockedInFlightFillsBuffer` is a near-verbatim match for the stub's name.
+
+### Feature does not exist (3) - these are issues, not tests
+
+No test can be written for these, because there is nothing to call. Writing them means building a
+feature first, and each already has a home in the tracker.
+
+- **`poisonPillGoesToDeadLetterQueue`** - **parallel-consumer has no dead-letter-queue concept and
+  never has.** Zero occurrences of dead-letter or DLQ in any `src/main/java` in the tree. Tracked as
+  **astubbs#149** (mirroring `confluentinc#310`), and `docs/inflight/next-candidates.md` already
+  ranks DLQ as **the most-demanded missing feature**. The stub is a 2020-era vote for that feature,
+  not a test debt.
+- **`maxPerPartition`** - **no per-partition in-flight limit exists.** `ParallelConsumerOptions` has
+  only the global `maxConcurrency`. Nearest tracked issue: **astubbs#160**.
+- **`maxPerTopic`** - **no topic-scoped concept exists at all.** `ShardKey` keys by `TopicPartition`,
+  or by key + `TopicPartition` - topic is never a unit of accounting. Nearest tracked issue:
+  **astubbs#236**.
+
+**The detail that makes the last two legible:** they were written as a **trio** with `maxOverall` -
+limits at three scopes, global, per-partition, per-topic. **Only the global scope was ever built.**
+It is `WorkManagerTest.maxInFlight` today, and it passes. So the two surviving empty bodies are not
+two forgotten tests; they are the unbuilt two-thirds of one design, and the built third is tested.
+
+Neither astubbs#160 nor astubbs#236 is *literally* a per-scope in-flight cap. If that debt should be
+visible in the tracker on its own terms, it is **one new issue about scoped concurrency limits** -
+not two test methods.
+
+### Obsolete (1)
+
+**`WorkManagerOffsetMapCodecManagerTest.truncationOnCommit`** (it carried
+`@Disabled("TODO: Blocker: Not implemented yet")`). **On-commit truncation is structurally
+unreachable now**, so the test it describes could only ever be vacuous:
+
+- `PartitionState.onOffsetCommitSuccess` sets the last committed offset and marks the partition
+  clean. That is all it does.
+- `incompleteOffsets` **by construction holds only incomplete offsets**, and the committed offset is
+  **the lowest incomplete one**. There is nothing tracked below it to discard. The truncation the
+  stub wanted has no operand.
+- **Truncation that does exist happens on the bootstrap poll instead** -
+  `PartitionState.maybeTruncateBelowOrAbove`, reached from `maybeTruncateOrPruneTrackedOffsets` when
+  the first polled batch arrives. It is covered by `PartitionStateCommittedOffsetTest.compactedTopic`,
+  `.committedOffsetLower` and `.bootstrapPollOffsetHigherDueToRetentionOrCompaction`.
+
+The production javadoc on `PartitionStateManager.onOffsetCommitSuccess` still described the old
+truncation, and referenced a `partitionOffsetHighWaterMarks` field that no longer exists. It is
+corrected on this branch (javadoc only, no behaviour change) so the next reader is not sent looking
+for a truncation that was removed years ago.
+
+### The restoration attempt was partial too
 
 **Neither follow-up merged.** `confluentinc#494` (*"Reenables disabled tests, to be fixed"*) and
 `confluentinc#496` are both named in the deleting commit's own body. The branch behind the latter,
@@ -341,11 +463,13 @@ removed empty tests, to be implemented"*, and a third that adds the stubs. At it
 the 10** carry `throw new NotImplementedException()` (`avro`, `maxPerPartition`, `maxPerTopic`). Six
 return unchanged - still `@Disabled`, still empty or `assertThat(false).isTrue()` - and
 `truncationOnCommit` returns *without* its `@Disabled` while keeping `assertThat(true).isFalse()`,
-which would have made it a hard red. So even the restoration was partial. No PR for that branch
-exists on the fork.
+which would have made it a hard red. No PR for that branch exists on the fork.
 
-So the honest answer is: the *removal* half landed; the *implementing* half never did, and the
-record of what was wanted now lives one `git show` away from being lost.
+Read against the dispositions above, that branch would have restored one useful stub
+(`userSucceedsButProduceToBrokerFails`, unchanged and still empty), three that cannot be
+implemented, and one that would have gone straight to red. **The removal was the correct half to
+land.** What was worth keeping was not the stubs - it was the record of *what was wanted*, which is
+this section.
 
 Two more standing intentions, not deleted but never fulfilled:
 
@@ -372,9 +496,24 @@ return !encodingsThatFail.contains(encoding);
 
 So for `BitSet`, `BitSetCompressed`, `BitSetV2`, `RunLength` and `RunLengthCompressed`,
 `ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential` **runs to green with most of
-its assertions branched around, and reports as a pass rather than a skip.** A test that looks like it
-covers all codecs, reports that it covers all codecs, and materially checks about half of them. The
-`assume*` name is what conceals it.
+its assertions branched around, and reports as a pass rather than a skip.** The `assume*` name is
+what conceals it.
+
+**The arithmetic is worse than "about half".** `OffsetEncoding` has **12** values. On any run:
+
+- **4** are dropped before the body by the real assumption in §5.2, and at least report as skipped.
+- **5** reach the body but are branched around by `assumeWorkingCodec`, and report as **passes**.
+- **3** run the full positive assertion path.
+
+So a test whose report says "12 passed or skipped, nothing failed" is materially exercising **3 of
+12** encodings. That is the number to quote, not "half".
+
+**A second vacuous assertion lives in the same test.** Alongside the branched sites, the test asserts
+`doesNotContain(2500L)` - and **2500 is never a record offset anywhere in that test**. The assertion
+holds for a codec that works and for a codec that is completely broken, because the value it
+excludes was never a candidate in the first place. It is not branched around and it is not skipped;
+it simply cannot fail. Deleting it loses nothing; replacing it with an offset the test actually
+produces is what would make it a check.
 
 **5.2 Assumption aborts - 5 tests, one site each.** All sit inside `@ParameterizedTest` methods, so they
 drop parameter *values* rather than whole tests, and the drop is invisible unless you read the report
@@ -407,7 +546,7 @@ misclassifies badly in both directions.
 | `ReactorTest.publishOn`, `.subscribeOn` | same shape |
 | `JavaEnvTest.checkJavaEnvironment` | one `log.error` (also 3.4) |
 | `ParallelEoSStreamProcessorTest.closeWithoutRunningShouldBeEventBasedFast` | name/body mismatch (also 3.2) |
-| `MockConsumerEarlyCloseTest.mockConsumer` | 70-line hang test; the class `@Timeout` is the only check - **and it is broken, see section 8** |
+| `MockConsumerEarlyCloseTest.mockConsumer` | 70-line hang test; the class `@Timeout` is the only check - **and it is broken, see 9.1. Both halves are fixed by open PR astubbs#206** |
 | `ShardKeyTest.nullKey` | throws-only NPE regression guard |
 | `InterruptionTests.waitOnZeroCausesInfiniteWait` | `@Timeout(1, SECONDS)` is the check |
 | `WorkManagerOffsetMapCodecManagerTest.runLengthEncodingCompression` | helper verified to only log |
@@ -450,8 +589,10 @@ misclassifies badly in both directions.
 
 ### Which of the 15 matter
 
-Genuinely worth fixing: `closeWithoutRunningShouldBeEventBasedFast`, `stringVsByteVsBitSetEncoding`,
-`MockConsumerEarlyCloseTest.mockConsumer` (via the timeout bug in section 8).
+Genuinely worth fixing: `closeWithoutRunningShouldBeEventBasedFast`, `stringVsByteVsBitSetEncoding`.
+`MockConsumerEarlyCloseTest.mockConsumer` belongs on that list too, but is **already owned by open PR
+astubbs#206**, which both fixes its timeout (9.1) and gives it a real assertion - so it is not work
+for anyone else.
 
 Defensible as they stand: the four `MutinyTest`/`ReactorTest` library scratchpads (they catch API
 breakage by throwing on upgrade), `ShardKeyTest.nullKey` (a throws-only NPE guard - its javadoc names
@@ -489,14 +630,40 @@ copy holds nothing this document lacks. **They are recorded, not fixed.**
 
 ### 8.1 Kneecapped volumes
 
+*Whether each commented-out value here was ever live - and what that makes it - is answered per site
+in §11.*
+
 | Location | Issue | Status |
 |---|---|---|
-| `LargeVolumeInMemoryTests` | 500 vs 1,000,000 messages | **Open.** Still `int quantityOfMessagesToProduce = 500;` with `// 1_000_000` commented above it, `git blame`d to `565230cd5a` (2020-06-04) and untouched since. The predecessor listed this as fixed by astubbs#49, but carried a caveat - *"Check whether this fix has been merged to master before flagging again"* - and it had not: astubbs#49 never touched the file. The restore-to-1M commit exists only on `refactor/test-hardening`. |
-| `MultiInstanceHighVolumeTest` | `30_000_00` - an underscore typo giving 3M, not 30M | **Open. A real defect, not a judgement call.** |
-| `VeryLargeMessageVolumeTest` | 1M vs 2M | Open - decide and clean up |
-| `LoadTest` | 4K vs several commented-out alternatives | Open - dead code |
-| `TransactionAndCommitModeTest.numThreads` | 64 vs 1000 | Open - document or fix |
-| `TransactionAndCommitModeTest.roundsAllowed` | 10, with a TODO | Open - likely masks a real issue |
+| `LargeVolumeInMemoryTests` | 500 vs 1,000,000 messages | **Open.** Still `int quantityOfMessagesToProduce = 500;` with `// 1_000_000` commented above it, `git blame`d to `565230cd5a` (2020-06-04) and untouched since. The predecessor listed this as fixed by astubbs#49, but carried a caveat - *"Check whether this fix has been merged to master before flagging again"* - and it had not: astubbs#49 never touched the file. The restore-to-1M commit exists only on `refactor/test-hardening`; the **OOM diagnostics from running it are now salvaged** into [`large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md`](large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md) in this directory, and show 1M failing with `OutOfMemoryError` in the close path. **Restoring 1M is not a value change** - see `docs/refactoring.md`. |
+| `MultiInstanceHighVolumeTest` | `30_000_00` - misgrouped underscores | **Legibility only, not a value defect.** See below. |
+| `VeryLargeMessageVolumeTest` | 1M vs a `2_000_000` comment | **Not kneecapped - withdrawn.** See below. |
+| `LoadTest` | 4K vs several commented-out alternatives | Open - dead code, but 4,000 is the *right* value. See §8.4. |
+| `TransactionAndCommitModeTest.numThreads` | 64 vs 1000 | Open - document or fix. Note 64 was an *increase* for stability, not a reduction. |
+| `TransactionAndCommitModeTest.roundsAllowed` | 10, with a TODO | **Dead code - masks nothing.** See below. |
+
+**`30_000_00` is not a 30M typo.** The predecessor read it as an underscore slip that lost a zero
+off 30,000,000. Git history says otherwise: the line was **reduced from `10_000_000`**, and the old
+value was kept as the comment directly above it. The intended value is **3,000,000** - which is what
+the misgrouped literal already evaluates to. So:
+
+- The fix is **underscore regrouping only** (`30_000_00` → `3_000_000`). Java ignores underscores in
+  numeric literals, so the change is **byte-identical at runtime** - no test behaviour moves.
+- **Raising it is blocked by something else in the same method:** a hard-coded 60-second
+  `waitAtMost`. Any larger volume has to clear that wait on a CI runner, so "put the zero back" is
+  not a one-token change and is not what the history asks for anyway.
+
+**`VeryLargeMessageVolumeTest` was never kneecapped, and this entry is withdrawn.** Its history is
+`1_000_000` → `100_0000` → `1_000_000`. The middle value is **the same number**, differently
+grouped - not a reduction. The `2_000_000` the predecessor compared against was **always an
+aspirational comment**, never a live value that something took away. There is no restore to perform.
+
+**`roundsAllowed` masks nothing.** It was **assigned and never read** - dead from the moment it was
+written. `ProgressTracker` in this test is constructed with **null rounds**, and it **throws if given
+both a round count and a timeout**, so the rounds mechanism was structurally unreachable rather than
+set too loose. Removing the variable changes no behaviour. The `// todo rounds should be 1? progress
+should always be made` question attached to it is a genuine open design question about the test's
+liveness signal, and it is triaged in `docs/refactoring.md` - but it is not a masked failure.
 
 ### 8.2 Weak and commented-out assertions
 
@@ -518,24 +685,54 @@ occurrences whose byte offset falls inside a comment region. Three raw hits; two
 `TestConventionRules` and `QuarantineRegistryScriptTest`). **It agrees with the predecessor's count
 of 1.**
 
-### 8.4 Tag-based exclusions - not a problem
+*Provenance for this one, and for the §8.1 and §8.2 commented-out lines: §11.*
 
-`@Tag("performance")` is excluded from default builds via `excluded.groups` in `pom.xml`, covering
-`LargeVolumeInMemoryTests`, `MultiInstanceHighVolumeTest` and `VeryLargeMessageVolumeTest`. They run
-in the PR performance suite. This is correct behaviour and is recorded only so nobody re-flags it.
+### 8.4 Tag-based exclusions - correct, but they cover fewer tests than §8.1 implies
+
+`@Tag("performance")` is excluded from default builds via `excluded.groups` in `pom.xml`. That is
+correct behaviour and is recorded only so nobody re-flags it. What matters is **which** of the §8.1
+tests it actually covers, because the volume entries read as though they are all safely parked in a
+non-gating lane. They are not.
+
+| Test | Tag | Lane |
+|---|---|---|
+| `LargeVolumeInMemoryTests` | `@Tag("performance")` | excluded from default; PR performance suite |
+| `MultiInstanceHighVolumeTest` | `@Tag("performance")` | excluded from default; PR performance suite |
+| `VeryLargeMessageVolumeTest` | `@Tag("performance")` | excluded from default; PR performance suite |
+| **`LoadTest`** | **none** | **the gating integration lane** |
+| **`TransactionAndCommitModeTest`** | **`@Tag("transactions")`** | not the performance lane |
+
+Two corrections follow, and both change what may be done to those tests:
+
+- **`LoadTest` carries no tag at all, so it runs in the gating integration lane on every PR** - and
+  it is a **listed member of the load-tightness flake family** recorded in
+  `docs/inflight/test-load-tightness-flakes.md`, *at its current 4,000*. Raising its volume is not a
+  free cleanup of commented-out alternatives: it would push a known-tight, already-flaky, **gating**
+  test harder. 4,000 is the value that family was tuned to. Leave it.
+- **`TransactionAndCommitModeTest` is `@Tag("transactions")`, not `@Tag("performance")`.** Whatever
+  its `numThreads` and volume are doing, it is not doing them behind the performance exclusion, so
+  the "it only runs in the perf suite" reasoning does not apply to it either.
 
 ### 8.5 Where the predecessor was wrong
 
-Two of its conclusions are **refuted** by the git history, which it did not consult - it recorded
-its reasons as *suspected*, attributed none of them to a commit, and noted an intent to
+Two of its **disabling-reason** conclusions are refuted by the git history, which it did not consult -
+it recorded its reasons as *suspected*, attributed none of them to a commit, and noted an intent to
 `git blame` that it never carried out:
 
 | It said | Actually |
 |---|---|
-| `…Long` was "probably disabled due to flakiness on slow CI" | Disabled by `c1fefbc64`, an offset-map/commit-semantics change. No flakiness evidence exists anywhere. |
-| `processInKeyOrder` was "probably flaky or the feature had bugs when it was written" | Disabled by **the same commit**, in the same hunk pattern, on the same day. |
+| `…Long` was "probably disabled due to flakiness on slow CI" | Disabled by `c1fefbc64`, an offset-map/commit-semantics change - and `origin/bugs/turn-on-commit-tests` names the offset map as the cause in the author's own words (§1.1). No flakiness evidence exists anywhere. |
+| `processInKeyOrder` was "probably flaky or the feature had bugs when it was written" | Disabled by **the same commit**, in the same hunk pattern, on the same day, and un-disabled by the same one-commit branch. |
 
-Both refutations rest on the same evidence: `Simplest`, `Short` and `Long` were all introduced
+Three further conclusions of the predecessor's are refuted in §8.1 rather than here, because they are
+volume findings rather than disabling-reason findings: `30_000_00` is **not** a 30M typo (the value
+was reduced from 10M and 3M is intended), `VeryLargeMessageVolumeTest` was **never** kneecapped
+(`1_000_000` → `100_0000` is the same number), and `roundsAllowed` masks **nothing** (it is dead
+code). None of the three was a careless claim - each is what the source looks like from the outside.
+They were settled by reading history rather than the current file, which is the method §8.5 exists to
+recommend.
+
+Both disabling-reason refutations rest on the same evidence: `Simplest`, `Short` and `Long` were all introduced
 together by `61f4c0e41` on 2020-05-27 and ran green for three months, so nothing about their history
 suggests flakiness. It is worth stating plainly that the predecessor did **not** claim `Short`
 superseded `Long` - that was a hypothesis raised while investigating, and the history refutes it, but
@@ -567,7 +764,19 @@ tree is written correctly (`@Timeout(60)`, `@Timeout(120)`, `@Timeout(value = 3,
 so these three are the outliers, and the `L` suffix is the tell that the author was thinking in
 milliseconds.
 
-**Highest value-to-effort fix in this document.**
+**Already owned - do not fix this here.** Open PR **astubbs#206** deletes all three annotations and
+replaces them with a single `@Timeout(120)` on a shared `MockConsumerTestBase` (`@Timeout` is
+`@Inherited`), with a comment naming the seconds-vs-milliseconds bug. That PR also adds the missing
+assertion to `MockConsumerEarlyCloseTest`, which is the other half of the problem this finding
+describes.
+
+**And `@Timeout(60)` would have been the wrong repair.** An earlier draft of this document called
+the one-token `60000L → 60` change the highest value-to-effort fix available. It is not a safe
+change: **two of these tests carry internal Awaitility budgets of 45s and 50s**, so a 60-second
+method timeout leaves 10-15 seconds of headroom and races the very waits the tests exist to perform
+on a loaded runner. Measured runtimes are ~5s, ~10s and ~25s. **120 is the correct value**, and
+arriving at it required measuring the tests rather than reading the annotation. A cheap-looking fix
+that turns a no-op timeout into a flake is worse than the no-op.
 
 **9.2 `OffsetEncodingTests` uses JUnit 4's `org.junit.Assume` inside a Jupiter test, and it works
 only by accident of the classpath.** No pom declares JUnit 4 (`junit.version` is 5.14.4); it arrives
@@ -589,7 +798,9 @@ this is the finding most likely to mislead someone reading a green test report.
 **9.4 Wall-clock burned by a test that cannot fail.** `MockConsumerEarlyCloseTest.mockConsumer`
 sleeps 5 seconds unconditionally and asserts nothing - so with 9.1's broken timeout, that is ~5
 seconds per run spent on a test with no way to fail except by throwing. (`ProgressBarTest.width`
-sleeps 10 seconds by construction but is `@Disabled`, so it costs nothing.)
+sleeps 10 seconds by construction but is `@Disabled`, so it costs nothing.) The assertion half of
+this is fixed by astubbs#206; the unconditional sleep is not, and remains fair game once that PR
+lands.
 
 ---
 
@@ -600,16 +811,17 @@ them is started here.
 
 **Trivial and safe:**
 
-1. `@Timeout(60000L)` → `@Timeout(60)` in the three classes (9.1). Restores a real check to an
-   assertion-free test.
-2. Delete `VertxTest.handleHttpResponseCodes` - never ran, cannot pass, tests nothing (1.3).
-3. Delete `StreamTest.test`'s commented-out method (8.3).
-4. Fix the `30_000_00` underscore typo (8.1).
+1. Delete `VertxTest.handleHttpResponseCodes` - never ran, cannot pass, tests nothing (1.3).
+2. Delete `StreamTest.test`'s commented-out method (8.3).
+3. Regroup `30_000_00` to `3_000_000` (8.1). **Cosmetic only** - Java ignores underscores, so this is
+   byte-identical at runtime. It is a legibility fix, not the value fix an earlier draft claimed.
 
 **Honesty fixes:**
 
-5. Rename `assumeWorkingCodec` to `isWorkingCodec`, or convert its call sites to real per-value
+4. Rename `assumeWorkingCodec` to `isWorkingCodec`, or convert its call sites to real per-value
    assumptions so the skips appear in the report (5.1).
+5. Delete or re-target the vacuous `doesNotContain(2500L)` assertion in the same test - 2500 is never
+   a record offset there, so it passes for a working codec and a broken one alike (5.1).
 6. Point `OffsetEncodingTests` at `org.junit.jupiter.api.Assumptions` (9.2).
 7. Add the timing assertion to `closeWithoutRunningShouldBeEventBasedFast`, copying the idiom from
    the test just above it (3.2).
@@ -617,18 +829,37 @@ them is started here.
 **Needs a decision:**
 
 8. `processInKeyOrder` (1.2) - the end-to-end key-order commit assertion is the one real coverage
-   gap. Re-enabling means reconciling it with the commit semantics `c1fefbc64` introduced.
-9. `offsetsAreNeverCommitted…Long` (1.1) - same commit, same reconciliation.
+   gap. Re-enabling means reconciling it with the commit semantics the offset map introduced in
+   `c1fefbc64` - and note that `origin/bugs/turn-on-commit-tests` shows deleting the annotation alone
+   was tried and abandoned at WIP, so budget for the reconciliation.
+9. `offsetsAreNeverCommitted…Long` (1.1) - same commit, same branch, same reconciliation.
 10. `stringVsByteVsBitSetEncoding` (3.3) and `MultiTopicTest.assertCommit` (8.2) - restore the
     comparison/assertion, or delete it. Leaving it implies coverage that does not exist.
 11. `LargeVolumeInMemoryTests` runs 500 messages where 1,000,000 is commented out (8.1). Previously
-    believed fixed; it is not. The restore-to-1M work exists on `refactor/test-hardening` along with
-    OOM diagnostics from running it - salvage both before that branch is deleted.
-12. The remaining kneecapped volumes (8.1) - decide the intended value and record why.
+    believed fixed; it is not. **This is not a one-line value change** - see
+    `large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md`, salvaged alongside this document,
+    for the `OutOfMemoryError` it produces in the close path and the 2-4GB estimate. Scoped as real
+    work in `docs/refactoring.md`.
+12. `userSucceedsButProduceToBrokerFails` (4) - the one deleted stub that names uncovered, reachable
+    behaviour. Write it, or record a decision not to.
 
 **Already owned - do not touch:**
 
 - `largeNumberOfInstances` (1.4). PR `astubbs#29` carries the `@Tag("performance")` change.
+- The three `@Timeout(60000L)` annotations (9.1). PR `astubbs#206` replaces them with `@Timeout(120)`
+  on a shared base, and adds the missing assertion to `MockConsumerEarlyCloseTest`. **`@Timeout(60)`
+  would have been wrong** - two of the tests wait 45s and 50s internally.
+
+**Not work at all** - recorded so nobody opens a ticket for them:
+
+- Eight of the ten deleted stubs (§4): five are covered by named enabled tests, three describe
+  features that do not exist (tracked as astubbs#149, astubbs#160, astubbs#236), and `truncationOnCommit` is
+  obsolete because on-commit truncation is structurally unreachable.
+- `VeryLargeMessageVolumeTest`'s volume (8.1) - it was never reduced.
+- `LoadTest`'s 4,000 (8.4) - it is untagged, gating, and a listed member of the load-tightness flake
+  family at exactly that value.
+- `roundsAllowed` (8.1) - dead code, not a mask. The design question attached to it lives in
+  `docs/refactoring.md`.
 
 **Deliberately not built:** a generated `docs/INACTIVE_TESTS.md` with a `--check` staleness gate,
 modelled on `bin/todo-index.sh`. It is consistent with repo convention and worth revisiting, but it
@@ -638,3 +869,58 @@ included.
 
 Per repo convention, triage for these lives in `docs/refactoring.md`, not here. This document is the
 inventory and the evidence.
+
+---
+
+## 11. Addendum, 2026-08-12: what the commented-out lines were, and which of them this audit traced
+
+The 2026-08-08 findings above stand as written. This section adds the one question none of them
+asked: **was the commented-out line ever live?** Nine review threads on astubbs#264 objected to the
+deletions that acted on §8.1-§8.3, all saying the same thing - the commented-out code was there for
+a reason. Answering that question per site shows they are right about some of it, and shows why.
+
+**A line that was never live is more likely to be a record of a manual run, not less.** Uncommenting
+a rung, running it, and commenting it back leaves no trace in git; the parked state is all that
+survives. So a born-commented ladder *is* the procedure - it is the only place the volumes someone
+actually exercised are written down. A superseded live value is the opposite: the history already
+holds it, and the comment is residue.
+
+| Line | Ever live? | Provenance | What it is |
+|---|---|---|---|
+| `MultiInstanceHighVolumeTest` `//10_000_000` | **Yes** | Live at `04cd4d81` (2020-12-14); commented at `ad3636a5` (2021-07-02) when reduced to 3M | Residue. §8.1 traced this correctly. |
+| `StreamTest` `//@Test` | No | Born commented at `61f4c0e4` (2020-05-27) | Scratchpad, never wired in. §8.3 correct. |
+| `VeryLargeMessageVolumeTest` `//2_000_000` | No | Added at `2b0ab66b` (2020-11-27), in the same edit that lowered the live value | Aspiration. §8.1 identified this correctly - *"always an aspirational comment"*. The deletion commit `e67d8b89` called it "stale", which is not what §8.1 said. |
+| `LoadTest` `8_000_0 / 4_000_00 / 4_000_0 / 8` | No | All four born commented in one commit, `af1fa5de` (2020-06-17), beside the live `4_000` | An authored range, 8 to 400,000, written in one sitting. §8.1 called it "dead code" without tracing it. `8` is a debug-fast setting, not a volume rung. |
+| `TransactionAndCommitModeTest` `2 / 100 / 1000` | No | Born commented at `2b0ab66b` (2020-11-27) beside live `numThreads = 16` | A concurrency ladder bracketing the live value. §8.1 said *"document or fix"*; `e67d8b89` did neither and deleted it. |
+
+**One rung does not survive its own test, and running it is what showed that.** `LoadTest`'s `8` was
+parked as a fast-iteration setting, but it could never have executed: the key range is derived as
+`volume / 100`, so eight records produced zero keys and `publishMessages` threw
+`IndexOutOfBoundsException` on the first send. That is true of `af1fa5de` as authored, not a later
+rot. So "born commented means someone ran it by hand" holds for the three volume rungs and fails for
+this one - provenance narrows the question, it does not answer it, and only executing the rung
+settles it. The floor added in `setupTestData` makes the setting work as intended rather than
+deleting it a second time.
+
+Reproduce any row with:
+
+```bash
+git log --all -p -S'<the commented literal>' -- '<path>'   # introduced, and whether as a comment
+git log -p <deleting-commit>^ -- '<path>'                  # the file's own lineage on this branch
+```
+
+**§1.3's verdict on `VertxTest.handleHttpResponseCodes` is right about the stub and silent about the
+gap.** There is nothing in `assertThat(true).isFalse()` to restore. But §1.3 also records that
+non-2xx handling is untested and that `testHttp` asserts 200 on the happy path only - and in
+`VertxParallelEoSStreamProcessor`, `send.onSuccess` calls `wc.onUserFunctionSuccess()`. A Vert.x
+`WebClient` future succeeds on any HTTP response and fails only on transport errors, so a 5xx
+appears to mark the work succeeded. That is a coverage gap the stub was named for, and it is worth
+writing even though the stub was not worth keeping.
+
+Recovery of the born-commented procedures, and characterization of the Vert.x behaviour, were planned
+in `docs/plans/2026-08-12-001-test-recover-manual-test-procedures-plan.md`. That work has since
+landed in astubbs#264, and the plan was deleted with it per the `AGENTS.md` lifecycle rule; read it
+at `git show a69cd348:docs/plans/2026-08-12-001-test-recover-manual-test-procedures-plan.md`. The
+recovered rungs now live in the tests themselves - `LoadTest.RECOVERED_VOLUMES`, the concurrency
+ladder in `TransactionAndCommitModeTest`, the environment dump in `AmbientProbeExtension`, and the
+Vert.x 5xx characterization in `VertxTest`.
