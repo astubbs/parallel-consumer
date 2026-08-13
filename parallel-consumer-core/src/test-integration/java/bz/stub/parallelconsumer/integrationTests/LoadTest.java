@@ -131,8 +131,21 @@ public class LoadTest extends DbTest {
      * {@code maven.yml} - a required check on every PR - so this case runs automatically there at
      * {@link #HIGH_VOLUME_TOTAL}, ten times the gating volume, with no retry. {@code LoadTest} is a
      * listed member of the load-tightness flake family at the gating volume
-     * (docs/inflight/test-load-tightness-flakes.md, 1/20, undiagnosed); whether that rate holds at
-     * this volume has not been measured.
+     * (docs/inflight/test-load-tightness-flakes.md, 1/20, undiagnosed).
+     * <p>
+     * <b>Measured before leaving it automatic</b>, per the {@code AGENTS.md} rule to separate
+     * test-infra contention from a genuine concurrency bug rather than tuning a deadline: given an
+     * uncontended broker, this case ran 5/5 green at 40,000, each in ~52s against its derived
+     * ceiling of 600s. So the code is not the problem at this volume, and it is nowhere near the
+     * deadline - by that rule, failures in this family are contention.
+     * <p>
+     * Which leaves the one thing the measurement could not clear: the performance lane does
+     * <em>not</em> give it an uncontended broker. Failsafe declares no {@code forkCount}, so all
+     * four {@code @Tag("performance")} classes share one JVM - and therefore the one static
+     * {@code BrokerIntegrationTest.kafkaContainer} - with {@code <parallel>methods</parallel>}. The
+     * gating integration lane already solves exactly this by forking
+     * ({@code -DforkCount=4 -DreuseForks=true}, so each fork gets its own broker); this lane does
+     * not. If this case does flake in CI, that is the first thing to reach for, not the deadline.
      */
     @SneakyThrows
     @Test
