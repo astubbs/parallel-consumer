@@ -11,6 +11,7 @@ import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -28,8 +29,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -99,11 +102,19 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
     private static final int GOOD_INPUT_RECORDS = 3;
 
     /**
-     * Comfortably above the producer default {@link ProducerConfig#MAX_REQUEST_SIZE_CONFIG} of 1MiB, so
-     * {@code KafkaProducer} rejects the record itself (client side, deterministically) rather than the test
-     * depending on a broker-side size limit.
+     * Pinned rather than inherited. The whole reproduction depends on the producer rejecting the oversized record
+     * client side, so the limit it is judged against must be part of the test, not whatever
+     * {@link ProducerConfig#MAX_REQUEST_SIZE_CONFIG} happens to default to. This is today's default, so behaviour is
+     * unchanged - it just can no longer drift out from under the test.
      */
-    private static final int OVERSIZED_VALUE_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_REQUEST_SIZE_BYTES = 1024 * 1024;
+
+    /**
+     * Comfortably above {@link #MAX_REQUEST_SIZE_BYTES}, so {@code KafkaProducer} rejects the record itself (client
+     * side, deterministically) rather than the test depending on a broker-side size limit. Derived from that constant
+     * so the two cannot drift apart.
+     */
+    private static final int OVERSIZED_VALUE_BYTES = 2 * MAX_REQUEST_SIZE_BYTES;
 
     private static final String POISON_KEY = "poison-key-0";
 
@@ -169,9 +180,12 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
         // must take its own explicit group afterwards
         var pcConsumer = getKcu().<String, String>createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
 
+        var producerProps = new Properties();
+        producerProps.put(ProducerConfig.MAX_REQUEST_SIZE_CONFIG, MAX_REQUEST_SIZE_BYTES);
+
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(pcConsumer)
-                .producer(getKcu().createNewProducer(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER))
+                .producer(getKcu().createNewProducer(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER, producerProps))
                 .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                 .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
                 .batchSize(1)
@@ -196,7 +210,7 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
 
     @Test
     void aTerminallyFailedSendMustNotLeaveHalfOfAResultSetVisible() {
-        String oversizedValue = repeat('x', OVERSIZED_VALUE_BYTES);
+        String oversizedValue = StringUtils.repeat('x', OVERSIZED_VALUE_BYTES);
 
         pc.pollAndProduceMany(context -> {
             String sourceKey = context.key();
@@ -272,18 +286,17 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
      * outcome is that NONE of its result set is visible.
      */
     private void assertNoPartialResultSetIsVisible() {
-        List<String> allSourceKeys = new ArrayList<>(goodKeys);
-        allSourceKeys.addAll(nudgeKeys);
-        allSourceKeys.add(POISON_KEY);
-        // anything the verifier saw that the test did not send is itself a result worth failing on
-        resultsSeenByInputKey.keySet().stream()
-                .filter(key -> !allSourceKeys.contains(key))
-                .forEach(allSourceKeys::add);
+        // every key the test sent, plus anything the verifier saw that the test did not send - an unexpected key is
+        // itself a result worth failing on. POISON_KEY is excluded because it is held to a stricter rule below.
+        Set<String> allOrNoneKeys = new LinkedHashSet<>(goodKeys);
+        allOrNoneKeys.addAll(nudgeKeys);
+        allOrNoneKeys.addAll(resultsSeenByInputKey.keySet());
+        allOrNoneKeys.remove(POISON_KEY);
 
         log.info("Result records visible per source key: {}", resultsSeenByInputKey.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().size())));
 
-        for (String key : allSourceKeys) {
+        for (String key : allOrNoneKeys) {
             int visible = resultsFor(key).size();
             assertWithMessage("%s has %s of %s result records visible to a read_committed consumer - a result set "
                             + "must be published all-or-none, so a partial one means a terminally failed send did "
@@ -292,6 +305,15 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
                     .that(visible)
                     .isAnyOf(0, RESULTS_PER_INPUT);
         }
+
+        // POISON_KEY is held to more than all-or-none. Its oversized result can never be delivered, so "all" is
+        // unreachable and NONE is the only legal outcome - asserting isAnyOf(0, RESULTS_PER_INPUT) here would also
+        // accept a full result set that cannot physically exist, which is weaker than the guarantee being pinned.
+        assertWithMessage("%s has %s of %s result records visible to a read_committed consumer - its oversized result "
+                        + "can never be sent, so NONE of its result set may ever be visible",
+                POISON_KEY, resultsFor(POISON_KEY).size(), RESULTS_PER_INPUT)
+                .that(resultsFor(POISON_KEY))
+                .isEmpty();
     }
 
     /**
@@ -371,15 +393,6 @@ class TransactionalPartialResultSetIT extends BrokerIntegrationTest<String, Stri
                     closingAnAlreadyBrokenPc);
         }
         pc = null;
-    }
-
-    /**
-     * Java 8 baseline - no {@code String#repeat}.
-     */
-    private static String repeat(char c, int length) {
-        char[] chars = new char[length];
-        java.util.Arrays.fill(chars, c);
-        return new String(chars);
     }
 
 }
