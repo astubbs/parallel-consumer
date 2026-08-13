@@ -20,7 +20,17 @@ import java.util.stream.Stream;
 
 /**
  * Result streaming version of {@link VertxParallelEoSStreamProcessor}.
+ *
+ * @deprecated Being removed - the JStream interface is not widely used and its unbounded result deque
+ * can cause memory leaks if the stream is not actively consumed. Use
+ * {@link VertxParallelStreamProcessor} and its callbacks instead.
+ * <p>
+ * The deprecation lives on this interface, not only on {@link JStreamVertxParallelEoSStreamProcessor},
+ * because callers reach the implementation through {@link #createEosStreamProcessor} and hold this type -
+ * so a deprecation on the implementation alone warns nobody before the advertised removal.
+ * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
  */
+@Deprecated
 public interface JStreamVertxParallelStreamProcessor<K, V> extends ParallelConsumer<K, V> {
 
     static <KK, VV> JStreamVertxParallelStreamProcessor<KK, VV> createEosStreamProcessor(ParallelConsumerOptions<KK, VV> options) {
