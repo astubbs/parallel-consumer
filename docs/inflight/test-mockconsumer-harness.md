@@ -1,7 +1,7 @@
 # The vanilla-`MockConsumer` test harness
 
 Cross-branch context for anyone touching
-`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumer*Test*.java`.
+`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumer*Test*.java`.
 
 ## There is now one harness, and it is not the main test base
 
