@@ -14,6 +14,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serdes;
@@ -72,6 +73,39 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @BeforeEach()
     public void setupData() {
         primeFirstRecord();
+    }
+
+    /**
+     * Waits until one partition's committed offset frontier - the highest offset committed for it, i.e. where
+     * consumption would resume - reaches exactly {@code expected}.
+     * <p>
+     * Asserted instead of the exact set of that partition's commits because which intermediate offsets appear
+     * depends on where the wall-clock commit ticks fall relative to work completing, not on anything the test is
+     * about. A slow runner legitimately shows partition 0 at {@code [1, 3]} where a fast one shows {@code [3]},
+     * because 1 means "record 0 done, resume at 1" - correct, and nothing to do with ordering. This is the same
+     * trap {@code astubbs#260} fixed by collapsing repeat commits inside {@code assertCommits}, in a different
+     * shape: there the repeat, here an extra intermediate step on the way to the same frontier.
+     * <p>
+     * The frontier is the invariant worth guarding, and it is a real one: it can only move when work completes
+     * contiguously, so a partition that advanced past in-flight work would fail this - which is exactly what
+     * {@link #processInKeyOrder} exists to catch.
+     */
+    private void awaitFrontier(int partition, long expected) {
+        var tp = new TopicPartition(INPUT_TOPIC, partition);
+        await().timeout(defaultTimeout)
+                .untilAsserted(() -> assertThat(highestCommitFor(tp))
+                        .as("committed offset frontier for partition %s", partition)
+                        .hasValue(expected));
+    }
+
+    private Optional<Long> highestCommitFor(TopicPartition tp) {
+        return getCommitHistory().stream()
+                .map(groupHistory -> groupHistory.get(CONSUMER_GROUP_ID))
+                .filter(Objects::nonNull)
+                .map(partitionCommits -> partitionCommits.get(tp))
+                .filter(Objects::nonNull)
+                .map(OffsetAndMetadata::offset)
+                .max(Comparator.naturalOrder());
     }
 
     @ParameterizedTest()
@@ -763,10 +797,19 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         log.debug("Unlocking 0...");
         msg0Lock.countDown();
 
-        // 0, 1 and 2 are all key-1 on partition 0: completing 0 frees 1, and 2 was already done, so the whole
-        // run 0-2 becomes contiguous and partition 0 advances once, to 3. It does not commit 0 and then 2 -
-        // the committed offset is where to resume, so finishing record 2 means resuming at 3.
-        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3), of(4))));
+        // 0, 1 and 2 are all key-1 on partition 0: completing 0 frees 1, and 2 was already done, so the run 0-2
+        // becomes contiguous and partition 0 resumes at 3 - not at 2, because a committed offset says where to
+        // resume, not which record was last done.
+        //
+        // From here the assertions are on the FRONTIER (highest committed offset per partition), not on the exact
+        // set of commits. Which intermediate offsets appear depends on where the wall-clock commit ticks fall
+        // relative to work completing: a slow runner legitimately shows partition 0 at [1, 3] where a fast one
+        // shows [3], because 1 means "record 0 done, resume at 1". That is correct behaviour and nothing to do
+        // with ordering, so asserting the exact set asserts tick timing - the same trap astubbs#260 fixed by
+        // collapsing repeat commits inside assertCommits. MEASURED: this test passed locally and failed in CI
+        // on exactly that difference.
+        awaitFrontier(0, 3);
+        awaitFrontier(1, 4);
 
         // unlock 3 - should get committed
         log.debug("Unlocking 3...");
@@ -779,7 +822,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertThat(processedState.get(5)).as("5 should processed").isTrue();
 
         // partition 0 advances to 4; partition 1 cannot move while 4 is in flight, even though 5 and 6 are done
-        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3, 4), of(4))));
+        awaitFrontier(0, 4);
+        awaitFrontier(1, 4);
 
         // unlock 4 - clears 5 for offset commit - 7 not processed yet (5,6,7 same key), 8 was never locked
         log.debug("Unlocking 4...");
@@ -793,7 +837,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // record 4 was in flight, even though 5, 6 and 8 had completed. Now that 4 is done it jumps to 7 - not to
         // 9 - because 8 is complete but not contiguous, so it cannot be resumed past.
         awaitForSomeLoopCycles(1);
-        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3, 4), of(4, 7))));
+        awaitFrontier(1, 7);
+        awaitFrontier(0, 4);
 
         // unlock 7 (same key as 6), unblocks 8 for commit
         assertThat(processedState.get(7)).isFalse();
@@ -802,7 +847,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         releaseAndWait(locks, 7);
 
         // 7 completing makes 7 and 8 contiguous, so partition 1 finally resumes at 9
-        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3, 4), of(4, 7, 9))));
+        awaitFrontier(1, 9);
+        awaitFrontier(0, 4);
     }
 
     /**
