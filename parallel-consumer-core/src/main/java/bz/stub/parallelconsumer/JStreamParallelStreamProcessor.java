@@ -14,12 +14,9 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 /**
- * @deprecated Being removed - the JStream interface is not widely used and its unbounded result deque
- * can cause memory leaks if the stream is not actively consumed. Use the callback-based API instead.
- * <p>
- * The deprecation lives on this interface, not only on {@link JStreamParallelEoSStreamProcessor}, because
- * callers reach the implementation through {@link #createJStreamEosStreamProcessor} and hold this type -
- * so a deprecation on the implementation alone warns nobody before the advertised removal.
+ * @deprecated Being removed. The deque behind {@link #pollProduceAndStream} is unbounded and drains only as
+ * the caller consumes the returned stream, so a slow or absent consumer grows it until the JVM runs out of
+ * memory. Take results through {@link ParallelStreamProcessor#pollAndProduceMany} and its callback instead.
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
  */
 @Deprecated
