@@ -36,6 +36,16 @@ parallel. This is how the project gets concurrency without adding partitions.
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
 merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
 
+**Commit frontier**
+The offset a partition would resume from if consumption restarted — the highest offset committed for
+it. It is *exclusive*: it names the next record expected to be polled, not the last one completed.
+
+The frontier advances only across a contiguous run of completed records, so a completed record sitting
+above an in-flight one does not move it. A partition can therefore have most of its work done and still
+be committing its starting offset. That property is also what makes the frontier the thing worth
+asserting about a commit: which intermediate offsets a partition commits on the way there depends on
+when the periodic commit happens to fire, but where it ends up does not.
+
 ## Transactional commit
 
 **Produce lock**
@@ -83,6 +93,16 @@ A test that awaits a consequence whose precondition it cannot guarantee will occ
 load-tightness flake: the margin is not too small, the awaited event may simply never happen in some
 interleavings, so no timeout is long enough to make the test reliable.
 
+**Tick-path assertion**
+A test assertion that pins the intermediate observations a system passed through on its way to a settled
+state, rather than pinning the settled state itself. Because those intermediates are only captured when
+a periodic action happens to fire, the assertion's truth is a property of the machine's speed rather
+than of the code under test — green on an idle box, red under load, with both readings correct.
+
+Distinct from a load-tightness flake and an unforceable trigger: no deadline is too tight, and no
+awaited event is missing. The awaited condition is one of several legitimate outcomes, and once a
+different one has occurred it can never become true, so the wait always expires in full.
+
 **Ambient probe**
 The always-on recorder attached to broker integration tests, which annotates a failure with
 consumer-group progress evidence so the contention-versus-product-bug question is answered before
@@ -96,3 +116,7 @@ test in question — a short, low-volume test cannot trip them, and a clean read
   a real deadline missed under contention, and an unforceable trigger is an awaited event that never
   occurred. All three present as the same expired await, and the whole diagnostic difficulty of this
   area is telling them apart.
+- **A tick-path assertion presents as that same expired await, and is the fourth member of the
+  confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
+  other three all mean the expected thing did not happen, while a tick-path assertion means something
+  equally valid happened instead.
