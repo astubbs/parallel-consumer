@@ -21,7 +21,7 @@ import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
  * @see ParallelConsumerOptions
  */
 @Tag("transactions")
-@Tag("#355")
+@Tag("confluentinc#355")
 class ParallelConsumerOptionsTest {
 
     /**

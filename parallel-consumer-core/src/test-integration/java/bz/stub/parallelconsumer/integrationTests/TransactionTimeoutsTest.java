@@ -36,6 +36,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -69,6 +70,13 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
     // allow the first offsets to succeed, which we can test
     private static final int OFFSET_TO_GO_SLOW = NUMBER_TO_SEND + 3;
 
+    /**
+     * The one record whose success is deliberately deferred into {@link #OFFSET_TO_GO_SLOW}'s lock hold, so
+     * that the controller is guaranteed to have something to commit while the lock is held. Any offset of the
+     * second batch that is neither the slow one nor the failing one will do.
+     */
+    private static final int OFFSET_TO_MARK_DIRTY = OFFSET_TO_GO_SLOW + 1;
+
 
     private ParallelEoSStreamProcessor<String, String> pc;
 
@@ -89,6 +97,19 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
         originalGroupId = getKcu().getConsumer().groupMetadata().groupId();
 
         assertConsumer = new BrokerCommitAsserter(getTopic(), getKcu().createNewConsumer(NEW_GROUP));
+    }
+
+    /**
+     * Bounded latch wait for use <em>inside</em> the user function. It deliberately does not throw: an
+     * exception here would be caught by PC as a user-function failure and retried, turning a diagnosable
+     * setup problem into noise. On timeout it logs and falls through, and the assertion on
+     * {@code commitLockAcquisitionAttempted} after the await then names what did not happen.
+     */
+    @SneakyThrows
+    private static void awaitQuietly(CountDownLatch latch) {
+        if (!latch.await(20, TimeUnit.SECONDS)) {
+            log.error("Latch not released within 20s - the commit/produce-lock overlap this test depends on did not happen");
+        }
     }
 
     private ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> createOptions() {
@@ -118,9 +139,13 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
      * <p>
      * Sleep time multiplier:
      * <p>
-     * 5: triggers a timeout
+     * {@value #SMALL_TIMEOUT_MULTIPLIER}: triggers a timeout
      * <p>
-     * 50: triggers a timeout with a much longer deadlock
+     * {@value #LONG_TIMEOUT_MULTIPLIER}: triggers a timeout with a much longer deadlock
+     * <p>
+     * The sleep is timed from the moment the controller enters its commit-lock acquisition, not from when
+     * the record acquired the produce lock - so the multiplier is a true margin over
+     * {@code commitLockAcquisitionTimeout} rather than a race against it.
      *
      * @param multiple Multiple values - but affect is the same. It's not worth trying to artificially create a scenario
      *                 where the sleep wakes up /after/ the commit lock has timed out - this would affectively be a semi
@@ -143,7 +168,40 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
                 .shutdownTimeout(Duration.ofSeconds(5))
                 .allowEagerProcessingDuringTransactionCommit(false)
                 .build();
-        setup(new PCModule<>(options));
+
+        // The commit-lock timeout this test waits for can only fire while the slow record is holding the
+        // produce lock AND the controller is inside its commit-lock acquisition. Nothing in PC guarantees
+        // that overlap, and when it is missed PC stays healthy and the await below burns its full 35s. So
+        // the test creates the overlap rather than hoping for it - see the two uses in the user function.
+        var slowRecordHoldsProduceLock = new CountDownLatch(1);
+        var commitLockAcquisitionAttempted = new CountDownLatch(1);
+
+        setup(new PCModule<>(options) {
+            private ProducerManager<String, String> instance;
+
+            /**
+             * Caching matters: {@link PCModule#producerManager()} caches, and a fresh {@link ProducerManager}
+             * per call would mean a fresh {@code producerTransactionLock} - the produce and commit locks would
+             * stop being the same lock - and would re-run {@code initTransactions()}.
+             */
+            @Override
+            protected ProducerManager<String, String> producerManager() {
+                if (instance == null) {
+                    instance = new ProducerManager<>(producerWrap(), consumerManager(), workManager(), options()) {
+                        @Override
+                        protected void preAcquireOffsetsToCommit() throws java.util.concurrent.TimeoutException, InterruptedException {
+                            // Only the attempt made while the slow record holds the lock is the one under test -
+                            // the happy-path commits of phase one reach here too, and must not open the latch.
+                            if (slowRecordHoldsProduceLock.getCount() == 0) {
+                                commitLockAcquisitionAttempted.countDown();
+                            }
+                            super.preAcquireOffsetsToCommit();
+                        }
+                    };
+                }
+                return instance;
+            }
+        });
 
 
 
@@ -155,10 +213,25 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
             if (offset == OFFSET_TO_GO_SLOW) {
                 // triggers deadlock as controller can't acquire commit lock fast enough due to this sleeping thread
                 log.debug("Processing offset {} - simulating a long processing phase with timeout multiple {}", OFFSET_TO_GO_SLOW, multiple);
+                slowRecordHoldsProduceLock.countDown();
+                // Hold the produce lock until the controller is actually inside its commit-lock acquisition, so
+                // the sleep below is measured FROM THE ATTEMPT. It used to start on lock acquisition instead,
+                // which left the trigger only `sleep - commitLockAcquisitionTimeout` of margin - and none at
+                // all when the attempt came a commit-interval later. Removing this wait reproduces that:
+                // 4/4 failures against a 1500ms-delayed commit attempt, where keeping it passes 4/4.
+                awaitQuietly(commitLockAcquisitionAttempted);
                 ThreadUtils.sleepQuietly(1000 * multiple);
                 log.debug("Processing offset {} - simulating a long processing phase COMPLETE", OFFSET_TO_GO_SLOW);
             } else if (offset == OFFSET_TO_ERROR) {
                 throw new FakeRuntimeException("fail");
+            } else if (offset == OFFSET_TO_MARK_DIRTY) {
+                // The controller only attempts a commit when a record has SUCCEEDED since the last one:
+                // PartitionState#onSuccess is the sole caller of setDirty, onFailure is a no-op, and
+                // wm.isDirty() is AND-ed into the commit gate - requestCommitAsap() cannot override it. So if
+                // every other record of this batch finishes before the slow one starts, no commit is attempted
+                // at all and no timeout can fire. Delaying this one success into the slow record's lock hold
+                // removes that possibility.
+                awaitQuietly(slowRecordHoldsProduceLock);
             }
             return new ProducerRecord<>(outputTopic, "output-value,source-offset: " + offset);
         });
@@ -174,6 +247,15 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
 
         // wait until pc dies from commit timeout
         await().atMost(Duration.ofSeconds(35)).untilAsserted(() -> assertThat(pc).isClosedOrFailed());
+
+        // Guard: PC must have died from the commit-lock attempt made WHILE the slow record held the produce
+        // lock, not from anything else that happens to mention "timeout". Verified by negative control - drop
+        // the countDown in producerManager() above and this fails deterministically, rather than the test
+        // returning as an occasional 35s flake.
+        Truth.assertWithMessage("controller must have attempted the commit lock while the slow record held the produce lock")
+                .that(commitLockAcquisitionAttempted.getCount())
+                .isEqualTo(0);
+
         assertThat(pc).getFailureCause().hasMessageThat().contains("timeout");
 
         // check what was committed at shutdown to the input topic, re-using same group id as PC, to access what was committed at shutdown commit attempt

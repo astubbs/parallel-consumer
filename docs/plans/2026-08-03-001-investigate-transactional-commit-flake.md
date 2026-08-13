@@ -5,7 +5,7 @@ See §11 for the resolution. Sections 1-10 are the investigation as it stood, ke
 reasoning is the useful part.
 **Written:** 2026-08-03
 **Branch:** `investigate/producer-transaction-commit-flake`
-**Branched from:** `932a7032` (`master` — "fix(core): a rebalance-time commit no longer kills the broker-poll thread (#857 family) (#100)")
+**Branched from:** `932a7032` (`master` — "fix(core): a rebalance-time commit no longer kills the broker-poll thread (confluentinc#857 family) (astubbs#100)")
 
 **Resolved — read §11 first.** The §4 hypothesis was confirmed by a controlled experiment: the window
 exists **only in the test harness**, not in production. This is a test bug, not an EOS bug. The rest
@@ -30,9 +30,9 @@ non-deterministically. Two distinct impacts:
    ```
 
    So this single race turns `Mutation (PIT, scoped) (optional)` red and **no mutants are scored at
-   all**. Observed on PR #108, run `30785700182`, job `91598708692`.
+   all**. Observed on PR astubbs#108, run `30785700182`, job `91598708692`.
 
-This is the **second** test to disable the PIT lane this way — PR #101 fixed
+This is the **second** test to disable the PIT lane this way — PR astubbs#101 fixed
 `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` for
 exactly the same reason. That makes the class of problem worth naming: *any* flaky core test silently
 disables mutation testing repo-wide, so a green PIT lane has been evidence of suite stability rather
@@ -60,7 +60,7 @@ The second would mean: after a crash, the produced record survives while its inp
 redelivered — a duplicate that EOS is specifically supposed to prevent.
 
 **Do not assume it is the first.** Two bugs in this same family — offsets recorded at a point the
-broker never accepted — were just fixed on the *consumer* commit path in #100 and #108, and both
+broker never accepted — were just fixed on the *consumer* commit path in astubbs#100 and astubbs#108, and both
 initially looked like flaky tests. This one is on the *producer* path. It may be the third instance,
 or it may be nothing. That question is the investigation.
 
@@ -96,8 +96,8 @@ producerWrapper.sendOffsetsToTransaction(
 
 Actual invocations have different arguments at position [0]:
     ...
-    producerWrapper.send(Mock for ProducerRecord, hashCode: 99235024, ...)     <- produce #1
-    producerWrapper.send(Mock for ProducerRecord, hashCode: 545770597, ...)    <- produce #2
+    producerWrapper.send(Mock for ProducerRecord, hashCode: 99235024, ...)     <- produce 1
+    producerWrapper.send(Mock for ProducerRecord, hashCode: 545770597, ...)    <- produce 2
     producerWrapper.flush()
     producerWrapper.flush()
     producerWrapper.beginTransaction()
@@ -146,7 +146,8 @@ counted, so the offset committed is one behind.
 
 ### Production ordering — mailbox first, unlock last
 
-`AbstractParallelEoSStreamProcessor.runUserFunction` (~line 1348):
+`AbstractParallelEoSStreamProcessor.runUserFunction` - its `try`/`finally` around
+`runUserFunctionInternal`:
 
 ```java
 try {
@@ -210,7 +211,7 @@ The hypothesis is wrong — and this is a real bug — if any of these turn out 
 
 - some production path releases the produce lock before the work reaches the mailbox (check every
   caller of `ProducingLock::unlock` / `finishProducing`, including
-  `WorkContainer.java:273` and the error/stale paths `handleStaleWork` and the failure branch that
+  `WorkContainer.onPostAddToMailBox` and the error/stale paths `handleStaleWork` and the failure branch that
   calls `addToMailbox(context, wc)` before `finally { cleanUpContext(context); }`);
 - `addToMailbox` is asynchronous in a way that leaves the work uncounted after it returns, so even the
   production ordering has the window;
@@ -237,7 +238,7 @@ That third bullet is why §3 comes first.
 
 ## 6. Why PIT provokes it
 
-PIT's coverage pass runs instrumented and single-minion: 362 seconds to compute coverage on the #108
+PIT's coverage pass runs instrumented and single-minion: 362 seconds to compute coverage on the astubbs#108
 run, slowest single test 135s. That stretches every interval in the test and widens whatever window
 the race needs — which makes PIT a *useful reproducer*, not merely a victim.
 
@@ -276,16 +277,18 @@ the race needs — which makes PIT a *useful reproducer*, not merely a victim.
 |---|---|
 | `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/internal/ProducerManagerTest.java` | the failing test; the TODO comments in `producedRecordsCantBeInTransactionWithoutItsOffsetDirect` are the lead |
 | `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ProducerManager.java` | `preAcquireOffsetsToCommit`, `commitOffsets`, `acquireProduceLock`, `ProducingLock` |
-| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering (~lines 1340–1425) |
-| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java:273` | the other `finishProducing` caller |
-| `docs/inflight.md` | the ledger entry for this flake — **update it as you go** |
+| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering |
+| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java` | `onPostAddToMailBox`, the other `finishProducing` caller |
+| `docs/inflight.md` | the ledger entry for this flake — **update it as you go**. (Pointer repair: that single file became the directory [`docs/inflight/`](../inflight/) on 2026-08-04 and was deleted in `0de96fc` — `git show 0de96fc^:docs/inflight.md`, grep `producedRecordsCantBeInTransactionWithoutItsOffsetDirect`, for the entry as it stood. It was already marked FIXED by astubbs#110 there and did not carry into `docs/inflight/`, so nothing live succeeds it. Two look-alikes that are **not** this entry: [`docs/inflight/bug-producing-lock-double-release.md`](../inflight/bug-producing-lock-double-release.md), the separate open follow-up §11 raised, and the same test name in [`docs/inflight/test-untracked-ci-flakes.md`](../inflight/test-untracked-ci-flakes.md), a later `BlockedThreadAsserter` timing defect.) |
 
 ## 10. Context worth having
 
-- **`docs/inflight.md` is the repo's ledger** for parked/in-flight work. Record findings there, not in
-  a scratch file.
-- **The #100 / #108 pattern.** Both were "an offset recorded as committed when it was not", on the
-  consumer path, and both were mis-framed at first (#100 as CI load, #108 as an already-handled
+- **[`docs/inflight/`](../inflight/) is the repo's ledger** for parked/in-flight work. Record findings
+  there, not in a scratch file — one file per item, conventions in
+  [`docs/inflight/AGENTS.md`](../inflight/AGENTS.md). (This plan said `docs/inflight.md`, the single
+  file that preceded the directory.)
+- **The astubbs#100 / astubbs#108 pattern.** Both were "an offset recorded as committed when it was not", on the
+  consumer path, and both were mis-framed at first (astubbs#100 as CI load, astubbs#108 as an already-handled
   exception). The house lesson from that workstream: when a test fails under stress, establish
   *contention vs genuine bug* before touching the test. A weakened assertion here would hide an EOS
   violation.

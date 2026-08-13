@@ -155,7 +155,7 @@ class PartitionStateCommittedOffsetTest {
      * If the CG offset has been changed to something higher than expected manually, then we will bootstrap the
      * partition as though it's never been seen before, so nothing to do.
      *
-     * @implSpec issue #409: Committing old offset after OFFSET_OUT_OF_RANGE
+     * @implSpec issue confluentinc#409: Committing old offset after OFFSET_OUT_OF_RANGE
      * @see PartitionState#maybeTruncateBelow
      * @see OffsetEncodingTests#ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential
      */

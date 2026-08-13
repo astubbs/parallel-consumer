@@ -661,7 +661,7 @@ public class WorkManagerTest {
         var recs = new ConsumerRecords<>(m);
         registerWork(recs);
 
-//        // force ingestion of records - see refactor: Queue unification #219
+//        // force ingestion of records - see refactor: Queue unification confluentinc#219
 //        wm.tryToEnsureQuantityOfWorkQueuedAvailable(100);
 
         var workContainersOne = wm.getWorkIfAvailable(1);
@@ -764,13 +764,10 @@ public class WorkManagerTest {
         fail(wc);
 
 
-        // advance clock to make delay pass
+        // advance clock to make delay pass - the mock clock is the only time source the retry path reads,
+        // so there is nothing to wait for. This used to also sleep a real second and hope.
         advanceClockByDelay();
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+
         // work should now be ready to take
         works = wm.getWorkIfAvailable(maxWorkToGet);
         assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection()).isEqualTo(total - works.size());

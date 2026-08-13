@@ -15,10 +15,6 @@
         <appender-ref ref="STDOUT"/>
     </root>
 
-
-
-    <!-- containers -->
-
     <!-- related -->
     <logger name="org.apache.kafka.clients" level="warn"/>
     <logger name="org.postgresql" level="info"/>

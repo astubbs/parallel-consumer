@@ -2,10 +2,14 @@
 // broken rule fails loudly rather than silently passing - or failing - every PR.
 const assert = require("assert");
 const {
-  suspectRefs, findOptOut, isExempt, stripQualified, QUALIFY_BELOW,
+  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
+  QUALIFY_BELOW, PR_BODY_LABEL,
 } = require("./issue-ref-gate.js");
 
 const file = (filename, ...added) => [{ filename, patch: added.map((l) => "+" + l).join("\n") }];
+
+// A PR body, as the workflow feeds it in: one synthetic entry alongside the real files.
+const body = (...lines) => [prBodyEntry(lines.join("\n"))];
 
 let run = 0;
 function check(name, fn) {
@@ -24,7 +28,7 @@ check("flags any unqualified low number, whichever repo it means", () => {
 });
 
 check("flags a low number even though it resolves in this repo - the old blind spot", () => {
-  // #200 resolves here (a docs issue about ManagedTruth) while authors mean upstream #200, the
+  // #200 resolves here (a docs issue about ManagedTruth) while authors mean confluentinc#200, the
   // shared-nothing architecture. Resolving is not evidence the reference is right.
   assert.deepStrictEqual(suspectRefs(file("docs/x.md", "part of the #200 rework")).map((h) => h.ref),
                          ["#200"]);
@@ -40,17 +44,22 @@ check("allows the fork-qualified prose form", () => {
   assert.deepStrictEqual(suspectRefs(file("docs/x.md", "Fixed by astubbs#119.")), []);
 });
 
-check("allows upstream prose, including 'PR #N' and 'issue #N'", () => {
-  assert.deepStrictEqual(suspectRefs(file("docs/x.md", "See upstream #857.")), []);
-  assert.deepStrictEqual(
-    suspectRefs(file("docs/x.md", "orphaned implementation in upstream PR #270")), []);
-  assert.deepStrictEqual(suspectRefs(file("docs/x.md", "see upstream issue #857")), []);
+// The tolerance is gone, and this assertion is what stops it drifting back. `upstream #N` was
+// accepted while the tree still used it; the sweep removed the last use, so it is now flagged like
+// any other unqualified reference. If someone re-adds the alternation to stripQualified, this fails.
+check("flags upstream prose - the role word is not a repo name", () => {
+  for (const s of ["See upstream #857.",
+                   "orphaned implementation in upstream PR #270",
+                   "see upstream issue #857"]) {
+    assert.ok(suspectRefs(file("docs/x.md", s)).length > 0, "must be flagged: " + s);
+  }
   assert.deepStrictEqual(suspectRefs(file("docs/x.md", "confluentinc#857 is the original")), []);
 });
 
-check("still flags trailing items in a list - only the first is qualified", () => {
+check("still flags trailing items in a list", () => {
+  // Every item is bare now that the leading `upstream` no longer qualifies the first one.
   const hits = suspectRefs(file("docs/x.md", "the upstream #233 / #326 / #857 cases"));
-  assert.deepStrictEqual(hits.map((h) => h.ref), ["#326", "#857"]);
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#233", "#326", "#857"]);
 });
 
 check("allows the owner-qualified PR and issue variants", () => {
@@ -123,10 +132,250 @@ check("stripQualified leaves an unqualified ref alone", () => {
   assert.ok(stripQualified("plain #857 here").includes("#857"));
 });
 
+// The asciidoc link macro, which the README is written in. The target names the repo, so the number
+// in the link text is already unambiguous - exactly the reasoning behind the markdown and html rules.
+check("an asciidoc link macro qualifies the number in its link text", () => {
+  const macros = [
+    "* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic #65]",
+    "See {base_confluent_url}/issues/12[issue #12], and the JavaDoc:",
+    "(see https://github.com/confluentinc/parallel-consumer/pull/291[PR #291 Explicit exceptions] for more)",
+  ];
+  for (const line of macros) {
+    assert.deepStrictEqual(suspectRefs(file("README.adoc", line)), [], line);
+  }
+});
+
+// The direction that matters: stripping MORE is how a real ambiguous ref goes silently unflagged.
+check("a link macro does not swallow a bare ref elsewhere on the line", () => {
+  const cases = [
+    "https://example.com/x[some text] and a bare #857",
+    "* https://github.com/confluentinc/parallel-consumer/issues/65[Enhanced retry epic #65] - see also #29",
+    "{base_confluent_url}/issues/12[issue #12] but #100 is ours",
+  ];
+  for (const line of cases) {
+    assert.ok(suspectRefs(file("docs/x.md", line)).length > 0, "must still flag: " + line);
+  }
+});
+
+// An anchor wrapped across two lines: suspectRefs sees each line separately, so neither half carries
+// a complete element. Both halves must strip, without breaking the single-line or the outside case.
+check("an html anchor split across two lines still qualifies its link text", () => {
+  const opening = ' * See <a href="https://github.com/confluentinc/parallel-consumer/issues/433">Different results';
+  const closing = " * obtained with different max concurrency for the same consumer #433</a>";
+  assert.deepStrictEqual(suspectRefs(file("X.java", opening)), []);
+  assert.deepStrictEqual(suspectRefs(file("X.java", closing)), []);
+});
+
+check("a ref outside a split anchor is still flagged", () => {
+  // `#29` sits after the element closes, so it is prose, not link text.
+  assert.ok(suspectRefs(file("X.java", " * text</a> and then #29")).length > 0);
+  // A complete single-line anchor must still leave a trailing bare ref visible.
+  assert.ok(suspectRefs(file("X.java", ' <a href="https://x/1">t #433</a> plus #29')).length > 0);
+});
+
 check("opt-out is recognised, and needs a reason", () => {
   assert.ok(findOptOut("blah\nissue-refs: N/A - all refs here are upstream by construction\nblah"));
   assert.ok(!findOptOut("no marker here"));
   assert.ok(!findOptOut("issue-refs: N/A"), "bare N/A without a reason must not count");
+});
+
+// ---------------------------------------------------------------------------------------------
+// The PR body, which reaches the rule as a synthetic file rather than through a path of its own.
+// These pin the ADAPTER - which text reaches suspectRefs - rather than re-testing the rule; the
+// point of feeding the body through suspectRefs is that everything above already covers the rule.
+// ---------------------------------------------------------------------------------------------
+
+check("a bare ref in the PR body is flagged, and attributed to the body rather than a file", () => {
+  const hits = suspectRefs(body("This carries the fix for #123."));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#123"]);
+  assert.strictEqual(hits[0].file, PR_BODY_LABEL);
+  assert.strictEqual(hits[0].text, "This carries the fix for #123.",
+                     "the prefix used to present the body as a diff must not leak into the report");
+});
+
+check("the body label cannot be an exempt path, and cannot be mistaken for one", () => {
+  assert.ok(!isExempt(PR_BODY_LABEL), PR_BODY_LABEL + " must not match EXEMPT_PATHS");
+  assert.ok(/[<>]/.test(PR_BODY_LABEL), "must contain a character no file path can");
+});
+
+check("a qualified ref in the PR body is not flagged", () => {
+  for (const s of ["Fixes astubbs/parallel-consumer#123.",
+                   "astubbs#123 mirrors confluentinc#857",
+                   "carried in confluentinc PR #548",
+                   "see [#233](https://github.com/confluentinc/parallel-consumer/issues/233)",
+                   "the literal `#857` marker"]) {
+    assert.deepStrictEqual(suspectRefs(body(s)), [], s);
+  }
+});
+
+check("a NOT_A_REF construct in the PR body is not flagged", () => {
+  assert.deepStrictEqual(suspectRefs(body("This changes {@link #close()} handling.")), []);
+  assert.deepStrictEqual(suspectRefs(body("It reworks #poll( and its callers.")), []);
+});
+
+check("the threshold applies in the PR body exactly as it does in a file", () => {
+  assert.deepStrictEqual(suspectRefs(body("Tracking issue: #1042.")), []);
+  assert.deepStrictEqual(suspectRefs(body("and #999 is still ambiguous")).map((h) => h.ref),
+                         ["#999"]);
+});
+
+// The workflow checks the opt-out BEFORE it calls suspectRefs, so a body that opts out skips the
+// whole gate - itself included. Both halves are pinned: the body would otherwise fail, and the
+// opt-out is what stops it mattering.
+check("the opt-out still skips the whole gate, body included", () => {
+  const b = "Depends on #205.\nissue-refs: N/A - that is a PR number in this repo, not an issue";
+  assert.ok(suspectRefs(body(b)).length > 0, "the body alone would fail");
+  assert.ok(findOptOut(b), "and the opt-out must short-circuit the gate before it does");
+});
+
+// GitHub does not autolink inside a fence, so a number there cannot become the wrong link - the
+// same reasoning by which stripQualified already drops code spans. Bodies quote logs, `gh` output
+// and this gate's own failure message, every one of them full of bare numbers.
+check("a fenced code block in the body is out of scope", () => {
+  assert.deepStrictEqual(
+    suspectRefs(body("Gate output:", "```", "  docs/x.md: #857  See #857", "```")), []);
+  assert.deepStrictEqual(suspectRefs(body("~~~text", "#857", "~~~")), []);
+  assert.deepStrictEqual(suspectRefs(body("```console", "$ gh issue view 857  # was #857", "```")),
+                         []);
+  assert.deepStrictEqual(suspectRefs(body("   ```", "#857", "   ```")), [],
+                         "a fence indented up to three spaces is still a fence");
+});
+
+check("prose after a fence closes is scanned again", () => {
+  assert.deepStrictEqual(
+    suspectRefs(body("```", "#857 inside", "```", "and #29 outside")).map((h) => h.ref), ["#29"]);
+});
+
+check("fence closing follows the opening fence's character and length", () => {
+  assert.deepStrictEqual(
+    suspectRefs(body("```", "#857", "````", "and #29")).map((h) => h.ref), ["#29"],
+    "a longer run of the same character closes the block");
+  assert.deepStrictEqual(suspectRefs(body("````", "#857", "```", "and #29")), [],
+                         "a shorter run does not close it");
+  assert.deepStrictEqual(suspectRefs(body("```", "#857", "~~~", "and #29")), [],
+                         "nor does the other fence character");
+});
+
+// CommonMark lets a closing fence be followed "only by spaces or tabs". Accepting a closer with
+// trailing content closed the block earlier than GitHub does, so lines GitHub still renders as code
+// were scanned and flagged - a reference a reader never sees as a link. Raised in review on
+// astubbs#221 and fixed there.
+check("a closing fence with trailing content does not close the block", () => {
+  assert.deepStrictEqual(suspectRefs(body("```", "#857", "``` see the note", "#29 still fenced")),
+                         [], "trailing content means it is not a closer, so the block stays open");
+  assert.deepStrictEqual(suspectRefs(body("```", "#857", "```  \t", "and #29")).map((h) => h.ref),
+                         ["#29"], "spaces and tabs after the run are allowed, so this one closes");
+});
+
+// The opening side, which fails in the direction that actually costs something: treating a non-fence
+// as a fence drops lines GitHub DOES auto-link, and drops them silently.
+check("a backtick fence whose info string contains a backtick opens nothing", () => {
+  assert.deepStrictEqual(suspectRefs(body("```a`b", "#857 is prose here")).map((h) => h.ref),
+                         ["#857"]);
+  assert.deepStrictEqual(suspectRefs(body("~~~a`b", "#857")), [],
+                         "a tilde fence carries no such restriction");
+});
+
+check("an unclosed fence swallows the rest of the body, exactly as GitHub renders it", () => {
+  assert.deepStrictEqual(
+    suspectRefs(body("before #29", "```", "#857 and everything after")).map((h) => h.ref), ["#29"]);
+});
+
+// A body is not a diff, but suspectRefs reads it as one. `++` is the trap: prefixing with a bare
+// "+" would produce "+++", which suspectRefs skips as a diff file header - silently exempting the
+// line, and handing anyone who noticed a way to hide a reference. Checklist items make `-` routine.
+check("body lines that look like diff markers are still scanned", () => {
+  for (const line of ["++ an asciidoc passthrough mentioning #857",
+                      "+++ #857",
+                      "+ #857",
+                      "- [ ] Docs updated for #857",
+                      "--- #857"]) {
+    assert.deepStrictEqual(suspectRefs(body(line)).map((h) => h.ref), ["#857"], line);
+  }
+});
+
+check("a CRLF body - what the API actually returns - splits into lines correctly", () => {
+  assert.deepStrictEqual(
+    suspectRefs([prBodyEntry("intro\r\n```\r\n#857\r\n```\r\nand #29")]).map((h) => h.ref), ["#29"]);
+});
+
+check("an absent or empty body contributes nothing", () => {
+  for (const b of [null, undefined, ""]) {
+    assert.strictEqual(prBodyEntry(b).patch, "");
+    assert.deepStrictEqual(suspectRefs([prBodyEntry(b)]), []);
+  }
+});
+
+check("the body is judged alongside the files, in the one call the workflow makes", () => {
+  const input = [...file("docs/x.md", "See #857 here."), prBodyEntry("and #29 in the body")];
+  assert.deepStrictEqual(suspectRefs(input).map((h) => `${h.file}: ${h.ref}`),
+                         ["docs/x.md: #857", `${PR_BODY_LABEL}: #29`]);
+});
+
+// The failure message is shared by the CI gate and bin/check-issue-refs.sh. Two hand-written copies
+// drifted apart within hours, so these pin the parts that made them disagree.
+const HITS = [{ file: "docs/x.md", ref: "#857", text: "See #857" }];
+
+check("the failure message recommends the owner forms, never the role form", () => {
+  const msg = formatFailure(HITS);
+  assert.ok(msg.includes("`astubbs#NN` for this repo or `confluentinc#NN`"), "must lead with owners");
+  assert.ok(!/Write .*`upstream #NN` for/.test(msg), "must not tell the author to write the role form");
+  // Was "it is being swept out" while the tolerance existed. The sweep removed the last use and
+  // stripQualified no longer accepts the form, so the message has to say so - an author told it
+  // "still passes" would go looking for why their line was flagged anyway.
+  assert.ok(msg.includes("no longer accepted"), "must say the role form is now rejected");
+  assert.ok(!msg.includes("still passes"), "must not claim the form is still tolerated");
+});
+
+check("the failure message names the owner in its prose too, not the role", () => {
+  const msg = formatFailure(HITS);
+  assert.ok(!msg.includes("upstream's range"), "prose must say confluentinc's range");
+  assert.ok(!msg.includes("Every upstream issue"), "prose must say Every confluentinc issue");
+});
+
+check("the mirror-lookup hint searches the owner form, matching the mirror titles", () => {
+  // Mirror titles are `confluentinc#NNN: ...`, so the hint must search that. They used to read
+  // `upstream #NNN:` - an import that deviated from its own plan - and the hint followed it.
+  assert.ok(formatFailure(HITS).includes('--search "confluentinc#NN"'));
+  assert.ok(!formatFailure(HITS).includes('--search "upstream'), "no stale role-form lookup");
+});
+
+check("formatFailure takes the repo from its caller, and defaults to the fork", () => {
+  assert.ok(formatFailure(HITS, { repo: "acme/thing" }).includes("gh issue list -R acme/thing"));
+  assert.ok(formatFailure(HITS).includes("gh issue list -R astubbs/parallel-consumer"));
+});
+
+check("the opt-out tail matches whether the caller can read the PR body", () => {
+  assert.ok(!formatFailure(HITS).includes("does not read the PR body"));
+  const local = formatFailure(HITS, { readsPrBody: false });
+  assert.ok(local.includes("does not read the PR body"));
+  // CI now scans the body as well as honouring the opt-out from it, so a caller with no body is
+  // missing both. A tail naming only the opt-out would understate what the local run cannot see.
+  assert.ok(local.includes("scans the body itself"), "must say CI reads the body for references too");
+});
+
+check("a body hit reads as the body in the failure listing", () => {
+  const msg = formatFailure([{ file: PR_BODY_LABEL, ref: "#857", text: "Fixes #857" }]);
+  assert.ok(msg.includes(`  ${PR_BODY_LABEL}: #857  Fixes #857`), msg);
+});
+
+// The headline advice ("write astubbs#NN") is right for a file and a trap in the body: that form is
+// not cross-reference syntax, so GitHub renders it as plain text and the body loses its link. An
+// author who follows the message literally would trade a wrong link for no link.
+check("a body hit adds the fully-qualified advice; a file-only failure does not", () => {
+  const bodyMsg = formatFailure([{ file: PR_BODY_LABEL, ref: "#857", text: "Fixes #857" }]);
+  assert.ok(bodyMsg.includes("`astubbs/parallel-consumer#NN`"), "must name the auto-linking form");
+  assert.ok(bodyMsg.includes("closes nothing"), "must warn that Fixes astubbs#NN closes nothing");
+  assert.ok(!formatFailure(HITS).includes("In the PR BODY"),
+            "a failure with no body hit must not carry body-only advice");
+});
+
+check("every hit is listed, with its count in the first line", () => {
+  const two = [...HITS, { file: "a.md", ref: "#29", text: "and #29" }];
+  const msg = formatFailure(two);
+  assert.ok(msg.startsWith("2 reference(s) below #" + QUALIFY_BELOW));
+  assert.ok(msg.includes("  docs/x.md: #857  See #857"));
+  assert.ok(msg.includes("  a.md: #29  and #29"));
 });
 
 console.log("\n" + run + " assertions passed");

@@ -35,7 +35,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * each constant's javadoc; margins vary per probe because the measured gaps do):
  * <ul>
  *   <li><b>Progress watermark</b>: while work remains, fleet-wide consumed count must advance within
- *   {@link #NO_PROGRESS_WINDOW} (generalises the #857 investigation's "no progress for 11s" check).</li>
+ *   {@link #NO_PROGRESS_WINDOW} (generalises the confluentinc#857 investigation's "no progress for 11s" check).</li>
  *   <li><b>Zombie-member / rebalance dwell</b>: the group must not dwell in
  *   {@code PREPARING_REBALANCE}/{@code COMPLETING_REBALANCE} beyond {@link #REBALANCE_DWELL_BOUND}.
  *   Keyed on protocol-unresponsiveness, NOT on "member holds partitions with zero consumption" - a
@@ -78,7 +78,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     /** Progress watermark is skipped when this few records remain: the tail may be all heavy-tailed
      * records legitimately sleeping in-flight. The defect signature is a stall with THOUSANDS remaining. */
     public static final int TAIL_SLACK = 500;
-    /** CLASS 2 probe (protocol-INVISIBLE stalls - the "locks forever, manual restart" #857 reports):
+    /** CLASS 2 probe (protocol-INVISIBLE stalls - the "locks forever, manual restart" confluentinc#857 reports):
      * no partition may hold real lag while its committed offset stagnates beyond this bound. Broker-side
      * clocks cannot see this class: the group is STABLE, heartbeats + polls flow, no rebalance is pending
      * so the 5-min eviction clock never starts - only lag observation (exactly how users notice) works.
@@ -89,7 +89,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * calibration: EAGER reassignment restarts in-flight heavies on every storm membership change,
      * pinning commit low-watermarks for storm+dwell+slack - scenarios must keep that arithmetic under
      * this bound (see ChaosRevokeUnderWorkIT). RED calibration of this probe is still open: W4 is
-     * artifact-free but has not yet reproduced a true unbounded Class 2 stall on master (the #857
+     * artifact-free but has not yet reproduced a true unbounded Class 2 stall on master (the confluentinc#857
      * root-cause stall is probabilistic); the probe ships GREEN-calibrated with peaks measured. */
     public static final Duration LAG_STAGNATION_BOUND = Duration.ofSeconds(150);
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */

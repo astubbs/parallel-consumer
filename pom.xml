@@ -9,7 +9,7 @@
 
     <groupId>bz.stub.parallelconsumer</groupId>
     <artifactId>parallel-consumer-parent</artifactId>
-    <name>Kafka Parallel Consumer</name>
+    <name>Parallel Consumer for Apache Kafka</name>
     <version>0.6.0.0-SNAPSHOT</version>
     <description>Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with key concurrency and extendable non-blocking IO processing.
     </description>
@@ -70,9 +70,14 @@
         <!-- Copyright-header conformance is enforced by bin/check-copyright-headers.sh, run in the
              `validate` phase by exec-maven-plugin (below), so a plain `mvn` build catches violations
              and not only the copyright.yml GitHub Action. It is provenance-aware: upstream-derived
-             files keep the Confluent header, fork-original files use the fork header - see AGENTS.md
-             "Copyright rules for this fork". Skip it with -Dcopyright.skip=true. -->
+             files keep the Confluent header, fork-original files use the fork header - see
+             docs/copyright.md. Skip it with -Dcopyright.skip=true. -->
         <copyright.skip>false</copyright.skip>
+        <!-- OSS Index dependency audit. Off by default because the API needs an account token that
+             not every contributor will have - see the ossindex-maven-plugin config below for how to
+             supply one and switch this to false. -->
+        <ossindex.skip>true</ossindex.skip>
+        <ossindex.fail>true</ossindex.fail>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
 
         <!-- standard props -->
@@ -105,6 +110,7 @@
         <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
         <pitest.version>1.25.8</pitest.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
+        <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
 
         <!-- core -->
         <slf4j.version>2.0.18</slf4j.version>
@@ -131,14 +137,16 @@
              wiremock-jre8 2.35.2 otherwise drags in byte-buddy 1.12.18, which wins the conflict
              and lacks the JAVA_V21 field mockito 5.23 needs -> MockitoInitializationException.
              Remove this pin once wiremock 3.x (a deferred major) drops the stale transitive.
-             Test/provided scope only - not in the shipped artifact. See docs/inflight.md. -->
+             Test/provided scope only - not in the shipped artifact.
+             See docs/inflight/deps-deferred-majors.md, the wiremock-jre8 row. -->
         <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
         <logback.version>1.6.1</logback.version>
         <!-- Held at 1.13.0: keep the micrometer family version-aligned with
              micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
-             prometheus package rename is migrated). See docs/inflight.md. -->
+             prometheus package rename is migrated).
+             See docs/inflight/deps-deferred-majors.md, the micrometer-core row. -->
         <micrometer-core.version>1.13.15</micrometer-core.version>
     </properties>
 
@@ -271,7 +279,8 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.11.0</version>
+                        <!-- version comes from pluginManagement below, so the examples module's
+                             skipPublishing declaration inherits it outside this profile too -->
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -429,6 +438,17 @@
                 <artifactId>micrometer-core</artifactId>
                 <version>${micrometer-core.version}</version>
             </dependency>
+            <!-- Pin lz4-java ahead of what kafka-clients 3.9.2 ships (1.10.1), which is vulnerable to
+                 CVE-2026-59949 (out-of-bounds read in the JNI XXHash entry points, fixed in 1.11.1).
+                 Note the coordinate: Kafka moved to the at.yawk maintained fork, not org.lz4. Nothing
+                 here calls the LZ4 API directly, so this is hygiene rather than exposure, but it is a
+                 leaf transitive with Java 7 bytecode and no API surface we touch, so the bump is free.
+                 Drop this once the Kafka client we depend on ships 1.11.1 or newer itself. -->
+            <dependency>
+                <groupId>at.yawk.lz4</groupId>
+                <artifactId>lz4-java</artifactId>
+                <version>1.11.2</version>
+            </dependency>
             <!-- External -->
             <dependency>
                 <groupId>org.testcontainers</groupId>
@@ -577,7 +597,144 @@
                 <version>3.2.0</version>
                 <configuration>
                     <scope>runtime</scope>
-                    <fail>false</fail>
+                    <!-- Off by default and visibly off, rather than on and hoping: the API no longer
+                         serves anonymous component-report requests, and a run without credentials 401s
+                         and still reports SUCCESS - so a green audit is never by itself evidence that
+                         it scanned. `authId` names a <server> in settings.xml holding the account
+                         token; once that exists, run it with `mvn test-compile -Dossindex.skip=false`
+                         (not `validate` - the mojo needs test-scope resolution) and confirm the run
+                         actually returned findings, because nothing else will. Clear the client's
+                         on-disk report cache first, or a warm cache will answer for it.
+
+                         Why `fail` cannot police this, and both traps in full:
+                         docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md
+                         What the first authenticated run found, and this scanner's false-positive
+                         rate: docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md -->
+                    <authId>ossindex</authId>
+                    <skip>${ossindex.skip}</skip>
+                    <fail>${ossindex.fail}</fail>
+                    <!-- Greenlit findings. Every entry here is one we have read and cannot act on -
+                         either no fixed release exists, or the finding does not apply to the version
+                         we resolve. Nothing is excluded because it was inconvenient. Without these
+                         the audit can never be moved to fail=true, because there is no version of the
+                         reactor that satisfies them. Full reasoning:
+                         docs/inflight/deps-cve-backlog.md.
+
+                         Each entry says what would retire it. Re-check them whenever this list is
+                         touched: an exclusion that has quietly become fixable is the failure mode.
+
+                         The list is in two parts, and the difference matters. The STANDING entries
+                         below are open-ended - retiring them needs someone else to act (an upstream
+                         release that does not exist, a disputed record being settled, a migration we
+                         have deferred). The TEMPORARY entries at the end are waiting on a specific
+                         upstream fix that is already written and merged, and are expected to be
+                         deleted within weeks. If a temporary entry is more than a release cycle old,
+                         that is a bug in this list, not a fact about the world.
+
+                         THE FORMAT BELOW IS ENFORCED, not a convention. bin/check-cve-exclusions.sh
+                         (Repo Hygiene) parses this block on every PR:
+
+                           * every id must sit under a comment - an unclassified id reads as
+                             standing-forever, which is how temporary becomes permanent by accident;
+                           * any comment saying TEMPORARY must carry `TEMPORARY-SINCE: YYYY-MM-DD`,
+                             and undated / unparseable / future-dated all FAIL rather than passing as
+                             "not expired yet";
+                           * a temporary entry older than 90 days fails the check, naming itself.
+
+                         Nothing else was ever going to tell us: these ids are not in OSV, NVD or
+                         GHSA, so no Dependabot alert exists to chase them. -->
+                    <excludeVulnerabilityIds>
+                        <!-- org.hdrhistogram:HdrHistogram (via micrometer-core). Both are
+                             VulDB-assigned, local-access-only, and carry isDisputed: true in the CVE
+                             record itself - "still unclear if this vulnerability genuinely exists".
+                             GHSA has accepted neither, which is why Dependabot is silent. 2.2.2 is
+                             the newest release on Central, so there is nothing to upgrade to, and it
+                             is transitive so it is not independently upgradable either.
+                             RETIRE WHEN: HdrHistogram publishes a fixed release, or the records are
+                             rejected/withdrawn. -->
+                        <excludeVulnerabilityId>CVE-2026-14683</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-14686</excludeVulnerabilityId>
+
+                        <!-- io.netty:netty-codec-http (via vertx-core). No public record exists: not
+                             in OSV, not in GHSA, and cveawg.mitre.org returns CVE_RECORD_DNE. The
+                             neighbouring ids are the real Netty August 2026 batch (-59898, -59899,
+                             -59901), all fixed in 4.1.136.Final, which is what we already resolve. So
+                             this is either a reserved id or a misattribution, and it cannot be acted
+                             on because there is nothing to read.
+                             RETIRE WHEN: the record is published and can be assessed - re-check when
+                             Vert.x 5 lands (docs/inflight/deps-deferred-majors.md). -->
+                        <excludeVulnerabilityId>CVE-2026-59903</excludeVulnerabilityId>
+
+                        <!-- io.micrometer:micrometer-core. Real, but there is no publicly available
+                             fix: the advisory's 1.13.x/1.14.x patches ship only in the commercial
+                             repository, and Central stops at 1.13.15 / 1.14.14, both affected. The
+                             minimum public fix is 1.15.12. Not reachable here either - the advisory
+                             scopes it to HTTP *server* instrumentation, and this project uses only
+                             Counter/Gauge/Timer/DistributionSummary/KafkaClientMetrics, with
+                             example-metrics serving over the JDK's own com.sun.net.httpserver.
+                             RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
+                             rename is migrated, which is what unblocks 1.15.x. -->
+                        <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
+
+                        <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
+                             positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
+                             the module resolves 2.18.9. The vulnerable code is in unwrapped-creator
+                             handling that the 2.18 line does not have. OSS Index's version range is
+                             over-broad; Dependabot does not report it.
+                             RETIRE WHEN: OSS Index corrects the range, or the module moves onto a
+                             2.21.x that is genuinely in scope (then it needs >= 2.21.5, not an
+                             exclusion). -->
+                        <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
+
+                        <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
+
+                             The date is machine-read by bin/check-cve-exclusions.sh, which fails the
+                             Repo Hygiene check once this entry is 90 days old. Change it only after
+                             re-checking upstream, never to buy quiet.
+
+                             com.fasterxml.jackson.core:jackson-databind, example-streams only, at
+                             runtime scope via kafka-streams 3.9.2. Unlike everything above, these two
+                             are NOT permanent: both fixes are already merged upstream on the 2.18
+                             branch, milestone 2.18.10, and there is simply no release carrying them
+                             yet.
+
+                               CVE-2026-68497 (8.7, CWE-770) - unbounded allocation deserializing
+                               javax.xml.datatype.Duration / XMLGregorianCalendar. Fix: FasterXML/
+                               jackson-databind#6127, merged 2026-07-29, adds the StreamReadConstraints
+                               number-length limit to CoreXMLDeserializers.
+
+                               CVE-2026-19032 (6.3, CWE-470) - java.nio.file.Path deserialization
+                               accepts arbitrary URI schemes. Fix: FasterXML/jackson-databind#6129,
+                               merged 2026-08-06, restricts the accepted schemes.
+
+                             There is nothing to bump TO. Neither id is in OSV, NVD or GHSA yet, so the
+                             only public record is Sonatype's own; the fixed-version data comes from the
+                             two merged PRs. Every released 2.x artifact predates both merges - the
+                             newest on each line are 2.18.9 (2026-07-08), 2.21.5 (2026-07-07) and
+                             2.22.1 (2026-07-07) - so moving up a line does not help, and moving lines
+                             is separately blocked (2.21.0-2.21.3 would make CVE-2026-54518 above real,
+                             and a global pin breaks VertxTest through wiremock-jre8).
+
+                             Neither is reachable in this example: StreamsApp is String-serde end to
+                             end, constructs no ObjectMapper, and never names Path, Duration or
+                             XMLGregorianCalendar. jackson-databind is present only because
+                             kafka-streams drags it in for its own internal metadata.
+
+                             Being an example is why this is excludable rather than shipped risk: the
+                             examples parent sets maven.deploy.skip / maven.install.skip /
+                             skipPublishing, so no consumer of the library inherits this dependency.
+                             That is a statement about blast radius, not about the vulnerability -
+                             an example is still code people copy, and if either advisory had touched
+                             core, vertx, reactor or mutiny this would have been a bump or a stop, not
+                             an exclusion. It was checked: they resolve no jackson-databind at runtime
+                             at all.
+
+                             RETIRE WHEN: jackson-databind 2.18.10 is on Central. Then bump the
+                             jackson-bom import in parallel-consumer-example-streams/pom.xml and DELETE
+                             these two lines - do not carry them forward. -->
+                        <excludeVulnerabilityId>CVE-2026-68497</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-19032</excludeVulnerabilityId>
+                    </excludeVulnerabilityIds>
                 </configuration>
                 <executions>
                     <execution>
@@ -753,9 +910,17 @@
                     <skipTests>${skipTests}</skipTests>
                     <skipITs>${skipITs}</skipITs>
                     <parallel>methods</parallel>
-                    <!-- Performance tests are excluded by default and run on dedicated hardware via the
-                         performance.yml workflow on a self-hosted runner. Override with -Dgroups=performance
-                         to run only performance tests, or -Dexcluded.groups= to run everything. -->
+                    <!-- Performance tests are excluded by default. There is no performance.yml and no
+                         dedicated hardware: what actually runs them is the "Performance Tests" leg of
+                         maven.yml (ubuntu-latest, a REQUIRED check on every PR, via bin/performance-test.sh)
+                         and the highcpu lane of pr-highcpu-fast-feedback.yml on the self-hosted runner.
+                         Select them with BOTH -Dincluded.groups=performance AND -Dexcluded.groups= - which is
+                         what bin/performance-test.sh does, and the reason to use it rather than a hand-rolled
+                         mvnw line. The include alone selects nothing: exclusion beats inclusion in JUnit
+                         Platform and excluded.groups already contains performance, so the run exits BUILD
+                         SUCCESS having tested nothing. NOT -Dgroups=performance either: the groups element
+                         below is pinned to ${included.groups}, so the explicit pom value wins and a bare
+                         -Dgroups is silently ignored - the same trap as -DforkCount vs -Dsurefire.forkCount. -->
                     <groups>${included.groups}</groups>
                     <excludedGroups>${excluded.groups}</excludedGroups>
                 </configuration>
@@ -897,6 +1062,13 @@
                                 <reactorModuleConvergence />
                                 <banDuplicatePomDependencyVersions />
                                 <requireSameVersions />
+                                <!-- Catches the "version declared only inside a profile, consumed from a child
+                                     module" trap: Maven only degrades that to a build WARNING, which scrolls past.
+                                     central-publishing-maven-plugin was in exactly that state - versioned in the
+                                     `maven-central` profile, declared version-less in the examples module - so every
+                                     ordinary build printed six malformed-model warnings. Verified to fail on the
+                                     unfixed tree, so this rule guards the fix rather than rubber-stamping it. -->
+                                <requirePluginVersions />
                             </rules>
                         </configuration>
                     </execution>
@@ -1059,6 +1231,11 @@
         <pluginManagement>
             <plugins>
                 <plugin>
+                    <groupId>org.sonatype.central</groupId>
+                    <artifactId>central-publishing-maven-plugin</artifactId>
+                    <version>${central-publishing-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-site-plugin</artifactId>
                     <version>4.0.0-M16</version>
@@ -1108,10 +1285,6 @@
         <repository>
             <id>central</id>
             <url>https://repo1.maven.org/maven2/</url>
-        </repository>
-        <repository>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
         </repository>
         <repository>
             <id>astubbs-truth-generator</id>

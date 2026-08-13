@@ -12,7 +12,7 @@
 #
 # @Quarantined chaos scenarios are EXCLUDED (the Quarantine Lane owns them): a known-RED detector
 # must not drown the tripwire signal. If that leaves zero tests selected, the summary says so
-# loudly instead of impersonating a real GREEN run (see docs/QUARANTINED_TESTS.md).
+# loudly instead of impersonating a real GREEN run (see docs/quarantined-tests.md).
 
 set -euo pipefail
 
@@ -33,8 +33,8 @@ summary() {
         echo "### ZERO chaos tests selected - this run measured NOTHING"
         echo ""
         echo "All chaos-tagged scenarios are currently @Quarantined (excluded here; the"
-        echo "Quarantine Lane runs them - see docs/QUARANTINED_TESTS.md). Real coverage"
-        echo "returns when the W4 variants or the quarantine owner fix (#80) land."
+        echo "Quarantine Lane runs them - see docs/quarantined-tests.md). Real coverage"
+        echo "returns when the W4 variants or the quarantine owner fix (astubbs#80) land."
     else
         echo "| Test class | Time |"
         echo "|---|---|"
@@ -51,7 +51,7 @@ summary() {
 # Emit the summary on EVERY exit - a RED run's autopsy needs the timing/selection data most.
 # MUST capture $? first and re-exit with it: an EXIT trap's own last command otherwise becomes
 # the script's exit status, and everything below is made to succeed - which would report a real
-# chaos RED as green (caught in PR #83 review round 6; repro: `set -e; trap true EXIT; false`
+# chaos RED as green (caught in PR astubbs#83 review round 6; repro: `set -e; trap true EXIT; false`
 # exits 0).
 emit_summaries() {
     local ec=$?

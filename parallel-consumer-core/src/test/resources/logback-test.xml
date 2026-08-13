@@ -27,10 +27,8 @@
         <appender-ref ref="STDOUT"/>
     </root>
 
-
     <!-- current -->
     <!--    <logger name="bz.stub.parallelconsumer.integrationTests.state.PartitionStateCommittedOffsetIT" level="debug"/>-->
-
 
     <!-- primary -->
     <logger name="bz.stub.parallelconsumer" level="info"/>
@@ -44,7 +42,6 @@
     <!--    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer" level="trace"/>-->
-
 
     <logger name="org.apache.kafka" level="warn"/>
 
@@ -67,11 +64,9 @@
     <!-- docker logs -->
     <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
 
-
     <!--    <logger name="bz.stub.parallelconsumer.internal.utils.LatchTestUtils" level="trace"/>-->
 
     <!--    <logger name="bz.stub.parallelconsumer.internal.DynamicLoadFactor" level="debug"/>-->
-
 
     <!--    <logger name="bz.stub.parallelconsumer" level="debug"/>-->
 
@@ -92,7 +87,6 @@
     <!--            <logger name="bz.stub.parallelconsumer.internal" level="debug"/>-->
     <!--            <logger name="bz.stub.parallelconsumer.state.WorkManager" level="debug"/>-->
 
-
     <!--    <logger name="bz.stub.parallelconsumer.BatchTestMethods" level="trace"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.state.RemovedPartitionState" level="trace"/>-->
 
@@ -100,11 +94,9 @@
     <!--    <logger name="bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer" level="trace"/>-->
 
-
     <!--    <logger name="bz.stub.parallelconsumer" level="debug"/>-->
     <!--        <logger name="bz.stub.parallelconsumer" level="trace"/>-->
     <!--    <logger name="bz.stub.parallelconsumer" level="error"/>-->
-
 
     <!--            <logger name="bz.stub.parallelconsumer" level="trace" />-->
 
@@ -118,10 +110,8 @@
     <!--    <logger name="bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.integrationTests" level="debug"/>-->
     <!--    <logger name="bz.stub.parallelconsumer.integrationTests.LargeVolumeInMemoryTests" level="debug"/>-->
-    <!--    <logger name="bz.stub.parallelconsumer.ParallelConsumerTestBase" level="trace"/>-->
 
     <!--    <logger name="bz.stub.parallelconsumer.offsets.WorkManagerOffsetMapCodecManagerTest" level="debug"/>-->
-
 
     <!-- containers -->
     <!--    <logger name="bz.stub.parallelconsumer.integrationTests.DbTest" level="debug"/>-->
@@ -140,7 +130,6 @@
     <!--    <logger name="io.vertx" level="debug"/>-->
     <logger name="io.netty" level="info"/>
     <logger name="pl.tlinkowski" level="warn"/>
-
 
     <!-- kafka internal -->
     <!--    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="debug"/>-->

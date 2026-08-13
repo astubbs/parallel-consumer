@@ -7,7 +7,7 @@
 # tests excluded from the gating suites. Red here is EXPECTED while the owning fix PR is open; the
 # point of running them anyway is to see when they start passing (fix landed), when they get worse,
 # and to keep their signal alive (a "known flake" can be a real product bug - see
-# docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md - lands with PR #80).
+# docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md - lands with PR astubbs#80).
 #
 # Usage: bin/quarantined-test.sh [extra-maven-args...]
 #
@@ -23,7 +23,7 @@ source bin/lib/quarantine-common.sh
 # separate fail-fast gating steps - re-running them inside a continue-on-error step would swallow
 # their failures; ce-review finding).
 if [ "${QUARANTINE_SKIP_CHECKS:-0}" != "1" ]; then
-  echo "=== Quarantine registry check (docs/QUARANTINED_TESTS.md must match the annotations) ==="
+  echo "=== Quarantine registry check (docs/quarantined-tests.md must match the annotations) ==="
   bin/check-quarantine-registry.sh
   echo "=== Quarantine owner-claim check (needs gh; skipped when unavailable) ==="
   if gh auth status >/dev/null 2>&1; then
@@ -32,7 +32,7 @@ if [ "${QUARANTINE_SKIP_CHECKS:-0}" != "1" ]; then
     echo "(gh unavailable/unauthenticated - owner claims not verified locally; CI verifies them)"
   fi
 fi
-echo "=== Quarantine audit (every entry must be diagnosed; empty fixedBy = unowned, needs an owner) ==="
+echo "=== Quarantine audit (entries are diagnosed, or recorded rule-1 exceptions; empty fixedBy = unowned) ==="
 grep -rnE --include='*.java' --exclude-dir=target -A 4 "$QUARANTINE_ANNOTATION_ERE" . || echo "(no @Quarantined tests - this lane is empty)"
 echo "==================================================================================================="
 
