@@ -49,7 +49,7 @@ public class PollContextInternal<K, V> {
      * Sets the produce lock this context owns, refusing to overwrite one it is already holding.
      * <p>
      * The one-lock-one-release invariant above is otherwise enforced only by caller convention:
-     * {@link bz.stub.parallelconsumer.ParallelEoSStreamProcessor#processAndProduceResults} acquires from one of two
+     * {@code ParallelEoSStreamProcessor#processAndProduceResults} acquires from one of two
      * branches that are mutually exclusive on
      * {@link ParallelConsumerOptions#isAllowEagerProcessingDuringTransactionCommit()}, so today a second set cannot
      * happen. A future call site that broke that exclusivity would silently drop the first lock - never released,
@@ -58,8 +58,12 @@ public class PollContextInternal<K, V> {
      */
     public synchronized void setProducingLock(Optional<ProducerManager<K, V>.ProducingLock> producingLock) {
         if (producingLock.isPresent() && this.producingLock.isPresent()) {
-            throw new InternalRuntimeException(msg("Produce lock already held for {} - overwriting it would orphan "
-                    + "the first, which is then never released and blocks every later transaction commit", this));
+            // Offsets, not the whole context: this is an exception message, and PollContextInternal's toString
+            // carries every record's key and value. ProducerManager's produce-lock logging identifies a context the
+            // same way for the same reason.
+            throw new InternalRuntimeException(msg("Produce lock already held for context: {} - overwriting it "
+                    + "would orphan the first, which is then never released and blocks every later transaction "
+                    + "commit", getOffsets()));
         }
         this.producingLock = producingLock;
     }

@@ -27,11 +27,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
+import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static org.awaitility.Awaitility.await;
-import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
 import static org.mockito.Mockito.mock;
 
 /**
