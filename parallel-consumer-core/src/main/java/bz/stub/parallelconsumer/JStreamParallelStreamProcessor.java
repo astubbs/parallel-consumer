@@ -18,9 +18,8 @@ import java.util.stream.Stream;
  * the caller consumes the returned stream, so a slow or absent consumer grows it until the JVM runs out of
  * memory. Take results through {@link ParallelStreamProcessor#pollAndProduceMany} and its callback instead.
  * <p>
- * Note that closing <b>discards</b> whatever the caller has not consumed by then: every {@code close} entry
- * point clears the backing deque once shutdown finishes, so results still sitting in it are dropped rather
- * than delivered. Drain the stream before closing if you need them.
+ * Closing <b>discards the backlog</b>: every {@code close} entry point empties the deque once shutdown
+ * finishes, so anything the caller never read is dropped rather than delivered. Drain first if you need it.
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
