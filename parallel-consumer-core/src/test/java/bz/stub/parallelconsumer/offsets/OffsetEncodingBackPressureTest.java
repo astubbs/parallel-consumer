@@ -8,7 +8,6 @@ package bz.stub.parallelconsumer.offsets;
 import com.google.common.truth.Truth;
 import com.google.common.truth.Truth8;
 import bz.stub.parallelconsumer.FakeRuntimeException;
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
 import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;

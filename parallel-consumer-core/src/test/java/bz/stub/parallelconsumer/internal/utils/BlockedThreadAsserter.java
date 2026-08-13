@@ -116,11 +116,11 @@ public class BlockedThreadAsserter {
     /**
      * Asserts that {@code functionExpectedToBlock} does not return until {@code unblockingFunction} has run.
      * <p>
-     * The property being asserted is <em>causal</em> rather than a duration - though the evidence for it is
-     * bounded, and the third point below is precise about where that bound sits. An earlier version scheduled
-     * the unblocker on a timer and then asserted the blocked function's wall-clock elapsed time was at least that
-     * long, which made it both slow (it genuinely slept for the timeout) and flaky - it failed in CI at
-     * {@code 19.985s >= 20s}, a 15ms scheduler-jitter miss that said nothing about the behaviour under test.
+     * The property being asserted is <em>causal</em> rather than a duration - see the third point below for how
+     * far the evidence for it actually reaches. An earlier version scheduled the unblocker on a timer and then
+     * asserted the blocked function's wall-clock elapsed time was at least that long, which made it both slow (it
+     * genuinely slept for the timeout) and flaky - it failed in CI at {@code 19.985s >= 20s}, a 15ms
+     * scheduler-jitter miss that said nothing about the behaviour under test.
      * <p>
      * Three things have to hold, and each of them is a different way a function can fail to block:
      * <ol>
@@ -133,7 +133,7 @@ public class BlockedThreadAsserter {
      *     clean block-then-return.</li>
      *     <li><b>Its return is ordered after the unblocker.</b> Both events take a tick from a shared monotonic
      *     sequence, and the ticks are compared. This is a backstop for the window's own edge, NOT a causality
-     *     proof - be precise about what it can and cannot see. The unblocker ticks <em>before</em>
+     *     proof. The unblocker ticks <em>before</em>
      *     {@code unblockingFunction.run()}, which is deliberate and cannot be moved: ticking after the call would
      *     race the woken function's own tick (an unblocker like {@code latch::countDown} can return after the
      *     thread it released has already ticked), and a correctly blocking function would then fail. Ticking
@@ -146,7 +146,7 @@ public class BlockedThreadAsserter {
      *     comparison: without cooperation from the function under test there is no observable difference between
      *     "returned because of the unblocker" and "returned just after it for its own reasons", and the promptness
      *     budget that would distinguish them is exactly the wall-clock assertion this class was rewritten to
-     *     remove. {@code BlockedThreadAsserterTest#functionThatReturnsOnItsOwnScheduleIsRejected} pins the part
+     *     remove. {@link BlockedThreadAsserterTest#functionThatReturnsOnItsOwnScheduleIsRejected} pins the part
      *     that IS caught deterministically, at 300ms inside the window.</li>
      * </ol>
      * A function that is never unblocked fails differently again: {@link #methodReturned} stays false and the
