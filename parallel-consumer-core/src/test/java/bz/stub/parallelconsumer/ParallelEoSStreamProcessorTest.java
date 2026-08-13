@@ -710,8 +710,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
      * <p>
      * {@link bz.stub.parallelconsumer.state.WorkManager#addSuccessfulWorkListener
      * WorkManager.addSuccessfulWorkListener} can be called from any thread, while
-     * {@code WorkManager.onSuccessResult} iterates the listeners and is documented as running from "controller or
-     * poller thread". Plain-list iteration breaks when a registration lands mid-notify.
+     * {@code WorkManager.onSuccessResult} iterates the listeners on the control thread. Plain-list iteration breaks
+     * when a registration lands mid-notify.
      * <p>
      * This registration used to be spelled {@code getSuccessfulWorkListeners().add(..)}, against a list handed out
      * whole by a Lombok {@code @Getter(PUBLIC)} - which is exactly why the bug stayed hidden. Searching for the field
@@ -725,7 +725,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(
                 "off-thread-success-listener-registrar",
-                // runs on whichever thread completed the work, and holds the notify loop open while the list is mutated
+                // runs on the control thread, and holds the notify loop open while the list is mutated
                 parkTheNotifyingThread -> wm.addSuccessfulWorkListener(work -> parkTheNotifyingThread.run()),
                 () -> wm.addSuccessfulWorkListener(work -> log.trace("Listener registered off thread")));
     }

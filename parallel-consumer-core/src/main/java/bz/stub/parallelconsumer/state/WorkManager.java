@@ -69,10 +69,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * Useful for testing. Register with {@link #addSuccessfulWorkListener}.
      * <p>
-     * Concurrent because registration can happen on any thread, while {@link #onSuccessResult} iterates it from the
-     * controller or poller thread. A plain list breaks its own iteration when a registration lands mid-notify, and the
-     * resulting {@link java.util.ConcurrentModificationException} escapes into the control loop and stops the
-     * consumer.
+     * Concurrent because registration can happen on any thread, while {@link #onSuccessResult} iterates it on the
+     * control thread. A plain list breaks its own iteration when a registration lands mid-notify, and the resulting
+     * {@link java.util.ConcurrentModificationException} escapes into the control loop and stops the consumer.
      */
     private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new CopyOnWriteArrayList<>();
 
@@ -167,8 +166,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * Register a listener to be notified after each work container succeeds.
      * <p>
-     * Safe to call from any thread, including while the consumer is running. The listener itself runs on whichever
-     * thread completed the work - controller or poller - so it must not block.
+     * Safe to call from any thread, including while the consumer is running. The listener itself always runs on the
+     * <b>control thread</b>: the worker pool hands a finished {@link WorkContainer} to the mailbox, and the control
+     * loop drains it through {@code processWorkCompleteMailBox} to {@link #handleFutureResult} and here. So a listener
+     * that blocks does not slow one worker - it stalls the control loop, and with it commits, polling, and every other
+     * listener. Do the work elsewhere and return.
      * <p>
      * Registering while a notification is already in flight will not see that notification, because the backing list
      * is copy-on-write and {@link #onSuccessResult} iterates the snapshot it started with. Every subsequent success is

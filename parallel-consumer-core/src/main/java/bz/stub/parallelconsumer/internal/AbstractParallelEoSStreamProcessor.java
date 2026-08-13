@@ -898,9 +898,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // distribute more work
         retrieveAndDistributeNewWork(userFunction, callback);
 
-        // run call back
-        log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
-        this.controlLoopHooks.forEach(Runnable::run);
+        // run call back - count what this iteration actually ran, rather than reading size() separately. Both reads
+        // see their own snapshot of the copy-on-write array, so a registration landing between them would have the
+        // log claim a number the loop never ran - the same "looks consistent, isn't under concurrency" shape this
+        // whole change is about.
+        int loopEndPluginsRun = 0;
+        for (Runnable hook : this.controlLoopHooks) {
+            hook.run();
+            loopEndPluginsRun++;
+        }
+        log.trace("Loop: Ran {} loop end plugin(s)", loopEndPluginsRun);
 
         log.trace("Current state: {}", state);
         switch (state) {
