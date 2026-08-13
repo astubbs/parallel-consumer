@@ -172,8 +172,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * stalls the control loop, and with it commits, polling, and every other listener. Do the work elsewhere and
      * return.
      * <p>
-     * A listener registered while a notification is in flight misses that one notification and receives every
-     * subsequent success, because {@link #onSuccessResult} iterates the copy-on-write snapshot it started with.
+     * Every success from the next one onwards is delivered. Whether the listener also sees a success that was
+     * <b>already being notified</b> when it registered is <b>undefined</b>, and deliberately left so: the iteration
+     * runs over the copy-on-write snapshot taken at the instant it starts, which is later than the start of
+     * {@link #onSuccessResult}, so a registration landing in between is included and one landing after is not. The
+     * caller cannot tell which side it landed on, so do not count that record either way - if a listener needs an
+     * exact tally, register it before processing starts.
      * <p>
      * <b>A listener that throws stops the consumer.</b> It is run through {@link UserFunctions}, as every other piece
      * of user-supplied code is, so the failure is reported as coming from user code - but it is not swallowed. Catch
