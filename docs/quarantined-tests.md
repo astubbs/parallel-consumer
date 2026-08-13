@@ -63,15 +63,6 @@ Every entry below is a timing flake rather than a deterministic failure, so all 
 `flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
 were hidden by the surefire retry until astubbs#224 removed it.
 
-- [ ] `PCMetricsTest.metricsRegisterBinding` - compares a registry gauge against an expectation built
-  from a test-side counter snapshot taken earlier in the method, so two independently-advancing
-  values are read at different instants with nothing holding processing still between them. Seen as
-  `PARTITION_HIGHEST_COMPLETED_OFFSET` expected 203.0 but was 207.0 - four more records completed in
-  the gap, so the metric was *more* current than the expectation testing it. Diagnosis in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-  Owner: PR astubbs#265, which replaces the `Thread.sleep(1000)` above the assertions with an
-  `await().untilAsserted(...)` on the trailing meters.
-
 - [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
   the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
   assertions, so the same signature can surface from any test that uses it. The unblocker is

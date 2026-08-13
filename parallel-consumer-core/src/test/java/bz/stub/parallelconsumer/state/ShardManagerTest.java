@@ -5,7 +5,6 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
@@ -156,30 +155,28 @@ class ShardManagerTest {
 
             WorkContainer<String, String> w0 = new WorkContainer<>(
                     1, new ConsumerRecord<>(topic, partition, 0, "key0", "value0"), mockPcModule);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
             w0.onUserFunctionFailure(new RuntimeException("test1"));
             retryQueue.add(w0);
 
             WorkContainer<String, String> w1 = new WorkContainer<>(
                     1, new ConsumerRecord<>(topic, partition, 1, "key1", "value0"), mockPcModule);
-            ThreadUtils.sleepQuietly(10);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+            // the retry ordering is keyed off the retry-due time, which the container reads from the
+            // (mock) clock - so advance the clock directly instead of sleeping to make wall time move it
+            clock.add(10, ChronoUnit.MILLIS);
             w1.onUserFunctionFailure(new RuntimeException("test2"));
             retryQueue.add(w1);
 
             WorkContainer<String, String> w2 = new WorkContainer<>(
                     1, new ConsumerRecord<>(topic, partition, 2, "key2", "value0"), mockPcModule);
-            ThreadUtils.sleepQuietly(10);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+            clock.add(10, ChronoUnit.MILLIS);
             w2.onUserFunctionFailure(new RuntimeException("test3"));
             retryQueue.add(w2);
 
-            ThreadUtils.sleepQuietly(10);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+            clock.add(10, ChronoUnit.MILLIS);
             w0.onUserFunctionFailure(new RuntimeException("a"));
             int tries = 0;
             while (retryQueue.size() < 4 && tries < 100) {
-                ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+                clock.add(1, ChronoUnit.MILLIS);
                 w0.onUserFunctionFailure(new RuntimeException("a"));
                 retryQueue.add(w0);
                 tries++;
