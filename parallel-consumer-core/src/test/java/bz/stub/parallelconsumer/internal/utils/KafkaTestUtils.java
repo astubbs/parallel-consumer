@@ -35,6 +35,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 @RequiredArgsConstructor
 public class KafkaTestUtils {
 
+    /**
+     * Partition key used when a commit history is known to cover one partition, so the per-partition collapse
+     * degenerates to a plain sequential one.
+     *
+     * @see #collapseRepeatedCommits(List)
+     */
+    private static final Object SINGLE_PARTITION = new Object();
+
     private final String INPUT_TOPIC;
 
     private final String CONSUMER_GROUP_ID;
@@ -64,6 +72,53 @@ public class KafkaTestUtils {
         return collect.stream().filter(x -> x != 0).collect(Collectors.toList());
     }
 
+    /**
+     * Collapses a repeat commit of the same base offset, for a commit history that covers a single partition.
+     * <p>
+     * PC commits {@link bz.stub.parallelconsumer.state.PartitionState#getOffsetToCommit()} - the highest
+     * <em>sequentially</em> succeeded offset plus one. When a record completes that cannot advance that (say
+     * an independent key's record finishing while a lower offset is still in flight), the base offset is
+     * committed again with updated incomplete-offset encoding. The repeat carries new information and is
+     * correct behaviour, but how many such commits occur depends on where the wall-clock commit ticks fall,
+     * so it is not something a test can assert on.
+     * <p>
+     * Only a repeat of the <em>immediately preceding</em> commit is collapsed. A committed offset that goes
+     * backwards - {@code [1, 2, 1]} - survives and still fails the assertion, because that would be a real
+     * defect.
+     *
+     * @see #collapseRepeatedCommits(List, List) for a history spanning more than one partition
+     */
+    public static List<Integer> collapseRepeatedCommits(final List<Integer> offsets) {
+        return collapseRepeatedCommits(Collections.nCopies(offsets.size(), SINGLE_PARTITION), offsets);
+    }
+
+    /**
+     * Collapses a repeat commit of the same base offset <em>per partition</em>, preserving the order in which
+     * the commits were emitted.
+     * <p>
+     * The partition has to be part of the comparison. A commit history is flattened across partitions, so two
+     * partitions committing the same offset in one round land next to each other; collapsing on the offset
+     * alone would merge them into one entry and hide a partition that failed to commit at all. Keying on the
+     * partition also keeps the genesis-offset race ({@link #trimAllGenesisOffset(List)}) benign: a partition
+     * still sitting at offset 0 while another advances interleaves as {@code [x, 0, x, 0]}, which collapses to
+     * {@code [x, 0]} rather than being read as an offset going backwards.
+     *
+     * @param partitions the partition each offset was committed for, in the same order as {@code offsets}
+     */
+    public static <PARTITION> List<Integer> collapseRepeatedCommits(final List<PARTITION> partitions, final List<Integer> offsets) {
+        Map<PARTITION, Integer> lastCommitPerPartition = new HashMap<>();
+        List<Integer> collapsed = new ArrayList<>();
+        for (int i = 0; i < offsets.size(); i++) {
+            Integer offset = offsets.get(i);
+            Integer previous = lastCommitPerPartition.put(partitions.get(i), offset);
+            boolean repeatsThePreviousCommitForThisPartition = offset.equals(previous);
+            if (!repeatsThePreviousCommitForThisPartition) {
+                collapsed.add(offset);
+            }
+        }
+        return collapsed;
+    }
+
     public ConsumerRecord<String, String> makeRecord(String key, String value) {
         return makeRecord(0, key, value);
     }
@@ -79,28 +134,59 @@ public class KafkaTestUtils {
     }
 
     /**
-     * Collects into a set - ignore repeated commits ({@link OffsetMapCodecManager}).
+     * Asserts the sequence of offsets committed, ignoring repeated commits of the same base offset
+     * ({@link OffsetMapCodecManager}).
      * <p>
      * Like {@link AbstractParallelEoSStreamProcessorTestBase#assertCommits(List, Optional)} but for a
-     * {@link MockProducer}.
+     * {@link MockProducer}. Both tolerate a repeat commit of the same base offset. They differ on order: the
+     * other method's consumer-side branch is order-insensitive, because it flattens each commit round's
+     * per-partition map and so cannot rely on a global ordering, and it therefore does not detect a committed
+     * offset going backwards either. Here the history is a single ordered stream, so order is asserted and a
+     * backwards offset does fail.
+     * <p>
+     * The collapse runs before the genesis trim, and is keyed on the partition. Trimming first would turn
+     * {@code [1, 0, 1]} into {@code [1, 1]} and then into {@code [1]}, silently accepting an offset that went
+     * backwards through genesis.
      *
      * @see AbstractParallelEoSStreamProcessorTestBase#assertCommits(List, Optional)
+     * @see #collapseRepeatedCommits(List, List)
      * @see OffsetMapCodecManager
      */
     public void assertCommits(MockProducer mp, List<Integer> expectedOffsets, Optional<String> description) {
         log.debug("Asserting commits of {}", expectedOffsets);
-        List<Integer> offsets = getProducerCommitsFlattened(mp);
+        List<Integer> offsets = getProducerCommitsFlattenedCollapsed(mp);
 
         if (!expectedOffsets.contains(0)) {
             offsets = KafkaTestUtils.trimAllGenesisOffset(offsets);
         }
 
-        assertThat(offsets).describedAs(description.orElse("Which offsets are committed and in the expected order"))
+        assertThat(offsets)
+                .describedAs(description.orElse("Which offsets are committed and in the expected order"))
                 .containsExactlyElementsOf(expectedOffsets);
     }
 
     public List<Integer> getProducerCommitsFlattened(MockProducer mp) {
         return getProducerCommitsMeta(mp).stream().map(x -> (int) x.offset()).collect(Collectors.toList());
+    }
+
+    /**
+     * The producer's commit history, flattened in emission order, with a repeat commit of the same base offset
+     * collapsed per partition.
+     *
+     * @see #collapseRepeatedCommits(List, List)
+     */
+    public List<Integer> getProducerCommitsFlattenedCollapsed(MockProducer mp) {
+        List<Map<String, Map<TopicPartition, OffsetAndMetadata>>> history = mp.consumerGroupOffsetsHistory();
+
+        List<TopicPartition> partitions = new ArrayList<>();
+        List<Integer> offsets = new ArrayList<>();
+        for (var round : history) {
+            for (var partitionOffsets : round.get(CONSUMER_GROUP_ID).entrySet()) {
+                partitions.add(partitionOffsets.getKey());
+                offsets.add((int) partitionOffsets.getValue().offset());
+            }
+        }
+        return collapseRepeatedCommits(partitions, offsets);
     }
 
     public List<OffsetAndMetadata> getProducerCommitsMeta(MockProducer mp) {

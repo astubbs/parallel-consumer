@@ -235,7 +235,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // wall-clock, not by cycle count. Nothing guaranteed a commit had happened before the latch was
         // released, after which v1 completes (it sleeps 100ms) and the next commit covers offset 2 - so
         // offset 1 was never committed on its own and the set-wise assertion saw only [2, 2]. Waiting on
-        // the commit itself makes the precondition explicit instead of probable. See docs/inflight.md.
+        // the commit itself makes the precondition explicit instead of probable. Full triage in
+        // astubbs#101, which diagnosed and fixed this; the ledger entry it came from was in
+        // docs/inflight.md, the single file that became docs/inflight/ and was deleted in 0de96fc
+        // (git show 0de96fc^:docs/inflight.md, grep this test's name).
         awaitForCommit(1);
 
         latch.countDown();
@@ -245,6 +248,70 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertCommits(of(1, 2), "primed record and first key=0 record completed only, followup key 0 records skipped");
         assertCommits().encodedIncomplete(2); //first blocked/skipped key 0 record (value v2).
         assertThat(interrupted).isFalse();
+    }
+
+    /**
+     * Deterministic version of the race that made
+     * {@link #queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)} flake.
+     * <p>
+     * Under KEY ordering the key="1" record sits on a shard independent of the blocked key="0" shard, so it
+     * completes while v1 is still latched. Its completion marks the partition dirty, but cannot advance the
+     * committable offset - {@link bz.stub.parallelconsumer.state.PartitionState#getOffsetToCommit()} is
+     * the highest <em>sequentially</em> succeeded offset plus one, and offset 1 is still in flight. PC
+     * therefore commits base offset 1 a second time, carrying updated incomplete-offset encoding.
+     * <p>
+     * That repeat is correct behaviour - it persists the key="1" completion so a crash does not reprocess it
+     * - so every commit mode must tolerate it. Holding the key="1" record until after the first commit has
+     * landed forces the repeat every run, instead of leaving it to where the wall-clock commit ticks fall.
+     */
+    @ParameterizedTest()
+    @EnumSource(CommitMode.class)
+    @SneakyThrows
+    public void repeatCommitOfSameBaseOffsetToleratedWhenIndependentKeyCompletesDuringBlock(CommitMode commitMode) {
+        CountDownLatch blockedKeyLatch = new CountDownLatch(1);
+        CountDownLatch independentKeyLatch = new CountDownLatch(1);
+        setupParallelConsumerInstance(getBaseOptionsKeyOrdered(commitMode, Duration.ofSeconds(1), Duration.ofMillis(100)));
+
+        primeFirstRecord();
+
+        consumerSpy.addRecord(ktu.makeRecord("0", "v1"));
+        consumerSpy.addRecord(ktu.makeRecord("0", "v2"));
+        consumerSpy.addRecord(ktu.makeRecord("1", "v3"));
+        AtomicBoolean gotK0 = new AtomicBoolean(false);
+        parallelConsumer.poll((record) -> {
+            String value = record.getSingleConsumerRecord().value();
+            if (value.equals("v1")) {
+                gotK0.set(true);
+                awaitLatch(blockedKeyLatch);
+            } else if (value.equals("v3")) {
+                awaitLatch(independentKeyLatch);
+            }
+        });
+        awaitUntilTrue(gotK0::get);
+
+        // the primed record's commit lands first, encoding only itself
+        awaitForCommit(1);
+        int commitsBeforeIndependentKey = getCommitHistoryFlattened().size();
+
+        // only now let the independent shard finish, so its completion cannot be folded into that commit
+        independentKeyLatch.countDown();
+        awaitForCommittedOffsetCount(commitsBeforeIndependentKey + 1);
+
+        // v1 is still blocked, so the second commit cannot have advanced the base offset - it must be a
+        // repeat of offset 1 carrying new encoding. Assert the repeat is really there: without this the test
+        // would still pass if the scenario stopped reproducing, and would then be guarding nothing.
+        assertThat(getCommitHistoryFlattened())
+                .as("the scenario under test must actually produce a repeat commit of base offset 1")
+                .filteredOn(committed -> committed == 1)
+                .hasSizeGreaterThanOrEqualTo(2);
+
+        // Asserted before the latch is released, so the shutdown sequence cannot add commits and blur what is
+        // being checked. This is the assertion that fails without the repeat-tolerance in the commit helper.
+        assertCommits(of(1), "base offset 1 committed twice: once for the primed record, once carrying the "
+                + "key=1 completion, which cannot advance the base offset while v1 is in flight");
+
+        blockedKeyLatch.countDown();
+        parallelConsumer.close();
     }
 
     /**
