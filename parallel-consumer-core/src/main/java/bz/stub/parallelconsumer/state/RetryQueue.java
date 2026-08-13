@@ -6,7 +6,6 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
-import lombok.AccessLevel;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.kafka.common.utils.CloseableIterator;
@@ -32,12 +31,13 @@ import java.util.stream.Collectors;
  */
 public class RetryQueue {
 
-    @Getter(AccessLevel.PACKAGE) //visible for testing
+    // No accessors on the three fields below. They were annotated "visible for testing" and had no caller anywhere -
+    // main, test or integration - so all they did was hand out this class's lock-protected state with none of the
+    // locking every real method takes. That is the same shape astubbs#267 removed from WorkManager, where an
+    // unused-looking accessor was what hid a live concurrency defect from a sweep looking for exactly it.
     private final Map<WorkContainerKey, WorkContainerSortKey> unique = new HashMap<>();
-    @Getter(AccessLevel.PACKAGE) //visible for testing
     private final NavigableMap<WorkContainerSortKey, WorkContainer<?, ?>> sorted;
 
-    @Getter(AccessLevel.PACKAGE) //visible for testing
     private final Comparator<WorkContainerSortKey> comparator = Comparator
             .comparing(WorkContainerSortKey::getRetryDueAt)
             .thenComparing(WorkContainerKey::getTopic)

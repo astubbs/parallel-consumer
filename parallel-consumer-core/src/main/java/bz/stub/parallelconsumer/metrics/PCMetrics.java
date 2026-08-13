@@ -13,6 +13,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.ToDoubleFunction;
 
@@ -33,8 +34,15 @@ public class PCMetrics {
 
     /**
      * Tracking of registered meters for removal from registry on shutdown.
+     * <p>
+     * Concurrent because the two ends of this field's life run on different threads. {@link #close()} iterates it on
+     * the control thread, while the four registration methods append from the broker-poll thread on every rebalance -
+     * and none of those four is {@code synchronized}, so the monitor on {@code close()} excludes nothing that matters.
+     * A plain list breaks its own iteration when a registration lands mid-close, and the resulting
+     * {@link java.util.ConcurrentModificationException} escapes into {@code doClose}'s {@code finally}, skipping the
+     * {@code state = CLOSED} transition that block exists to guarantee.
      */
-    private List<Meter.Id> registeredMeters = new ArrayList<>();
+    private final List<Meter.Id> registeredMeters = new CopyOnWriteArrayList<>();
 
     /**
      * Common metrics tags added to all meters - for example PC instance. Configurable through Parallel Consumer

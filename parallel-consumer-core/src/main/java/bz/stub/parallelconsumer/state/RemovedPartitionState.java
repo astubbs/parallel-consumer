@@ -15,9 +15,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 
+import java.util.Collections;
 import java.util.Optional;
 import java.util.SortedSet;
-import java.util.TreeSet;
 
 /**
  * No op version of {@link PartitionState} used for when partition assignments are removed, to avoid managing null
@@ -37,7 +37,12 @@ import java.util.TreeSet;
 @Slf4j
 public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
 
-    private static final SortedSet<Long> READ_ONLY_EMPTY_SET = new TreeSet<>();
+    /**
+     * The name asserted read-only; the {@code TreeSet} it used to hold did not, and being {@code static} it was one
+     * instance shared by every partition and every PC in the JVM. A single caller mutating what it was handed would
+     * have changed what every other caller sees.
+     */
+    private static final SortedSet<Long> READ_ONLY_EMPTY_SET = Collections.emptySortedSet();
 
     private static final PartitionState singleton = new RemovedPartitionState<>();
 

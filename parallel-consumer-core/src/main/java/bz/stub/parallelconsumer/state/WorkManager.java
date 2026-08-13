@@ -21,6 +21,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 import static java.lang.Boolean.TRUE;
@@ -73,8 +74,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private Gauge waitingRecordsNumberGauge;
     private Gauge inflightRecordsNumberGauge;
-    private Map<TopicPartition, Counter> succeededRecordsCounters = new HashMap<>();
-    private Map<TopicPartition, Counter> failedRecordsCounters = new HashMap<>();
+    /**
+     * Concurrent because the writes and the reads are on different threads: entries are put on partition assignment
+     * and removed on revoke, both of which arrive on the broker-poll thread as rebalance callbacks, while
+     * {@link #incrementCounterIfPresent} reads them on the control thread for every record that completes.
+     * <p>
+     * Nothing iterates these, so unlike the listener collections they cannot throw
+     * {@link java.util.ConcurrentModificationException} - the cost of getting it wrong is quieter. A {@code get}
+     * racing another thread's resize can miss an entry that is present, so the counter silently under-counts during
+     * a rebalance, which is exactly when an operator is most likely to be reading it.
+     */
+    private final Map<TopicPartition, Counter> succeededRecordsCounters = new ConcurrentHashMap<>();
+    private final Map<TopicPartition, Counter> failedRecordsCounters = new ConcurrentHashMap<>();
 
     private final PCMetrics pcMetrics;
 
@@ -318,12 +329,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private void initTopicPartitionSpecificMetrics(Collection<TopicPartition> partitions) {
         partitions.forEach(topicPartition -> {
-            if (!succeededRecordsCounters.containsKey(topicPartition)) {
-                succeededRecordsCounters.put(topicPartition, pcMetrics.getCounterFromMetricDef(PCMetricsDef.PROCESSED_RECORDS, getWorkManagerCounterTags(topicPartition)));
-            }
-            if (!failedRecordsCounters.containsKey(topicPartition)) {
-                failedRecordsCounters.put(topicPartition, pcMetrics.getCounterFromMetricDef(PCMetricsDef.FAILED_RECORDS, getWorkManagerCounterTags(topicPartition)));
-            }
+            // computeIfAbsent rather than containsKey-then-put: the concurrent map makes each call safe, but the
+            // check and the write are only one decision if they happen as one operation
+            succeededRecordsCounters.computeIfAbsent(topicPartition,
+                    tp -> pcMetrics.getCounterFromMetricDef(PCMetricsDef.PROCESSED_RECORDS, getWorkManagerCounterTags(tp)));
+            failedRecordsCounters.computeIfAbsent(topicPartition,
+                    tp -> pcMetrics.getCounterFromMetricDef(PCMetricsDef.FAILED_RECORDS, getWorkManagerCounterTags(tp)));
         });
     }
 

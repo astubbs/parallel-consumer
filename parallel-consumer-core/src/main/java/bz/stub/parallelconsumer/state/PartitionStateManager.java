@@ -73,7 +73,12 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private Gauge numberOfPartitionsGauge;
     private Gauge totalIncompletesGauge;
-    private final Map<TopicPartition, Counter> slowWorkCounters = new HashMap<>();
+    /**
+     * NOTE: Must be concurrent because it can be set by one thread, but read by another - the same reason
+     * {@link #partitionsAssignmentEpochs} above says so. Written on the broker-poll thread by the rebalance
+     * callbacks, read on the control thread by {@link #incrementSlowWorkCounter} as work is retrieved.
+     */
+    private final Map<TopicPartition, Counter> slowWorkCounters = new ConcurrentHashMap<>();
 
     private final PCMetrics pcMetrics;
 
@@ -139,13 +144,12 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private void initPartitionCounters(Collection<TopicPartition> assignedPartitions) {
         assignedPartitions.forEach(topicPartition -> {
-            if (!slowWorkCounters.containsKey(topicPartition)) {
-                slowWorkCounters.put(topicPartition, pcMetrics
-                        .getCounterFromMetricDef(PCMetricsDef.SLOW_RECORDS,
-                                Tag.of("topic", topicPartition.topic()),
-                                Tag.of("partition", String.valueOf(topicPartition.partition())))
-                );
-            }
+            // computeIfAbsent rather than containsKey-then-put, so the check and the write are one decision
+            slowWorkCounters.computeIfAbsent(topicPartition, tp -> pcMetrics
+                    .getCounterFromMetricDef(PCMetricsDef.SLOW_RECORDS,
+                            Tag.of("topic", tp.topic()),
+                            Tag.of("partition", String.valueOf(tp.partition())))
+            );
         });
     }
 
