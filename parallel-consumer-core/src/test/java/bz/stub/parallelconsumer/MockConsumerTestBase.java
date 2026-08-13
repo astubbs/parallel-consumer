@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import static com.google.common.truth.Truth.assertWithMessage;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
@@ -126,13 +127,14 @@ abstract class MockConsumerTestBase {
         // Stop the feed BEFORE closing PC: once the mock consumer is closed, addRecord() throws
         // IllegalStateException, and an uncaught exception on a stray daemon thread gets attributed to
         // whatever test is running next in the same JVM (PIT's minion JVMs make this especially confusing).
+        String leakedRecordAdder = null;
         if (recordAdder != null) {
             recordAdder.interrupt();
-            // it only ever sleeps in ~1s slices, so this joins promptly; the bound is to fail loudly rather
-            // than hang the suite if it ever does not
+            // it only ever sleeps in ~1s slices, so this joins promptly; the bound is so that a feed which
+            // never stops fails this test rather than hanging the suite
             recordAdder.join(Duration.ofSeconds(10).toMillis());
             if (recordAdder.isAlive()) {
-                log.error("Record adder thread {} did not stop after interrupt", recordAdder.getName());
+                leakedRecordAdder = recordAdder.getName();
             }
         }
 
@@ -146,6 +148,16 @@ abstract class MockConsumerTestBase {
         if (parallelConsumer != null && !parallelConsumer.isClosedOrFailed()) {
             parallelConsumer.close();
         }
+
+        // A hard failure, not a log line. A feed thread that outlived its test goes on to addRecord() against
+        // a closed consumer, and the resulting uncaught exception is attributed to whatever runs next - so
+        // logging it leaves this suite green while corrupting a later one, which is the "reports success
+        // without having checked" failure mode this teardown exists to prevent. JUnit reports an @AfterEach
+        // throw alongside any primary test failure rather than masking it. Asserted after the close above, so
+        // that a leaked feed does not also strand a running PC.
+        assertWithMessage("a record adder thread did not stop after being interrupted, and would leak into the "
+                + "next test in this JVM")
+                .that(leakedRecordAdder).isNull();
     }
 
     /**

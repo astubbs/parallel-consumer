@@ -30,10 +30,11 @@ class MockConsumerTest extends MockConsumerTestBase {
     private static final int RECORDS = 3;
 
     /**
-     * Test that the mock consumer works as expected
+     * With nothing injected to go wrong, the backlog reaches the user function - the baseline the failure
+     * scenarios are measured against.
      */
     @Test
-    void mockConsumer() {
+    void backlogIsProcessedWithAVanillaMockConsumer() {
         addRecords(RECORDS);
 
         startProcessing();

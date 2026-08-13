@@ -28,8 +28,7 @@ import org.apache.kafka.common.errors.RebalanceInProgressException;
  * it far likelier, because members keep committing <i>during</i> rebalances by design.
  * <p>
  * Mirrors {@link MockConsumerCommitTimeoutTest} and {@link MockConsumerSaslAuthenticationTest}, which pin the
- * other rungs of the ladder (those two were renamed from {@code MockConsumerTestWith*Exception} so surefire
- * would collect them).
+ * other rungs of the ladder.
  * The scenario itself lives in {@link CommitRejectionTestBase}, shared with
  * {@link MockConsumerCommitFailedTest}.
  */

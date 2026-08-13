@@ -39,10 +39,7 @@ class MockConsumerSaslAuthenticationTest extends MockConsumerTestBase {
 
     private static final int RECORDS = 3;
 
-    /**
-     * 8s mock-failure window (was 20s) - keeps total test runtime well within PIT's baseline per-test budget
-     * while still triggering PC's SASL retry path meaningfully.
-     */
+    /** How long every call fails before the consumer goes back to normal. */
     private static final Duration OUTAGE = Duration.ofSeconds(8);
 
     @Override
@@ -78,10 +75,11 @@ class MockConsumerSaslAuthenticationTest extends MockConsumerTestBase {
     }
 
     /**
-     * Test that the mock consumer works as expected
+     * PC survives an auth outage shorter than its retry budget: once the broker recovers, the backlog that
+     * built up during the outage drains.
      */
     @Test
-    void mockConsumer() {
+    void backlogStillDrainsAfterATransientSaslOutage() {
         addRecords(RECORDS);
 
         startProcessing();

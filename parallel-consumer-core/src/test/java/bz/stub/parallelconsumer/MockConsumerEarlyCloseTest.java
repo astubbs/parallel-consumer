@@ -61,7 +61,7 @@ class MockConsumerEarlyCloseTest extends MockConsumerTestBase {
         return new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized ConsumerRecords<String, String> poll(Duration timeout) {
-                if (outageStarted()) {
+                if (isOutage()) {
                     pollAuthFailures.incrementAndGet();
                     throw authFailure();
                 }
@@ -70,14 +70,14 @@ class MockConsumerEarlyCloseTest extends MockConsumerTestBase {
 
             @Override
             public synchronized void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
-                if (outageStarted()) {
+                if (isOutage()) {
                     throw authFailure();
                 }
                 super.commitSync(offsets);
             }
 
             /** Never recovers - the point is that close does not wait for a recovery that will not come. */
-            private boolean outageStarted() {
+            private boolean isOutage() {
                 return System.currentTimeMillis() > startFailing;
             }
 
@@ -95,10 +95,11 @@ class MockConsumerEarlyCloseTest extends MockConsumerTestBase {
     }
 
     /**
-     * Test that the mock consumer works as expected
+     * Close returns, rather than blocking on a retry budget that will never be exhausted, when it is called
+     * while PC is mid-retry against a broker that never recovers.
      */
     @Test
-    void mockConsumer() {
+    void closesCleanlyWhileRetryingAPermanentlyFailingBroker() {
         addRecordsInBackground(RECORDS, Duration.ofSeconds(1));
 
         startProcessing();

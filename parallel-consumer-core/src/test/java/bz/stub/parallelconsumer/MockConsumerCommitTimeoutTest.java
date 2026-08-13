@@ -70,10 +70,11 @@ class MockConsumerCommitTimeoutTest extends MockConsumerTestBase {
     }
 
     /**
-     * Test that the PC can resume operation after several failures
+     * PC resumes normal operation after several {@code commitSync} timeouts, so the whole backlog still
+     * drains once the outage window closes.
      */
     @Test
-    void mockConsumer() {
+    void backlogStillDrainsAfterRepeatedCommitTimeouts() {
         // the backlog keeps arriving during the outage, so commits are still being attempted while they fail
         addRecordsInBackground(RECORDS, Duration.ofSeconds(1));
 
