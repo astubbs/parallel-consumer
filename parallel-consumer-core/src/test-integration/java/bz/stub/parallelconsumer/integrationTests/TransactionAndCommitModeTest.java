@@ -157,7 +157,7 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         //
         // Doing it by hand truncated, and worst exactly where the ladder is meant to be used: at 40 threads
         // `GATING_CONCURRENCY / threads` is 64/40 = *1* in integer division, so that rung got no scaling at all
-        // against a true ratio of 1.6 - a 60s deadline where 96s was owed.
+        // against a true ratio of 1.6 - a 30s deadline where 48s was owed (defaultTimeout is 30s, not 60).
         return completionCeiling(GATING_CONCURRENCY, threads, defaultTimeout);
     }
 
