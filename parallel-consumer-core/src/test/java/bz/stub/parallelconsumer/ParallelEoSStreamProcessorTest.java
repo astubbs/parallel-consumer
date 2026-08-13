@@ -691,9 +691,15 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // the latch's remaining count rather than a bare "expected 0 but was 1"
         awaitLatch(registrationLanded);
 
-        // the outcome that matters: the loop kept turning after the concurrent registration, rather than dying on it
-        awaitForOneLoopCycle();
-        assertThat(parallelConsumer.isClosedOrFailed()).as("consumer still running").isFalse();
+        // the outcome that matters: the loop kept turning after the concurrent registration, rather than dying on it.
+        // failFast rather than awaitForOneLoopCycle(), because that helper only consults isClosedOrFailed AFTER its
+        // full 30s await - so the regression this test exists to catch would report a latch timeout, naming neither
+        // the consumer nor the exception, and taking 30s per test to say it
+        var loopsBefore = loopCountRef.get();
+        await().timeout(defaultTimeout)
+                .failFast("consumer stopped - the concurrent registration took the control loop down",
+                        () -> parallelConsumer.isClosedOrFailed())
+                .until(() -> loopCountRef.get() > loopsBefore);
 
         parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds));
     }

@@ -901,11 +901,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // run call back - counted from the iteration itself, because a separate size() read takes its own snapshot of
         // the copy-on-write array and can report a number this loop never ran
         int loopEndPluginsRun = 0;
-        for (Runnable hook : this.controlLoopHooks) {
-            hook.run();
-            loopEndPluginsRun++;
+        try {
+            for (Runnable hook : this.controlLoopHooks) {
+                hook.run();
+                loopEndPluginsRun++;
+            }
+        } finally {
+            // in a finally so a hook that throws still leaves a record of how far the phase got - that trace line is
+            // the last breadcrumb before the control loop unwinds
+            log.trace("Loop: Ran {} loop end plugin(s)", loopEndPluginsRun);
         }
-        log.trace("Loop: Ran {} loop end plugin(s)", loopEndPluginsRun);
 
         log.trace("Current state: {}", state);
         switch (state) {

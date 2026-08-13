@@ -166,10 +166,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     /**
      * Register a listener to be notified after each work container succeeds.
      * <p>
-     * Safe to call from any thread, including while the consumer is running. The listener itself always runs on the
-     * <b>control thread</b> - the worker pool only hands the finished {@link WorkContainer} to the mailbox, and the
-     * control loop is what drains it to here. So a listener that blocks does not slow one worker, it stalls the
-     * control loop, and with it commits, polling, and every other listener. Do the work elsewhere and return.
+     * Safe to call from any thread, including while the consumer is running. When PC delivers a success, the listener
+     * runs on the <b>control thread</b> - the worker pool only hands the finished {@link WorkContainer} to the
+     * mailbox, and the control loop is what drains it to here. So a listener that blocks does not slow one worker, it
+     * stalls the control loop, and with it commits, polling, and every other listener. Do the work elsewhere and
+     * return.
      * <p>
      * A listener registered while a notification is in flight misses that one notification and receives every
      * subsequent success, because {@link #onSuccessResult} iterates the copy-on-write snapshot it started with.
