@@ -13,9 +13,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Lifecycle regression for {@link ManagedPCInstance}: one instance must never end up with two
@@ -36,6 +38,9 @@ class ManagedPCInstanceLifecycleIT {
 
     private static final int CLOSE_ENTRY_TIMEOUT_MS = 5_000;
 
+    /** ManagedPCInstance.run()'s close-wait budget; the early-exit test must finish well inside it. */
+    private static final long CLOSE_WAIT_BUDGET_MS = 10_000;
+
     /**
      * How long to keep watching for a second closer that must never appear. This is the reliability
      * knob for that negative assertion: a wrongly-spawned closer is started synchronously inside
@@ -43,6 +48,64 @@ class ManagedPCInstanceLifecycleIT {
      * under CI contention thread-start latency alone can run into the hundreds of milliseconds.
      */
     private static final int SECOND_CLOSER_WATCH_MS = 1_000;
+
+    /** A PC that never reports itself closed, so {@code run()} genuinely enters the close-wait loop. */
+    @SuppressWarnings("unchecked")
+    private static ParallelEoSStreamProcessor<String, String> neverClosingPc() {
+        ParallelEoSStreamProcessor<String, String> pc = mock(ParallelEoSStreamProcessor.class);
+        when(pc.isClosedOrFailed()).thenReturn(false);
+        return pc;
+    }
+
+    /**
+     * The close-wait loop's {@code !stopRequested} term. Without it a queued {@code run()} sleeps out
+     * the full 10s budget before noticing the stop, holding a carrier thread on a bounded
+     * work-stealing pool for the whole time - during exactly the churn this harness exists to create.
+     * <p>
+     * No other test reaches this loop: they leave {@code parallelConsumer} null, so the whole block
+     * is skipped and only the post-loop abort runs.
+     */
+    @Test
+    void aStopEndsTheCloseWaitImmediatelyRatherThanWaitingOutTheBudget() {
+        ManagedPCInstance instance = BrokerlessInstances.newInstance("close-wait-topic");
+        RecordingExecutor executor = new RecordingExecutor();
+        instance.setParallelConsumerForTest(neverClosingPc());
+
+        assertThat(instance.start(executor)).isTrue();
+        instance.stopAsync(); // stop lands while the start is queued
+
+        long startedAt = System.nanoTime();
+        executor.runAll();
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+        // the PC never reports closed, so without the term this cannot finish before the 10s budget
+        assertThat(elapsedMs).isLessThan(CLOSE_WAIT_BUDGET_MS);
+    }
+
+    /**
+     * The {@code stopRequested = false} reset in {@code start()}. Without it the flag stays true after
+     * the first stop forever, so every later restart aborts on arrival and the fleet silently shrinks
+     * to nothing - a failure that looks like the chaos scenario simply losing instances.
+     * <p>
+     * Proving it needs a start that runs to completion <em>past</em> the abort branch, which is why
+     * no earlier test caught it: they all stop at "queued", or abort by design.
+     */
+    @Test
+    void aRestartAfterAStopRunsRatherThanAbortingOnTheStaleFlag() {
+        ManagedPCInstance instance = BrokerlessInstances.newInstance("restart-after-stop-topic");
+        RecordingExecutor executor = new RecordingExecutor();
+
+        assertThat(instance.start(executor)).isTrue();
+        instance.stopAsync();
+        executor.runAll(); // aborts, releasing the guard
+
+        assertThat(instance.start(executor)).isTrue();
+        // This run() must get PAST the abort branch. It then reaches the broker path and NPEs on the
+        // null KafkaClientUtils - which RecordingExecutor surfaces. That NPE is the proof: it can
+        // only be thrown from beyond the point a stale stopRequested would have returned at.
+        AssertionError proceeded = assertThrows(AssertionError.class, executor::runAll);
+        assertThat(proceeded).hasCauseThat().isInstanceOf(NullPointerException.class);
+    }
 
     /**
      * The double-submission itself: a second start while the first is still queued must be refused,

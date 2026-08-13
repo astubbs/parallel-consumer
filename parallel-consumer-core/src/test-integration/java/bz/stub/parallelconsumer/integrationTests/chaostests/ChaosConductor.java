@@ -296,6 +296,12 @@ public class ChaosConductor {
         ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return false;
         states.put(victim.getInstanceId(), InstanceState.DRAINING);
+        // A drain is a stop, so it must set the same flag the other stops do. This path closes the
+        // PC itself below rather than going through stopAsync(), so without this the queued-start
+        // abort in ManagedPCInstance.run() would be inert for STOP_DRAIN - the most frequently drawn
+        // stop in the default profile - and a start queued behind this drain would bring up a PC the
+        // conductor has already marked STOPPED.
+        victim.markStopRequested();
         disturbanceCount.incrementAndGet();
         record("STOP_DRAIN", victim.getInstanceId());
         observer.onAction(victim.getInstanceId(), ChaosAction.STOP_DRAIN);
