@@ -226,7 +226,7 @@ backlog:
       tracking: astubbs#142
     - subject: Removing the JStream API entirely
       status: >-
-        Someday, and its deprecation is proposed separately. Nothing to do with Kafka Streams: these
+        Someday; the deprecation itself is delivered by astubbs#116. Nothing to do with Kafka Streams: these
         are the JStream processors that hand back a JDK Stream of produce results.
       tracking: astubbs#116
     - subject: Dynamic concurrency control using flow-control theory

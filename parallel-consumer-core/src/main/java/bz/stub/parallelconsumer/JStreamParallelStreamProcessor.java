@@ -19,7 +19,10 @@ import java.util.stream.Stream;
  * memory. Take results through {@link ParallelStreamProcessor#pollAndProduceMany} and its callback instead.
  * <p>
  * Closing <b>discards the backlog</b>: every {@code close} entry point empties the deque once shutdown
- * finishes, so anything the caller never read is dropped rather than delivered. Drain first if you need it.
+ * finishes, so anything the caller never read is dropped rather than delivered. {@code closeDrainFirst()}
+ * does <b>not</b> rescue it - draining finishes the queued <i>processing</i>, which enqueues further results,
+ * and the clear still follows. Consuming the stream before, or concurrently with, shutdown is the only way
+ * to keep results.
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
