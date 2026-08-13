@@ -110,7 +110,6 @@ class JStreamMemoryLeak912Test extends ParallelEoSStreamProcessorTestBase {
         assertThat(deque).isEmpty();
     }
 
-    @SuppressWarnings("unchecked")
     private ConcurrentLinkedDeque<?> getResultDeque() {
         try {
             Field field = JStreamParallelEoSStreamProcessor.class.getDeclaredField("userProcessResultsStream");

@@ -28,7 +28,7 @@ public class JStreamResultDeques {
     /**
      * How many additions between backlog checks. Also the size below which a backlog is not worth reporting.
      */
-    public static final int BACKLOG_WARN_INTERVAL = 10_000;
+    private static final int BACKLOG_WARN_INTERVAL = 10_000;
 
     /**
      * Adds a result, warning periodically while the deque is backlogged.

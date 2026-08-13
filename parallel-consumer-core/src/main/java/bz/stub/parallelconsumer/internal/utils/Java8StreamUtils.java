@@ -18,31 +18,27 @@ import java.util.stream.StreamSupport;
 public class Java8StreamUtils {
 
     public static <T> Stream<T> setupStreamFromDeque(Deque<? extends T> userProcessResultsStream) {
-        Spliterator<T> spliterator = new DequeSpliterator<>(userProcessResultsStream, userProcessResultsStream.size());
+        Spliterator<T> spliterator = new DequeSpliterator<>(userProcessResultsStream);
 
         return StreamSupport.stream(spliterator, false);
     }
 
     /**
-     * Ends the stream when the deque is (momentarily) empty, deciding that with a <b>single</b> {@code poll()}
-     * rather than an {@code isEmpty()} followed by a {@code poll()}.
+     * Takes from a deque that another thread may be draining or clearing concurrently, ending the stream once
+     * it comes up empty.
      * <p>
-     * The two-call form - which this replaced - is not atomic: another consumer, or the clear-on-close the
-     * {@code JStream*} processors perform, can empty the deque between the two, and the second call then
-     * returns {@code null} into a stream declared {@link Spliterator#NONNULL}, typically surfacing as an NPE
-     * inside the caller's terminal operation at shutdown. One {@code poll()} cannot observe that gap.
-     * <p>
-     * Termination behaviour is otherwise unchanged: the stream still ends the first time the deque is found
-     * empty, which is one of the reasons the {@code JStream*} API is deprecated.
-     *
-     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc/parallel-consumer#912</a>
+     * The take is a <b>single</b> {@code poll()} rather than an {@code isEmpty()} test followed by one: those
+     * two calls are not atomic, so the deque can empty in between and the {@code poll()} then returns
+     * {@code null} into a stream that declares {@link Spliterator#NONNULL}.
      */
     private static class DequeSpliterator<T> extends Spliterators.AbstractSpliterator<T> {
 
         private final Deque<? extends T> userProcessResultsStream;
 
-        DequeSpliterator(Deque<? extends T> userProcessResultsStream, long estimatedSize) {
-            super(estimatedSize, Spliterator.NONNULL);
+        DequeSpliterator(Deque<? extends T> userProcessResultsStream) {
+            // Estimate 0 rather than "unknown": it keeps AbstractSpliterator.trySplit() disabled, so a caller
+            // that asks for a parallel stream cannot have a split poll ahead of this single-shot source.
+            super(0, Spliterator.NONNULL);
             this.userProcessResultsStream = userProcessResultsStream;
         }
 

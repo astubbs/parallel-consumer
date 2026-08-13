@@ -51,9 +51,7 @@ class Java8StreamUtilsTest {
 
         var stream = Java8StreamUtils.setupStreamFromDeque(emptiedUnderneath);
 
-        // dereferences every element, so a null would surface as an NPE here rather than silently
-        Assertions.assertThatCode(() -> Assertions.assertThat(stream.map(String::length).collect(Collectors.toList()))
-                        .isEmpty())
-                .doesNotThrowAnyException();
+        // map dereferences every element, so a null reaches the test as an NPE rather than as a quiet pass
+        Assertions.assertThat(stream.map(String::length).collect(Collectors.toList())).isEmpty();
     }
 }
