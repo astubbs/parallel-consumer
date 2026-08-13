@@ -137,9 +137,9 @@ public class BlockedThreadAsserter {
      *     {@code unblockingFunction.run()}, which is deliberate and cannot be moved: ticking after the call would
      *     race the woken function's own tick (an unblocker like {@code latch::countDown} can return after the
      *     thread it released has already ticked), and a correctly blocking function would then fail. Ticking
-     *     first means any return landing after the window necessarily takes the higher tick, so what this
-     *     actually rejects is a return that races the end of the window - between the window elapsing and the
-     *     unblocker ticking - and nothing later.
+     *     first means any return landing after the unblocker's tick necessarily takes the higher tick, so what
+     *     this actually rejects is a return that races the end of the window - between the window elapsing and
+     *     the unblocker ticking, which still takes the LOWER tick - and nothing later.
      *     <p>
      *     So the window is the real guard, and a function that returns on its own schedule <em>after</em> the
      *     window but within {@code returnBudget} passes. That is not an oversight to be fixed by a tighter
