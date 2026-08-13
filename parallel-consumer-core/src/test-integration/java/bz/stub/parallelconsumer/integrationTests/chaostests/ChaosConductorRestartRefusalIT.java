@@ -4,8 +4,7 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.integrationTests.utils.BrokerlessInstances;
 import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import bz.stub.parallelconsumer.integrationTests.utils.RecordingExecutor;
 import org.junit.jupiter.api.Test;
@@ -38,16 +37,6 @@ class ChaosConductorRestartRefusalIT {
     /** Any roll works: pickInState indexes modulo the candidate list, and there is one candidate. */
     private static final int ANY_ROLL = 0;
 
-    private static ManagedPCInstance newInstance() {
-        ManagedPCInstance.Config config = ManagedPCInstance.Config.builder()
-                .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
-                .order(ProcessingOrder.UNORDERED)
-                .inputTopic("restart-refusal-topic")
-                .build();
-        return new ManagedPCInstance(config, null, key -> {
-        });
-    }
-
     /** Records what the probe would have been told, so a phantom RESTART is visible. */
     private static class RecordingObserver implements ChaosConductor.ChaosObserver {
 
@@ -60,7 +49,7 @@ class ChaosConductorRestartRefusalIT {
     }
 
     private static class Fixture {
-        final ManagedPCInstance instance = newInstance();
+        final ManagedPCInstance instance = BrokerlessInstances.newInstance("restart-refusal-topic");
         final RecordingExecutor executor = new RecordingExecutor();
         final RecordingObserver observer = new RecordingObserver();
         final ChaosConductor conductor = ChaosConductor.builder()

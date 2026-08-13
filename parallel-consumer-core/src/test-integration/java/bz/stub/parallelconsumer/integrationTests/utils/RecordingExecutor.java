@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +20,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class RecordingExecutor extends AbstractExecutorService {
 
-    private final List<Runnable> tasks = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<Runnable> tasks = new CopyOnWriteArrayList<>();
 
     /** Tasks submitted and not yet drained by {@link #runAll()}. */
     public List<Runnable> getTasks() {

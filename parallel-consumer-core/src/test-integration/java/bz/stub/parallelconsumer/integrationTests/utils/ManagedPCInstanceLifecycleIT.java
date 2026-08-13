@@ -4,13 +4,10 @@ package bz.stub.parallelconsumer.integrationTests.utils;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
-import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -47,23 +44,13 @@ class ManagedPCInstanceLifecycleIT {
      */
     private static final int SECOND_CLOSER_WATCH_MS = 1_000;
 
-    private ManagedPCInstance newInstance() {
-        ManagedPCInstance.Config config = ManagedPCInstance.Config.builder()
-                .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
-                .order(ProcessingOrder.UNORDERED)
-                .inputTopic("lifecycle-regression-topic")
-                .build();
-        return new ManagedPCInstance(config, null, key -> {
-        });
-    }
-
     /**
      * The double-submission itself: a second start while the first is still queued must be refused,
      * not silently queued behind it.
      */
     @Test
     void secondStartIsRefusedWhileTheFirstIsStillInFlight() {
-        ManagedPCInstance instance = newInstance();
+        ManagedPCInstance instance = BrokerlessInstances.newInstance("lifecycle-regression-topic");
         RecordingExecutor executor = new RecordingExecutor();
 
         assertThat(instance.start(executor)).isTrue();
@@ -81,7 +68,7 @@ class ManagedPCInstanceLifecycleIT {
      */
     @Test
     void aStopWhileQueuedAbortsTheStartAndReleasesTheGuard() {
-        ManagedPCInstance instance = newInstance();
+        ManagedPCInstance instance = BrokerlessInstances.newInstance("lifecycle-regression-topic");
         RecordingExecutor executor = new RecordingExecutor();
 
         assertThat(instance.start(executor)).isTrue();
@@ -102,7 +89,7 @@ class ManagedPCInstanceLifecycleIT {
      */
     @Test
     void aSecondAsyncStopDoesNotStartASecondCloser() throws InterruptedException {
-        ManagedPCInstance instance = newInstance();
+        ManagedPCInstance instance = BrokerlessInstances.newInstance("lifecycle-regression-topic");
         @SuppressWarnings("unchecked")
         ParallelEoSStreamProcessor<String, String> pc = mock(ParallelEoSStreamProcessor.class);
 
