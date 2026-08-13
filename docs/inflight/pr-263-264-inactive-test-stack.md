@@ -42,14 +42,6 @@ resolves is.
 
 ## Open items
 
-- **The three unstarted units are now unblocked.** Re-enabling the two long-dark core tests
-  (`ParallelEoSStreamProcessorTest.processInKeyOrder` and
-  `offsetsAreNeverCommittedForMessagesStillInFlightLong`) and writing the missing
-  `userSucceedsButProduceToBrokerFails`. They were held behind astubbs#260, **which is now merged**,
-  so the stated precondition is satisfied. Both dark tests fail 100% deterministically, the library
-  is correct, and the measured commit sequences they should assert are recorded in
-  `docs/test-hardening/dark-core-tests-measured-commit-sequences-2026-08-12.md`. They need assertion
-  surgery, not investigation. **This is not part of either PR** - it is follow-on work.
 - **Should the new 40,000-message `LoadTest` case auto-run in the required performance check?**
   `bin/performance-test.sh` passes `-Dincluded.groups=performance` and is the "Performance Tests"
   leg of `maven.yml`, a required check on every PR, so `asyncConsumeAndProcessAtVolume` runs there
@@ -64,6 +56,22 @@ resolves is.
 
 ## Settled
 
+- **The last three units are done, here.** astubbs#260 merging removed the only blocker, so the two
+  long-dark core tests are re-enabled and the missing one is written, rather than left as follow-on:
+  - `offsetsAreNeverCommittedForMessagesStillInFlightLong` - was asserting that *nothing* commits
+    while work is in flight. PC does commit the base offset; that is a starting point, not progress.
+    Now asserts the frontier, cumulatively: `{3}`, `{3,4}`, `{3,4,6}`.
+  - `processInKeyOrder` - was asserting flattened offsets `{0,2,3,6,8}`. Two things were wrong: a
+    committed offset is exclusive (where to resume, not the last record done), and partition 1's base
+    offset is 4, which the flattened helper reads as progress because it only trims a genesis of 0.
+    Now per-partition via `assertCommitLists`, ending `(p0=[3,4], p1=[4,7,9])`.
+  - `userSucceedsButProduceToBrokerFails` - new. A produce failure must not commit the offset, and
+    the record must be retried.
+  All three run across all three commit modes, and each was mutation-checked: breaking the expected
+  value reds it. The measurements that were salvaged out of the deleted plan are now *in* these
+  tests, with the reasoning in comments, so that salvage file is gone too - an executable assertion
+  and a prose copy of the same numbers would drift apart, which is the defect the `todo-index.md`
+  count fix in this same PR removes.
 - **The plan documents are cut.** All three (`2026-08-08-001`, `2026-08-08-002`,
   `2026-08-12-001`) are deleted: their work landed, and `AGENTS.md` says a plan goes stale once its
   work lands. The one thing that outlived them - the measured commit sequences for the three

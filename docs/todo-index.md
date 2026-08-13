@@ -212,7 +212,6 @@ that line, leave it in the code - it will show up here.
 - awaitForSomeLoopCycles(50); // async commit can be slow - todo change this to event based
 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
-- verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction(); // todo remove all wait nevers in favour of triggers as it slows down test
 
 **`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/utils/KafkaTestUtils.java`**
 

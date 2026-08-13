@@ -20,7 +20,6 @@ import org.apache.kafka.common.serialization.Serdes;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -36,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
@@ -433,7 +433,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 assertCommits(of(2), "Only one of the two offsets committed, as they were coalesced for efficiency"));
     }
 
-    @Disabled
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
     void offsetsAreNeverCommittedForMessagesStillInFlightLong(CommitMode commitMode) {
@@ -469,8 +468,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         awaitForSomeLoopCycles(1);
 
-        // make sure no offsets are committed
-        verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction();
+        // Nothing may be committed beyond the base offset: 0 is still in flight, so 1 completing cannot
+        // advance the contiguous frontier. assertCommits trims the genesis commit, so "no progress" is the
+        // empty set - PC re-committing the base offset is not progress and is expected.
+        assertCommits(of(), "1 completed but 0 is still in flight, so the frontier cannot move");
 
         // finish 2
         releaseAndWait(locks, 2);
@@ -478,40 +479,33 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         //
         awaitForSomeLoopCycles(1);
 
-        // make sure no offsets are committed
-        verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction();
+        // still blocked by 0
+        assertCommits(of(), "2 completed too, but 0 still blocks the frontier");
 
         // finish 0
         releaseAndWait(locks, 0);
         awaitForOneLoopCycle();
 
-        // make sure offset 2, not 0 or 1 is committed
-        verify(producerSpy, after(verificationWaitDelay).times(1)).commitTransaction();
-        var maps = producerSpy.consumerGroupOffsetsHistory();
-        assertThat(maps).hasSize(1);
-        OffsetAndMetadata offsets = maps.get(0).get(CONSUMER_GROUP_ID).get(toTopicPartition(firstRecord));
-        assertThat(offsets.offset()).isEqualTo(2);
+        // 0, 1 and 2 are now contiguously complete, so the frontier jumps straight to 3 - the next offset to
+        // consume. It is 3 and not 2 because a committed offset is exclusive: it names where to resume, not
+        // the last record done.
+        // The expectations below are CUMULATIVE - assertCommits compares the whole commit history, not the
+        // latest entry - so each step adds to the set rather than replacing it.
+        awaitForCommit(3);
+        assertCommits(of(3), "0,1,2 contiguously complete - resume at 3");
 
         // finish 3
         releaseAndWait(locks, 3);
 
-        // 3 committed
-        verify(producerSpy, after(verificationWaitDelay).times(2)).commitTransaction();
-        maps = producerSpy.consumerGroupOffsetsHistory();
-        assertThat(maps).hasSize(2);
-        offsets = maps.get(1).get(CONSUMER_GROUP_ID).get(toTopicPartition(firstRecord));
-        assertThat(offsets.offset()).isEqualTo(3);
+        awaitForCommit(4);
+        assertCommits(of(3, 4), "3 done, resume at 4");
 
         // finish 4,5
         releaseAndWait(locks, of(4, 5));
 
-        // 5 committed
-        verify(producerSpy, after(verificationWaitDelay).atLeast(3)).commitTransaction();
-        maps = producerSpy.consumerGroupOffsetsHistory();
-        assertThat(maps).hasSizeGreaterThanOrEqualTo(3);
-        offsets = maps.get(2).get(CONSUMER_GROUP_ID).get(toTopicPartition(firstRecord));
-        assertThat(offsets.offset()).isEqualTo(5);
-        assertCommits(of(2, 3, 5));
+        // 4 and 5 coalesce into one advance rather than committing twice
+        awaitForCommit(6);
+        assertCommits(of(3, 4, 6), "4 and 5 done, resume at 6");
 
         // close
         parallelConsumer.close();
@@ -660,7 +654,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
     @SneakyThrows
-    @Disabled
     public void processInKeyOrder(CommitMode commitMode) {
         setupParallelConsumerInstance(ParallelConsumerOptions.builder()
                 .commitMode(commitMode)
@@ -748,7 +741,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 .as("blocked by 0 (1 shouldn't be run until 0 is complete, due to key order processing)")
                 .isFalse();
 
-        // make sure no offsets are committed
+        // nothing committed at all yet - not even partition 1's bootstrap
         assertCommits(of());
 
         // finish 2 process clear, but commit blocked by 0
@@ -758,21 +751,22 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertThat(processedState.get(2)).isTrue();
 
 
-        // still nothing - 0 blocks 1 and 2 (partition 0)
-        verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction(); // todo remove all wait nevers in favour of triggers as it slows down test
+        // Still nothing has advanced on partition 0 - 0 is in flight and blocks its key. Partition 1 has by now
+        // emitted its bootstrap commit at 4, which is ITS base offset (record creation uses a global offset
+        // counter, so partition 1's records start at 4) - a starting point, not progress. Asserted per-partition
+        // from here on, because the flattened assertCommits only trims a genesis of 0 and so would read
+        // partition 1's 4 as if it were progress.
         awaitForOneLoopCycle();
-        assertCommits(of());
+        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(), of(4))));
 
         // finish 0 - releases pending (1,2)
         log.debug("Unlocking 0...");
         msg0Lock.countDown();
 
-        // 0 gets comitted by itself
-        awaitForCommitExact(0, 0);
-
-        // make sure offset 0 is committed. 1 is now free to be processed (same key as 0), which as 2 was processed previously, frees up offset 2 to commit
-        awaitForCommitExact(0, 2);
-        assertCommits(of(0, 2));
+        // 0, 1 and 2 are all key-1 on partition 0: completing 0 frees 1, and 2 was already done, so the whole
+        // run 0-2 becomes contiguous and partition 0 advances once, to 3. It does not commit 0 and then 2 -
+        // the committed offset is where to resume, so finishing record 2 means resuming at 3.
+        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3), of(4))));
 
         // unlock 3 - should get committed
         log.debug("Unlocking 3...");
@@ -784,8 +778,8 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         awaitUntilTrue(() -> processedState.get(5));
         assertThat(processedState.get(5)).as("5 should processed").isTrue();
 
-        awaitForCommitExact(0, 3);
-        assertCommits(of(0, 2, 3));
+        // partition 0 advances to 4; partition 1 cannot move while 4 is in flight, even though 5 and 6 are done
+        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3, 4), of(4))));
 
         // unlock 4 - clears 5 for offset commit - 7 not processed yet (5,6,7 same key), 8 was never locked
         log.debug("Unlocking 4...");
@@ -795,18 +789,20 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         awaitUntilTrue(() -> processedState.get(6));
         assertThat(processedState.get(6)).as("6 should processed").isTrue();
 
-        // 5 and 6 finished, same key, coalesced commit to 6
+        // THE INVARIANT THIS TEST EXISTS FOR: partition 1 would not advance past its base offset 4 while key-2's
+        // record 4 was in flight, even though 5, 6 and 8 had completed. Now that 4 is done it jumps to 7 - not to
+        // 9 - because 8 is complete but not contiguous, so it cannot be resumed past.
         awaitForSomeLoopCycles(1);
-        awaitForCommitExact(1, 6);
-        assertCommits(of(0, 2, 3, 6));
+        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3, 4), of(4, 7))));
 
         // unlock 7 (same key as 6), unblocks 8 for commit
         assertThat(processedState.get(7)).isFalse();
         assertThat(processedState.get(8)).isTrue();
         //
         releaseAndWait(locks, 7);
-        awaitForCommitExact(1, 8);
-        assertCommits(of(0, 2, 3, 6, 8));
+
+        // 7 completing makes 7 and 8 contiguous, so partition 1 finally resumes at 9
+        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(3, 4), of(4, 7, 9))));
     }
 
     /**
@@ -1096,6 +1092,49 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
 
         assertThat(producerSpy.history()).hasSize(1);
+    }
+
+    /**
+     * The produce half of {@link #produceMessageFlow}: the user function succeeds, and the produce that follows it
+     * fails. Nothing covered this before - the audit records it as a path that exists, is reachable, and has no
+     * test - so a regression that swallowed a produce failure and committed anyway would have gone unnoticed.
+     * <p>
+     * What is asserted is the consequence, not the throw: the offset does <b>not</b> advance, and the record is
+     * retried. A produce failure is not a delivered result, so the work is not done.
+     * <p>
+     * No producer-callback-thread variant here. That asymmetry is owned by open astubbs#261, and it is
+     * unreachable in this harness anyway: the base class gives every test one auto-completing {@code MockProducer}
+     * that invokes callbacks on the calling thread, so there is no I/O thread to raise from.
+     */
+    @ParameterizedTest()
+    @EnumSource(CommitMode.class)
+    void userSucceedsButProduceToBrokerFails(CommitMode commitMode) {
+        setupParallelConsumerInstance(commitMode);
+
+        var userFunctionRan = new AtomicInteger();
+
+        // fail every produce, so the record can never complete
+        doThrow(new FakeRuntimeException("Fake produce failure"))
+                .when(producerSpy).send(any(ProducerRecord.class), any());
+
+        parallelConsumer.pollAndProduce((ignore) -> {
+            userFunctionRan.incrementAndGet();
+            return new ProducerRecord<>("Hello", "there");
+        });
+
+        // the user function is retried, which is only possible if the produce failure failed the work
+        await().untilAsserted(() ->
+                assertThat(userFunctionRan.get())
+                        .as("user function retried after the produce failed")
+                        .isGreaterThan(1));
+
+        parallelConsumer.requestCommitAsap();
+        awaitForSomeLoopCycles(2);
+
+        // and the offset never advances - the record is not done just because the user function returned
+        assertCommits(of(), "a failed produce must not commit the record's offset");
+
+        parallelConsumer.close();
     }
 
     /**
