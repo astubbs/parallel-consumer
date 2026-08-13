@@ -387,7 +387,7 @@ class ProducerManagerTest {
             }, () -> {
                 log.debug("Unblocking offset processing offset1Mutex...");
                 offset1Mutex.countDown();
-            }, ofSeconds(20)); // was 10s; too tight under PIT
+            });
 
             //
             await().atMost(ofSeconds(20))
