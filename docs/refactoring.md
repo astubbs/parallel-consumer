@@ -280,6 +280,40 @@ Do not start one casually.
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
   brute-force transaction-commit retry.
+- **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
+  rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
+  **expected operational state**, not an internal fault: the reachable causes are client-side
+  rejections of the user's own result records - `RecordTooLargeException` is the one
+  `TransactionalPartialResultSetIT` exercises - and the throw is observable only on the synchronous
+  pre-accumulator path, because Kafka's `ProducerBatch` swallows callback throws on the async one.
+  A name that says "internal" sends every reader, human or agent, to re-derive that whole chain
+  before they can conclude it is ordinary failure handling. It was verified from source and
+  kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
+  - **Preferred, non-breaking:** throw a specific subclass - e.g. `RecordPublishFailedException
+    extends InternalRuntimeException` - so existing `catch (InternalRuntimeException)` keeps
+    working while the type states the situation. Renaming `InternalRuntimeException` itself would
+    be user-visible and belongs in
+    [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
+    needing that.
+  - **Drive-by while there:** the lambda parameter is bare `exception`. It is the *send* failure, not
+    a user-code exception (those are caught around `usersFunction.apply` in
+    `runUserFunctionInternal`), so name it `sendFailure`. Do **not** name it after user code - that
+    is the exact confusion this entry exists to stop.
+  - Adjacent but **not** the same thing: `confluentinc#242` (issue) and its PR `confluentinc#291`
+    cover the **user function** throwing terminal/retry exceptions, so neither classifies a *send*
+    failure. Send-retry semantics live under astubbs#141 / astubbs#149, epic astubbs#239. This item
+    is naming only - it changes no behaviour and does not wait on any of them.
+  - Both are already accounted for, so do not re-mirror them. `confluentinc#291` was closed unmerged
+    on 2023-06-15 in the PR half of the administrative sweep and is recorded in
+    [`upstream-map.yaml`](../src/docs/development/upstream-map.yaml) under `sweep-2023-admin-closure`;
+    it has no dedicated fork issue because that cohort mirrored the 28 swept *issues*, with the 35
+    swept *PRs* carried in the map and surfaced under the relevant mirror's "Prior work".
+    `confluentinc#242` is not sweep-affected at all - astubbs closed it as completed on 2022-10-21.
+    `README_TEMPLATE.adoc` already cites `confluentinc#291` as the refinement reference for
+    throwing failure exceptions from the processing function.
+  - **Small gap worth closing while here:** astubbs#239's "Prior work" names `confluentinc#366` from
+    that same swept-PR cohort but not `confluentinc#291`, which is equally prior art for the retry /
+    terminal-exception half of that epic.
 
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
