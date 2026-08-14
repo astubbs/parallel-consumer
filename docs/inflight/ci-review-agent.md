@@ -90,10 +90,23 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   **The comment route is no better off, for a different reason.** It looks testable - just comment
   on a PR - but `issue_comment` workflows always run the **default branch's** copy, so a comment
   exercises master's `claude.yml`, never the one on your branch. The tool grants and the
-  `refresh-gate` added there are unverified in exactly the same way. The dispatch half of that
-  exercise is now done and is the entry above; **the comment route is still unexercised** - the
-  open questions are whether it really does open an inline thread, and whether `claude-review`
-  clears itself afterwards.
+  `refresh-gate` added there are unverified in exactly the same way.
+
+- **OBSERVED 2026-08-14, and it worked: the comment route posted, and cleared its own gate.** The
+  other half of the exercise the entry above asks for. `@claude review this` on astubbs#297, run
+  [`31773366411`](https://github.com/astubbs/parallel-consumer/actions/runs/31773366411): a
+  `claude[bot]` comment appeared reporting `finished @astubbs's task in 4m 7s`, both jobs
+  (`claude`, `refresh-gate`) concluded `success`, and `claude-review` went green with **no manual
+  intervention**. So where the dispatch route spent a full billed review and posted nothing, the
+  comment route completes end-to-end - which is the evidence behind "ask by comment" being routing
+  advice rather than a preference.
+
+  **Whether it opens inline review threads is still UNEXERCISED - not answered, and not refuted.**
+  That run raised no blocking finding, so it had no occasion to open one; astubbs#297 has zero
+  review threads from any author. Answering it needs a PR where the reviewer actually has
+  something blocking to say. Do not read this entry as evidence that the route *cannot* - the
+  mechanism (an entity event, so the inline-comment MCP server is installed) is in the
+  inline-comment entry above, and it is the reason to prefer this route in the first place.
 - **The duplication scanners are pointed away from where agents duplicate.** `dups: clones` and
   `dups: similarity` scan `parallel-consumer-*/src` only, and the similarity job additionally
   filters `file_extensions: 'java'` - so `docs/`, `.github/`, `bin/` and `AGENTS.md` are scanned by

@@ -70,6 +70,14 @@ Same magnitude, different position, outcome flips - which is what rules out "it 
 load". CPU contention alone does *not* reproduce it: under `SOAK_FREE_CORES=1` the margin stayed at
 504-522 ms across runs, because burners slow both terms together.
 
+**One term in the margin was never isolated.** Both arms placed their 700 ms *around* the send -
+before it, and after it but before the check - so neither placed any between the latch firing and
+the `pollDelay` clock starting. That gap is not zero: `BrokerCommitAsserter#assertConsumedAtMostOffset`
+runs `setup()` - `subscribe` plus `seekToBeginning` - and only then calls `await().pollDelay(delay)`,
+so subscribe and group-join time shifts the whole delay window later while `t=0` stays where it was.
+Against the ~4 s post-fix margin it is very unlikely to matter, and nothing here suggests it does;
+this records what the table decomposes and what it does not, rather than a suspected defect.
+
 ## The fix
 
 Anchor the check to the **start** of the block instead of hoping to overlap it. The test already has a
