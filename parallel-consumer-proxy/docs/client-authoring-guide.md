@@ -118,6 +118,14 @@ suite's negative control on this section).
 
 ## 4. Liveness duties
 
+Every duty in this section and §5 is **gated by its capability token** (the specification's
+capability-negotiation rules): heartbeats by `heartbeat`, the manifest reconnect and `Drop` by
+`manifest`, `WorkerDied` by `worker-death`, the `Shutdown` drain by `shutdown`. A duty whose token is
+not in `Configured.capabilities` does not exist on that session - do not send its messages, and do not
+wait for its replies. The gated `Configured` fields (`heartbeat_interval`, `lease_duration`,
+`reconnect_window`) are absent exactly when their token is un-negotiated, so there is no interval to
+guess at.
+
 - Send `Heartbeat` every `Configured.heartbeat_interval`, from the admin, unconditionally - independent of
   queue depth, executor business, or anything the workers are doing.
 - Watch your own workers. When one dies, send `WorkerDied` naming the tokens it held - this is the primary
@@ -159,6 +167,33 @@ Every client runs the same named scenarios against the same JVM-side harness (th
 its identity everywhere: the harness CLI, each language's test names, and this list. A client is
 conformant when every scenario below passes; a scenario name missing from a client's test suite is a
 review finding.
+
+### Running the harness
+
+The harness is `bz.stub.parallelconsumer.proxy.testmode.TestModeMain`, deliberately shipped in the proxy
+module's **test** jar (it must never reach a client package), so it runs on the proxy module's test
+classpath: build with `bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests`, then
+`java -cp <tests-jar>:<main-jar>:<test-scope deps> ...TestModeMain --mock --scenario <name>`. Run it with
+no arguments for its usage text, which is authoritative for its flags. The conventions a test needs:
+
+- **The scenario name is also the topic name.** `Configure` subscribes to the scenario name as its one
+  topic; the seeded records arrive from it.
+- **`kafka_properties` may be empty** - `--mock` builds mock Kafka clients and reads no properties. Real
+  credentials never belong in a conformance test.
+- **The harness is not the shipped sidecar, and it diverges from the lifecycle contract in three ways a
+  test must absorb** (each is a harness limitation, not protocol): its stdout carries logging *before*
+  the `port: <n>` line, so scan for the line rather than asserting it comes first (production spawn code
+  still implements the specification's first-line contract); it serves sessions **until stdin EOF** - it
+  does not exit after a client-initiated drain, so reap it by closing its stdin, never by waiting; and it
+  currently negotiates only `["dispatch"]`, so the liveness, manifest, terminal and shutdown duties are
+  off by negotiation (their `Configured` fields absent) until the engine units land and their tokens are
+  granted - which is the same statement as the "named now" table below.
+- **The harness process carries no verdict channel**: it exits 0 whether or not the scenario's assertion
+  held, and prints no result. Where an assertion names engine state a client cannot see (the committed
+  offset in the first two scenarios), that assertion runs JVM-side; the client-side test asserts the
+  wire-observable consequences - the dispatch arrives, a failure redelivers with `attempt` incremented
+  and the reason verbatim, a success is followed by silence rather than redelivery. A per-scenario verdict
+  the client test can read is U31's harness work, not something to go hunting for today.
 
 Live now (the harness serves them today):
 

@@ -34,7 +34,13 @@ diff is enforced empty, not audited by hand.
   length-delimited (standard varint-prefixed) messages, covering every message type, a beyond-int32 epoch, a
   tombstone, and presence/absence in both directions. Every language's generated parser must read those
   bytes to exactly the documented values; they are the cross-language fixed point a same-runtime round trip
-  cannot provide.
+  cannot provide. The exact contents: **eight** `ClientMessage`s (configure, heartbeat, three reports,
+  worker-died, manifest, released-report) and **five** `ProxyMessage`s (configured, dispatch, drop,
+  shutdown, set-executor-count) - the transcript's reconnect `Configured` is byte-identical to the first
+  and is deliberately not committed twice. The corpus pins **serialization, not session legality**: it
+  declares `capabilities: ["dispatch"]` yet carries traffic from every token (and a `SetExecutorCount` no
+  v1 proxy ever sends), and it reports two outcomes at one epoch - a parser fixture, never a model session
+  to replay against a live proxy.
 
 ### Deliberate narrowness
 
@@ -141,7 +147,12 @@ must not imply otherwise to its users.
 Each dispatched record carries a **lease** proving the client is alive - attached at dispatch, extended for
 **all** in-flight records of the session by connection-level `Heartbeat` messages. The client's admin sends
 `Heartbeat` every `heartbeat_interval` (from `Configured`), unconditionally - never withheld because the
-dispatch queue is full or executors are busy.
+dispatch queue is full or executors are busy. This whole section is gated by the `heartbeat` capability
+(see [Capabilities](#capabilities-and-versioning)): on a session that did not negotiate it, the client
+sends no heartbeats, `Configured` carries no `heartbeat_interval` or `lease_duration`, and no lease
+machinery runs. Heartbeating starts when `Configured` arrives (nothing earlier names the interval) and,
+after a reconnect, resumes from the moment the reconnect handshake's `Configured` arrives - the same
+moment reporting may resume.
 
 - The lease is **not a processing deadline**. A worker whose function runs for hours keeps its record as
   long as the admin heartbeats. There is no per-record clock: "a record stays in flight until your function
@@ -200,8 +211,11 @@ records to scheduling immediately, attempt counts unchanged, without waiting for
   input** everywhere it is handled, and the proxy bounds and sanitises it before any log line.
 - **`Terminal`** - the worker declares the record terminally failed. The proxy produces the record to the
   configured `terminal_topic` and advances the offset; the record is never dispatched again. Only valid on
-  a session whose `Configure` named a `terminal_topic` - a `Terminal` report without one is a protocol
-  violation. The terminal produce and the commit are not atomic: a crash between them redelivers the record
+  a session whose **effective** configuration carries a `terminal_topic` - which requires both the
+  negotiated `terminal` capability and a `Configure` that named a topic; the client checks
+  `Configured.terminal_topic`, not its own request. A `Terminal` report without one is a protocol
+  violation, discarded non-fatally: the record stays in flight and a later report at the same epoch is
+  still honoured. The terminal produce and the commit are not atomic: a crash between them redelivers the record
   and can duplicate the terminal entry (at-least-once, again). The terminal topic inherits the source
   topic's confidentiality expectations - readable only by the audience already entitled to the source
   topic, bounded retention - and the proxy cannot enforce broker-side ACLs, so it does not claim to.
@@ -221,11 +235,19 @@ outcome.
 Both directions exist, and both end with everything either reported or released - never abandoned, never
 guessed.
 
-**Proxy-initiated** (parent death detected, or the operator stopping the sidecar): the proxy sends
+**Proxy-initiated** (the operator stopping the sidecar while a client is connected): the proxy sends
 `Shutdown`, stops dispatching, and drains. On `Shutdown` the client: stops handing queued records to
 executors; reports every queued record `Released`; lets executing records finish and report normally; then
 half-closes the stream. The proxy commits what resolved within `drain_timeout`, completes the stream, and
 exits. Records unreported at the deadline are left for redelivery - the proxy does not invent an outcome.
+(`Shutdown` is gated by the `shutdown` capability; a session that did not negotiate it gets the abrupt
+path below, never the message.)
+
+**Parent death is not this path.** The stdin write end is held by the client's own process, so EOF on
+stdin *is* proof the client is gone - there is nobody left to read a `Shutdown`, and the proxy does not
+send one. It commits what has already resolved and exits; a stream still technically open is terminated
+abruptly (the peer, if any half-dead remnant is still reading, observes stream termination, not a drain
+order). Uncommitted records redeliver to the next group member as an ordinary rebalance.
 
 **Client-initiated** (the application closing its client): the client performs the same sequence unprompted
 - stop hand-out, `Released` for the queue, final reports for executing records - and then **half-closes**
@@ -234,8 +256,8 @@ shutdown request message, deliberately, because a client that has already report
 has nothing left to say. The proxy then drains, commits, completes the stream, and exits with its group
 membership cleanly ended.
 
-If the application dies without running any code (SIGKILL), the proxy's parent-death watchdog exits the
-process; uncommitted records redeliver to the next group member as an ordinary rebalance.
+An application killed without running any code (SIGKILL) is the parent-death case above: the watchdog
+exits the process, and the rebalance does the rest.
 
 ## Capabilities and versioning
 
@@ -268,6 +290,24 @@ The v1 **baseline** is the first six. A conformant v1 client implements all six;
 future revision can add a seventh without a flag day, and so an older client meeting a newer proxy (or the
 reverse) degrades by negotiation instead of by surprise.
 
+Three consequences of the negotiation rule, spelled out because every one of them bit the specification
+probe:
+
+- **Duties follow the negotiated set, not this document's imperative mood.** Where a later section says
+  "send `Heartbeat` unconditionally" or "reconnect with `Manifest`", the duty exists **iff its gating
+  token is in the negotiated set**. A client on a session without `heartbeat` sends no heartbeats (and
+  has no lease semantics to honour); without `manifest` it has no reconnect path; without `terminal` it
+  may not report `Terminal`; without `shutdown` it will never receive one. A gated message sent anyway is
+  the ordinary un-negotiated-message violation - the receiver ignores it or fails the stream.
+- **The proxy's own token set is not promised by this specification.** A *complete* v1 proxy grants the
+  whole baseline, but a proxy whose machinery for a token is not yet built excludes that token, so an
+  empty (= baseline) client declaration can still negotiate down to a subset. The client reads
+  `Configured.capabilities` and behaves accordingly; asserting the baseline came back is a conformance
+  test's job, not a client library's assumption.
+- **A reconnect stream carries no `Configure`, so it negotiates nothing of its own**: the original
+  session's negotiated set survives connection loss and governs the reconnect stream. Opening a stream
+  with `Manifest` is itself gated - legal only when `manifest` is in that surviving set.
+
 ## The executor count
 
 `Configured.executor_count` tells the client how many executors to run - threads, processes, goroutines:
@@ -291,7 +331,7 @@ on any stream termination, so every refusal is recoverable by correcting and rec
 |---|---|
 | `PERMISSION_DENIED` | Connection's declared authority not in the allowlist (closed before any message is handled) |
 | `RESOURCE_EXHAUSTED` | A second concurrent connection while one session is live |
-| `FAILED_PRECONDITION` | First message on the stream is neither `Configure` (fresh) nor `Manifest` (reconnect); or a `Configure` on a new stream when the proxy is already configured |
+| `FAILED_PRECONDITION` | First message on the stream is neither `Configure` (fresh) nor `Manifest` (reconnect); a `Manifest`-first stream when `manifest` is not in the surviving session's negotiated set; or a `Configure` on a new stream when the proxy is already configured |
 | `INVALID_ARGUMENT` | `Configure` refused: both or neither of topics/pattern; unparseable pattern; `max_concurrency < 1`; the transactional commit mode (impossible through the proxy in v1); an unrecognized enum value; or Kafka clients rejecting the property map |
 | `INTERNAL` | Construction of the session's engine failed for a non-Kafka reason |
 
@@ -377,7 +417,7 @@ resolved to, so a client asserts what it got, not what it asked for. Durations a
 | `max_failure_history` | optional int32 | Failure records kept per record for retry introspection |
 | `invalid_offset_metadata_policy` | optional InvalidOffsetMetadataPolicy | See enum |
 | `launch_token` | optional string | **Reserved, unused in v1.** Post-v6 admission hardening: a per-launch secret inherited from the parent |
-| `terminal_topic` | optional string | Destination for `Terminal` records. **Presence enables terminal reports**; a `Terminal` without it configured is a protocol violation |
+| `terminal_topic` | optional string | Destination for `Terminal` records. **Presence, together with the negotiated `terminal` capability, enables terminal reports** - `Configured.terminal_topic` reports whether it took effect; a `Terminal` without an effective topic is a protocol violation |
 | `lease_duration` | Duration | How long records survive without heartbeats before returning to scheduling |
 | `heartbeat_interval` | Duration | How often the client must send `Heartbeat` |
 | `reconnect_window` | Duration | How long the proxy protects records after connection loss (default 30s) |
@@ -396,8 +436,16 @@ nothing to fill.
 Every value the proxy computes is **always set** despite the `optional` markers (which exist for
 presence-API stability across generated languages, not to permit absence): a `Configured` missing
 `max_concurrency` or `executor_count` is a protocol violation, and **absence never means "unlimited"**.
-`pc_instance_tag` and `terminal_topic` are set exactly when configured; `topics`/`topic_pattern` echo
-whichever subscription form was given.
+`pc_instance_tag` is set exactly when configured; `topics`/`topic_pattern` echo whichever subscription
+form was given.
+
+Four fields are **capability-gated**, and their absence is how the wire says the machinery is off for
+this session, not a violation: `lease_duration` and `heartbeat_interval` are set exactly when
+`heartbeat` is in the negotiated set, `reconnect_window` exactly when `manifest` is, and
+`terminal_topic` exactly when `terminal` is negotiated **and** `Configure` named a topic. So a
+`Configure` naming a `terminal_topic` on a session that did not negotiate `terminal` is accepted, but
+the echo omits the topic and terminal reports stay violations - the client learns its terminal feature
+is off by reading the echo, which is the general rule: assert what came back, never what was asked for.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -497,8 +545,11 @@ Empty. The drain order; see [Shutdown and drain](#shutdown-and-drain).
 
 ## A complete session, message by message
 
-The transcript below is the golden session, the same one committed as bytes in the golden resources.
-`→` is client to proxy, `←` is proxy to client.
+The transcript below is the golden session, committed as bytes in the golden resources - with one
+deliberate difference: the reconnect's repeated `Configured` is byte-identical to the first and appears
+once in the bytes, so the byte files hold eight client messages and five proxy messages (see
+[Wire contract at a glance](#wire-contract-at-a-glance) for the exact list and the corpus's
+parser-fixture-not-legal-session status). `→` is client to proxy, `←` is proxy to client.
 
 ```text
 # the application launches the sidecar; the sidecar prints its port
