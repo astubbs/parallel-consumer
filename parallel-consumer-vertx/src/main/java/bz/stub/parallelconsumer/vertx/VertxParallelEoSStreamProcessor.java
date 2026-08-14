@@ -211,7 +211,10 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 addToMailbox(context, wc);
             });
             send.onFailure(h -> {
-                log.error("Vert.x Vertical fail: {}", h.getMessage());
+                // the throwable rather than its message: this is the only record of why a send failed, and
+                // getMessage() alone drops the type, the cause chain and the stack - and reads "fail: null"
+                // for anything thrown without a message
+                log.error("Vert.x Vertical fail", h);
                 wc.onUserFunctionFailure(h);
                 addToMailbox(context, wc);
             });

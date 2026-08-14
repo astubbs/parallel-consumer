@@ -189,7 +189,9 @@ public class OffsetSimultaneousEncoder {
         try {
             activeEncoders.add(new ByteBufferEncoder(lengthBetweenBaseAndHighOffset, this));
         } catch (ArithmeticException a) {
-            log.warn("Cannot use {} encoder ({})", BitSetEncoder.class.getSimpleName(), a.getMessage());
+            // names ByteBufferEncoder, which is what this method builds - it reported BitSetEncoder, so the one
+            // warning telling you which encoder is unavailable named the wrong one
+            log.warn("Cannot use {} encoder", ByteBufferEncoder.class.getSimpleName(), a);
         }
     }
 

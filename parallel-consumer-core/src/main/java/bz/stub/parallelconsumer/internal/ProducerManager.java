@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.ConcurrentModificationException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -301,7 +302,13 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                             // try wait again
                             commitTransaction();
                         }
-                        boolean transactionModeIsReady = lastErrorSavedForRethrow == null || !lastErrorSavedForRethrow.getMessage().contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
+                        // getMessage() is nullable, and this runs while already handling an error - an exception with
+                        // no message (an NPE from the producer, say) turned the recovery path into a second failure.
+                        // The null-check above guards the reference, not the message.
+                        String lastErrorMessage = lastErrorSavedForRethrow == null
+                                ? ""
+                                : Objects.toString(lastErrorSavedForRethrow.getMessage(), "");
+                        boolean transactionModeIsReady = !lastErrorMessage.contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
                         if (transactionModeIsReady) {
                             // try again
                             log.error("Transaction was already in READY state - tx completed between interrupt and retry");
