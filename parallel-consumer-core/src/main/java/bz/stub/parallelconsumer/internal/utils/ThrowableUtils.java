@@ -29,6 +29,20 @@ import java.util.IdentityHashMap;
 public class ThrowableUtils {
 
     /**
+     * How far either walk will follow {@code getCause} before giving up.
+     * <p>
+     * The identity set below stops a chain that loops back to something already seen. It cannot stop one that never
+     * repeats: {@code getCause()} is overridable, so a throwable may return a <b>freshly allocated</b> cause on every
+     * call. Each is a new identity, so nothing is ever "seen" twice, and the walk allocates a throwable - with its own
+     * captured stack trace - per hop until the heap is gone. Both guards are needed because they stop different
+     * shapes, and neither implies the other.
+     * <p>
+     * A real chain is nowhere near this deep, so truncating is only ever reached by something pathological; reaching
+     * it means answering from what was walked rather than spending the control thread's shutdown on the rest.
+     */
+    private static final int MAX_CAUSE_DEPTH = 100;
+
+    /**
      * The throwable's own message, plus its root cause's, because the immediate message is routinely the least
      * informative one available.
      * <p>
@@ -41,10 +55,16 @@ public class ThrowableUtils {
      * <em>description</em> of a failure would prevent handling the failure itself. On any trouble it falls back to
      * the type name, which is always available and is still more than the null it replaced.
      *
-     * @param t the throwable to describe; must not be null
+     * @param t the throwable to describe; null answers {@code "null"} rather than throwing
      * @return a human-readable description, never null
      */
     public static String describeWithRootCause(Throwable t) {
+        if (t == null) {
+            // degrades rather than throwing, as hasCauseOfType does for the same argument. A null here is a caller
+            // bug, but this method's whole contract is that it does not add a second failure to the one being
+            // described - and the fallback below dereferences t, so it cannot be the null handler.
+            return "null";
+        }
         try {
             Throwable root = rootCauseOf(t);
             return root == t
@@ -66,6 +86,14 @@ public class ThrowableUtils {
      * <p>
      * <b>Never throws</b>, for the same reason as {@link #describeWithRootCause}: callers use this on the failure
      * path. An unreadable chain answers {@code false} rather than replacing one failure with another.
+     * <p>
+     * <b>The assumption this rests on, for whoever adds the next caller.</b> Searching the whole chain means a match
+     * anywhere decides the answer for the entire failure - so if an unrelated exception of this type were ever
+     * chained beneath a genuinely fatal one, the fatal one would be classified by the buried match. That is safe for
+     * the current retriable-logging callers because nothing chains one failure onto another:
+     * {@code WorkContainer.onUserFunctionFailure} replaces the stored cause per attempt rather than appending, and
+     * the reactive engines pass on only what their framework hands back. A change that starts aggregating failures
+     * into one chain would invalidate that, and the symptom would be quiet: a real error logged at debug.
      *
      * @param t    the throwable to search; null answers false
      * @param type the type to look for
@@ -73,10 +101,12 @@ public class ThrowableUtils {
     public static boolean hasCauseOfType(Throwable t, Class<? extends Throwable> type) {
         try {
             var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
-            for (var current = t; current != null && seen.add(current); current = current.getCause()) {
+            var current = t;
+            for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && seen.add(current); depth++) {
                 if (type.isInstance(current)) {
                     return true;
                 }
+                current = current.getCause();
             }
             return false;
         } catch (Throwable searchingItFailed) {
@@ -85,7 +115,7 @@ public class ThrowableUtils {
     }
 
     /**
-     * The deepest cause, stopping on a repeat.
+     * The deepest cause, stopping on a repeat or at {@link #MAX_CAUSE_DEPTH}.
      * <p>
      * An identity set rather than a self-reference check, because a cause chain can cycle without any link pointing
      * at itself: {@code initCause} refuses self-causation, so {@code A -> A} cannot be built and a self-check looks
@@ -96,8 +126,10 @@ public class ThrowableUtils {
         var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
         var root = t;
         seen.add(root);
-        for (var cause = root.getCause(); cause != null && seen.add(cause); cause = cause.getCause()) {
+        int depth = 0;
+        for (var cause = root.getCause(); cause != null && depth < MAX_CAUSE_DEPTH && seen.add(cause); cause = cause.getCause()) {
             root = cause;
+            depth++;
         }
         return root;
     }

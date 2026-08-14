@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.hasCauseOfType;
@@ -84,6 +85,74 @@ class ThrowableUtilsTest {
         assertThat(hasCauseOfType(buried, UnsupportedOperationException.class)).isTrue();
         assertThat(hasCauseOfType(buried, IllegalStateException.class)).as("the throwable itself counts").isTrue();
         assertThat(hasCauseOfType(buried, NumberFormatException.class)).isFalse();
+    }
+
+    /**
+     * A chain that never repeats and never ends.
+     * <p>
+     * The identity set stops a chain that loops <em>back</em>; it cannot stop one that never revisits anything.
+     * {@code getCause()} is overridable, so each call here hands back a brand-new object with its own captured stack
+     * trace - never "seen", so the walk runs until the heap is gone. Both guards are needed, and neither implies the
+     * other: this input defeats the cycle guard, and the cyclic input above defeats a depth cap alone would not catch
+     * it in time.
+     * <p>
+     * The timeout is the assertion. Without the depth bound this does not fail with a message - it allocates until
+     * the JVM dies, taking the control thread's shutdown with it.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void anEndlesslyFreshCauseChainIsBounded() {
+        EndlessCause.hops.set(0);
+        assertThat(describeWithRootCause(new EndlessCause())).isNotNull();
+        assertThat(EndlessCause.hops.get())
+                .as("hops taken while describing an endless chain")
+                .isLessThanOrEqualTo(HOP_CEILING);
+
+        EndlessCause.hops.set(0);
+        assertThat(hasCauseOfType(new EndlessCause(), NumberFormatException.class)).isFalse();
+        assertThat(EndlessCause.hops.get())
+                .as("hops taken while searching an endless chain")
+                .isLessThanOrEqualTo(HOP_CEILING);
+    }
+
+    /**
+     * Generously above the walk's own limit, because this asserts <em>bounded</em>, not the exact bound - pinning the
+     * constant here would make the test fail on a deliberate tuning change rather than on the defect.
+     */
+    private static final int HOP_CEILING = 1_000;
+
+    /**
+     * Each call hands back a <b>new</b> instance of itself, so no identity is ever seen twice and the chain never
+     * ends. The reviewer's example, made countable.
+     * <p>
+     * Counting hops rather than waiting for the heap to run out: an unbounded walk here would eventually throw
+     * {@link OutOfMemoryError}, which the walk's own {@code catch (Throwable)} would swallow and return from
+     * normally - so a "did it come back?" assertion passes either way, and the only thing distinguishing them would
+     * be how long the JVM took to die. This asks the question directly.
+     */
+    private static class EndlessCause extends RuntimeException {
+
+        static final AtomicInteger hops = new AtomicInteger();
+
+        EndlessCause() {
+            super("endless");
+        }
+
+        @Override
+        public synchronized Throwable getCause() {
+            hops.incrementAndGet();
+            return new EndlessCause();
+        }
+    }
+
+    /**
+     * The one property every caller on the failure path relies on, tested against the input most likely to break it.
+     * The fallback inside {@code describeWithRootCause} dereferences its argument, so it could not be the null
+     * handler - a null used to produce a second NPE that escaped the method entirely.
+     */
+    @Test
+    void aNullThrowableIsDescribedRatherThanThrowing() {
+        assertThat(describeWithRootCause(null)).isEqualTo("null");
     }
 
     @Test
