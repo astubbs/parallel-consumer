@@ -48,6 +48,8 @@
 #    13e-f. a bulleted LGTM, and an `->` arrow, both still stamp           -> pass (0)
 #    13g. a LAZY blockquote continuation - '> Bob said\nLGTM'              -> FAIL (1)
 #    13h-j. ... ended by a blank line, a list item, and a heading          -> pass (0)
+#    13k-m. ... and it only STARTS from a paragraph - not a heading, an
+#           empty `>`, or a fence inside the quote                        -> pass (0)
 #    14. LGTM wearing ordinary punctuation - (LGTM) LGTM! -- LGTM. LGTM,   -> pass (0)
 #    15. a rejected near-miss beside a real LGTM in the same body          -> pass (0)
 #
@@ -467,6 +469,27 @@ assert "13i. a list item interrupts the quoted paragraph, so a bulleted LGTM sta
 assert "13j. a heading also interrupts it, so the LGTM under it stamps" \
     0 "$(run_checker "$(owner_review '> Bob asked whether this was fine
 ## My own read
+LGTM')")"
+
+# LAZINESS STARTS FROM A PARAGRAPH AND FROM NOTHING ELSE. CommonMark will not lazily continue a
+# heading, a fence, a list or an empty `>` line, so the LGTM below is OUTSIDE the quote and is a
+# real stamp. Carrying the quote from every `>` line refused it - a FALSE NEGATIVE, and the
+# direction of error this whole check exists to avoid, because a memory aid that rejects a real
+# stamp is a nuisance people route around. Reported on astubbs/parallel-consumer#298.
+assert "13k. a heading inside the quote cannot be continued lazily, so the LGTM stamps" \
+    0 "$(run_checker "$(owner_review '> # context from the linked issue
+LGTM')")"
+
+assert "13l. an empty quote line ends the paragraph, so the LGTM after it stamps" \
+    0 "$(run_checker "$(owner_review '> Bob asked whether this was fine
+>
+LGTM')")"
+
+# The third thing that cannot be lazily continued, and the one nothing else in this suite
+# reaches: a FENCE inside the quote. Drop that clause from `quote_is_paragraph` and every other
+# case here stays green while this real stamp is refused.
+assert "13m. a fence inside the quote cannot be continued lazily either, so the LGTM stamps" \
+    0 "$(run_checker "$(owner_review '> ```
 LGTM')")"
 
 assert "14. LGTM wearing ordinary punctuation passes" \

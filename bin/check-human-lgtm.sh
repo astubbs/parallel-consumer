@@ -113,7 +113,10 @@
 #                         - LAZINESS. A paragraph inside a blockquote continues onto following
 #                           lines that DROP the `>`, so `> Bob said\nLGTM` is one quoted
 #                           paragraph. The continuation ends at a blank line, a fence, or a line
-#                           starting a block a paragraph cannot lazily continue into.
+#                           starting a block a paragraph cannot lazily continue into - and it
+#                           only STARTS from a paragraph, because a heading, a fence, a list or
+#                           an empty `>` inside the quote cannot be continued lazily either. So
+#                           `> # context\nLGTM` DOES stamp: that LGTM is outside the quote.
 #                         - THE CLOSING-FENCE INDENT. A closing fence may carry at most three
 #                           spaces; the fourth makes it code and the block stays OPEN. Treating
 #                           it as a close ended the block early and put the rest into prose.
@@ -346,6 +349,24 @@ scan_result=$(awk \
         return (s ~ /^([-*+]|[0-9]+[.)])([ \t]|$)/ || s ~ /^#{1,6}([ \t]|$)/)
     }
 
+    # Laziness carries from a PARAGRAPH inside the quote, and from nothing else. CommonMark
+    # does not let a heading, a fence, a list item or an empty `>` line be continued lazily, so
+    # `> # context` followed by a bare LGTM leaves that LGTM OUTSIDE the quote - and calling it
+    # quoted refused a stamp the owner really gave. That direction of error is the one this
+    # whole check exists to avoid: a memory aid that rejects the habit it is meant to remind
+    # you of is a nuisance people route around.
+    function quote_is_paragraph(line,   s, n) {
+        s = strip_markers(line)
+        for (n = 0; n < 8 && s ~ /^>/; n++) {
+            sub(/^>[ \t]?/, "", s)
+            sub(/^[ \t]+/, "", s)
+        }
+        if (s !~ /[^ \t]/) return 0
+        if (starts_block(s)) return 0
+        if (s ~ /^(`{3,}|~{3,})/) return 0
+        return 1
+    }
+
     # Scanning runs ONE LINE BEHIND the reader, which is what makes the line after a candidate
     # available to the clause above. Nothing else needs the delay, so it is confined here: every
     # rule below either hands the current line to flush() as the next line, or ends the
@@ -450,7 +471,7 @@ scan_result=$(awk \
     open && (fenced || strip_markers($0) ~ /^>/ \
              || (in_quote && $0 ~ /[^ \t]/ && !starts_block($0))) {
         break_para()
-        if (!fenced) in_quote = 1
+        if (!fenced) in_quote = quote_is_paragraph($0)
         if ($0 ~ /[Ll][Gg][Tt][Mm]/) note_near("quoted")
         next
     }
