@@ -35,7 +35,7 @@ Verified against Claude Code **2.1.223**. This is the part most people get wrong
 there. Claude Code does not read it. The bridge is a `CLAUDE.md` alongside each `AGENTS.md`
 containing `@AGENTS.md`, which imports it:
 
-- `CLAUDE.md` -> imports root `AGENTS.md`, plus the invariants worth stating twice
+- `CLAUDE.md` -> imports root `AGENTS.md`
 - `bin/CLAUDE.md` -> imports `bin/AGENTS.md`, arriving when you touch a script
 - `docs/inflight/CLAUDE.md` -> imports `docs/inflight/AGENTS.md`, arriving when you touch a note
 
@@ -43,6 +43,31 @@ containing `@AGENTS.md`, which imports it:
 which is exactly the "inject the right prompt at the right time" that a routing table in a doc
 cannot do. Adding a nested `AGENTS.md` without its `CLAUDE.md` sibling means Claude Code never sees
 it.
+
+### Import or symlink?
+
+Both work, and git handles both. A symlink is stored as mode `120000` with the target path as its
+blob, so `ln -s AGENTS.md CLAUDE.md` commits and clones fine.
+
+| | Symlink | `@AGENTS.md` import, kept as a pure stub |
+|---|---|---|
+| Drift between the two | impossible - one file | **impossible - the stub has no content to drift** |
+| Windows without Developer Mode | **silently broken**: `core.symlinks` defaults false, and the file checks out as plain text containing the literal string `AGENTS.md` | fine |
+| Claude-only content | impossible | possible, but see below |
+
+This repo uses the **import**, and the reason is worth stating precisely, because the obvious version
+of the argument is wrong. The usual objection to two files is drift - but a stub containing *only*
+`@AGENTS.md` has nothing to drift *with*. Drift is a cost of putting rules in the stub, not a cost of
+the stub existing. So keep them pure: every `CLAUDE.md` here is an import and a sentence about why
+the file exists, and nothing else. On those terms the import strictly dominates - same zero drift,
+and no silent Windows breakage.
+
+That is also why the "Claude-only content" row is not the advantage it looks like. Rules written into
+a `CLAUDE.md` are invisible to Codex and every other agent reading `AGENTS.md`, so taking that option
+is how the two copies start diverging in the first place.
+
+Neutrality is unaffected either way: `AGENTS.md` stays the tool-neutral source, Codex and other
+agents read it directly, and `CLAUDE.md` is only the adapter that makes Claude Code see it.
 
 ## The layers
 
@@ -80,9 +105,24 @@ It distinguishes **failed** from **could not run**. `bin/check-issue-refs.sh` ex
 absent, and blocking a commit for that would teach everyone to bypass the hook, taking the real
 violations with it. Soft exits warn; only genuine violations block.
 
-**`.claude/settings.json`** - a `PreToolUse` hook on `Bash` matching `git commit *`, running the same
-script. This is belt-and-braces: it catches the agent even in a clone where `core.hooksPath` was
-never set, which is the likely state of a fresh worktree on a new machine.
+**`.claude/settings.json`** - two hooks, and the file is **tracked**. `.gitignore` excludes
+`/.claude/*` by contents rather than excluding the directory, with a comment anticipating exactly
+this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
+grants stay in `settings.local.json`, still ignored.
+
+- `PreToolUse` on `Bash` matching `git commit *` runs the same pre-commit script. Belt-and-braces:
+  it catches the agent even in a clone where `core.hooksPath` was never set, which is the likely
+  state of a fresh worktree on a new machine.
+- `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
+  `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
+  "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to
+  inject the thought at the decision, not to gate anything. The checklist's two standing asks are to
+  **offer** to write the squash message and to **offer** to reorganise the commits into cohesive
+  units. Matching is deliberately broad on verbs and narrow on nouns: a false positive costs a few
+  hundred tokens, a false negative costs the thing it exists to prevent.
+
+The checklist itself is a plain doc, not embedded in the hook, so Codex and anything else reading
+`AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific.
 
 ## Adding to it
 

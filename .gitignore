@@ -12,6 +12,12 @@ CLAUDE.md
 # that shared config can be un-ignored later with a negation, e.g.
 # `!/.claude/settings.json`; git will not descend into a fully-excluded directory.
 /.claude/*
+# ...which is now done: the shared harness config is tracked, personal overrides are not.
+# settings.local.json stays ignored - it is where per-machine permission grants accumulate.
+# See docs/agent-harness.md.
+!/.claude/settings.json
+!/.claude/hooks/
+!/.claude/hooks/**
 /.codebuddy/
 /.context/
 /.compound-engineering/

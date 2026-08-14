@@ -83,6 +83,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 | [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
+| [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 
 **Where work and knowledge are recorded:**
 
@@ -383,24 +384,11 @@ Nothing lints commit messages, so all of this is on you.
   reading if it says where you looked, and ruling one out is a real result (astubbs#220 is the
   worked example). Do this at merge prep, once the class is understood; doing it mid-diagnosis just
   widens the investigation.
-- **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates fix-ups
-  nobody wants in the permanent log, but usually also two or three genuinely separate pieces of
-  work. Do not default; look at the actual commits:
-  - **Re-cut the commits** - `git reset --mixed <merge-base>`, restage into a handful of atomic
-    commits, rebase-merge - when the branch holds distinct workstreams someone will later want to
-    bisect to or revert independently. The test for "atomic" is whether the message needs an "and
-    also". **`git fetch origin master` first, every time**, and reset to the **merge-base**, not to
-    `origin/master`: a stale ref or the wrong base silently reverts whatever master gained
-    meanwhile, and the tell is files appearing in the staged set that the branch never touched.
-    Verify with `git diff <old-tip> HEAD` - it must be empty, proving history changed and content
-    did not.
-  - **Squash-merge** when the branch is one idea and the intermediate commits are noise. If you
-    recommend this, **write the suggested squash message out in full** - it becomes the permanent
-    record, and the default concatenation of every subject is unreadable.
-  - **Rebase-merge as-is** only when the existing commits are already clean and atomic.
-
-  Release notes are generated from the commit log, so this choice decides what a future changelog
-  has to work with.
+- **Before merging, recommend a merge strategy - and say why**, and **offer** to write the squash
+  message and to re-cut the commits into atomic units rather than doing either silently. Release
+  notes are generated from the commit log, so the choice decides what a future changelog has to work
+  with. [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - the three strategies,
+  when each applies, and the reset-to-merge-base trap that silently reverts master.
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they know about, and a one-way link strands the other half. If the successor does
