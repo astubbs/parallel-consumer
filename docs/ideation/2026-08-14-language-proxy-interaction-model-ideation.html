@@ -69,7 +69,7 @@
 <h1>Ideation: Language-Proxy Interaction Model</h1>
 <p class="sub">
   2026-08-14 · <code>astubbs/parallel-consumer#242</code> · branch <code>feats/proxy-requirements</code><br>
-  27 raw candidates → 16 after merge → <strong>6 survivors</strong> · 5 axes · repo-grounded
+  27 raw candidates → 16 after merge → <strong>6 survivors: 3 settled, 3 open</strong> · 5 axes · repo-grounded
 </p>
 
 <p class="lede">
@@ -180,7 +180,7 @@ decision rather than patch that seam again — which is what this whole exercise
 
 <div class="card">
   <div class="rank"><span class="num">2</span><h3>One connection, fan-out inside the client (the admin model)</h3></div>
-  <div class="tags"><span class="tag">work hand-out</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">external</span></div>
+  <div class="tags"><span class="tag">work hand-out</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag" style="background:var(--accent);color:var(--bg)">SETTLED</span></div>
   <p>The protocol permits exactly one connection per application. An <strong>admin</strong> holds the stream
      and relays to its workers — a goroutine talking to worker goroutines in Go, a process talking to worker
      processes in Python. Identical shape in both languages, so the client translates with far less error
@@ -210,7 +210,7 @@ decision rather than patch that seam again — which is what this whole exercise
 
 <div class="card">
   <div class="rank"><span class="num">3</span><h3>An epoch per delivery — fencing borrowed from Kafka's own exactly-once model</h3></div>
-  <div class="tags"><span class="tag">client shape</span><span class="tag">failure &amp; recovery</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag">direct + external</span></div>
+  <div class="tags"><span class="tag">client shape</span><span class="tag">failure &amp; recovery</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag" style="background:var(--accent);color:var(--bg)">SETTLED</span></div>
   <p>Every dispatched record carries an <strong>epoch</strong>. A dead client is fenced and the epoch
      increments when the record is handed to another worker; a report naming a superseded epoch is
      discarded. The worker echoes the epoch back verbatim and keeps <strong>no</strong> request map, no
@@ -255,22 +255,41 @@ decision rather than patch that seam again — which is what this whole exercise
 </div>
 
 <div class="card">
-  <div class="rank"><span class="num">5</span><h3>The sidecar spawns its own workers</h3></div>
-  <div class="tags"><span class="tag">lifecycle &amp; supervision</span><span class="tag conf-med">Confidence: Medium</span><span class="tag">Complexity: M</span><span class="tag">external</span></div>
-  <p>Invert supervision: the sidecar starts N worker processes from a configured command and passes them the
-     endpoint. Worker death becomes a child exit observed directly, not a socket close to be interpreted.
-     The bind-race election, the detached process group, and the checksum-verify-before-exec disappear from
-     <em>both</em> client libraries.</p>
-  <div class="field"><b>Basis</b><div class="basis">
-    <code>external:</code> Ray's node-local daemon owns worker-pool lifecycle entirely and the language driver never
-    spawns workers — precisely because spawn/reap/orphan semantics are where the per-language bugs live.
-    <code>reasoned:</code> It also makes connection-loss attribution exact rather than heuristic: a wait-status
-    distinguishes a clean exit from a kill from an OOM, which a closed socket never can.
+  <div class="rank"><span class="num">5</span><h3>The engine puppeteers; the client spawns — policy in the sidecar, mechanism in the client</h3></div>
+  <div class="tags"><span class="tag">lifecycle &amp; supervision</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag" style="background:var(--accent);color:var(--bg)">SETTLED</span></div>
+  <p>The user's app starts the sidecar. The sidecar decides <em>how many</em> executors and <em>when</em>,
+     and says so in a message. The client library — already inside the user's process, holding the user's
+     function — does the actual spawning with its own language's native mechanism. The engine never learns
+     what the function is, or what a function even is; it just asks for executors.</p>
+  <div class="field"><b>Why this beats both of the options it replaces</b><div class="basis">
+    Against <em>client supervises the sidecar</em>: the bind-race election disappears, because one app
+    process starts one sidecar — there is nothing to elect. The detached process group disappears too; it
+    only existed so the sidecar could outlive whichever worker won the race, and the app is now the parent
+    that should own it.
+    Against <em>sidecar spawns the workers</em>: the sidecar would have needed to know how to start the
+    user's program, which is deploy-time configuration that fails late — and it could only spawn a
+    <em>command</em>, forcing the user's function to be an importable name rather than a closure. Keeping
+    the mechanism client-side dissolves both.
   </div></div>
-  <div class="field"><b>Verifier pushback — retained and fair</b><div class="basis">
-    It <em>relocates</em> the bootstrap problem rather than deleting it: something still has to start the
-    sidecar. And it reopens a user-directed decision. The honest claim is "moves the hard part from two
-    client languages into one JVM", not "removes it".
+  <div class="field"><b>What it settles downstream</b><div class="basis">
+    Config travels <strong>connect-time over the protocol, expressed in the user's own language</strong> —
+    no config files, no environment variables, no shell. Generated stubs are not a translation layer.
+    Max concurrency is set by the app, sent to the engine, and used as the in-flight ceiling — which is
+    already exactly what <code>maxConcurrency × batchSize</code> means to an external engine, so
+    <strong>no core change is needed for it</strong>.
+    App shutdown shuts the sidecar down: drain in-flight work within the bounded timeout, commit, leave the
+    group. The no-connection grace period is no longer needed at all — the app's death <em>is</em> the
+    signal, rather than something to infer from zero connections.
+  </div></div>
+  <div class="field"><b>Residuals</b><div class="basis">
+    <strong>SIGKILL backstop</strong> — if the app is killed outright nothing runs, so the sidecar must watch
+    its parent and exit on its own (closing pipe, or <code>PR_SET_PDEATHSIG</code> on Linux). Otherwise a JVM
+    leaks while still holding group membership, and partitions do not rebalance until the session timeout.
+    <strong>Python spawn-method</strong> — <code>fork</code> inherits the closure for free; <code>spawn</code>
+    (default on macOS and Windows) re-imports and needs something picklable. An API-shape and documentation
+    question, not an architectural one.
+    <strong>Credentials over the wire</strong> — see the settled list below; this revises a requirement rather
+    than violating it, but it has to be written down.
   </div></div>
 </div>
 
@@ -298,7 +317,7 @@ decision rather than patch that seam again — which is what this whole exercise
 <table>
   <tr><th>Candidate</th><th>Verdict</th><th>Reason</th></tr>
   <tr><td><strong>Compile PC as a native shared library</strong> (C-ABI via <code>native-image --shared</code>, so threaded languages run the engine in-process with no protocol)</td><td>Dead end</td>
-      <td><strong>Never proposed — an agent's extrapolation, ranked #1 in the first draft and wrongly attributed to the user.</strong> Rejected on direction. Two things undercut it on its own terms, recorded so it is not re-proposed: the cleared native-image gate produced an <em>executable</em>, not a <code>--shared</code> export (different entry-point surface, isolate and thread-attach semantics, GC coexistence with a foreign runtime, callbacks re-entering from foreign threads — none tested); and Temporal's Go and Java SDKs are independent implementations, not bindings over its shared core, so the usual precedent is thinnest exactly where the idea was boldest.</td></tr>
+      <td><strong>Never proposed — an agent's extrapolation, ranked first in the original draft and wrongly attributed to the user.</strong> Rejected on direction. Two things undercut it on its own terms, recorded so it is not re-proposed: the cleared native-image gate produced an <em>executable</em>, not a <code>--shared</code> export (different entry-point surface, isolate and thread-attach semantics, GC coexistence with a foreign runtime, callbacks re-entering from foreign threads — none tested); and Temporal's Go and Java SDKs are independent implementations, not bindings over its shared core, so the usual precedent is thinnest exactly where the idea was boldest.</td></tr>
   <tr><td>Derive, never accumulate (in-flight as set cardinality)</td><td>Folded in</td>
       <td>Sound, but already an adopted principle rather than a new idea — retained as a design rule across survivors 4 and 7, not ranked separately.</td></tr>
   <tr><td>Abandoned-by-default at dispatch</td><td>Rejected</td>
@@ -328,16 +347,51 @@ decision rather than patch that seam again — which is what this whole exercise
 
 <h2>Settled during this run</h2>
 <ul>
-  <li><strong>Workers never produce to Kafka directly.</strong> Output travels back through the engine over
-      the protocol and the sidecar produces. Chosen for simplicity, and it is what lets survivor 3's epoch
-      check carry exactly-once on its own.</li>
   <li><strong>The wrapper is the layer; Java is the degenerate case.</strong> One client model, with the
       protobuf hop absent in Java rather than a second architecture.</li>
+  <li><strong>The engine puppeteers, the client spawns.</strong> Policy in the sidecar, mechanism in the
+      client — survivor 5.</li>
+  <li><strong>Workers never produce to Kafka directly.</strong> Output travels back through the engine and
+      the sidecar produces. This is what lets survivor 3's epoch check carry exactly-once on its own —
+      one producer, one transactional id, one fence.</li>
+  <li><strong>Configuration is code, delivered connect-time over the protocol.</strong> No config files, no
+      environment variables, no shell. Lean on the target language's own tooling; generated stubs do not
+      count as a translation layer.</li>
+  <li><strong>Max concurrency keeps its existing meaning.</strong> Set by the app, sent to the engine, used
+      as the in-flight ceiling — already what it means to <code>ExternalEngine</code>. Two earlier proposals
+      to withdraw it were both wrong.</li>
+  <li><strong>App shutdown shuts down the sidecar.</strong> Drain within the bounded timeout, commit, leave
+      the group. Plus a parent-death backstop for SIGKILL.</li>
   <li><strong>Native shared library: dead end.</strong> See the rejection table.</li>
 </ul>
 
+<h2>Requirements this moves</h2>
+<p>The plan on disk predates all of the above and is now materially stale — it still reads as though the
+credit ledger were live. Beyond that supersession, these move:</p>
+<div class="scroll">
+<table>
+  <tr><th>Requirement</th><th>Currently says</th><th>Now</th></tr>
+  <tr><td>R9</td><td>Options are startup configuration; no worker sets sidecar-wide options over the protocol</td>
+      <td>Options arrive connect-time over the protocol, expressed in the app's own language</td></tr>
+  <tr><td>R33</td><td>Zero connected workers is not an end-of-life signal; a bounded grace period reconciles it with R11</td>
+      <td>Not needed — the app owns the sidecar's lifetime directly, so its death is the signal</td></tr>
+  <tr><td>R35</td><td>Credentials are neither readable nor settable over the protocol</td>
+      <td>Revised, with a stronger argument than the original: the sidecar accepts exactly one connection, from
+          the process that spawned it, and does nothing until configured — so nothing sits on disk or in
+          <code>/proc</code>, and there is no window for a second local process</td></tr>
+  <tr><td>KTD7</td><td>Client library supervises the sidecar; bind failure is the election</td>
+      <td>Superseded by survivor 5. <strong>Correction:</strong> this was reported mid-run as a user-directed
+          settled decision. It is not — it carries no <code>session-settled:</code> label and is the plan's own
+          reasoning. Nothing user-directed was reversed.</td></tr>
+</table>
+</div>
+
 <h2>What this set does not settle</h2>
 <ul>
+  <li><strong>Survivors 1, 4 and 6 remain open.</strong> The reconnect manifest (survivor 1) is the one that
+      should be treated as a defect rather than a choice — it is a correctness gap in a requirement currently
+      treated as decided, and it needs fixing whichever way the rest goes. Wave dispatch (4) and the liveness
+      lease (6) are genuine forks still to be taken.</li>
   <li><strong>Python as its own module.</strong> If Python is the only runtime needing the process-pool
       split, isolating it keeps the shared path clean and stops the GIL shaping everyone else's design.
       A module boundary is the cheapest separation available.</li>

@@ -83,6 +83,36 @@ ledger were live; treat this note as current where the two disagree.
   *external* side effects — a database write or an HTTP call — which is true of any at-least-once
   system and should not be implied otherwise.
 
+- **The engine puppeteers; the client spawns.** The app starts the sidecar. The sidecar decides how many
+  executors and when, and says so in a message; the client library — already holding the user's function —
+  spawns them using its own language's mechanism. The engine never learns what the function is.
+  This deletes the bind-race election (one app process starts one sidecar, so there is nothing to elect)
+  and the detached process group (that existed only so the sidecar could outlive the worker that won the
+  race; the app is now the parent that should own it). It also avoids the sidecar needing to know how to
+  start the user's program, which would have forced the user function to be an importable name rather than
+  a closure. Supersedes KTD7.
+- **Configuration is code, delivered connect-time over the protocol.** No config files, no environment
+  variables, no shell. Lean on the target language's own tooling; generated stubs are not a translation
+  layer. This moves R9, which currently says options are startup configuration and that no worker sets
+  sidecar-wide options over the protocol.
+- **Max concurrency keeps the meaning it already has.** Set by the app, sent to the engine, used as the
+  in-flight ceiling — which is exactly what `maxConcurrency × batchSize` already means to an
+  `ExternalEngine`. No core change. Two proposals to withdraw the option were both wrong.
+- **App shutdown shuts down the sidecar.** Drain in-flight work within the bounded timeout per R12, commit,
+  leave the group. R33's no-connection grace period is no longer needed — the app's death is the signal
+  rather than something inferred from zero connections. One backstop is still required: on SIGKILL nothing
+  runs, so the sidecar must watch its parent and exit itself (closing pipe, or `PR_SET_PDEATHSIG` on Linux),
+  or a JVM leaks while still holding group membership and partitions do not rebalance until session timeout.
+- **Credentials now travel the protocol, revising R35.** The original forbade it because the loopback
+  surface is unauthenticated, and rejected argv because `/proc` is world-readable. The revision rests on a
+  stronger argument: the sidecar accepts exactly one connection, from the process that spawned it, and does
+  nothing until configured — so nothing sits on disk or in `/proc`, and there is no window for a second
+  local process to connect.
+
+**Correction to a claim made during ideation:** KTD7 was reported as a `session-settled: user-directed`
+decision. It is not — it carries no such label; only KTD1 and KTD2 do among the KTDs. Superseding it
+reverses nothing the user directed.
+
 **Dead end — do not re-propose: compiling PC to a native shared library.** The idea was to emit a
 C-ABI library via GraalVM `native-image --shared` so non-JVM languages could run the engine in-process
 with no protocol at all. It was an agent's extrapolation during ideation, not a proposal, and it is
