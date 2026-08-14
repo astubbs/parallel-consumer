@@ -75,6 +75,21 @@ GATES=(
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# Make the copyright gate's shallow-clone case REACH the soft-skip above instead of hiding.
+#
+# Left alone, `check-copyright-headers.sh` prints "WARNING: ... Skipping copyright header check."
+# and exits **0** when the fork-point commit is not in history. This loop discards the output of
+# any gate that exits 0, so the gate skipped itself and said nothing - and the `:2` soft code
+# configured for it was unreachable in the one situation it was configured for. A gate that stops
+# running with nobody told is the exact silent miss the NOT-EXECUTABLE branch below exists to
+# prevent, arriving by a different door.
+#
+# Asking it to hard-fail routes that case through the soft-code machinery: exit 2, classified
+# soft, reported as `pre-commit: skipped check-copyright-headers.sh (exit 2 - could not run)`.
+# The commit is not blocked either way - only the silence changes. Scoped to this hook; CI sets
+# the same flag for its own reason (there, full history is fetched, so it must be an error).
+export COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1
+
 failed=()
 skipped=()
 

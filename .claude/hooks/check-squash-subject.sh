@@ -29,9 +29,10 @@
 #     is inside the body text.
 #
 # A PreToolUse deny is hard, so the last two are the more expensive class: a false positive stops a
-# legitimate merge and the agent cannot argue with it. So: slice the command at each `gh pr merge`,
-# `shlex.split` that slice so quoting is handled by something that knows shell quoting, take the
-# LAST `--subject` the way `gh` does, and cross-check the number against the PR being merged.
+# legitimate merge and the agent cannot argue with it. So: `shlex.split` the whole line, so quoting
+# is handled by something that knows shell quoting; find each `gh pr merge` in the TOKEN stream and
+# judge its slice on its own; take the LAST `--subject` the way `gh` does; and cross-check the
+# number against the PR being merged.
 #
 # FAIL OPEN, ALWAYS. Any parse failure exits 0. A hook that blocks on its own bug is worse than no
 # hook: the gate below it (docs/merge-checklist.md, and review) still catches a bad subject, but
@@ -78,8 +79,6 @@ if tool.get("tool_name") != "Bash":
 
 cmd = tool.get("tool_input", {}).get("command", "")
 
-MERGE = re.compile(r"\bgh\s+pr\s+merge\b")
-
 # `gh pr merge` flags that CONSUME the next argument. The set matters twice over: `-t` is the
 # short spelling of `--subject`, and reading only the long one let `-t "no number"` through the
 # hook entirely; and a flag's VALUE must never be mistaken for the PR selector.
@@ -96,31 +95,45 @@ PR_URL = re.compile(r"/pull/(\d+)")
 # does not expand either, so the text we are holding is not the text `gh` will send.
 UNEXPANDED = re.compile(r"[$`]")
 
-# One command line can carry more than one `gh pr merge` (`a && b`, `a ; b`). Each is judged on its
-# own slice, running to the start of the next one, so a good merge cannot vouch for a bad one.
-starts = [m.start() for m in MERGE.finditer(cmd)]
+# SEGMENT ON TOKENS, NEVER ON THE RAW STRING. One command line can carry more than one
+# `gh pr merge` (`a && b`, `a ; b`), and each must be judged on its own slice so a good merge
+# cannot vouch for a bad one. Finding those boundaries with a regex over the raw line also finds
+# the phrase inside QUOTED BODY TEXT: `--body "text gh pr merge here"` cut the line into two
+# slices that each had unbalanced quotes, so both fail-opened and the real `--subject` was never
+# judged at all. Splitting first and matching on tokens makes the body a single token, so text
+# inside it can no longer look like a command.
+try:
+    tokens = shlex.split(cmd)
+except ValueError:
+    sys.exit(0)                      # unbalanced quotes: our own parse limit, never block on it
+
+
+def is_gh(token):
+    return token == "gh" or token.endswith("/gh")
+
+
+starts = [i for i in range(len(tokens) - 2)
+          if is_gh(tokens[i]) and tokens[i + 1] == "pr" and tokens[i + 2] == "merge"]
 if not starts:
     sys.exit(0)
-bounds = list(zip(starts, starts[1:] + [len(cmd)]))
+bounds = list(zip(starts, starts[1:] + [len(tokens)]))
 
 
-def subjects_and_pr(slice_):
-    """The subject values and the PR number in one `gh pr merge ...` slice.
+def subjects_and_pr(slice_tokens):
+    """The subject values and the PR number in one already-tokenised `gh pr merge ...` slice.
 
     Every spelling `gh` accepts for the subject counts, because the hook is worthless against the
     one it cannot read: `--subject X`, `--subject=X`, `-t X`, `-tX`, `-t=X`, and `-t` inside a
     combined shorthand group such as `-st X`. Flags that consume a value have theirs consumed here
     too, so a value is never mistaken for the PR selector.
 
-    Raises ValueError from shlex on unbalanced quotes, which the caller turns into an allow.
     """
-    tokens = shlex.split(slice_)
     values, pr = [], None
     seen_merge = False
     selector_seen = False
     i = 0
-    while i < len(tokens):
-        token = tokens[i]
+    while i < len(slice_tokens):
+        token = slice_tokens[i]
 
         if token.startswith("--"):
             name, sep, inline = token.partition("=")
@@ -129,9 +142,9 @@ def subjects_and_pr(slice_):
                     values.append(inline)
                 i += 1
                 continue
-            if name in LONG_VALUE_FLAGS and i + 1 < len(tokens):
+            if name in LONG_VALUE_FLAGS and i + 1 < len(slice_tokens):
                 if name == "--subject":
-                    values.append(tokens[i + 1])
+                    values.append(slice_tokens[i + 1])
                 i += 2
                 continue
             i += 1
@@ -152,8 +165,8 @@ def subjects_and_pr(slice_):
                     value = rest[1:]
                 elif rest:
                     value = rest
-                elif i + 1 < len(tokens):
-                    value = tokens[i + 1]
+                elif i + 1 < len(slice_tokens):
+                    value = slice_tokens[i + 1]
                     took_next = True
                 else:
                     value = None
@@ -180,10 +193,7 @@ def subjects_and_pr(slice_):
 
 
 for start, end in bounds:
-    try:
-        subjects, pr = subjects_and_pr(cmd[start:end])
-    except ValueError:
-        continue                     # our own parse limit, not the author's mistake - allow
+    subjects, pr = subjects_and_pr(tokens[start:end])
 
     if not subjects:
         continue                     # no override, so GitHub appends the number itself - fine

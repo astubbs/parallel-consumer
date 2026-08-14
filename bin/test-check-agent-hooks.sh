@@ -176,6 +176,20 @@ assert "a branch-name selector with NO number is still denied" DENY \
 assert "a flag value is not mistaken for the PR selector" ALLOW \
     "$(verdict 'gh pr merge --body 1206 --squash 1299 --subject "thing (#1299)"')"
 
+# Round four. Segmenting the command with a regex over the RAW line found `gh pr merge` inside
+# quoted body text, cut the line into two slices that each had unbalanced quotes, and fail-opened
+# both - so the real --subject was never judged. Body text could switch the hook off. Segmentation
+# now runs over shlex TOKENS, where a quoted body is a single token and cannot look like a command.
+assert "the phrase 'gh pr merge' inside --body does not disable the guard" DENY \
+    "$(verdict 'gh pr merge 1299 --body "text gh pr merge here" --subject "bad no number"')"
+assert "...and the same body with a correct subject still passes" ALLOW \
+    "$(verdict 'gh pr merge 1299 --body "text gh pr merge here" --subject "tooling: thing (#1299)"')"
+assert "the phrase inside the SUBJECT does not disable the guard either" DENY \
+    "$(verdict 'gh pr merge 1299 --squash --subject "how to gh pr merge safely"')"
+# An absolute path to gh is still gh; a word merely ending in those letters is not a command.
+assert "an absolute path to gh is still matched" DENY \
+    "$(verdict '/usr/local/bin/gh pr merge 1299 --squash --subject "tooling: thing"')"
+
 assert "a non-Bash tool is ignored" ALLOW \
     "$(printf '%s' '{"tool_name":"Read","tool_input":{"command":"gh pr merge 1299 --subject \"x\""}}' \
         | "$HOOKS/check-squash-subject.sh" 2>/dev/null | grep -c '"deny"' | sed 's/^0$/ALLOW/;s/^[1-9].*/DENY/')"
