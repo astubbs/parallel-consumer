@@ -23,7 +23,15 @@
 
 set -uo pipefail
 
-HOOKS="$(cd "$(dirname "$0")/.." && pwd)/.claude/hooks"
+# Resolved from $0, never from the caller's cwd. inject-merge-checklist.sh finds its checklist via
+# CLAUDE_PROJECT_DIR or `git rev-parse --show-toplevel`, so running this script from a DIFFERENT
+# checkout of this repo - the primary one, a sibling worktree on another branch - silently pointed
+# the hook at that tree's docs/ instead of this branch's. On a branch without the checklist the
+# hook exits 0 and the assertions below read the absence as "not injected". That is the failure
+# this file exists to catch, in this file: pinning the root makes the test measure the branch it
+# ships with, wherever it is run from.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+HOOKS="$REPO_ROOT/.claude/hooks"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -119,6 +127,55 @@ assert "two merges chained, the second is bad" DENY \
     "$(verdict 'gh pr merge 1299 --squash --subject "a (#1299)" && gh pr merge 1300 --squash --subject "b"')"
 assert "unbalanced quotes fail OPEN, never on our own parse bug" ALLOW \
     "$(verdict 'gh pr merge 1299 --squash --subject "unterminated')"
+# Round three. All three of these were live holes, reproduced before being fixed - `-t` and the
+# URL selector let the mistake through, the unexpanded subject blocked a legitimate merge.
+#
+# 7. `-t` is gh's documented short form of --subject. Reading only the long spelling meant the
+#    parser saw NO override, took the "GitHub appends the number itself" branch, and allowed a
+#    subject that lands verbatim with no number - the astubbs#206 shape via another spelling.
+assert "-t is --subject: no number is still denied" DENY \
+    "$(verdict 'gh pr merge 1299 --squash -t "tooling: thing with no number"')"
+assert "-tVALUE attached form" DENY \
+    "$(verdict 'gh pr merge 1299 --squash -t"tooling: thing with no number"')"
+assert "-t=VALUE form" DENY \
+    "$(verdict 'gh pr merge 1299 --squash -t="tooling: thing with no number"')"
+assert "-t inside a combined shorthand group" DENY \
+    "$(verdict 'gh pr merge 1299 --squash -st "tooling: thing with no number"')"
+assert "-t carrying the right number is allowed" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash -t "tooling: thing (#1299)"')"
+assert "-t naming the WRONG PR" DENY \
+    "$(verdict 'gh pr merge 1299 --squash -t "tooling: thing (#1206)"')"
+# `t` here is part of -b's VALUE, not a flag. Reading it as a subject would deny a merge whose
+# real subject is fine - so the shorthand scan stops at the first value-taking letter.
+assert "a 't' inside another short flag's value is not a subject" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash -bt --subject "tooling: thing (#1299)"')"
+
+# 8. FALSE POSITIVE. shlex does not expand shell variables, so the hook was judging a string that
+#    is not the one gh will send - and denying it. Every other unresolvable case fails open; this
+#    one hard-blocked a legitimate merge, which the header calls the more expensive direction.
+assert "an unexpanded \$VAR subject fails OPEN" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash --subject "$SUBJECT"')"
+assert "an unexpanded command substitution fails OPEN" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash --subject "$(cat msg.txt)"')"
+
+# 9. The PR selector may be a number, a URL or a branch. Only `isdigit()` was read, so a URL left
+#    the cross-check switched off entirely and ANY number satisfied it - including a wrong one.
+assert "a URL selector still cross-checks the number" DENY \
+    "$(verdict 'gh pr merge https://github.com/astubbs/parallel-consumer/pull/1299 --squash --subject "thing (#1206)"')"
+assert "a URL selector with the right number is allowed" ALLOW \
+    "$(verdict 'gh pr merge https://github.com/astubbs/parallel-consumer/pull/1299 --squash --subject "thing (#1299)"')"
+# A branch name carries no number and resolving it needs the network, so any (#N) is accepted -
+# the same stated boundary as a merge with no selector at all. Pinned, not incidental.
+assert "a branch-name selector cannot be cross-checked (stated boundary)" ALLOW \
+    "$(verdict 'gh pr merge some-branch --squash --subject "thing (#1206)"')"
+assert "a branch-name selector with NO number is still denied" DENY \
+    "$(verdict 'gh pr merge some-branch --squash --subject "thing with no number"')"
+# A flag VALUE that looks like a PR number must not be read as the selector. Discriminating on
+# purpose: read 1206 as the PR and the correct (#1299) becomes a mismatch, so the old parser
+# hard-denied a perfectly good merge.
+assert "a flag value is not mistaken for the PR selector" ALLOW \
+    "$(verdict 'gh pr merge --body 1206 --squash 1299 --subject "thing (#1299)"')"
+
 assert "a non-Bash tool is ignored" ALLOW \
     "$(printf '%s' '{"tool_name":"Read","tool_input":{"command":"gh pr merge 1299 --subject \"x\""}}' \
         | "$HOOKS/check-squash-subject.sh" 2>/dev/null | grep -c '"deny"' | sed 's/^0$/ALLOW/;s/^[1-9].*/DENY/')"
@@ -194,7 +251,7 @@ echo "--- inject-merge-checklist.sh ---"
 injected() { # <prompt> -> YES | NO
     local out
     out=$(python3 -c 'import json,sys; print(json.dumps({"prompt":sys.argv[1]}))' "$1" \
-        | "$HOOKS/inject-merge-checklist.sh" 2>/dev/null)
+        | CLAUDE_PROJECT_DIR="$REPO_ROOT" "$HOOKS/inject-merge-checklist.sh" 2>/dev/null)
     [ -n "$out" ] && echo YES || echo NO
 }
 
@@ -211,9 +268,9 @@ assert "unrelated prompt: emerge is not merge"         NO  "$(injected 'the patt
 # asks - a second copy, in the one place nobody would think to look for drift. This asserts the
 # injected text is the file's own bytes plus a pointer, and nothing else.
 body=$(python3 -c 'import json,sys; print(json.dumps({"prompt":"ready to merge?"}))' \
-    | "$HOOKS/inject-merge-checklist.sh" 2>/dev/null \
+    | CLAUDE_PROJECT_DIR="$REPO_ROOT" "$HOOKS/inject-merge-checklist.sh" 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])')
-checklist_head=$(head -1 "$(dirname "$HOOKS")/../docs/merge-checklist.md" 2>/dev/null)
+checklist_head=$(head -1 "$REPO_ROOT/docs/merge-checklist.md" 2>/dev/null)
 case "$body" in
     *"$checklist_head"*) got=verbatim ;;
     *)                   got=missing ;;

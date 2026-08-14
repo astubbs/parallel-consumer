@@ -156,9 +156,10 @@ silent misses.
 header and listed under *Known gaps* below; it is an open decision, not an oversight.
 
 **The three `CLAUDE.md` bridges** - `CLAUDE.md`, `bin/CLAUDE.md`, `docs/inflight/CLAUDE.md`, each a
-pure `@AGENTS.md` import. They are **tracked**, which took a `.gitignore` change: line 4 carried a
-bare `CLAUDE.md` rule from when these were personal scratch files, so all three were ignored and
-existed only on the author's machine. Everything looked correctly wired locally and would have
+pure `@AGENTS.md` import. They are **tracked**, which took a `.gitignore` change: a bare `CLAUDE.md`
+rule there (the one whose comment begins "A `CLAUDE.md` is ignored BY DEFAULT") dated from when
+these were personal scratch files, so all three were ignored and existed only on the author's
+machine. Everything looked correctly wired locally and would have
 merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three paths are now
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
