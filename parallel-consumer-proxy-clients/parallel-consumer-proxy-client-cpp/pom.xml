@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client C++</name>
+    <artifactId>parallel-consumer-proxy-client-cpp</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over CMake (CMakeLists.txt beside this file). The commands below run
+        ONLY under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator
+        for why opt-in is load-bearing. The build step configures into target/native (kept under
+        target/ so `mvn clean` cleans it); the C++ wave of the language-proxy plan (astubbs#242)
+        owns everything in this directory, including extending these commands to compile and run
+        real tests.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>cmake</pc.foreign.build.executable>
+        <pc.foreign.build.args>-S . -B target/native</pc.foreign.build.args>
+        <pc.foreign.test.executable>ctest</pc.foreign.test.executable>
+        <pc.foreign.test.args>--test-dir target/native</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

@@ -1,0 +1,10 @@
+{
+  "name": "@parallel-consumer/proxy-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Parallel Consumer proxy client for TypeScript - skeleton seeded by the language-proxy plan (astubbs#242); the TypeScript wave owns this directory. JSON allows no comments, so this field carries the note.",
+  "scripts": {
+    "build": "tsc --build",
+    "test": "node --test"
+  }
+}

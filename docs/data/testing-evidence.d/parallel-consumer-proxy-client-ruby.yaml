@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Ruby client wave ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - artifact: parallel-consumer-proxy-client-ruby
+    deferred:
+      reason: >-
+        No test evidence is claimed for an empty skeleton; the Ruby client wave records this module's evidence here when its wave starts.
+      lifted_by: >-
+        astubbs#242 - the Ruby client wave of the language-proxy plan.

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Language Proxy Protocol</name>
+    <artifactId>parallel-consumer-proxy-protocol</artifactId>
+
+    <!--
+        SKELETON, deliberately. This module owns proxy.proto and its generated Java; the engine
+        depends on it, the gRPC transport depends on it, and the direct transport must NEVER
+        depend on it - that arrow is enforced by bannedDependencies in
+        parallel-consumer-proxy-client-java-direct. The .proto and the codegen wiring are a later
+        unit's work on the language-proxy plan (astubbs#242,
+        docs/plans/2026-08-14-001-feat-language-proxy-plan.md); this pom exists first so every
+        shared surface - the root module list, the data fragments, the dependency arrows - is
+        seeded once, before any content exists to conflict over.
+    -->
+
+    <properties>
+        <!--
+            Empty skeleton: publish nothing to Maven Central until the module has real content.
+            The unit that lands the .proto and codegen deletes this whole block - this module is a
+            real published artifact once it has something to publish. The examples aggregator
+            models the same skip trio.
+        -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <!-- version comes from the parent's pluginManagement -->
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

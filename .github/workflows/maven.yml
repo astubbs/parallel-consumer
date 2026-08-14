@@ -237,7 +237,14 @@ jobs:
       - uses: astubbs/duplicate-code-cross-check@d3140ef6e9a4adf68c9f729a789e8b7ec8d058f7 # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src parallel-consumer-proxy/src'
+          # The three Java proxy-client modules are listed DELIBERATELY, and the nine non-JVM
+          # client modules are omitted DELIBERATELY: this is an include list (there is no
+          # exclusion parameter), and ten clients implementing one architecture in one shape is
+          # the intended outcome, not accidental duplication - listing them would fail the build
+          # for doing exactly what was asked. The Java clients are different: they are Java, in
+          # the reactor, and structurally deduplicated through the shared api module, so two
+          # near-identical Java transport implementations SHOULD fail this gate. (astubbs#242)
+          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src parallel-consumer-proxy/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-api/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src'
           cpd-max-duplication: '5'
           # Absolute cap set to 5% (matching PMD CPD). The repo baseline is already ~4.2% jscpd,
           # so a 4% cap fails on every PR (including the base branch itself) regardless of the change.
@@ -257,7 +264,10 @@ jobs:
       - uses: astubbs/duplicate-code-detection-tool@74adf74b65b6a288b21ba957d7d7bef43831ee65 # master: base-vs-PR comparison + ce-review fixes
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src,parallel-consumer-proxy/src'
+          # Same include-list reasoning as duplicate-detection above: the three Java proxy-client
+          # modules are in scope on purpose, the nine non-JVM clients are out of scope on purpose.
+          # Note the separator differs - comma here, space above. (astubbs#242)
+          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src,parallel-consumer-proxy/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-api/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src'
           file_extensions: 'java'
           ignore_below: 30
           fail_above: 80

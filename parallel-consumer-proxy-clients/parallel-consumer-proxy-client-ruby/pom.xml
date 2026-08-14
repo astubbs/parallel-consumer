@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Ruby</name>
+    <artifactId>parallel-consumer-proxy-client-ruby</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over Bundler (Gemfile beside this file). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for
+        why opt-in is load-bearing. Skeleton until the Ruby wave of the language-proxy plan
+        (astubbs#242) starts; that wave owns everything in this directory, including refining
+        these commands.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>bundle</pc.foreign.build.executable>
+        <pc.foreign.build.args>install</pc.foreign.build.args>
+        <pc.foreign.test.executable>bundle</pc.foreign.test.executable>
+        <pc.foreign.test.args>exec rspec</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

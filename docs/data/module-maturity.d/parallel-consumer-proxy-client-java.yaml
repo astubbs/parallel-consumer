@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the Java reference implementation work ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-client-java
+    deferred:
+      reason: >-
+        Nested aggregator packaging pom for the Java client's api, direct and grpc modules, seeded ahead of the fan-out. It publishes no artifact of its own.
+      lifted_by: >-
+        astubbs#242 - the Java reference implementation wave of the language-proxy plan decides this aggregator's row.

@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Skeleton, seeded by the language-proxy plan (astubbs#242). The Rust wave owns this file and
+# everything else in this directory; the pom.xml beside it wraps this crate into the Maven
+# reactor under -Dpc.foreignClients. src/lib.rs exists only because cargo requires a build
+# target; it holds no code.
+
+[package]
+name = "parallel-consumer-proxy-client"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"

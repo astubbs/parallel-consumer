@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the protocol work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - artifact: parallel-consumer-proxy-protocol
+    deferred:
+      reason: >-
+        No test evidence is claimed for an empty skeleton; the protocol unit that lands proxy.proto records this module's evidence here.
+      lifted_by: >-
+        astubbs#242 - the language-proxy plan's protocol unit.

@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Clients</name>
+    <artifactId>parallel-consumer-proxy-clients</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        THE SHARED SURFACE OF THE CLIENT FAN-OUT - seeded complete, edited by no language agent.
+        Every client module is listed here from the outset (astubbs#242,
+        docs/plans/2026-08-14-001-feat-language-proxy-plan.md), so an agent implementing one
+        client only ever adds files inside its own module directory and never touches a file
+        another agent owns. If you are a language wave and believe you need to edit this pom,
+        stop: the thing you need belongs in your own module's pom, or the seed was wrong and the
+        fix is its own change, not a side effect of yours.
+
+        The Java variants nest one level deeper (singular inside plural, the
+        parallel-consumer-examples convention); the nine non-JVM clients are thin Maven wrappers
+        that drive their language's own build tooling - see the foreign-clients profile below.
+        Kotlin is the exception among the non-Java entries: it is a JVM language, builds with
+        Maven directly, and needs no foreign toolchain, so it carries no wrapper wiring.
+    -->
+    <modules>
+        <module>parallel-consumer-proxy-client-java</module>
+        <module>parallel-consumer-proxy-client-python</module>
+        <module>parallel-consumer-proxy-client-go</module>
+        <module>parallel-consumer-proxy-client-swift</module>
+        <module>parallel-consumer-proxy-client-rust</module>
+        <module>parallel-consumer-proxy-client-dotnet</module>
+        <module>parallel-consumer-proxy-client-typescript</module>
+        <module>parallel-consumer-proxy-client-kotlin</module>
+        <module>parallel-consumer-proxy-client-ruby</module>
+        <module>parallel-consumer-proxy-client-cpp</module>
+    </modules>
+
+    <!--
+        Skeletons publish nothing to Maven Central. Inherited by every client module; a wave whose
+        module reaches publishable content overrides these in ITS OWN pom
+        (maven.deploy.skip=false etc.), never here - per-module ownership is the whole design.
+        The examples aggregator models the same trio and records the central-publishing plugin
+        version trap that makes the explicit plugin declaration below necessary.
+    -->
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+        <!--
+            Foreign exec executions are skipped unless a module opts in by overriding this to
+            false. The guard is NOT redundant with the foreign-clients profile below: the root pom
+            declares exec-maven-plugin (for the copyright check, inherited=false), and Maven still
+            carries that plugin DECLARATION into every child's effective model - so when the
+            profile is active, its managed executions would bind to every module in this tree,
+            aggregators and Java modules included, and fail on the modules that define no foreign
+            command. Verified empirically: without this guard, -Dpc.foreignClients ran
+            foreign-build on this aggregator itself.
+        -->
+        <pc.foreign.skip>true</pc.foreign.skip>
+        <!--
+            Placeholder command, never meant to run: exec's 'executable' parameter is REQUIRED and
+            Maven validates it before the mojo's own skip check runs, so on a module that leaves
+            pc.foreign.skip=true the property must still resolve to something. /bin/false rather
+            than /bin/true, deliberately: if the skip guard ever regresses, the build goes red and
+            names the bug, instead of a no-op quietly reading as a passing foreign build.
+        -->
+        <pc.foreign.build.executable>false</pc.foreign.build.executable>
+        <pc.foreign.build.args>placeholder-never-runs</pc.foreign.build.args>
+        <pc.foreign.test.executable>false</pc.foreign.test.executable>
+        <pc.foreign.test.args>placeholder-never-runs</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <!--
+                    Version pin only, active in every build: each foreign-client module declares
+                    this plugin, and the enforcer's requirePluginVersions needs the version present
+                    whether or not the foreign-clients profile below contributes executions.
+                    3.5.0 matches the root pom's own exec-maven-plugin use.
+                -->
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
+                <!--
+                    No codegen pluginManagement yet, deliberately: the protocol module owns Java
+                    codegen from proxy.proto (a later unit on astubbs#242), and non-JVM clients
+                    generate from the .proto by path inside their own native builds - so nothing
+                    shared is missing here, and pinning an unused plugin version would be a guess
+                    nothing tests. If Java-side codegen ever needs shared config, it lands here
+                    before the fan-out releases any agent, when this file still has one owner.
+                -->
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <!-- version comes from the parent's pluginManagement -->
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!--
+            FOREIGN TOOLCHAINS ARE OPT-IN, and that is load-bearing. Nine always-on exec bindings
+            would make go, cargo, swift, dotnet, node, ruby and cmake mandatory for anyone
+            building core, and toolchain ABSENCE is the normal state of every machine that is not
+            that language's CI matrix runner. An ordinary build therefore builds eleven Maven
+            skeletons and runs no foreign tool at all; a CI matrix row (or a developer, locally)
+            opts one language in with -Dpc.foreignClients.
+
+            Wired once here rather than eight times: each foreign-client module declares
+            exec-maven-plugin and sets four pc.foreign.* properties naming its language's build
+            and test commands; this profile contributes the executions that run them. With the
+            profile inactive the declared plugin has no executions and does nothing. A foreign
+            build that fails exits non-zero and fails the Maven build - exec-maven-plugin
+            propagates the exit code - so a red row means a real failure.
+        -->
+        <profile>
+            <id>foreign-clients</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <plugin>
+                            <groupId>org.codehaus.mojo</groupId>
+                            <artifactId>exec-maven-plugin</artifactId>
+                            <executions>
+                                <execution>
+                                    <id>foreign-build</id>
+                                    <phase>compile</phase>
+                                    <goals>
+                                        <goal>exec</goal>
+                                    </goals>
+                                    <configuration>
+                                        <skip>${pc.foreign.skip}</skip>
+                                        <executable>${pc.foreign.build.executable}</executable>
+                                        <commandlineArgs>${pc.foreign.build.args}</commandlineArgs>
+                                        <workingDirectory>${project.basedir}</workingDirectory>
+                                    </configuration>
+                                </execution>
+                                <execution>
+                                    <id>foreign-test</id>
+                                    <phase>test</phase>
+                                    <goals>
+                                        <goal>exec</goal>
+                                    </goals>
+                                    <configuration>
+                                        <skip>${pc.foreign.skip}</skip>
+                                        <executable>${pc.foreign.test.executable}</executable>
+                                        <commandlineArgs>${pc.foreign.test.args}</commandlineArgs>
+                                        <workingDirectory>${project.basedir}</workingDirectory>
+                                    </configuration>
+                                </execution>
+                            </executions>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+    </profiles>
+
+</project>

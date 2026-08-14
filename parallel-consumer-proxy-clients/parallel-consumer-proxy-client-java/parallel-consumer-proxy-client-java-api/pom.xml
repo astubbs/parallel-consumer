@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-client-java</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java API</name>
+    <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+
+    <!--
+        SKELETON, deliberately. The shared Java wrapper surface - the API both transports
+        implement and the nine other languages mirror - lands with the Java reference
+        implementation on the language-proxy plan (astubbs#242). Seeded empty so the module tree,
+        aggregator entries and data fragments exist before any code does. Transport types (gRPC,
+        protobuf) must never appear on this surface; the direct sibling's dependency ban is what
+        makes that checkable.
+    -->
+
+</project>

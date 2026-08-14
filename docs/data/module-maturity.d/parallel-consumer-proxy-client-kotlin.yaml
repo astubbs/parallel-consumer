@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the Kotlin client wave ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-client-kotlin
+    deferred:
+      reason: >-
+        Empty skeleton seeded ahead of the fan-out; the Kotlin client wave has not begun, and no maturity or support claim is published for a module with no content.
+      lifted_by: >-
+        astubbs#242 - the Kotlin client wave of the language-proxy plan records this module's first real row when its wave starts.

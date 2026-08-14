@@ -26,7 +26,9 @@ directory sees the shape of what is open without reading anything.
 | `next-` | Candidate work, ranked |
 
 New prefixes are fine when something genuinely does not fit. Do not add subdirectories - the prefix
-is the grouping.
+is the grouping. One deliberate exception exists: `clients/<lang>.md` holds the language-proxy
+fan-out's per-language notes (astubbs#242) - a family of parallel same-shape items where a prefix
+would just re-spell the directory; do not add a second subdirectory without the same argument.
 
 ## Rules
 

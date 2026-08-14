@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the protocol work ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-protocol
+    deferred:
+      reason: >-
+        Skeleton pom only, seeded so every shared surface exists before the client fan-out. proxy.proto and its generated Java land with the plan's protocol unit; an empty module publishes no maturity or support claim.
+      lifted_by: >-
+        astubbs#242 - the language-proxy plan's protocol unit, which lands proxy.proto and its codegen, replaces this deferral with the module's first real row.
