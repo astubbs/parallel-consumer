@@ -152,6 +152,7 @@ ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 # checked) and stops the check ambushing the stack at merge (see PR astubbs#83).
 EXTRACTED_FROM_UPSTREAM="
 parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/ManagedPCInstance.java
+parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerTestBase.java
 ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 "
 

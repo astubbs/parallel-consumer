@@ -256,7 +256,20 @@ public class KafkaClientUtils implements AutoCloseable {
         return createNewProducer(ProducerMode.matching(commitMode));
     }
 
+    /**
+     * As {@link #createNewProducer(CommitMode)}, but lets the caller pin producer config this helper would otherwise
+     * leave at the client default. A test whose behaviour depends on a specific value should pin it here rather than
+     * inherit it, so the dependency lives in the test instead of in a comment.
+     */
+    public KafkaProducer<String, String> createNewProducer(CommitMode commitMode, Properties overrides) {
+        return createNewProducer(ProducerMode.matching(commitMode), overrides);
+    }
+
     public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode) {
+        return createNewProducer(mode, new Properties());
+    }
+
+    public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode, Properties overrides) {
         Properties properties = setupProducerProps();
 
         var txProps = new Properties();
@@ -271,6 +284,9 @@ public class KafkaClientUtils implements AutoCloseable {
             txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, this.getClass().getSimpleName() + ":" + nextInt()); // required for tx
             txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) ofSeconds(10).toMillis()); // speed things up
         }
+
+        // last, so a caller can pin anything this helper set above
+        txProps.putAll(overrides);
 
         KafkaProducer<K, V> kvKafkaProducer = new KafkaProducer<>(txProps);
 

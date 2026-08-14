@@ -81,9 +81,19 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
-| [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 | [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
+| [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
+| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+
+**A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
+there, not after review catches you.** The table above routes the ones that exist today; `find . -name
+AGENTS.md` is the check that it is still complete. This rule is here because the routing was complete
+and got missed anyway: astubbs#206 added a `docs/inflight/` note describing work that PR itself landed,
+which the directory's first rule - track only what is currently OPEN - forbids. Routing is necessary
+but not sufficient: the nested `CLAUDE.md` bridges described in
+[`docs/agent-harness.md`](docs/agent-harness.md) are what make a directory's `AGENTS.md` arrive when
+a file in it is touched, rather than waiting to be opened.
 
 **Where work and knowledge are recorded:**
 
