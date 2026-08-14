@@ -104,6 +104,17 @@ assert "--subject=VALUE form is read too" DENY \
     "$(verdict 'gh pr merge 1299 --squash --subject="tooling: thing"')"
 assert "no PR argument, so no cross-check is possible" ALLOW \
     "$(verdict 'gh pr merge --squash --subject "tooling: thing (#1206)"')"
+# The convention puts (#N) in the TRAILING slot, and this hook deliberately does not require it -
+# raised in review, kept on purpose. What is unfixable after a merge is a number that is MISSING or
+# points at the WRONG PR, and both of those are denied above. A number that is present and correct
+# but sits mid-subject is a visible, cosmetic deviation that review catches and that still links
+# correctly; a hard PreToolUse deny for it would block "port (#N) to master" and every other
+# unusual-but-fine subject, with no way for the agent to argue. Pinned so tightening it later is a
+# deliberate act - see the BOUNDARY note in .claude/hooks/check-squash-subject.sh.
+assert "a correct (#N) outside the trailing slot is allowed (stated boundary)" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash --subject "fix(core) (#1299): detail"')"
+assert "...but the same shape with the WRONG number is still denied" DENY \
+    "$(verdict 'gh pr merge 1299 --squash --subject "fix(core) (#1206): detail"')"
 assert "two merges chained, the second is bad" DENY \
     "$(verdict 'gh pr merge 1299 --squash --subject "a (#1299)" && gh pr merge 1300 --squash --subject "b"')"
 assert "unbalanced quotes fail OPEN, never on our own parse bug" ALLOW \

@@ -31,6 +31,15 @@ CLAUDE.md
 /.claude/*
 # ...which is now done: the shared harness config is tracked, personal overrides are not.
 # settings.local.json stays ignored - it is where per-machine permission grants accumulate.
+#
+# ONE-TIME MIGRATION HAZARD, and it is silent. Git refuses to overwrite an untracked file, but it
+# will overwrite an IGNORED one without a word. So an existing clone that already has a local
+# `.claude/settings.json` - which every clone did, because it was ignored until this commit - has it
+# REPLACED by the tracked version on the first pull, with no conflict, no warning, and no copy left
+# anywhere: the file was never in git, so there is nothing to recover from. Verified, not assumed.
+# Nothing inside the repo can prevent it; git resolves the checkout before any hook of ours runs.
+# Copy anything local out of `.claude/settings.json` into `.claude/settings.local.json` BEFORE
+# pulling this commit - that is where it belonged anyway, and it survives every later pull.
 # See docs/agent-harness.md.
 !/.claude/settings.json
 !/.claude/hooks/

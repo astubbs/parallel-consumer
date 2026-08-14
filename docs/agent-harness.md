@@ -228,6 +228,15 @@ one is a case in that file, and the suite goes red against the old parser.
 - **Nothing enforces that a nested `AGENTS.md` has its `CLAUDE.md` bridge.** A check could;
   see below. Until then the `.gitignore` negation is the only place the question is asked - which is
   why the three bridges are enumerated there rather than blanket-negated.
+- **Tracking `.claude/settings.json` silently overwrites the local one it replaces - once.** Git
+  refuses to clobber an *untracked* file and clobbers an *ignored* one without a word, and this file
+  was ignored in every clone until it became tracked. So the first pull past that commit replaces
+  any local `.claude/settings.json` with the shared version: no conflict, no warning, and nothing to
+  recover from, because the old contents were never in git. Verified against a scratch clone rather
+  than reasoned about. This is unfixable from inside the repo - git resolves the checkout before any
+  hook here runs - and it is a **one-time** hazard: it only bites a clone that predates the change.
+  The mitigation is to move anything local into `.claude/settings.local.json`, which stays ignored,
+  before pulling; the `.gitignore` comment says so at the point someone reads it.
 
 ## Settled by testing, so nobody re-opens them
 

@@ -23,6 +23,17 @@
 # on stderr produces "hook error: No stderr output", which tells the agent it was blocked and
 # nothing about why; that was the observed behaviour of the inline form.
 #
+# WHICH REPOSITORY IT GATES - THE SESSION'S, NOT THE COMMAND'S. Both the gate path below and the
+# gate's own `git rev-parse --show-toplevel` resolve from this hook process, so what gets checked is
+# the checkout the SESSION is rooted in. Raised in review as a worktree hazard: a session in the
+# primary checkout running `cd .claude/worktrees/task && git commit` would be gated against the
+# wrong tree. It cannot reach here - `if: Bash(git commit *)` matches the command as WRITTEN, so
+# that command does not fire this hook at all (docs/agent-harness.md, "Known gaps"). Every command
+# that does fire it is a bare `git commit ...` in the session's own cwd, where session repo and
+# commit repo are the same one. The residual case - a `cd`'d or `git -C` commit into another
+# worktree - is covered by `.githooks/pre-commit`, which git runs inside the target repository. That
+# is why the git hook is the primary mechanism and this is belt-and-braces.
+#
 # FAIL OPEN ON OUR OWN BUG. If the payload does not parse, or the gate script is missing, this exits
 # 0. The git hook and CI both still gate the same commit.
 #
