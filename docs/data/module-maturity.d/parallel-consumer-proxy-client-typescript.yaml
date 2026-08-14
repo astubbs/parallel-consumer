@@ -7,8 +7,30 @@ schema_version: 1
 kind: module-maturity
 modules:
   - artifact: parallel-consumer-proxy-client-typescript
-    deferred:
-      reason: >-
-        Empty skeleton seeded ahead of the fan-out; the TypeScript client wave has not begun, and no maturity or support claim is published for a module with no content.
-      lifted_by: >-
-        astubbs#242 - the TypeScript client wave of the language-proxy plan records this module's first real row when its wave starts.
+    maturity: alpha
+    minimum_java: 17
+    package_ecosystem: npm
+    package_coordinate: "@parallel-consumer/proxy-client"
+    reliability_confidence: >-
+      Wave one only: one record carried end to end over the real wire against the test-mode
+      sidecar. The connect, configure, dispatch, invoke, report and clean-shutdown path works, and
+      the dispatch queue's FIFO and overflow rules are asserted directly. The liveness lease,
+      heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes and the
+      shutdown drain are not implemented at all, so nothing about a session that loses its
+      connection or outlives a lease has been exercised.
+    api_expectation: >-
+      PROVISIONAL. The surface (open/poll/done/close, a processor returning nothing for success and
+      throwing for failure) has not yet had its idiomatic-TypeScript review, and the reference
+      wrapper surface it mirrors may itself move when the fan-out's wave syncs resolve divergences.
+      Whether poll() blocks is unstated in the shared specification; this client decided it does
+      not, and that decision is a candidate for the sync to overturn.
+    support_posture: >-
+      Not supported for external use, and not published to npm - the package is private and the
+      publishing wave is later. It exists as one of the fan-out's comparable data points on whether
+      a client can be built from the frozen protocol documents.
+    evidence_id: proxy-client-typescript
+    tracking: astubbs#242
+    use_this_if: >-
+      You are working on the language-proxy fan-out itself and want the Node shape of a foreign
+      client - in particular how a single-threaded event loop honours an executor count. Nobody
+      should consume it from an application yet.

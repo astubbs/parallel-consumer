@@ -19,16 +19,31 @@
     <!--
         Thin Maven wrapper over Bundler (Gemfile beside this file). The commands below run ONLY
         under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for
-        why opt-in is load-bearing. Skeleton until the Ruby wave of the language-proxy plan
-        (astubbs#242) starts; that wave owns everything in this directory, including refining
-        these commands.
+        why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this skeleton
+        and runs no Ruby toolchain at all.
+
+        THE TEST PHASE RUNS `rake`, NOT `rspec`, and the difference is deliberate: rake's default
+        task is rubocop-then-spec, so the bug finder runs in the same lane as the specs and on a
+        developer's box rather than only in CI. The clients matrix runs its own rubocop step on
+        top; that is a redundancy, not the first place the check fires.
+
+        THE SPECS NEED THE PROXY MODULE'S TEST JAR, AND MAVEN CANNOT ORDER THAT FOR US. The
+        conformance spec spawns the harness (TestModeMain, in parallel-consumer-proxy's test jar),
+        but this module deliberately has NO Maven dependency on the proxy - no client depends on
+        the engine - so `-am` does not pull it into the reactor ahead of us. Build it first:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The spec fails with that command in its message rather than skipping, because a test that
+        quietly does not run is not a passing test. Recorded as a wave finding in
+        docs/inflight/clients/ruby.md (astubbs#242).
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
         <pc.foreign.build.executable>bundle</pc.foreign.build.executable>
         <pc.foreign.build.args>install</pc.foreign.build.args>
         <pc.foreign.test.executable>bundle</pc.foreign.test.executable>
-        <pc.foreign.test.args>exec rspec</pc.foreign.test.args>
+        <pc.foreign.test.args>exec rake</pc.foreign.test.args>
     </properties>
 
     <build>

@@ -1,7 +1,31 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
+# frozen_string_literal: true
+
+# The Ruby client of the language-proxy plan (astubbs#242). The pom.xml beside this file wraps the
+# module into the Maven reactor under -Dpc.foreignClients.
 #
-# Skeleton, seeded by the language-proxy plan (astubbs#242). The Ruby wave owns this file and
-# everything else in this directory; the pom.xml beside it wraps this project into the Maven
-# reactor under -Dpc.foreignClients.
+# EVERY VERSION IS PINNED EXACTLY, generators included. `grpc-tools` carries the protoc and the
+# Ruby gRPC plugin that scripts/generate-proto.sh regenerates the committed stubs with, so the
+# regeneration is reproducible from this file rather than from whatever protoc happens to be on
+# PATH - the same discipline the Go client's `tool` directives apply to its generators.
 
 source "https://rubygems.org"
+
+# The client's own runtime dependencies. `google-protobuf` arrives transitively with `grpc`; it is
+# named anyway because the generated message classes are its API and the version is load-bearing
+# (the committed stubs were generated against it).
+gem "google-protobuf", "4.35.1"
+gem "grpc", "1.83.0"
+
+group :development, :test do
+  # protoc + protoc-gen-grpc-ruby, at the same version as the runtime, for
+  # scripts/generate-proto.sh. Nothing is installed globally.
+  gem "grpc-tools", "1.83.0"
+
+  gem "rake", "13.4.2"
+  gem "rspec", "3.13.2"
+
+  # Bug-finding, not style arbitration - see .rubocop.yml, which turns the style departments off
+  # and leaves Lint/ and Security/ at full strength.
+  gem "rubocop", "1.89.0"
+end

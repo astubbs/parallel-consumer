@@ -17,11 +17,17 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over the Node toolchain (package.json beside this file). The commands
-        below run ONLY under -Dpc.foreignClients - see the foreign-clients profile in the clients
-        aggregator for why opt-in is load-bearing. Skeleton until the TypeScript wave of the
-        language-proxy plan (astubbs#242) starts; that wave owns everything in this directory,
-        including refining these commands and the package.json scripts they call.
+        Thin Maven wrapper over the Node toolchain: package.json beside this file is the real
+        build, and `npm run build` / `npm test` are the one recipe a developer and the CI matrix
+        row both run. The exec bindings fire ONLY under -Dpc.foreignClients (the foreign-clients
+        profile in the clients aggregator), so an ordinary `bin/build.sh -am` builds this module
+        as an empty Maven skeleton and starts no Node at all.
+
+        `npm run build` runs `npm ci` first, deliberately: the exec binding calls a script, not a
+        shell, so there is nowhere else to install dependencies, and `npm ci` from the committed
+        package-lock.json is the reproducible form of it.
+
+        TypeScript wave of the language-proxy plan, astubbs#242.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
@@ -30,6 +36,84 @@
         <pc.foreign.test.executable>npm</pc.foreign.test.executable>
         <pc.foreign.test.args>test</pc.foreign.test.args>
     </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            The suite's end-to-end test spawns the real test-mode sidecar over the real wire, which
+            needs the proxy module's test jar (TestModeMain and the harness), its main jar, and
+            core's test jar underneath. Declaring them here is what makes
+            `./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients` -
+            the CI matrix row's exact command - build those modules first and resolve them;
+            build-classpath below then writes the classpath where the test reads it.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all. The
+            client itself obtains the protocol the way every non-JVM client does, by generating
+            from the .proto by path, with no Maven dependency; this edge is a test-scoped harness
+            dependency in the opt-in lane and nothing this client ships.
+
+            Modelled on the Python client's python-e2e-harness profile, which solved the same
+            problem first. The Go wave recorded the unsolved version of it as a plan defect: `-am`
+            alone cannot order a build this module has no dependency on.
+        -->
+        <profile>
+            <id>typescript-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the Node suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>

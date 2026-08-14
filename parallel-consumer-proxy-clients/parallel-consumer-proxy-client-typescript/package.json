@@ -1,10 +1,45 @@
 {
   "name": "@parallel-consumer/proxy-client",
-  "version": "0.0.0",
+  "version": "0.6.0-0",
   "private": true,
-  "description": "Parallel Consumer proxy client for TypeScript - skeleton seeded by the language-proxy plan (astubbs#242); the TypeScript wave owns this directory. JSON allows no comments, so this field carries the note.",
+  "description": "Parallel Consumer for TypeScript - ordered concurrent Kafka consumption without the event loop as the ceiling. JSON allows no comments, so: the pom.xml beside this file is a thin Maven wrapper that drives THIS under -Dpc.foreignClients, and an ordinary Maven build starts no Node at all. Copyright (C) 2026 Antony Stubbs and contributors.",
+  "license": "Apache-2.0",
+  "author": "Antony Stubbs and contributors",
+  "homepage": "https://github.com/astubbs/parallel-consumer",
+  "keywords": [
+    "kafka",
+    "parallel",
+    "consumer",
+    "concurrency"
+  ],
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "files": [
+    "dist/src"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
-    "build": "tsc --build",
-    "test": "node --test"
+    "build": "npm ci --no-audit --no-fund && tsc --build",
+    "compile": "tsc --build",
+    "test": "node --test dist/test/*.test.js",
+    "check": "tsc --build && eslint .",
+    "lint": "eslint .",
+    "proto": "node scripts/generate-proto.mjs",
+    "proto:check": "node scripts/generate-proto.mjs --check",
+    "clean": "tsc --build --clean && rm -rf dist"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.10.2",
+    "@grpc/grpc-js": "1.14.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.1",
+    "eslint": "10.8.1",
+    "ts-proto": "2.12.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0"
   }
 }

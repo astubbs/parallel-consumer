@@ -6,9 +6,31 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-typescript
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the TypeScript client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the TypeScript client wave of the language-proxy plan.
+  - id: proxy-client-typescript
+    artifact: parallel-consumer-proxy-client-typescript
+    coverage: >-
+      One conformance scenario, a-processed-record-advances-the-committed-offset, run end to end
+      over real gRPC against the test-mode sidecar: the sidecar is spawned as a child process, its
+      port read from the lifecycle channel, the fresh-session handshake completed, a dispatch wave
+      queued and handed to an executor, the user's closure run, the outcome reported with the token
+      echoed verbatim, and the session closed by half-close and the lifecycle pipe. That the
+      assertion can fail was established by a negative control - throwing from the user function
+      instead of returning produced three deliveries inside the same quiet period, with the attempt
+      count incrementing 1, 2, 3, the failure reason travelling back verbatim and last_failure_at
+      set from the second delivery onwards - and the test went red. The dispatch queue's normative
+      rules (FIFO hand-out, the overflow protocol violation naming the count, discard-on-close,
+      and that an executing record still occupies the ceiling) are asserted directly in unit tests,
+      because a one-record scenario cannot reach them.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript/test/one-record-end-to-end.test.ts
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript/test/dispatch-queue.test.ts
+    limitation: >-
+      One scenario of eleven, and the harness negotiates only the dispatch capability, so every
+      liveness, reconnect, worker-death, terminal and drain duty is untested because it is
+      un-negotiated rather than because it passed. The subscription is not a live variable either:
+      the mock harness seeds its records regardless of the topic a client subscribes to, so a
+      wrong-topic run still passes and cannot be used as a control. Concurrency is unproven beyond
+      the queue's own accounting - the scenario dispatches one record, so no test yet observes two
+      executors running at once, and nothing exercises a processor that blocks the event loop,
+      which is this client's stated failure mode. The regenerate-and-diff check on the committed
+      stubs (npm run proto:check) is run by hand and not wired into the build.

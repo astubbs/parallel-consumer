@@ -6,9 +6,31 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-ruby
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the Ruby client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the Ruby client wave of the language-proxy plan.
+  - id: proxy-client-ruby
+    artifact: parallel-consumer-proxy-client-ruby
+    coverage: >-
+      One conformance scenario, a-processed-record-advances-the-committed-offset, run end to end over
+      real gRPC against the test-mode sidecar: the sidecar is spawned as a child process, its port read
+      from the lifecycle channel, the fresh-session handshake completed, a dispatch wave queued and
+      handed to a thread executor, the user's block run, the outcome reported with the token echoed
+      verbatim, and the session closed by half-close and the lifecycle pipe. The assertion that it can
+      fail was established by a negative control - raising inside the user's block instead of returning
+      produced three deliveries with the attempt count incrementing and the failure reason coming back
+      verbatim, and the spec went red. Static analysis is RuboCop, configured as a bug finder
+      (Lint/ and Security/ at full strength), and its ability to fail was established the same way: an
+      injected useless assignment and an injected unreachable statement each turned it red.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/spec/one_record_end_to_end_spec.rb
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/.rubocop.yml
+    limitation: >-
+      One scenario of eleven, and the harness negotiates only the dispatch capability, so every liveness,
+      reconnect, worker-death, terminal and drain duty is untested because it is un-negotiated rather
+      than because it passed. The dispatch queue's own rules are implemented but unexercised: no test
+      drives FIFO hand-out with fewer executors than records, and the overflow path - which the client
+      answers by cancelling the call - has never run, because a correct proxy cannot produce it.
+      Subscription is not a live variable either: the mock harness seeds its records regardless of the
+      topic a client subscribes to, so a wrong-topic run still passes and cannot be used as a control.
+      The regenerate-and-diff check on the committed stubs is not wired into the build yet -
+      parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/scripts/generate-proto.sh is
+      run by hand. Everything here was verified on Ruby 4.0.6 while the CI matrix row pins 3.4.4, and
+      no run has yet happened on 3.4.
