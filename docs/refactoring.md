@@ -282,10 +282,13 @@ Do not start one casually.
   brute-force transaction-commit retry.
 - **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
   rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
-  **expected operational state**, not an internal fault: the reachable causes are client-side
-  rejections of the user's own result records - `RecordTooLargeException` is the one
-  `TransactionalPartialResultSetIT` exercises - and the throw is observable only on the synchronous
-  pre-accumulator path, because Kafka's `ProducerBatch` swallows callback throws on the async one.
+  **expected operational state**, not an internal fault: the throw is observable only on the
+  synchronous pre-accumulator path, because Kafka's `ProducerBatch` swallows callback throws on the
+  async one - and everything `KafkaProducer#doSend` raises before the accumulator arrives there, not
+  just size rejections. `RecordTooLargeException` is the one `TransactionalPartialResultSetIT`
+  exercises, but metadata and authorization failures on that same path (`TimeoutException`,
+  `TopicAuthorizationException` - both `ApiException`) reach it too, so the name has to cover
+  environment failures as well as bad result records.
   A name that says "internal" sends every reader, human or agent, to re-derive that whole chain
   before they can conclude it is ordinary failure handling. It was verified from source and
   kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
@@ -306,7 +309,7 @@ Do not start one casually.
     for why, and do not re-mirror either.
 
 *Prior art: [confluentinc#291](https://github.com/confluentinc/parallel-consumer/pull/291), closed
-unmerged in the 2023-06-15 sweep · already cited in `README_TEMPLATE.adoc`, and worth adding to
+unmerged in the 2023-06-15 sweep · already cited in `src/docs/README_TEMPLATE.adoc`, and worth adding to
 [astubbs#239](https://github.com/astubbs/parallel-consumer/issues/239)'s "Prior work", which names
 [confluentinc#366](https://github.com/confluentinc/parallel-consumer/pull/366) from the same cohort
 but not this.*

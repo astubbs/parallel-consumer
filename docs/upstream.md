@@ -285,6 +285,11 @@ wanted, `git bundle` is the tool, and nobody has decided it is needed.
 [`upstream-map.yaml`](../src/docs/development/upstream-map.yaml) so the check can be redone without
 re-querying upstream, which the PR numbers alone did not allow.
 
+Their objects are not reachable from any branch, so a plain `git fetch` in a clone made before they
+were pushed will not bring them down - use `git fetch --tags` to get the commits locally. Verifying
+the tags still exist needs no fetch at all: `git ls-remote --tags origin 'archive/upstream-pr-*'`
+asks the remote directly.
+
 **Re-running this is not yet automated.** Branches get deleted, so a head safe today can be orphaned
 tomorrow - but no script checks it: `--audit` covers tracking and mirroring, not reachability, and
 would report clean with every tag above deleted. Until a containment check is wired into

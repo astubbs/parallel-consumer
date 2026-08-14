@@ -93,6 +93,9 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * path in the first place - when a send fails asynchronously, Kafka's own {@code ProducerBatch} catches and logs
      * whatever a callback throws, so it was already inert there in both modes.
      */
+    // TODO(refactor): InternalRuntimeException misnames this - a failed send is an expected state, not an
+    //  internal fault. Throw a specific subclass, and rename the callback's `exception` to `sendFailure`.
+    //  See docs/refactoring.md, internal/ProducerManager.java.
     private final Callback sendCallback;
 
     public ProducerManager(ProducerWrapper<K, V> newProducer,
