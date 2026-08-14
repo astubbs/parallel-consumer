@@ -32,6 +32,16 @@ quarantined_occurrences() {
     grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null || echo 0
 }
 
+# The human-readable audit listing: every annotation usage with the following lines that carry its
+# `fixedBy`/reason. Lives here rather than in the caller because it needs the SAME exclusions as
+# quarantined_files() above - bin/quarantined-test.sh had its own copy of this grep without them,
+# so the worktree-pollution bug fixed there still reproduced in the audit output, listing
+# annotations from ~60 sibling branches. One pattern and one exclusion set, one place.
+quarantined_audit() {
+    grep -rnE --include='*.java' --exclude-dir=target --exclude-dir=.claude --exclude-dir=.git \
+        -A 4 "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null
+}
+
 # Registry entries, one per line: `Class.method` (or `Class` for class-level quarantines).
 registry_entries() {
     grep -E '^- \[ \] `' "$REGISTRY" 2>/dev/null | sed -E 's/^- \[ \] `([^`]+)`.*/\1/' || true

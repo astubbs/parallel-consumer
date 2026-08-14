@@ -18,6 +18,22 @@
 #
 # BYPASS: `git commit --no-verify`. Deliberately easy - a gate people cannot skip when they have a
 # reason is a gate they disable permanently. CI is the authority; this is the fast mirror of it.
+# `.claude/hooks/pre-commit-gate.sh`, which runs this same script for Claude Code, honours the same
+# flag for the same reason.
+#
+# SCOPE - AND IT IS NOT THE COMMIT. Every gate below reads the WORKING TREE. The commit records the
+# INDEX. Those differ whenever anything is staged selectively, and the gap goes both ways:
+#
+#   - stage a clean hunk, leave an unrelated dirty one -> blocked for content that is not being
+#     committed;
+#   - stage a violation, then fix it in the working tree without staging the fix -> the violation
+#     is gated green and lands.
+#
+# This is DOCUMENTED rather than fixed, deliberately. The usual fix, `git stash push --keep-index`
+# around the run, can destroy uncommitted work if the hook dies between the stash and the pop, and
+# a pre-commit hook that can eat your changes is worse than one with a known blind spot. CI reads
+# the pushed commit and has no such gap, so nothing escapes permanently; the second case above
+# costs one CI round trip. Open decision - see docs/agent-harness.md, "Known gaps".
 #
 # COST BUDGET: the whole run is ~1.5s. Keep it that way. A pre-commit hook that takes ten seconds
 # gets --no-verify'd by habit, and then it protects nothing. Anything slower belongs in CI only.
@@ -28,10 +44,29 @@ set -euo pipefail
 # A "soft" code means the gate COULD NOT RUN (a missing interpreter, no merge base) as opposed to
 # finding a violation. That distinction is load-bearing: blocking a commit because node is absent
 # teaches people to bypass the hook, and the next real violation goes with it. Soft results warn.
+#
+# Keeping this list right means READING each gate's exit codes, not guessing them - this list was
+# written by guessing, and two of the three gates that need a soft code were missing one. Each of
+# the three below reserves 1 for a real finding and 2 for "I could not run", so no violation can be
+# reclassified as soft by these entries:
+#   - check-issue-refs.sh        - 2 when `node` is absent
+#   - check-docs-data.sh         - 2 for "no working Python 3 on PATH" and for "PyYAML is not
+#                                  installed"; 1 for structural violations
+#   - check-copyright-headers.sh - 2 when the fork-point commit is not in history (a shallow clone,
+#                                  and only when COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1); 1 for
+#                                  violations. Its own header states this contract on line "Exit
+#                                  codes:"; copyright.yml is the authoritative gate and fetches
+#                                  full history.
+# check-docs-data.sh was the expensive omission: PyYAML is a dependency nothing in this repo
+# installs, so a contributor without it was hard-blocked from committing ANYTHING, with
+# "check-docs-data.sh failed (exit 2)" as the only explanation - the precise outcome the paragraph
+# above exists to prevent. The remaining three gates exit 0 or 1 only, so they need no soft code:
+# check-shell-sigpipe.sh and check-action-versions.sh exit 1 on a finding, and
+# check-quarantine-registry.sh exits its own drift flag.
 GATES=(
-    "check-copyright-headers.sh:"
+    "check-copyright-headers.sh:2"
     "check-issue-refs.sh:2"
-    "check-docs-data.sh:"
+    "check-docs-data.sh:2"
     "check-shell-sigpipe.sh:"
     "check-quarantine-registry.sh:"
     "check-action-versions.sh:"
@@ -47,8 +82,19 @@ for entry in "${GATES[@]}"; do
     script="bin/${entry%%:*}"
     soft_codes="${entry#*:}"
 
-    # A branch older than a gate simply does not have it. Not an error.
-    [ -x "$script" ] || continue
+    # A branch older than a gate simply does not have it. Not an error - say nothing.
+    #
+    # A gate that is PRESENT but not executable is a different thing entirely, and the two used to
+    # share this one test. That is a silent miss in a tool whose whole job is to stop silent
+    # misses: a lost exec bit (a `cp` without -p, a checkout on a filesystem with no exec bit, a
+    # patch applied by hand) reads as "this branch predates the gate", and the gate simply stops
+    # running with nobody told. Report it.
+    if [ ! -e "$script" ]; then
+        continue
+    elif [ ! -x "$script" ]; then
+        skipped+=("${entry%%:*} (present but NOT EXECUTABLE - run: chmod +x $script)")
+        continue
+    fi
 
     set +e
     output=$("$script" 2>&1)

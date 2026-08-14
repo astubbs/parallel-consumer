@@ -387,10 +387,10 @@ Nothing lints commit messages, so all of this is on you.
 - **Before merging, recommend a merge strategy - and say why**, and **offer** to write the squash
   message and to re-cut the commits into atomic units rather than doing either silently. Keep the
   recommendation to a line or two: write the squash message where it is used, not into the
-  conversation, unless asked for it. Release notes are generated from the commit log, so the choice
-  decides what a future changelog has to work with.
-  [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - the three strategies, when
-  each applies, and the reset-to-merge-base trap that silently reverts master.
+  conversation, unless asked for it.
+  [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
+  generated release notes, the three strategies and when each applies, and the reset-to-merge-base
+  trap that silently reverts master.
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they know about, and a one-way link strands the other half. If the successor does

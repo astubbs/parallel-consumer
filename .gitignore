@@ -1,7 +1,24 @@
 /mk-include
 /.mk-include-timestamp
 .DS_Store
+
+# A `CLAUDE.md` is ignored BY DEFAULT, at any depth: historically these were personal scratch files,
+# and the default should stay "yours, not the repo's" so nobody's local notes land by accident.
 CLAUDE.md
+# ...except the harness bridges, which are the opposite of personal - they are the ONLY reason
+# Claude Code sees this repo's AGENTS.md rules at all (it never reads AGENTS.md; verified against
+# 2.1.223). Ignored, they exist on the author's machine and nowhere else, which is exactly how they
+# were nearly shipped as a no-op: everything looked wired up locally.
+#
+# ENUMERATED, NOT BLANKET (`!CLAUDE.md`), for two reasons. The default above is worth keeping for
+# any other CLAUDE.md, and a blanket negation would also invite the drifting second copy of the
+# rules that docs/agent-harness.md argues against - the stubs are pure `@AGENTS.md` imports on
+# purpose. And adding a nested AGENTS.md then requires a deliberate line here, which is one more
+# place the "did you add the bridge?" question gets asked; until the gate under "Worth adding" in
+# docs/agent-harness.md exists, that is the only place it gets asked at all.
+!/CLAUDE.md
+!/bin/CLAUDE.md
+!/docs/inflight/CLAUDE.md
 
 # Local per-worktree ownership markers (see AGENTS.md "Worktree ownership")
 .worktree-owner

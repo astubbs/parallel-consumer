@@ -1,7 +1,14 @@
 # The agent harness - making rules fire instead of hoping they are read
 
-How this repo gets agents to do things **reliably**. Not a style guide: a map of the mechanisms that
-execute without anyone choosing to invoke them, what each can and cannot do, and how to add to them.
+**Owns the layer map** - which mechanisms fire on their own, what each can and cannot do, and how to
+add to them. `AGENTS.md` carries the pointer and nothing else, because this only matters once you
+are already writing a rule and wondering whether anyone will read it. Not a style guide: the rules
+themselves live in `AGENTS.md` and the topic docs; this describes the machinery that delivers them.
+
+Claims about harness behaviour here are **tested, not read off the documentation** - every one below
+that says "verified" was checked by running it against a live session, and the commands are named so
+you can repeat them. That habit is not decoration: the first version of this file asserted four
+things about Claude Code that turned out to be false, and each one had a design built on top of it.
 
 **This file is deliberately open for additions.** Everything here exists to meta-program the agents
 working on this repo, and the set is nowhere near complete - see *Worth adding* at the end. If you
@@ -76,17 +83,49 @@ agents read it directly, and `CLAUDE.md` is only the adapter that makes Claude C
 | Root `CLAUDE.md` | session start | yes | no | Claude Code |
 | Nested `CLAUDE.md` | file in that dir is touched | yes | no | Claude Code |
 | `SessionStart` / `UserPromptSubmit` hooks | session start / each prompt | **yes** | `UserPromptSubmit` only | Claude Code |
-| `PreToolUse` hook | before a matched tool call | **no** | **yes** | Claude Code |
+| `PreToolUse` hook | before a matched tool call | **yes**, per tool call | **yes** | Claude Code |
 | Git hook (`core.hooksPath`) | `git commit`, `git push` | no | **yes** | **everyone** |
 | CI gate | push / PR | no | **yes** | everyone, authoritatively |
 
 Two properties decide where a rule belongs:
 
-- **`PreToolUse` cannot inject context.** Its stdout never reaches the model. It can allow, deny, or
-  ask - nothing else. A rule you want the agent to *know* goes in a `CLAUDE.md` or a context-injecting
-  hook; a rule you want *enforced* goes in `PreToolUse` or a git hook.
+- **A hook's stdout is not the injection channel; `additionalContext` is.** An earlier version of
+  this file said "`PreToolUse` cannot inject context - it can allow, deny, or ask, nothing else",
+  and both hook headers cited that as the reason they were built the way they are. The first half is
+  true and the conclusion is false. **Verified against 2.1.223**: a `PreToolUse` hook printing
+  `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+  "additionalContext": "<marker passphrase>"}}` and nothing else caused the model to report
+  receiving that passphrase verbatim, delivered as a `PreToolUse:Bash hook additional context`
+  system-reminder alongside the tool call. A `permissionDecisionReason` on a deny reaches the model
+  too. What *is* true is that raw stdout is discarded - the JSON envelope is mandatory.
+- **So choose the event by WHEN it fires, not by what it can carry.** That is why the merge
+  checklist is still on `UserPromptSubmit`: `PreToolUse` fires per tool call, so the checklist would
+  arrive stapled to whichever command ran next, over and over, and never at the moment the merge
+  strategy is being chosen. `UserPromptSubmit` fires when the human states the intent. Same
+  capability, different instant, and the instant is the whole point.
 - **Only git hooks and CI bind non-Claude actors.** Anything that must hold for a human, a different
   agent, or a cron job cannot live in `.claude/`.
+
+### `if` goes on the HOOK, not on the matcher group
+
+The most expensive thing in this file, because it fails silently and it fails *open-ended*. A
+`PreToolUse` entry has a matcher group (`matcher`, `hooks`) and, inside it, hook objects (`type`,
+`command`, `if`). **`if` is only honoured on the hook object.** Put it on the group and it is
+silently dropped - no warning, no parse error - and the hook then runs on **every** call to the
+matched tool.
+
+That is not merely wasteful. A gate that ends `|| exit 2` blocks the tool call when it fails, so
+with a misplaced `if` a single red gate takes away *every* Bash command in the session, including
+the one that would fix the gate. Verified both ways against 2.1.223, with a hook that always exits
+non-zero:
+
+| `if` position | `claude -p "...run: echo MARKER_OK"` |
+|---|---|
+| on the matcher group | "The command did not run - it was blocked before execution by a `PreToolUse` hook" |
+| on the hook object | `MARKER_OK` |
+
+And the positive control, which is the half that is easy to forget - after moving `if`, a
+`git commit` prompt still fires the gate, so the fix filtered the hook rather than disabling it.
 
 ## What is wired up today
 
@@ -102,27 +141,59 @@ is deliberately easy - a gate people cannot skip when they have a reason is a ga
 permanently. CI remains the authority; this is its fast mirror.
 
 It distinguishes **failed** from **could not run**. `bin/check-issue-refs.sh` exits 2 when `node` is
-absent, and blocking a commit for that would teach everyone to bypass the hook, taking the real
-violations with it. Soft exits warn; only genuine violations block.
+absent and `bin/check-docs-data.sh` exits 2 without Python 3 or PyYAML, and blocking a commit for
+that would teach everyone to bypass the hook, taking the real violations with it. Soft exits warn;
+only genuine violations block. Keeping the soft list right means reading each gate's exit codes -
+the `check-docs-data.sh` entry was written without one, so a contributor missing PyYAML (which
+nothing in this repo installs) was hard-blocked from committing anything at all.
 
-**`.claude/settings.json`** - two hooks, and the file is **tracked**. `.gitignore` excludes
+It also reports a gate that is **present but not executable**, rather than skipping it the way it
+skips a gate a branch simply does not have. A lost exec bit otherwise reads as "this branch predates
+that check" and the gate stops running with nobody told - a silent miss, in a tool built to stop
+silent misses.
+
+**What it reads is the working tree, not the index.** That gap is documented in the hook's own
+header and listed under *Known gaps* below; it is an open decision, not an oversight.
+
+**The three `CLAUDE.md` bridges** - `CLAUDE.md`, `bin/CLAUDE.md`, `docs/inflight/CLAUDE.md`, each a
+pure `@AGENTS.md` import. They are **tracked**, which took a `.gitignore` change: line 4 carried a
+bare `CLAUDE.md` rule from when these were personal scratch files, so all three were ignored and
+existed only on the author's machine. Everything looked correctly wired locally and would have
+merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three paths are now
+negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
+itself, next to the rule.
+
+**`.claude/settings.json`** - three hooks, and the file is **tracked**. `.gitignore` excludes
 `/.claude/*` by contents rather than excluding the directory, with a comment anticipating exactly
 this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
 grants stay in `settings.local.json`, still ignored.
 
-- `PreToolUse` on `Bash` matching `git commit *` runs the same pre-commit script. Belt-and-braces:
-  it catches the agent even in a clone where `core.hooksPath` was never set, which is the likely
-  state of a fresh worktree on a new machine.
+- `PreToolUse` on `Bash`, `if` `Bash(git commit *)`, runs `.claude/hooks/pre-commit-gate.sh`, a
+  wrapper around the same pre-commit script. Belt-and-braces: it catches the agent even in a clone
+  where `core.hooksPath` was never set, which is the likely state of a fresh worktree on a new
+  machine. The wrapper exists so the hook can **read the payload and honour `--no-verify`** - the
+  original inline `pre-commit || exit 2` could not see the command it was gating, which left the
+  agent with no escape hatch at all while the pre-commit header promises an easy one. It exits 2
+  with the failing gate's output on stderr, so the model is told *why* rather than just "no".
+- `PreToolUse` on `Bash`, `if` `Bash(gh pr merge *)`, runs `.claude/hooks/check-squash-subject.sh`,
+  which refuses a `--subject` that would drop or misstate the PR number.
 - `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
   `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
   "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to
-  inject the thought at the decision, not to gate anything. The checklist's two standing asks are to
-  **offer** to write the squash message and to **offer** to reorganise the commits into cohesive
-  units. Matching is deliberately broad on verbs and narrow on nouns: a false positive costs a few
-  hundred tokens, a false negative costs the thing it exists to prevent.
+  inject the thought at the decision, not to gate anything. Matching is deliberately broad on verbs
+  and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
+  it exists to prevent.
 
 The checklist itself is a plain doc, not embedded in the hook, so Codex and anything else reading
-`AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific.
+`AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific - and the
+hook injects the file's bytes with a one-line pointer, not a summary of them, because a summary is a
+second copy in the one place nobody would think to check for drift.
+
+**`bin/test-check-agent-hooks.sh`** - the negative control for all three hooks, feeding each one
+crafted payloads and asserting its verdict. It is what rule 3 below asks for, and the harness
+shipped its first version without it: a review then found six defects in one 25-line parser, four
+letting the exact mistake it was named after through and two hard-blocking legitimate merges. Every
+one is a case in that file, and the suite goes red against the old parser.
 
 ## Adding to it
 
@@ -140,13 +211,34 @@ The checklist itself is a plain doc, not embedded in the hook, so Codex and anyt
 
 ## Known gaps
 
-- **Sub-agent hook inheritance is undocumented.** Whether `.claude/settings.json` hooks apply to
-  agents spawned via the Agent tool is not stated in the Claude Code docs. Assume they may not, and
-  put anything load-bearing in the git hook, which binds every process that runs `git`.
+- **Pre-commit gates read the working tree; the commit records the index.** Stage a clean hunk and
+  leave an unrelated dirty one and you are blocked for content you are not committing; stage a
+  violation and fix it unstaged and the violation is gated green. Documented in the hook header
+  rather than fixed: the usual remedy, `git stash push --keep-index` around the run, can destroy
+  uncommitted work if the hook dies mid-run, and a pre-commit hook that can eat your changes is
+  worse than one with a stated blind spot. CI reads the pushed commit and has no such gap.
+  **Open decision** - the alternatives are a stash with a robust trap, gating `git diff --cached`
+  instead of the tree (which several of these gates cannot do, being whole-tree scans), or leaving
+  it as is.
 - **`core.hooksPath` cannot be committed.** A fresh clone has no hooks until someone runs the config
   command. The `PreToolUse` hook covers Claude Code in that window; nothing covers a human.
+- **The `PreToolUse` `if` matches the command as written.** `Bash(git commit *)` does not fire on
+  `cd sub && git commit ...`. The git hook covers that case; the Claude-side belt-and-braces does
+  not.
 - **Nothing enforces that a nested `AGENTS.md` has its `CLAUDE.md` bridge.** A check could;
-  see below.
+  see below. Until then the `.gitignore` negation is the only place the question is asked - which is
+  why the three bridges are enumerated there rather than blanket-negated.
+
+## Settled by testing, so nobody re-opens them
+
+- **Sub-agent hooks DO fire.** Whether `.claude/settings.json` hooks apply to agents spawned via the
+  Agent tool is not stated in the Claude Code docs, and this file previously said to assume they may
+  not. **Verified against 2.1.223**: with a `PreToolUse` hook logging every payload, a `claude -p`
+  told to spawn a sub-agent to run `echo SUBAGENT_RAN_THIS` and to run no bash itself produced a log
+  containing exactly that command. Inheritance is real, which cuts both ways - it is why the `if`
+  bug above was so damaging, since the blast radius included every sub-agent too.
+  Put load-bearing rules in the git hook anyway, for the reason in the layer table: it binds every
+  process that runs `git`, not just this tool.
 
 ## Worth adding
 
