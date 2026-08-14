@@ -23,7 +23,6 @@ import bz.stub.parallelconsumer.internal.DrainingCloseable.DrainingMode;
 import bz.stub.parallelconsumer.internal.JStreamResultDeques;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -57,8 +56,6 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
      * The Queue of results. Unbounded — will grow indefinitely if the stream is not consumed.
      */
     private final ConcurrentLinkedDeque<VertxCPResult<K, V>> userProcessResultsStream;
-
-    private final AtomicLong resultsAdded = new AtomicLong();
 
     /**
      * Provide your own instances of the Vertx engine and it's webclient.
@@ -98,7 +95,7 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
             // stream
             result.asr(future);
             VertxCPResult<K, V> build = result.build();
-            addResultAndWarnIfBacklogged(build);
+            userProcessResultsStream.add(build);
         };
 
         super.vertxHttpReqInfo(requestInfoFunctionWrapped, onSendCallBack, (ignore) -> {
@@ -124,7 +121,7 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
             // stream
             result.asr(future);
             VertxCPResult<K, V> build = result.build();
-            addResultAndWarnIfBacklogged(build);
+            userProcessResultsStream.add(build);
         };
 
         super.vertxHttpRequest(requestInfoFunctionWrapped, onSendCallBack, (ignore) -> {
@@ -151,16 +148,12 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
             // stream
             result.asr(future);
             VertxCPResult<K, V> build = result.build();
-            addResultAndWarnIfBacklogged(build);
+            userProcessResultsStream.add(build);
         };
 
         super.vertxHttpWebClient(wrappedFunc, onSendCallBack);
 
         return stream;
-    }
-
-    private void addResultAndWarnIfBacklogged(VertxCPResult<K, V> result) {
-        JStreamResultDeques.addAndWarnIfBacklogged(userProcessResultsStream, resultsAdded, result);
     }
 
     /**

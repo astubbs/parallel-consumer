@@ -16,7 +16,6 @@ import bz.stub.parallelconsumer.internal.JStreamResultDeques;
 import java.time.Duration;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -30,8 +29,6 @@ import java.util.stream.Stream;
 public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamProcessor<K, V> implements JStreamParallelStreamProcessor<K, V> {
 
     private final Stream<ConsumeProduceResult<K, V, K, V>> stream;
-
-    private final AtomicLong resultsAdded = new AtomicLong();
 
     private final ConcurrentLinkedDeque<ConsumeProduceResult<K, V, K, V>> userProcessResultsStream;
 
@@ -47,7 +44,7 @@ public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamPr
     public Stream<ConsumeProduceResult<K, V, K, V>> pollProduceAndStream(Function<PollContext<K, V>, List<ProducerRecord<K, V>>> userFunction) {
         super.pollAndProduceMany(userFunction, result -> {
             log.trace("Wrapper callback applied, sending result to stream. Input: {}", result);
-            JStreamResultDeques.addAndWarnIfBacklogged(this.userProcessResultsStream, this.resultsAdded, result);
+            this.userProcessResultsStream.add(result);
         });
 
         return this.stream;
@@ -66,7 +63,9 @@ public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamPr
      * <p>
      * It runs in a {@code finally} because a close that fails - a drain that times out, an exception off the
      * control thread - is exactly when the backlog is largest, and releasing it does not depend on the
-     * shutdown having succeeded.
+     * shutdown having succeeded. On that failed path the release is <b>best-effort</b>: workers that outlive
+     * a timed-out shutdown can enqueue again afterwards. A close that completes normally has no such window,
+     * and an instance whose close failed is not one to keep using.
      *
      * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
