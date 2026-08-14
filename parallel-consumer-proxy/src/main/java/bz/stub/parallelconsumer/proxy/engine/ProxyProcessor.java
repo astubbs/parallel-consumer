@@ -173,7 +173,7 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
             return ReportResult.SUPERSEDED_EPOCH;
         }
 
-        var claimed = inFlight.claim(token.getRecordId(), token.getEpoch());
+        var claimed = inFlight.claim(token.getRecordId(), live.get());
         if (claimed.isEmpty()) {
             // another report thread won the race between peek and claim; for this one the token is now dead
             return ReportResult.UNKNOWN_TOKEN;

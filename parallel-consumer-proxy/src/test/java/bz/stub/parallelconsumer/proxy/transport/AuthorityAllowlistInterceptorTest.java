@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.proxy.transport;
  */
 
 import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
-import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
@@ -13,13 +12,10 @@ import io.grpc.ServerCallHandler;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockito.ArgumentCaptor;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -42,21 +38,7 @@ import static org.mockito.Mockito.when;
  * (a null authority, the port and bracket forms).
  */
 @Timeout(value = 30)
-class AuthorityAllowlistInterceptorTest {
-
-    CountingSessionService service;
-    ProxyServer server;
-
-    @BeforeEach
-    void startServer() throws IOException {
-        service = new CountingSessionService();
-        server = ProxyServer.builder().sessionService(service).build().start();
-    }
-
-    @AfterEach
-    void stopServer() {
-        server.close();
-    }
+class AuthorityAllowlistInterceptorTest extends WireTestBase {
 
     @Test
     void connectionDeclaringLocalhostIsAdmitted() throws Exception {
@@ -183,11 +165,5 @@ class AuthorityAllowlistInterceptorTest {
         when(handler.startCall(any(), any())).thenReturn(new ServerCall.Listener<>() {
         });
         return handler;
-    }
-
-    private static ClientMessage configure(String topic) {
-        return ClientMessage.newBuilder()
-                .setConfigure(Configure.newBuilder().addTopics(topic))
-                .build();
     }
 }

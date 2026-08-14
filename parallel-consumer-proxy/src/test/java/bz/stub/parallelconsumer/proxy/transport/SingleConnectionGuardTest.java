@@ -4,18 +4,14 @@ package bz.stub.parallelconsumer.proxy.transport;
  */
 
 import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
-import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.io.IOException;
 import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 
@@ -32,7 +28,7 @@ import static org.awaitility.Awaitility.await;
  * releases on stream termination, so the next stream is admitted - the seam U8's reconnection re-uses).
  */
 @Timeout(value = 30)
-class SingleConnectionGuardTest {
+class SingleConnectionGuardTest extends WireTestBase {
 
     // --- the state machine, directly ---
 
@@ -97,21 +93,7 @@ class SingleConnectionGuardTest {
         assertThat(guard.isHeld()).isFalse();
     }
 
-    // --- the wire, through a real loopback server ---
-
-    CountingSessionService service;
-    ProxyServer server;
-
-    @BeforeEach
-    void startServer() throws IOException {
-        service = new CountingSessionService();
-        server = ProxyServer.builder().sessionService(service).build().start();
-    }
-
-    @AfterEach
-    void stopServer() {
-        server.close();
-    }
+    // --- the wire, through a real loopback server (fixture: WireTestBase) ---
 
     @Test
     void aSecondConcurrentStreamIsRejectedWhileTheFirstIsLiveAndAdmittedOnceItTerminates() throws Exception {
@@ -166,11 +148,5 @@ class SingleConnectionGuardTest {
             channel.shutdownNow();
             channel.awaitTermination(5, TimeUnit.SECONDS);
         }
-    }
-
-    private static ClientMessage configure(String topic) {
-        return ClientMessage.newBuilder()
-                .setConfigure(Configure.newBuilder().addTopics(topic))
-                .build();
     }
 }

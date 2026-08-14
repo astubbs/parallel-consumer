@@ -25,7 +25,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * <p>
  * <b>Leak discipline (the plan's U6 execution note):</b> every path that removes an entry must end in a mailbox
  * add, or {@code numberRecordsOutForProcessing} drifts. Removal is therefore only possible through
- * {@link #claim(String, long)}, whose single caller ({@link ProxyProcessor#report}) mailbox-adds
+ * {@link #claim(String, InFlight)}, whose single caller ({@link ProxyProcessor#report}) mailbox-adds
  * unconditionally after claiming, and {@link #unregister(String)}, whose single caller is the dispatch path's
  * exception handler - where core's own {@code runUserFunction} catch block performs the mailbox add.
  * <p>
@@ -80,18 +80,14 @@ class InFlightRegistry {
     }
 
     /**
-     * Atomically removes and returns the entry, but only when its captured epoch matches the one the report
-     * echoed - a stale report must not claim (and thereby end) a live delivery it does not name. Empty when
-     * there is no entry or the epoch does not match; the caller distinguishes the two via {@link #peek}.
+     * Atomically removes and returns the entry the caller {@link #peek}ed - conditional on that exact entry
+     * still being the registered one, so two report threads racing on one token resolve to one winner, and a
+     * delivery superseded between peek and claim is left untouched (its entry no longer matches). Empty when
+     * this call lost that race; the caller has already fenced the epoch against the peeked entry (KTD8).
      */
-    Optional<InFlight> claim(String recordId, long reportedEpoch) {
-        var entry = byRecordId.get(recordId);
-        if (entry == null || entry.capturedEpoch() != reportedEpoch) {
-            return Optional.empty(); // no entry, or a stale report - either way the live delivery is untouched
-        }
-        // conditional on the exact entry, so two report threads racing on one token resolve to one winner
-        boolean won = byRecordId.remove(recordId, entry);
-        return won ? Optional.of(entry) : Optional.empty();
+    Optional<InFlight> claim(String recordId, InFlight peeked) {
+        boolean won = byRecordId.remove(recordId, peeked);
+        return won ? Optional.of(peeked) : Optional.empty();
     }
 
     /**

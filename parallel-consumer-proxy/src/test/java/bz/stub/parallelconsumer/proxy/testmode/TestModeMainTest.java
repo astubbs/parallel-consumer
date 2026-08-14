@@ -128,7 +128,8 @@ class TestModeMainTest {
                             .addTopics(scenario.name())
                             .setMaxConcurrency(2)
                             .setCommitInterval(com.google.protobuf.Duration.newBuilder()
-                                    .setNanos((int) ProxyHarness.COMMIT_INTERVAL.toNanos())))
+                                    .setSeconds(ProxyHarness.COMMIT_INTERVAL.getSeconds())
+                                    .setNanos(ProxyHarness.COMMIT_INTERVAL.getNano())))
                     .build());
 
             var configured = take(responses, streamError).getConfigured();
