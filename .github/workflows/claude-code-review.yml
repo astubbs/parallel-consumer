@@ -72,15 +72,20 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
-# DELIBERATELY NOT `pull_request_review`. Re-running the gate when a review is submitted would
-# be the obvious way to clear the human half the moment the LGTM lands, and it is a trap: on
-# that event the sender is the reviewer, so a review submitted by a BOT would skip the job
-# below on its `sender.type` guard - and a skipped job reports a `skipped` check run, which
-# GitHub counts as satisfying a required check. That is the same mechanism that makes the
-# Dependabot exemption work, pointed the wrong way: any bot review would turn the gate green
-# without either half being asserted. Clearing the gate after a late review is instead the
-# `refresh-gate` jobs' business (claude.yml, claude-code-review-dispatch.yml), and after a
-# human LGTM it is a re-run - see docs/ci.md, "if a review posts and the gate stays red anyway".
+# DELIBERATELY NOT `pull_request_review`, though the reason has changed and is worth stating
+# accurately. Re-running the gate when a review is submitted is the obvious way to clear the
+# human half the moment the LGTM lands. It used to be a TRAP, because the jobs below were
+# guarded on `github.event.sender.type`: on a `pull_request_review` event the sender is the
+# REVIEWER, so a review submitted by a bot would have skipped the job - and a skipped job
+# reports a `skipped` check run, which GitHub counts as satisfying a required check. Any bot
+# review would have turned the gate green with neither half asserted.
+#
+# That specific trap is closed: the guard now reads the PR AUTHOR (`pull_request.user.type`),
+# which no event's sender can change. Wiring the trigger is nevertheless a separate change from
+# this one and is not made here - it alters when a REQUIRED check runs, which is its own
+# decision. Until it is made, clearing the gate after a late review is the `refresh-gate` jobs'
+# business (claude.yml, claude-code-review-dispatch.yml), and after a human LGTM it is a re-run
+# - see docs/ci.md, "if a review posts and the gate stays red anyway".
 concurrency:
   group: claude-review-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -92,10 +97,24 @@ jobs:
     # operands are the two halves, so a red entry in the checks list already tells you which
     # question is outstanding before you open anything.
     name: "review: bot + human LGTM"
-    # Unchanged from the reviewer this replaces: a bot-raised PR (Dependabot and friends) is
-    # not held to the review requirement - including the human half, deliberately. Widening
-    # that is a separate decision from this one.
-    if: github.event.sender.type != 'Bot'
+    # A BOT-RAISED PR (Dependabot and friends) is not held to the review requirement - including
+    # the human half, deliberately. Widening that exemption is a separate decision from this one.
+    #
+    # THE AUTHOR, NOT THE SENDER, AND THAT DISTINCTION IS LOAD-BEARING. This read
+    # `github.event.sender.type != 'Bot'` until astubbs/parallel-consumer#298. `sender` is
+    # whoever triggered the EVENT, which on `synchronize`, `reopened` and `ready_for_review` is
+    # frequently not the author: a bot pushing to a human's branch - and `claude.yml` commits to
+    # PR branches in this repo - made the sender a Bot, which skipped the whole job. A skipped
+    # job reports a `skipped` check run, and GitHub counts that as SATISFYING a required check.
+    # So a bot touching any human PR turned the gate green with neither half asserted: the
+    # documented exemption ("a bot-raised PR") silently became "a bot-touched PR", and it landed
+    # this repo's most-repeated defect
+    # (docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md) inside
+    # the gate written to prevent it. `pull_request.user` is the PR's author and no event can
+    # change it, so the guard now means what the sentence above always claimed it meant.
+    # bin/test-check-human-lgtm.sh case 26 pins this guard, for the same reason case 25f pins
+    # the step's: a guard that can never be true is a deleted gate that still looks present.
+    if: github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     # Two `gh api` calls and two shell scripts. If it has not finished in five minutes
     # something is wrong, and a wedged required check is worse than a failed one.
@@ -240,7 +259,12 @@ jobs:
   # is still enforcing: it is a frozen copy of the old contract, with a short life.
   # ---------------------------------------------------------------------------------------
   claude-review:
-    if: github.event.sender.type != 'Bot'
+    # Frozen at the OLD CONTRACT (the automated half only) - but not at the old guard. The
+    # `sender.type` bug described on the job above is a false GREEN on a required check, and
+    # this is the job the ruleset currently requires, so leaving it here would leave the hole
+    # open for exactly as long as the cutover takes. Fixing it does not make this job stricter
+    # than the contract the ruleset enforces; it makes it run when that contract says it should.
+    if: github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

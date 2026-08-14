@@ -84,11 +84,31 @@
 #                     * NOT immediately preceded by a negator - `not`, `no`, `never`, or a
 #                       contraction ending `n't` - so `NOT LGTM`, `not LGTM` and `isn't LGTM`
 #                       are refused.
+#                     * THE TWO CLAUSES ABOVE SEE ACROSS ONE SOFT LINE BREAK, because Markdown
+#                       does. A newline inside a paragraph renders as a space, so a body
+#                       reading "not\nLGTM" or "LGTM\n?" is displayed to every human as "not
+#                       LGTM" and "LGTM ?" - and a rule that scanned each physical line alone
+#                       accepted both. Hard-wrapped prose is the ordinary way to hit that, not
+#                       a contrivance. The lookaround is exactly one line and only when this
+#                       side of the token is otherwise empty, so a BLANK LINE (a paragraph
+#                       break, where the two words are not adjacent in the rendered text)
+#                       still separates them, and the rule stays statable in a sentence rather
+#                       than becoming the unbounded sentiment analysis refused below. The
+#                       reach is TO the token, not THROUGH punctuation on its own line:
+#                       `not\n(LGTM)` still counts, because the negator is no longer the word
+#                       touching the token once a bracket is between them. That is the same
+#                       place the single-line rule stops (see `not LGTM/LGTM` below), and it
+#                       is a bound rather than a claim to be right about that sentence.
 #                     * on a line that is neither inside a fenced code block nor a blockquote
 #                       (`>`). A review DISCUSSING this rule, or quoting somebody else's
 #                       LGTM, must not stamp the PR by accident - and that is not a
 #                       hypothetical, because the review of the PR that introduced this check
-#                       necessarily quotes it.
+#                       necessarily quotes it. BOTH EXCLUSIONS SURVIVE LIST NESTING: CommonMark
+#                       lets a block start after a list marker, so `- > LGTM` is a blockquote
+#                       and ``- ```py `` opens a fence just as surely as the unindented forms,
+#                       and a leading `- ` used to walk an LGTM straight past both. Continuation
+#                       lines of a list item are plain indentation and always worked; it is the
+#                       marker line itself that did not.
 #   4. STATE      - is NOT consulted, with one exception: a `PENDING` review (started, never
 #                   submitted) is ignored, because it has not been submitted. APPROVED,
 #                   COMMENTED, CHANGES_REQUESTED and DISMISSED are all treated alike; the
@@ -223,9 +243,28 @@ scan_result=$(awk \
         if (seg_near == "") seg_near = reason
     }
 
+    # Drops leading whitespace and any leading CommonMark list markers, so the blockquote and
+    # fence tests below see what the renderer sees. A block can start straight after a list
+    # marker, which means `- > LGTM` IS quoted and ``- ```py `` DOES open a fence; matching only
+    # `^[ \t]*` missed exactly those marker lines and let a leading `- ` carry an LGTM past both
+    # exclusions. A marker needs whitespace (or end of line) after it, which is what keeps `->`
+    # ordinary prose rather than a bullet, as CommonMark also has it. Bounded at eight levels:
+    # deeper nesting is not a shape any review body has, and an unbounded loop here would be a
+    # denial of service written into a required check.
+    function strip_markers(line,   s, n) {
+        s = line
+        sub(/^[ \t]+/, "", s)
+        for (n = 0; n < 8; n++) {
+            if (s !~ /^([-*+]|[0-9]+[.)])([ \t]|$)/) break
+            sub(/^([-*+]|[0-9]+[.)])[ \t]*/, "", s)
+        }
+        return s
+    }
+
     # Walks every LGTM-shaped token on a line, applying the whole-word, question-mark and
-    # negation clauses of rule 3 in order.
-    function scan(line,   rest, start, pre, prevch, post, nextch) {
+    # negation clauses of rule 3 in order. `prevl` and `nextl` are the adjacent lines of the
+    # same paragraph, or "" where there is no such line - see the soft-line-break clause.
+    function scan(line, prevl, nextl,   rest, start, pre, prevch, post, nextch, epre, epost) {
         rest = line
         while (match(rest, /[Ll][Gg][Tt][Mm]/)) {
             start = RSTART
@@ -234,8 +273,17 @@ scan_result=$(awk \
             post = substr(rest, start + 4)
             nextch = substr(post, 1, 1)
             if (prevch !~ /[A-Za-z0-9]/ && nextch !~ /[A-Za-z0-9]/) {
-                if (post ~ /^[ \t]*\?/) note_near("question")
-                else if (negated(pre)) note_near("negated")
+                # A soft line break renders as a space, so "not\nLGTM" and "LGTM\n?" are shown
+                # to a human as "not LGTM" and "LGTM ?" and must be refused as those. The
+                # adjacent line is spliced in ONLY when this side of the token is otherwise
+                # empty, which is what keeps the reach to one line and lets a blank line - a
+                # paragraph break, where the words are not adjacent in the rendered text -
+                # separate them. The whole-word test above deliberately does not look across:
+                # a break is a space, so it cannot glue two tokens together.
+                epost = (post ~ /^[ \t]*$/) ? post " " nextl : post
+                epre = (pre ~ /^[ \t]*$/) ? prevl " " pre : pre
+                if (epost ~ /^[ \t]*\?/) note_near("question")
+                else if (negated(epre)) note_near("negated")
                 else { seg_ok = 1; return }
             }
             # Advance to the LAST CHARACTER of the token just examined, not past it. Advancing
@@ -247,14 +295,45 @@ scan_result=$(awk \
         }
     }
 
+    # A fence may OPEN behind a list marker but may only CLOSE in the plain form, because the
+    # lines between the two are literal code where a marker is just text.
+    function fence_line(line) {
+        return fenced ? (line ~ /^[ \t]*(`{3,}|~{3,})/) \
+                      : (strip_markers(line) ~ /^(`{3,}|~{3,})/)
+    }
+
+    # Scanning runs ONE LINE BEHIND the reader, which is what makes the line after a candidate
+    # available to the clause above. Nothing else needs the delay, so it is confined here: every
+    # rule below either hands the current line to flush() as the next line, or ends the
+    # paragraph with break_para().
+    function flush(nextl) {
+        if (have_pending) {
+            scan(pending, prev_line, nextl)
+            prev_line = pending
+            pending = ""
+            have_pending = 0
+        }
+    }
+
+    # A marker, a fence line and a blockquote line all end the paragraph they follow (in
+    # CommonMark a fence and a blockquote may interrupt one), so the pending line has no next
+    # line and the line after them has no previous one.
+    function break_para() {
+        flush("")
+        prev_line = ""
+    }
+
     function reset_segment() {
         open = 0; fenced = 0; fence_ch = ""; fence_len = 0
         submitted = ""; login = ""; state = ""; seg_ok = 0; seg_near = ""
+        pending = ""; have_pending = 0; prev_line = ""
     }
 
     # Charges the finished segment to the verdict. PENDING is the one state consulted: it
     # means the review was started and never submitted, so there is nothing to have said.
     function settle() {
+        # The last line of the segment is still one line behind; charge it before judging.
+        flush("")
         if (open && tolower(login) == owner && state != "PENDING") {
             saw_owner = 1
             if (submitted > latest) latest = submitted
@@ -297,13 +376,19 @@ scan_result=$(awk \
 
     # CommonMark fence tracking, the same rule bin/check-review-posted.sh applies to task-list
     # boxes: a closing fence must use the same character, be at least as long, and carry no
-    # info string.
-    open && match($0, /^[ \t]*(`{3,}|~{3,})/) {
-        fence = substr($0, RSTART, RLENGTH)
-        sub(/^[ \t]+/, "", fence)
+    # info string. Read off the marker-stripped line, so a fence opened inside a list item is
+    # still a fence.
+    open && fence_line($0) {
+        break_para()
+        # Inside an open fence every line is literal, so only the plain form can CLOSE one: a
+        # `- ` in front of the backticks there is code, not a list marker.
+        norm = fenced ? $0 : strip_markers($0)
+        sub(/^[ \t]+/, "", norm)
+        match(norm, /^(`{3,}|~{3,})/)
+        fence = substr(norm, RSTART, RLENGTH)
         ch = substr(fence, 1, 1)
         len = length(fence)
-        after = substr($0, RSTART + RLENGTH)
+        after = substr(norm, RSTART + RLENGTH)
         if (!fenced) { fenced = 1; fence_ch = ch; fence_len = len }
         else if (ch == fence_ch && len >= fence_len && after ~ /^[ \t]*$/) { fenced = 0 }
         next
@@ -311,12 +396,13 @@ scan_result=$(awk \
 
     # Quoted or fenced text is discussion, not a stamp - but an LGTM in there is worth
     # reporting back, because "you wrote it inside a code block" is a fix nobody would guess.
-    open && (fenced || /^[ \t]*>/) {
+    open && (fenced || strip_markers($0) ~ /^>/) {
+        break_para()
         if ($0 ~ /[Ll][Gg][Tt][Mm]/) note_near("quoted")
         next
     }
 
-    open { scan($0) }
+    open { flush($0); pending = $0; have_pending = 1 }
 
     END {
         settle()

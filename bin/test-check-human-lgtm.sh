@@ -25,8 +25,12 @@
 #   TOKEN - every form below is a body this repo has actually received, or a mutation of one
 #     8. lower-case lgtm, and the real forms this repo has received        -> pass (0)
 #     9. LGTM?, LGTM ? and lgtm?                                           -> FAIL (1)
+#     9d. a question mark across a SOFT LINE BREAK - 'LGTM\n?'             -> FAIL (1)
+#     9e. ... but across a BLANK line, which is a paragraph break          -> pass (0)
 #    10. NOT LGTM / not LGTM / never LGTM / isn't LGTM                     -> FAIL (1)
 #    10e. 'not LGTM/LGTM' - where the negator rule deliberately stops      -> pass (0)
+#    10f. a negator across a soft line break - 'not\nLGTM'                 -> FAIL (1)
+#    10g. ... but not across a blank line                                  -> pass (0)
 #    11. LGTM glued to a letter or digit either side                       -> FAIL (1)
 #    11b. LGTM glued to ANOTHER LGTM - LGTMLGTM, xLGTMLGTM                 -> FAIL (1)
 #    12. lgtm inside a fenced code block only                              -> FAIL (1)
@@ -35,7 +39,11 @@
 #    12d. an info-string fence does not CLOSE an already-open fence        -> FAIL (1)
 #    12e. a `~~~` line does not close a backtick fence                     -> FAIL (1)
 #    12f. a CRLF body still closes its fence, so a later LGTM counts       -> pass (0)
+#    12g. a fence opened BEHIND A LIST MARKER still hides the LGTM         -> FAIL (1)
+#    12h. ... but a marker-prefixed line inside a block does not close it  -> FAIL (1)
 #    13. LGTM inside a blockquote only                                     -> FAIL (1)
+#    13b-d. a blockquote NESTED IN A LIST ITEM, three ways                 -> FAIL (1)
+#    13e-f. a bulleted LGTM, and an `->` arrow, both still stamp           -> pass (0)
 #    14. LGTM wearing ordinary punctuation - (LGTM) LGTM! -- LGTM. LGTM,   -> pass (0)
 #    15. a rejected near-miss beside a real LGTM in the same body          -> pass (0)
 #
@@ -64,6 +72,7 @@
 #    25e. its `if:` guard is not a never-true constant, and 25f. is still the intended one
 #    25g. nothing in it swallows the checker's exit status
 #    25h. the checker invocation is the step's last command
+#    26.  both of the gate's JOBS are guarded on the PR AUTHOR, not the event sender
 #
 # Cases 17 and 19 are the ones that pin head-insensitivity, and they are written as positive
 # assertions rather than as deleted code so that re-adding a freshness rule breaks the suite.
@@ -202,6 +211,22 @@ assert "9b. LGTM followed by a spaced question mark fails" \
 assert "9c. lower-case lgtm? fails - the question mark, not the case, is what rejects it" \
     1 "$(run_checker "$(owner_review 'lgtm?')")"
 
+# ACROSS A SOFT LINE BREAK. Markdown renders a newline inside a paragraph as a space, so this
+# body reads "LGTM ?" to every human who opens it - and the scanner, which looked at one
+# physical line at a time, called it a stamp. Hard-wrapped prose is the ordinary way to reach
+# this. Reported on astubbs/parallel-consumer#298 with 10f.
+assert "9d. a question mark on the next line still refuses the stamp" \
+    1 "$(run_checker "$(owner_review 'LGTM
+?')")"
+
+# WHERE THE LOOKAROUND STOPS, so that nobody widens it into the sentiment analysis this rule
+# refuses: a blank line is a paragraph break, the two are not adjacent in the rendered text, and
+# the LGTM stands. Delete the blank line and 9d is what you get.
+assert "9e. a question mark in a LATER paragraph does not reach back" \
+    0 "$(run_checker "$(owner_review 'LGTM
+
+?')")"
+
 assert "10. NOT LGTM fails" \
     1 "$(run_checker "$(owner_review 'This is NOT LGTM until the flake is fixed')")"
 
@@ -222,6 +247,17 @@ assert "10d. a contraction negation fails" \
 # a sentence. The person who could write this is the owner, about his own PR.
 assert "10e. only the word touching the token negates it - 'not LGTM/LGTM' passes, on purpose" \
     0 "$(run_checker "$(owner_review 'not LGTM/LGTM')")"
+
+# The negator's half of the soft-line-break clause: wrapped prose puts "not" at the end of one
+# line and the token at the start of the next, which renders as "not LGTM" and used to pass.
+assert "10f. a negator on the previous line still refuses the stamp" \
+    1 "$(run_checker "$(owner_review "I have read the retry path and this is not
+LGTM until the flake is fixed")")"
+
+assert "10g. a negator in an EARLIER paragraph does not reach forward" \
+    0 "$(run_checker "$(owner_review 'The first version of this was not
+
+LGTM, but this one is')")"
 
 assert "11. LGTM glued to a letter or digit either side fails" \
     1 "$(run_checker "$(owner_review 'ALGTM LGTMx LGTM2 xLGTM')")"
@@ -309,11 +345,68 @@ CRLF_BODY=$'The rule looks like this:\r\n```\r\nLGTM\r\n```\r\n\r\nAnd having no
 assert "12f. a CRLF body still closes its fence, so the LGTM after it counts" \
     0 "$(run_checker "$(owner_review "$CRLF_BODY")")"
 
+# A FENCE OPENED BEHIND A LIST MARKER IS STILL A FENCE. CommonMark lets a block start straight
+# after the marker, so this renders as a code block exactly as 12 does - but the fence test only
+# allowed leading whitespace, so the `- ` carried the LGTM out of the block and stamped the PR.
+# Reported on astubbs/parallel-consumer#298 alongside 13b.
+LIST_FENCE_BODY='Two ways to write it:
+
+- ```
+  LGTM
+  ```
+
+Still reading.'
+assert "12g. a fence opened behind a list marker still hides the LGTM" \
+    1 "$(run_checker "$(owner_review "$LIST_FENCE_BODY")")"
+
+# The asymmetry the fix has to keep: a marker may precede an OPENING fence, but between the two
+# fences every line is literal code, where `- ` is text rather than a marker. Read the closing
+# rule the same way as the opening one and this body's block ends early, putting its LGTM in
+# open prose. Nothing else in this suite distinguishes the two directions.
+LIST_FENCE_CLOSE_BODY='Explaining what a bulleted fence looks like:
+
+```
+- ```
+LGTM
+```
+
+Still reading.'
+assert "12h. a marker-prefixed fence line inside a block does not close it" \
+    1 "$(run_checker "$(owner_review "$LIST_FENCE_CLOSE_BODY")")"
+
 QUOTED_BODY='> LGTM
 
 That was Bob, not me. I have not read it yet.'
 assert "13. LGTM inside a blockquote does not stamp" \
     1 "$(run_checker "$(owner_review "$QUOTED_BODY")")"
+
+# THE SAME QUOTE, ONE BULLET DEEP. `- > LGTM` is a blockquote nested in a list item and renders
+# identically to 13; the predicate looked for `>` as the first non-whitespace character, so a
+# leading `- ` walked a quoted LGTM straight past the exclusion and turned the required check
+# green with nobody having stamped anything.
+assert "13b. a blockquote nested in a list item does not stamp either" \
+    1 "$(run_checker "$(owner_review '- > LGTM')")"
+
+assert "13c. the same in an ordered list does not stamp" \
+    1 "$(run_checker "$(owner_review '1. > LGTM')")"
+
+assert "13d. two levels of list nesting does not stamp" \
+    1 "$(run_checker "$(owner_review '  - - > LGTM')")"
+
+# THE OTHER SIDE OF THAT FIX, and the reason it strips markers rather than any leading
+# punctuation: a bulleted LGTM is a perfectly ordinary stamp, and a rule that swallowed the
+# whole line prefix would refuse it.
+assert "13e. an LGTM in a plain list item still stamps" \
+    0 "$(run_checker "$(owner_review '- LGTM')")"
+
+# A marker needs whitespace (or end of line) after it, which is what makes `->` an arrow rather
+# than a bullet followed by a blockquote - CommonMark says the same. It has to start the LINE to
+# reach the rule at all, which is why this body is two lines: a mid-sentence `->` never gets
+# near the marker-stripping. Drop the whitespace clause and this ordinary stamp is read as
+# quoted text and refused.
+assert "13f. a line-leading arrow is prose, not a bullet and a blockquote" \
+    0 "$(run_checker "$(owner_review 'Read it end to end.
+-> LGTM')")"
 
 assert "14. LGTM wearing ordinary punctuation passes" \
     0 "$(run_checker "$(owner_review '(LGTM)')")"
@@ -563,6 +656,44 @@ else
     echo "FAIL: 25h. the step's last command is '$LGTM_STEP_LAST', expected '$EXPECTED_LAST'. Anything after the checker decides the step's exit status instead of the checker."
     failures=$((failures + 1))
 fi
+
+# THE JOB'S GUARD, for the same reason 25e and 25f pin the step's, and one the step-level cases
+# cannot reach: a job that does not run reports a `skipped` check run, and GitHub counts skipped
+# as SATISFYING a required check. So the job guard is the one line in this workflow that can
+# turn the gate green with nothing asserted, and it is not hypothetical - it read
+# `github.event.sender.type != 'Bot'` until astubbs/parallel-consumer#298, where `sender` is
+# whoever triggered the event rather than the PR's author. A bot pushing to a human's branch
+# (this repo has one that does) made the sender a Bot and skipped the entire gate.
+#
+# Both jobs are asserted, including the transitional `claude-review` one, because that is the
+# job the ruleset currently requires - a hole left open there is open in practice. The case
+# lives in this file rather than a third one because this is the file that already parses this
+# workflow.
+job_if() { # <workflow-file> <job-id>
+    awk -v job="$2" '
+        /^[ \t]*#/ { next }
+        $0 ~ "^  " job ":[ \t]*$" { inside = 1; next }
+        inside && /^  [^ ]/ { exit }
+        inside && /^    steps:/ { exit }
+        inside && /^    if:/ {
+            sub(/^[ \t]*if:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit
+        }
+    ' "$1"
+}
+
+# Spelled out so that ANY edit to it - a widened exemption, a never-true constant, or a quiet
+# return to `sender` - has to come past a red test and a person who meant it.
+EXPECTED_JOB_IF="github.event.pull_request.user.type != 'Bot'"
+
+for job in review-gate claude-review; do
+    guard=$(job_if "$GATE_WORKFLOW" "$job")
+    if [ "$guard" = "$EXPECTED_JOB_IF" ]; then
+        echo "ok:   26. the '$job' job is guarded on the PR author, not the event sender"
+    else
+        echo "FAIL: 26. the '$job' job's guard is '$guard', expected '$EXPECTED_JOB_IF'. A job that does not run reports a skipped check run, and GitHub counts that as satisfying a required check - so this line can turn the whole gate green with neither half asserted. 'github.event.sender' is whoever triggered the event, not the PR's author, and a bot pushing to a human's branch is enough to skip it."
+        failures=$((failures + 1))
+    fi
+done
 
 # ----------------------------------------------------------------
 

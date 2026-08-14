@@ -373,10 +373,13 @@ turn the gate green" below.)
 **The human half will usually need one re-run.** Submitting a review raises no `pull_request`
 event, so the gate does not re-evaluate itself when the LGTM lands - the same mechanism, and the
 same fix, as the escape hatch above: re-run the gate's existing run. Adding a `pull_request_review`
-trigger looks like the obvious fix and is a trap; the workflow header says why (a bot-submitted
-review would *skip* the job, and a skipped job satisfies a required check). Leaving the LGTM
-*before* asking for the automated review avoids it entirely, because the reviewer's `refresh-gate`
-job then re-runs the gate with both halves already true.
+trigger is the obvious fix and is **not wired**, deliberately: it changes when a required check
+runs, which is its own decision. It used to be a *trap* as well - the jobs were guarded on
+`github.event.sender.type`, and on that event the sender is the reviewer, so a bot-submitted review
+would have *skipped* the job, which satisfies a required check - and the workflow header records
+both that trap and its closure, since the guard now reads the PR author instead. Leaving the LGTM
+*before* asking for the automated review avoids the re-run entirely, because the reviewer's
+`refresh-gate` job then re-runs the gate with both halves already true.
 
 ### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
 
