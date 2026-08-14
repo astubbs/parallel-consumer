@@ -9,10 +9,18 @@ instead of ten suites drifting apart.
 ## Why it fits better than it first appears
 
 - **It fills a gap the specification probe already found.** The test-mode harness has *no verdict
-  channel*: it exits 0 whether or not a scenario's assertions held, and its committed-offset
-  assertions are not observable over the wire at all. Every foreign client has therefore had to
-  invent its own assertions. A results topic is that missing channel, and it is worth building for
-  the ordinary conformance suite even before chaos.
+  channel*: it exits 0 whether or not a scenario's assertions held. Every foreign client has
+  therefore had to invent its own assertions. A results topic is that missing channel, and it is
+  worth building for the ordinary conformance suite even before chaos.
+- **The split falls out cleanly, and only half of it needs the topic.** Broker-side truth is already
+  observable to the orchestrator through the **Kafka Admin API** — committed offsets per group
+  (`listConsumerGroupOffsets`), topic contents, group membership — with no client cooperation at all,
+  so the suite keeps asserting those directly and no language needs a Kafka client of its own to be
+  tested. What the Admin API cannot see is *client-side* truth: which records a worker actually
+  received, in what order, at what concurrency, with which retry attempts. **That** is what the
+  results topic carries. Getting this boundary right is what keeps the clients thin — a client that
+  had to run an admin client to be tested would have re-acquired the dependency this whole design
+  exists to remove.
 - **A client cannot reach Kafka directly — by design — so its results must travel the produce path.**
   Workers never produce to Kafka themselves; output goes back through the engine, which produces.
   So a client publishing its verdict *uses the R6 produce payload*, which means the verdict channel
