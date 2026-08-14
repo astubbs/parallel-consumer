@@ -7,8 +7,28 @@ schema_version: 1
 kind: module-maturity
 modules:
   - artifact: parallel-consumer-proxy-client-kotlin
-    deferred:
-      reason: >-
-        Empty skeleton seeded ahead of the fan-out; the Kotlin client wave has not begun, and no maturity or support claim is published for a module with no content.
-      lifted_by: >-
-        astubbs#242 - the Kotlin client wave of the language-proxy plan records this module's first real row when its wave starts.
+    maturity: alpha
+    reliability_confidence: >-
+      No reliability claim. Wave one carries one record end to end over the real protocol and nothing
+      beyond it: the liveness lease, the manifest reconnect, worker-death reporting and terminal outcomes
+      are later waves, so a record whose session is interrupted has no recovery path yet. The client
+      declares only the dispatch capability, so the proxy asks nothing of it that it does not do.
+    api_expectation: >-
+      Experimental and expected to change. The surface mirrors the shared client API every language
+      implements, rendered in Kotlin - nullability where the reference uses Optional, a sealed outcome,
+      a suspending user function - and changes to that shared shape land here.
+    support_posture: >-
+      Not published to any package index and not supported for production use; built from a checkout.
+      The stable modules' release gate says nothing about this module.
+    evidence_id: proxy-client-kotlin-alpha
+    use_this_if: >-
+      You want ordered concurrent Kafka consumption from Kotlin with a coroutine-native surface, and you
+      are willing to track an experimental client through its remaining waves.
+    opt_in: >-
+      Nothing reaches it unless an application constructs it. It is a JVM module with no foreign
+      toolchain, so an ordinary reactor build compiles it and runs its unit tests; the end-to-end test
+      against the sidecar runs only under -Dpc.foreignClients, which is where its harness classpath
+      comes from.
+    isolated_from_stable_modules: true
+    tracking: >-
+      astubbs#242 - the language-proxy plan; this row is updated by each Kotlin wave as its scope grows.

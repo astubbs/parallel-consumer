@@ -6,9 +6,29 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-kotlin
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the Kotlin client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the Kotlin client wave of the language-proxy plan.
+  - id: proxy-client-kotlin-alpha
+    artifact: parallel-consumer-proxy-client-kotlin
+    coverage: >-
+      One end-to-end test spawns the real test-mode sidecar as a child process and drives it over the
+      real gRPC wire on the shared conformance scenario
+      a-processed-record-advances-the-committed-offset - launch, port line, loopback connect, handshake,
+      one dispatch wave, the user's suspending function, a success report with the delivery token echoed,
+      then a clean client-initiated shutdown and reap. It asserts the negotiated capability set came back
+      as dispatch alone, and that a reported success is followed by silence rather than a redelivery,
+      which is the wire-observable form of the offset advancing. Unit tests cover the wire mapping in
+      both directions - the capability declaration, absent key or value as null, the failure history,
+      the byte-identical token echo, and a Configured without its ceiling refused as a violation - plus
+      the single translation of a returned, thrown or cancelled function into exactly one outcome, and
+      the credential-hygiene rule that no options or record toString prints a payload or a property map.
+      detekt (default ruleset, the version and flags the CI row runs) is green, and was proven able to
+      fail against an injected defect.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/src/test/kotlin/bz/stub/parallelconsumer/client/coroutines/OneRecordThroughTheSidecarTest.kt
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/src/test/kotlin/bz/stub/parallelconsumer/client/coroutines/WireTest.kt
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/src/test/kotlin/bz/stub/parallelconsumer/client/coroutines/ProcessorOutcomeTest.kt
+    limitation: >-
+      Wave one only. The suite exercises one record against a mock-Kafka sidecar: there is no broker
+      test, no multi-record concurrency or FIFO hand-out test, no overflow negative control, and nothing
+      covering connection loss, lease expiry, worker death, terminal outcomes or the Shutdown drain -
+      because none of those paths is implemented. The cross-language conformance suite does not include
+      this client until its scenarios exist here.
