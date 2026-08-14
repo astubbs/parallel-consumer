@@ -561,6 +561,12 @@ person who wants the merge, so it stops nobody who wants not to be stopped. What
 "have I read this one myself yet?" becomes a red check instead of something to remember across a
 dozen open PRs.
 
+**Every PR, with no bot exemption** - unlike the automated half, which skips bot-raised PRs. The two
+assert different things: a Dependabot PR does not need an *automated review*, but it is still a change
+going in, and the requirement is that the owner reviews everything himself. Having no guard also means
+there is no job to skip, and a skipped job would otherwise satisfy the required check having asserted
+nothing.
+
 It is deliberately a second job rather than a second step in `claude-review`, so the checks list says
 *which* half is missing without opening anything - and so `claude-review`, a required check matched by
 name in the master ruleset, did not have to be renamed. It is **not head-sensitive**, matching the

@@ -163,8 +163,17 @@ jobs:
   # ---------------------------------------------------------------------------------------
   human-lgtm:
     name: "review: human LGTM"
-    # Same exemption as the automated half: a bot-raised PR is not held to it.
-    if: github.event.sender.type != 'Bot'
+    # NO BOT EXEMPTION, UNLIKE THE HALF ABOVE, AND THAT ASYMMETRY IS THE POINT. The two jobs assert
+    # different things: a bot-raised PR genuinely does not need an AUTOMATED review, but it is still
+    # a change going in, and the requirement here is "I review everything myself". Dependabot
+    # included - a dependency bump is exactly where a human should look.
+    #
+    # Deleting the guard also removes a whole bug class rather than fixing it. `github.event.sender`
+    # is the event ACTOR, not the PR author, so a human PR synchronized or reopened by a bot or a
+    # GitHub App would have skipped this job - and a SKIPPED job satisfies a required check, so the
+    # context would have gone green having asserted nothing. Keying on `pull_request.user.type`
+    # instead would fix the direction but keep the skip; no guard at all means there is nothing to
+    # skip. If this proves too noisy on bot PRs, add the exemption back deliberately.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Read-only. This job posts nothing.
