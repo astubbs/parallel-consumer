@@ -68,12 +68,27 @@ output (scope every dispatched build to its own module).
 **10. The git index is shared state between parallel agents, and `git add` is a trap.** File
 ownership was split so no two agents edited the same file — but every agent in a worktree shares one
 *index*, so `git add <mine> && git commit` commits whatever anyone else happens to have staged at
-that moment. It happened here: an orchestrator's documentation commit swallowed a language agent's
-pending file deletion. Nothing broke, because content was correct and only attribution was wrong —
-but the same mechanism could commit another agent's half-finished work under a message that does not
-describe it, and the diff would look deliberate forever after. **The fix is one character of
-discipline: `git commit -- <paths>`, never `git add` then commit.** Worth a dispatch-prompt clause
-and, better, a pre-commit hook that refuses a commit whose staged set exceeds its pathspec.
+that moment.
+
+**It happened twice in one night, and the second was not small.** First an orchestrator's
+documentation commit swallowed a language agent's pending file deletion; then an entire language
+client — its source, tests, build files and data fragments — landed inside a *different* language's
+commit. Both times the content was correct and only the attribution was wrong, which is precisely
+what makes it dangerous: nothing fails, nothing is red, and the history reads as deliberate forever
+after. A future bisect lands on a commit whose message describes none of what it contains.
+
+Three fixes, in ascending order of how much they actually fix:
+
+- **Discipline:** `git commit -- <paths>` always, never `git add` then commit. For a new file,
+  `git add <paths> && git commit -- <paths>` — the pathspec on the *commit* is what bounds it.
+  Cheap, and it belongs in every dispatch prompt; but it is compliance, so it will fail sometimes.
+- **A hook** that refuses a commit whose staged set is wider than the paths it names. Mechanical,
+  but needs the agent to declare its intent somewhere the hook can read.
+- **Real isolation:** one worktree per agent, which is what worktrees exist for and what this repo's
+  own ownership rule already says. It was skipped here for a real reason — agents on one branch
+  share a build tree and a branch cannot be checked out twice — so the honest statement is that
+  running N agents in one worktree buys coordination and *pays for it in shared mutable state*: one
+  index, one `target/`, one HEAD. Know which you are choosing.
 
 **11. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
 interrogate the shared surface: no-exception languages test whether outcomes are really values,
