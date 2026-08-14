@@ -82,6 +82,13 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
+| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+
+**A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
+there, not after review catches you.** The table above routes the ones that exist today; `find . -name
+AGENTS.md` is the check that it is still complete. This rule is here because the routing was complete
+and got missed anyway: astubbs#206 added a `docs/inflight/` note describing work that PR itself landed,
+which the directory's first rule - track only what is currently OPEN - forbids.
 
 **Where work and knowledge are recorded:**
 
