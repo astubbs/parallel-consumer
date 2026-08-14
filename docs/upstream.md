@@ -237,6 +237,38 @@ on a quiet day never trips the bulk-day heuristic, and a discussion with one dis
 tracked in
 [`docs/inflight/next-upstream-coverage-completeness.md`](inflight/next-upstream-coverage-completeness.md).
 
+### Swept PR heads that only upstream had - now preserved as tags
+
+A mirror records what a closed PR *said*. It does not keep the code. The 35 PRs closed in the
+2023-06-15 sweep were reachable through `refs/pull/<n>/head` **in the upstream repository**, which is
+not a copy we control: if that repo is deleted or a contributor's fork disappears, the commits go
+with it, and a mirror describing work whose diff no longer exists is close to useless.
+
+Checked 2026-08-14 (`git branch -r --contains <head>` for each of the 35): **29 were already safe**,
+because their PRs were raised from branches that still exist on this fork. **Six were reachable only
+from upstream** - not on this fork, and not even present in a local clone. They are now pinned as
+annotated tags:
+
+| Tag | Upstream PR | Head | Author |
+|---|---|---|---|
+| `archive/upstream-pr-22` | confluentinc#22 | `ba6b71f1` | astubbs |
+| `archive/upstream-pr-204` | confluentinc#204 | `02ab3289` | astubbs |
+| `archive/upstream-pr-270` | confluentinc#270 | `007ae090` | astubbs |
+| `archive/upstream-pr-405` | confluentinc#405 | `77a021ee` | astubbs |
+| `archive/upstream-pr-443` | confluentinc#443 | `4533f6d8` | **Robbie-Palmer** |
+| `archive/upstream-pr-506` | confluentinc#506 | `33d93af0` | astubbs |
+
+Each tag's message carries the upstream title, author, head branch name and closure date, so the
+provenance survives without the upstream thread.
+
+confluentinc#443 was the sharpest case: a third-party fork can vanish independently of Confluent's
+repository, and nothing would have flagged it. Tagging is deliberate over branching - tags are not
+swept by branch-cleanup tooling and read as archival rather than live work.
+
+**This is a recurring check, not a one-off.** Branches get deleted, so a head safe today can be
+orphaned tomorrow. Re-run it whenever the sweep cohort is revisited; the decision backlog it feeds
+is astubbs#300.
+
 ### Surfaces checked and ruled out
 
 Recorded here so they are not re-investigated (established 2026-08-07):
