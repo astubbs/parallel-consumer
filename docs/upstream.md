@@ -241,11 +241,15 @@ tracked in
 
 A mirror records what a closed PR *said*. It does not keep the code. The 35 PRs closed in the
 2023-06-15 sweep were reachable through `refs/pull/<n>/head` **in the upstream repository**, which is
-not a copy we control: if that repo is deleted, or the branch behind a PR is, the commits go with it,
-and a mirror describing work whose diff no longer exists is close to useless.
+not a copy we control: if that repository goes, the commits go with it, and a mirror describing work
+whose diff no longer exists is close to useless.
+
+Deleting the *branch* behind a PR is **not** a loss event - `refs/pull/<n>/head` is held by the base
+repository and keeps the commit after its branch is gone. The exposure is loss of
+`confluentinc/parallel-consumer` itself.
 
 All 35 heads were raised from branches in `confluentinc/parallel-consumer` itself (every `head.label`
-is `confluentinc:<branch>`), so the exposure is **upstream branch or repository loss** - not a
+is `confluentinc:<branch>`), so the exposure is **upstream repository loss** - not a
 contributor's fork vanishing. That distinction matters because it is the upstream branch, not a third
 party, that has to be watched.
 
@@ -268,17 +272,18 @@ confluentinc#405 have same-named fork branches that do **not** contain their hea
 are in the table below. **Six were reachable from nothing on this fork.** They are now pinned as
 annotated tags:
 
-| Tag | Upstream PR | Head | Author |
-|---|---|---|---|
-| `archive/upstream-pr-22` | confluentinc#22 | `ba6b71f1` | astubbs |
-| `archive/upstream-pr-204` | confluentinc#204 | `02ab3289` | astubbs |
-| `archive/upstream-pr-270` | confluentinc#270 | `007ae090` | astubbs |
-| `archive/upstream-pr-405` | confluentinc#405 | `77a021ee` | astubbs |
-| `archive/upstream-pr-443` | confluentinc#443 | `4533f6d8` | **Robbie-Palmer** |
-| `archive/upstream-pr-506` | confluentinc#506 | `33d93af0` | astubbs |
+confluentinc#22, confluentinc#204, confluentinc#270, confluentinc#405, confluentinc#443 and
+confluentinc#506. Each is pinned as `archive/upstream-pr-<n>`.
+
+**The tag name, target SHA and check date live in one place only** -
+`sweep-2023-admin-closure.preserved_heads` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), which is this repo's owner of
+fork-upstream facts. They are deliberately not repeated here: a corrected SHA updated in one copy
+while the other still read as authoritative is exactly the failure this section exists to prevent.
 
 Each tag's message carries the upstream title, author, head branch name and closure date, so the
-provenance survives without the upstream thread.
+provenance survives without the upstream thread. confluentinc#443 is the one raised by an outside
+contributor (Robbie-Palmer); see below for why that turned out not to matter.
 
 confluentinc#443 is the one raised by an outside contributor (Robbie-Palmer), but its head lives on
 `confluentinc:pyallel-consumer` like the rest - that contributor's own fork is already gone, and it
@@ -291,9 +296,8 @@ objects outside the GitHub fork network; that is acceptable because deleting a p
 the network to a surviving fork rather than destroying its objects. If an out-of-network copy is ever
 wanted, `git bundle` is the tool, and nobody has decided it is needed.
 
-**The SHAs above are the record.** They are duplicated into `sweep-2023-admin-closure` in
-[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml) so the check can be redone without
-re-querying upstream, which the PR numbers alone did not allow.
+Recording the SHAs in the manifest is what makes the check redoable without re-querying upstream; the
+PR numbers alone did not allow it.
 
 Their objects are not reachable from any branch, so a plain `git fetch` in a clone made before they
 were pushed will not bring them down - use `git fetch --tags` to get the commits locally. Verifying
