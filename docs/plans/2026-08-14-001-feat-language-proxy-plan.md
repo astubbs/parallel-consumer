@@ -27,6 +27,8 @@ R47 is **amended, not preserved**. It said the proxy decides how many executors 
 
 R66 is **amended, not preserved**. It said every seeded module "builds and tests green from the moment it is seeded". That is not true and does not need to be: a module nobody has started yet has nothing to be green about. It now says: **every seeded module is green at each decided checkpoint, and between checkpoints a module whose wave has not begun is skipped rather than red.** The property R66 actually protects is interpretability - a red job during the fan-out must mean a real failure - and skipping delivers it without demanding vacuous greenness from ten empty modules. KTD35 names the checkpoints.
 
+R74 is **retired, not rewritten** (user decision, 2026-08-14). It required the project website to host a running demo per language; that hosted gallery is cut from this plan's scope, because no hosting substrate exists - the docs site it would ride on is itself parked (astubbs#208) - and hosting is not this plan's to deliver. The per-language demo containers stay (R72, R73). The idea was liked, not rejected: it is parked in `docs/inflight/parked-demo-gallery.md` for whenever the docs-site question reopens. The ID is never reused. The same 2026-08-14 amendment added the demo-UX requirements R75-R77, continuing the numbering, and widened R73 to the three-mode contract.
+
 Two requirements are **changed, not preserved**: R15 and R16. They were written to test specification completeness with one independent Go author and one effort number. The strategy is now many client languages built concurrently by separate authors, which turns a single anecdote into a distribution - where every author trips is a specification defect, where one author trips is a language quirk. The IDs keep their subject and their numbers; their text is rewritten around the larger sample.
 
 U-IDs follow the same never-renumber rule. `U30` is a deliberate gap: it briefly held a second, record-level spike before the spike converged to a single `MockConsumer`-driven vertical slice at U29, and the number is not reused.
@@ -41,7 +43,7 @@ U-IDs follow the same never-renumber rule. `U30` is a deliberate gap: it briefly
 
 **Authority hierarchy.** Requirements (`R<N>`) win on product behavior. Key Technical Decisions (`KTD<N>`) win on implementation mechanism inside their cited requirements. Acceptance Examples illustrate; they never amend. Where this plan and a repo convention in `AGENTS.md` disagree, the repo convention wins.
 
-**Execution profile.** Deep. Thirty active units; four already landed. The two packaging units, U13 and U14, are deliberately independent so they can run in parallel, as are U21 and U25, which are built concurrently against U20's shared API. Correctness units U8, U9 and U10 precede every client unit, because a client written against a leaky lifecycle bakes the leak into ten languages and because U20's conformance suite tests messages only those units teach the engine to answer.
+**Execution profile.** Deep. Twenty-eight active units; six already landed. The two packaging units, U13 and U14, are deliberately independent so they can run in parallel, as are U21 and U25, which are built concurrently against U20's shared API. Correctness units U8, U9 and U10 precede every client unit, because a client written against a leaky lifecycle bakes the leak into ten languages and because U20's conformance suite tests messages only those units teach the engine to answer.
 
 **Stop conditions.** Stop and surface rather than guess when: a unit needs any change to `parallel-consumer-core`'s public behavior beyond U3's, which has already landed - KTD16 and KTD17 both decline further core change; the duplicate-code gate moves within 0.3% of its 5% cap; or the protocol would need a field removed or redefined rather than added. The one sanctioned exception to the core-change stop is post-v6 exactly-once, per KTD7, and it is not in this plan's scope.
 
@@ -149,8 +151,10 @@ Reimplementing the engine per language multiplies the delivery-semantics surface
 - R19. Each client library ships a runnable example against a real broker.
 - R20. One command brings up a broker, the proxy, a workload and a worker using a client library, and shows records being processed concurrently.
 - R72. Every client library ships a demo, a runnable example and its applicable tests, and the demo ships as a container so anyone can run any language's demo without knowing how to build that language. Java is included, not exempted.
-- R73. Every demo defaults to a real broker and takes a selectable mock mode. The flag name, the environment variable, the interactive prompt and the non-interactive fallback are identical in all eleven, so a visitor moving between two languages' demos sees the same behaviour.
-- R74. The project website hosts a running demo per language against the mock, each showing a prettified snippet of the client code beneath the visual, so the breadth of language support is demonstrated rather than claimed.
+- R73. Every demo offers the same three modes: the user's **own cluster** (bootstrap servers and topic supplied by the user), a real Testcontainers **broker** (the default), and a **mock**. The flag names, the environment variables, the interactive prompt wording and the non-interactive fallback are identical in all eleven, so a visitor moving between two languages' demos sees the same behaviour.
+- R75. Every demo can be pointed at the user's own Kafka cluster: bootstrap servers and topic travel the same UX path as the mode selection - a prompt on a TTY, flags and environment variables otherwise - so a user watches any language's demo consume their real data. Anything the user supplies to reach their cluster is subject to the existing credential-hygiene rules: never logged and never echoed, in a demo exactly as in the proxy.
+- R76. Every demo's code carries a clearly marked serde extension point - a comment block reading `PLACE SERDE SETUP IN YOUR LANGUAGE HERE`, rendered idiomatically per language - where the user drops their own deserializer so their own data renders. The demo defaults to a bytes/string fallback that works without touching it. This is a designed modification surface, not an afterthought: the demo doubles as the user's starting template.
+- R77. Every demo prints reading statistics - records consumed, processing rate, and per-key or per-partition spread as fits the language - and shows a sample of message content, dynamically rate-limited: on a replay or backlog it samples rather than spamming the screen. The sampling shape is decided once in the reference demo and mirrored per language.
 - R21. End-user documentation covers installing a client library, running the sidecar, and the ordering and retry semantics. `README.adoc` is generated, so edits belong in `src/docs/README_TEMPLATE.adoc`.
 - R22. A test demonstrates a non-Java application processing more records concurrently than the topic has partitions, across several worker processes, under key ordering, with the resulting out-of-order commits surviving a restart without reprocessing completed work.
 - R31. v1 measures median and p99 poll-to-completion latency through the proxy and for in-process PC on the same workload, and reports both.
@@ -264,10 +268,10 @@ Reimplementing the engine per language multiplies the delivery-semantics surface
   - **When:** the second record is still queued and `Shutdown` arrives.
   - **Then:** the first record was handed out before the second, the queued record is reported `RELEASED` rather than dropped or invented an outcome for, and it returns to scheduling with its attempt count unchanged.
 - AE31. **Two languages' demos behave identically**
-  - **Covers:** R73
+  - **Covers:** R73, R75
   - **Given:** the Rust demo and the Python demo.
-  - **When:** each is run with no arguments on a TTY, with the mock flag, with the mock environment variable, and with no TTY and no flag.
-  - **Then:** all four behaviours match between the two, including the prompt wording and the non-interactive fallback.
+  - **When:** each is run with no arguments on a TTY, with the mock flag, with the own-cluster flags naming a bootstrap server and topic, with the mock environment variable, and with no TTY and no flag.
+  - **Then:** all five behaviours match between the two, including the prompt wording and the non-interactive fallback.
 - AE32. **A demo runs without its language's toolchain**
   - **Covers:** R72
   - **Given:** a machine with Docker and nothing else installed.
@@ -301,6 +305,7 @@ Reimplementing the engine per language multiplies the delivery-semantics surface
 **Deferred to follow-up work**
 
 - A shared serving module extracted from this module and `feats/web-gui`. KTD12 explains why the extraction has to come after both land.
+- **The hosted demo gallery - parked, not this plan's to deliver.** R74 (retired, 2026-08-14) asked the website to host a running mock-backed demo per language with a prettified snippet of the client code beneath each visual. It was liked; it has no substrate - the docs site is itself parked (astubbs#208) - and it would be this plan's only internet-facing deployment, with a security posture nobody has recorded. Parked in `docs/inflight/parked-demo-gallery.md` with the reasoning needed to restart it.
 - Whether terminal-failure resolution moves to a core dead-letter queue. **Reassessed before v6, not settled now.** astubbs#149 is open and the feature does not exist; R7 no longer claims to borrow its semantics. KTD9 sizes the seam either way, so the reassessment is a choice rather than a rewrite.
 
 **Outside this product's identity**
@@ -437,14 +442,17 @@ KTD27 is the tie-breaker. When a fork below is finely balanced, or a new one app
 
 - KTD25. **Build CI as a language matrix from the start.** Each language needs its own toolchain setup, build, test and a language-native static-analysis scanner. Appending N sets of steps to existing jobs is what pushes a repo already close to its job timeouts over them. A matrix keyed on language, with the toolchain as a matrix dimension, adds a language by adding a row. Governs R57.
 
-- KTD40. **Every language ships a demo in a container, and the mode logic is one shape across all eleven.** (session-settled: user-directed.) A demo per language is what makes ten languages visible; a demo you must first learn to build that language to run is not, so each ships as a Docker container and Java is included rather than assumed obvious. Four rules, and they are rules precisely because eleven authors would otherwise each pick reasonably and differently:
+- KTD40. **Every language ships a demo in a container, and the demo contract is one shape across all eleven.** (session-settled: user-directed; widened 2026-08-14 by user decision with the own-cluster mode, the serde extension point and the sampled output.) A demo per language is what makes ten languages visible; a demo you must first learn to build that language to run is not, so each ships as a Docker container and Java is included rather than assumed obvious. Seven rules, and they are rules precisely because eleven authors would otherwise each pick reasonably and differently:
 
-  - **Broker by default, mock selectable.** A real Testcontainers broker is the honest default because it is what a user will actually run; mock mode exists for fast boot and cheap hosting.
-  - **Interactive default is to ask.** On a TTY the demo prompts for broker or mock, in identical wording everywhere.
+  - **Three modes: own-cluster, broker, mock.** A real Testcontainers broker is the honest default because it is what a user will actually run; mock mode exists for fast boot and automation; own-cluster takes the user's bootstrap servers and topic so they watch their own data consumed (R75).
+  - **Interactive default is to ask.** On a TTY the demo prompts across the three modes, in identical wording everywhere, and the own-cluster inputs arrive through the same prompt-or-flags shape as the mode selection itself.
   - **Non-TTY takes one documented default, and the default is mock.** A demo container that blocks on stdin in CI or on a hosted runner is the classic failure of this shape, so the fallback is decided here rather than per language. Mock is chosen over broker because the no-TTY case is overwhelmingly automation, where a demo that silently pulls a broker image and then fails on an unavailable Docker socket is worse than one that runs immediately and says it is mocked. It announces the mode it chose and why on the first line of output.
-  - **Same flag, same variable, same prompt, same fallback**, in the client-authoring guide beside the API conventions. A visitor switching between the Rust demo and the Python demo must not have to re-learn the interface.
+  - **Same flags, same variables, same prompt, same fallback**, in the client-authoring guide beside the API conventions. A visitor switching between the Rust demo and the Python demo must not have to re-learn the interface.
+  - **A marked serde extension point.** Each demo's code carries a comment block reading `PLACE SERDE SETUP IN YOUR LANGUAGE HERE`, rendered idiomatically per language, where the user drops their own deserializer; the bytes/string default works untouched (R76). The demo doubles as the user's starting template, so this modification surface is designed, not discovered.
+  - **Stats plus a sampled view, replay-safe.** The demo prints reading statistics and shows a dynamically rate-limited sample of message content, so a backlog or replay renders as a sample rather than a scrolling wall (R77). One sampling shape, decided in the reference demo, mirrored per language.
+  - **Credential hygiene applies to demos.** Own-cluster mode takes user credentials into a demo; the proxy's rules - nothing logged, nothing echoed - bind here too.
 
-  Hosted demos on the website run the mock explicitly, so they boot fast and cannot fail on a broker, and each shows a prettified snippet of the client code beneath the visual. That last part is the point of the exercise rather than decoration: the argument for this product is how little code the client library needs, and a snippet beside a running demo makes it in one screen. Treat the gallery as product, not as documentation. Governs R72, R73, R74, R20.
+  The hosted website gallery this decision once covered is cut: R74 is retired, and the idea - mock-backed demos per language, each with a prettified snippet of the client code beneath the visual - is parked in `docs/inflight/parked-demo-gallery.md` beside the parked docs site (astubbs#208). Governs R72, R73, R75, R76, R77, R20.
 
 - KTD26. **The accumulated specification is a deliverable.** What the waves iterate into - architecture, conventions, resolved divergences, the shared test scenarios - is exactly the client-authoring guide R21 asks for, and it is what makes language eleven cheap rather than as expensive as language two. Treat it as planned output with an owner, not as scaffolding that happens to survive. Governs R58, R21.
 
@@ -679,7 +687,7 @@ flowchart TB
   U24 --> U32["U32 package publishing, eleven registries"]
   U33 --> U32
   U34["U34 UPDATE STRATEGY.md<br/>LANDED"]
-  U25 --> U35["U35 demo reference, containers, hosted gallery"]
+  U25 --> U35["U35 demo reference + containers"]
   U24 --> U35
 ```
 
@@ -713,8 +721,8 @@ flowchart TB
 | U1 | Feasibility gates: authority rejection and native image | *(landed)* | - |
 | U2 | Proxy module scaffolding and registration | *(landed)* | - |
 | U3 | Verdict-free work return in core | *(landed)* | - |
-| U27 | Docs-data cross-check, and per-module data fragments | `bin/check-docs-data.sh`, `docs/data/module-maturity.d/`, `docs/data/testing-evidence.d/` | - |
-| U19 | Seed every shared surface | root `pom.xml`, `parallel-consumer-proxy-clients/pom.xml`, `.github/workflows/maven.yml`, `docs/data/*.d/`, `docs/inflight/clients/` | U27 |
+| U27 | Docs-data cross-check, and per-module data fragments | *(landed)* | - |
+| U19 | Seed every shared surface | *(landed)* | U27 |
 | U23 | CI language matrix - owns the file end to end | `.github/workflows/clients.yml` | U19 |
 | U4 | Protocol module, codegen, provisional schema | `parallel-consumer-proxy-protocol/` | U19 |
 | U31 | Shared MockConsumer harness and the test-mode sidecar | `parallel-consumer-proxy/src/test/.../harness/`, `.../testmode/` | U19 |
@@ -741,7 +749,7 @@ flowchart TB
 | U16 | End-to-end demo and the concurrency proof | `parallel-consumer-proxy/demo/` | U9, U11, U13, U14 |
 | U32 | Package publishing per language | `.github/workflows/publish.yml`, per-module release config | U24, U33 |
 | U17 | End-user documentation and the proxy's data records | `src/docs/README_TEMPLATE.adoc`, `docs/data/` | U24, U16 |
-| U35 | Demo reference, containers and the hosted gallery | `parallel-consumer-proxy/demo/`, each client's `demo/` | U25, U24 |
+| U35 | Demo reference and per-language containers | `parallel-consumer-proxy/demo/`, each client's `demo/` | U25, U24 |
 
 ### U33. Claim the package names - do this first
 
@@ -798,7 +806,9 @@ Do not re-plan. `parallel-consumer-proxy` exists, is registered in the root `pom
 
 Do not re-plan. A record can return to scheduling with no verdict and no retry consumed. `WorkContainer.deliveryCount` increments on queueing and is exposed by `getDeliveryCount()`; `markAbandoned(long delivery)` records which delivery a return was raised for; `isReturnForSupersededDelivery()` causes a return naming an ended delivery to be ignored. `markAbandoned` has no production caller yet - U8 is its first. The discipline in KTD8 applies to every caller.
 
-### U27. Close the docs-data gate's silent gap, and make the data per-module, before either has to survive eleven agents
+### U27. Close the docs-data gate's silent gap, and make the data per-module, before either has to survive eleven agents - LANDED
+
+Landed at `424bcb857`. Do not re-run. Both directions of the reactor cross-check are enforced, descending into nested aggregators' `<modules>`; both corpora read `docs/data/module-maturity.d/<artifact>.yaml` and `docs/data/testing-evidence.d/<artifact>.yaml` fragments merged at check time, with deferral a `deferred: {reason, lifted_by}` field inside a module's own fragment and every current deferral named in the output on green runs too; `evidence_id` resolution is now actually enforced (the plan believed it already was); and the packaging decision of step 6 landed as optional `package_ecosystem`/`package_coordinate` fields on the maturity row, with `artifact` keeping its Maven meaning. The section below stays as the record of what the unit demanded and why.
 
 - **Goal:** A module with no maturity row fails the build instead of passing clean - and no two agents ever write the same data file.
 - **Requirements:** R62, R55. Governed by KTD31, KTD22.
@@ -831,7 +841,9 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   - The existing corpus passes unchanged after the new checks land. A gate that immediately reds the repo gets disabled rather than fixed.
 - **Verification:** `bin/check-docs-data.sh` green on the current tree; `bin/test-check-docs-data.sh` green with fixtures covering each new failure path.
 
-### U19. Seed every shared surface, green
+### U19. Seed every shared surface, green - LANDED
+
+Landed at `f3274c9e2`, one commit deliberately. Do not re-run. Fifteen new modules seeded: the protocol skeleton, the clients aggregator, the Java sub-aggregator, the three Java client modules and the nine non-JVM wrappers, each with its language-native build skeleton beside its pom. Foreign toolchains sit behind `-Dpc.foreignClients`, with a `pc.foreign.skip` guard closing the inherited-plugin-declaration trap the commit body records; `bannedDependencies` is live on `...-java-direct` (verified red); the three Java client `src` directories are in both detector lists and none of the nine non-JVM ones, with the deliberateness commented; and every new module carries its own deferral fragments plus one `docs/inflight/clients/<lang>.md` per language. The section below stays as the record of what the unit demanded and why.
 
 - **Goal:** Create everything shared, so a fan-out agent only ever adds files inside its own module - and leave the branch green while doing it.
 - **Requirements:** R55, R56, R63, R64, R66. Governed by KTD22, KTD24, KTD32, KTD35. R57's matrix is U23's, one unit later.
@@ -1091,7 +1103,7 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   4. Write the protocol specification: every message, every field's meaning, the connect handshake, the dispatch and report cycle, the epoch echo rule, the reconnect manifest, the lease, and every error the proxy can return. A client author must never need to read Java. Include a full session transcript from connect to shutdown, because that is what a stranger reads first.
   5. Write the client-authoring guide alongside it: the architecture every client follows, the conventions, and the shared scenario set from U31's harness that each client must satisfy. This is KTD26's deliverable and what U22's wave syncs write into.
   6. **Specify the client-side dispatch queue in full, per KTD39**, as its own numbered section of the guide. It is the one piece of flow control that lives inside the client, and everything about it is an ordering-or-liveness decision that ten authors would otherwise each invent: that the admin always reads the stream and never backpressures by not reading; that the buffer's depth is max concurrency and an overflow is a protocol violation rather than a load condition; that hand-out is FIFO by arrival and by position within a `Dispatch`; that a queued record is already leased and heartbeats must not be withheld; that `Shutdown` releases the queue with `RELEASED` rather than running or abandoning it. Give it a worked example and name it as a conformance scenario so U20 can test it and every client must pass it.
-  7. **Specify the demo mode contract, per KTD40**, beside the API conventions: the flag name, the environment variable, the interactive prompt wording, and the non-TTY fallback to mock. It sits in this guide rather than in each demo's README because its whole value is being identical in eleven places.
+  7. **Specify the demo contract, per KTD40**, beside the API conventions: the flag names and environment variables for all three modes - own-cluster, broker, mock - the own-cluster bootstrap-and-topic inputs and their credential hygiene, the interactive prompt wording, the non-TTY fallback to mock, the serde extension point marker (`PLACE SERDE SETUP IN YOUR LANGUAGE HERE`) with its bytes/string default, and the stats-and-sampling output shape. It sits in this guide rather than in each demo's README because its whole value is being identical in eleven places.
   8. State the narrowness KTD28 depends on - one bidirectional stream, one authority check, no other interceptors, no load balancing, no xDS, no per-call deadline negotiation - so an author can confirm their language's gRPC library suffices by reading a list.
   9. **Declare the freeze.** After this unit a protocol change is an event: a capability entry, a `buf breaking` pass in the `FILE` category, and a note naming which clients must be revisited. Add `buf breaking --against '.git#branch=master'` to CI here. `FILE` is the category that actually forbids field deletion and type change; `WIRE` is weaker than R38 requires.
 - **Execution note:** The specification is the product of this unit. Write it so U12's author can be handed only this and succeed - that is its acceptance test, and U12 measures it.
@@ -1226,7 +1238,7 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   5. Mirror U20's surface. Where Go cannot express it, that is a finding about the reference surface and goes to the wave sync, not into a Go-specific deviation.
   6. Generate with `protoc-gen-go` and `protoc-gen-go-grpc` pinned in `go.mod` tooling rather than `@latest`, or via `buf` with local plugins. Commit the generated code under `gen/` - Go has no codegen step at `go get` time, so committing is mandatory for consumers.
   7. **Run the idiomatic-API review before this unit closes, per R71.** The question is whether the surface reads as Go - errors returned rather than thrown, a `context.Context` first parameter, a struct-with-options constructor rather than a builder - and not whether it mirrors the Java reference field for field. A finding that is only about Go stays local; a finding that says the reference surface itself is un-mirrorable goes to the sync, because nine more languages are about to copy it.
-  8. Ship the demo and its container alongside the example, per KTD40: broker by default, `--mock` selectable, the same prompt and the same non-TTY fallback as every other language. The demo is an application, so R39 does not govern it, and its flags are not a violation.
+  8. Ship the demo and its container alongside the example, per KTD40: broker by default, mock and own-cluster selectable, the same prompt and the same non-TTY fallback as every other language, the serde extension point marked `PLACE SERDE SETUP IN YOUR LANGUAGE HERE` as an idiomatic Go comment with the bytes/string default underneath, and the reference demo's stats-and-sampling output mirrored. The demo is an application, so R39 does not govern it, and its flags are not a violation.
   9. Land this module's data records, its orientation README and its `docs/inflight/clients/go.md` in this unit, per KTD30. Write no file outside this module and those three, per KTD22.
   10. **Do not change the proxy.** If a change is genuinely needed, that is the success criterion failing and must be surfaced rather than absorbed.
 - **Execution note:** This unit is a gate. Do not start U11 or U22 until its findings are resolved into the specification - handing nine agents a document a stranger has already tripped on multiplies the defect ninefold.
@@ -1239,7 +1251,7 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   - Every scenario named in `client-authoring-guide.md` passes.
   - The example runs against a real broker, in the integration lane.
   - Covers AE30. With fewer goroutine executors than dispatched records, hand-out is FIFO, and `Shutdown` reports the queued records `RELEASED`.
-  - Covers AE31, AE32. The demo container runs on a host with no Go toolchain, and its four mode behaviours match the reference demo's exactly.
+  - Covers AE31, AE32. The demo container runs on a host with no Go toolchain, and its five mode behaviours match the reference demo's exactly.
   - Regenerating from the `.proto` produces no diff.
 - **Verification:** `./mvnw -pl :parallel-consumer-proxy-client-go -am test` drives `go test ./...` through the wrapper; `bin/check-docs-data.sh` green; the recorded effort and the specification-defect list land in `docs/inflight/clients/go.md` against the ASM1 budget - this language's own file, not the shared branch document, per KTD22.
 
@@ -1261,7 +1273,7 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   6. Generate with `grpcio-tools`' bundled `protoc` and its own protobuf runtime. Do not drive Java and Python codegen from one protoc version - the `.proto` is the contract and each language's gencode need only match its own runtime.
   7. Report worker death per R45, naming the tokens that worker held. This is the primary liveness path U8 relies on.
   8. **Run the idiomatic-API review before this unit closes, per R71.** Pythonic is the bar and it is a real one for the flagship: context managers where a resource is held, type hints that a checker accepts, exceptions rather than error returns, and `async` only where it genuinely helps rather than because the protocol is streaming underneath.
-  9. Ship the demo and its container per KTD40, with the same flag, variable, prompt and non-TTY fallback as every other language.
+  9. Ship the demo and its container per KTD40, with the same flags, variables, prompt and non-TTY fallback as every other language, own-cluster mode included, the serde extension point marked `PLACE SERDE SETUP IN YOUR LANGUAGE HERE` rendered idiomatically with the bytes/string default underneath, and the reference demo's stats-and-sampling output mirrored.
   10. Land this module's data records, its orientation README and its `docs/inflight/clients/python.md` in this unit, per KTD30.
 - **Execution note:** Record the effort budget before this unit starts, per ASM1 - R16 cannot falsify anything against a number decided afterwards, and the flagship's data point is the one U17's distribution can least afford to backfill. Then write the fork-safety test first. It is the failure this design exists to prevent, and it is silent when wrong.
 - **Test scenarios:**
@@ -1276,7 +1288,7 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   - Regenerating from the `.proto` produces no diff.
   - The example runs against a real broker, in the integration lane.
   - Covers AE30. With fewer worker processes than dispatched records, hand-out is FIFO and `Shutdown` reports the queued records `RELEASED`.
-  - Covers AE31, AE32. The demo container runs on a host with no Python installed, and its four mode behaviours match the Go demo's exactly.
+  - Covers AE31, AE32. The demo container runs on a host with no Python installed, and its five mode behaviours match the Go demo's exactly.
 - **Verification:** `./mvnw -pl :parallel-consumer-proxy-client-python -am test` drives the Python suite through the wrapper; `make proto` leaves a clean tree; `bin/check-docs-data.sh` green.
 
 ### U22. Remaining seven languages, in waves
@@ -1293,7 +1305,7 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   5. Rust uses `tonic`. Our usage is one bidirectional stream and the authority check, with no interceptors beyond it, no load balancing and no xDS - the narrowness KTD28 relies on. If a wave introduces a requirement `tonic` cannot meet, that is a signal about the protocol, not about Rust.
   6. Mirror U20's reference surface. Where a language cannot express it - C++ without exceptions, or a language without closures - the finding goes to the wave sync.
   7. **Review the surface in this language's own terms, per R71**, in wave (f) and not as a final sweep. `Result` in Rust, `async`/`await` in TypeScript and C#, nullability in Kotlin and Swift, RAII and no-exceptions viability in C++, blocks in Ruby. A recurring finding is a fact about the reference surface and goes to the sync; a one-off is a language quirk and stays local.
-  8. Ship each language's demo and container in wave (g), per KTD40, with the same flag, environment variable, prompt wording and non-TTY fallback as every other language. A visitor moving between two demos must see identical behaviour, so this is the least negotiable part of the wave.
+  8. Ship each language's demo and container in wave (g), per KTD40, with the same flags, environment variables, prompt wording and non-TTY fallback as every other language, own-cluster mode included, the serde extension point marked `PLACE SERDE SETUP IN YOUR LANGUAGE HERE` rendered idiomatically with the bytes/string default underneath, and the reference demo's stats-and-sampling output mirrored. A visitor moving between two demos must see identical behaviour, so this is the least negotiable part of the wave.
   9. Record each language's effort against its budget before it starts, and land its data records, orientation README and `docs/inflight/clients/<lang>.md` in its own final wave, per KTD30. Each of those is a file only this language's agent touches, per KTD22.
 - **Execution note:** Waves, not completions. A language that runs to completion in isolation cannot be compared with one that did, and comparison is the point.
 - **Test scenarios (per language instance):**
@@ -1302,7 +1314,7 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   - The epoch is echoed verbatim and no client-side correlation state is kept.
   - Records are reported independently and out of order.
   - Covers AE30. Worker death is reported with the tokens held; with fewer executors than dispatched records, hand-out is FIFO and `Shutdown` reports the queued records `RELEASED`.
-  - Covers AE31, AE32. The demo container runs on a host without this language's toolchain, and its four mode behaviours match every other language's.
+  - Covers AE31, AE32. The demo container runs on a host without this language's toolchain, and its five mode behaviours match every other language's.
   - The proxy exits when the client's process is killed.
   - The example runs against a real broker, in the integration lane.
   - Regenerating from the `.proto` produces no diff.
@@ -1493,14 +1505,14 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   3. Use unique topics and consumer groups per test, and extend `KafkaClientUtils` rather than writing a second topic-creation helper - duplicating that helper previously caused a required-gate flake.
   4. No absolute wall-clock deadlines. Await convergent states derived from named constants, and arrival-sync before asserting a return to zero.
   5. Choose fork count and worker count together. CI forks a JVM with a broker per fork, and this test multiplies real processes inside each fork.
-  6. `demo/run.sh` is R20's one command: broker up, proxy up, workload produced, worker running, concurrent processing visible. Make it work against both artifacts, selected by a flag, and consume KTD40's mode contract exactly as U35's reference demo already implements it - broker by default, `--mock` selectable, prompt on a TTY, mock on no TTY. The wording and flag names were fixed by U35's first part, which lands with U25 and long precedes this unit; do not re-decide them here. Ownership split under `parallel-consumer-proxy/demo/`: U35 owns the reference demo, its `Dockerfile` and the mode-contract implementation; this unit owns `run.sh` and `docker-compose.yml`, the broker-backed one-command path.
+  6. `demo/run.sh` is R20's one command: broker up, proxy up, workload produced, worker running, concurrent processing visible. Make it work against both artifacts, selected by a flag, and consume KTD40's mode contract exactly as U35's reference demo already implements it - broker by default, mock and own-cluster selectable, prompt on a TTY, mock on no TTY. The wording and flag names were fixed by U35's first part, which lands with U25 and long precedes this unit; do not re-decide them here. Ownership split under `parallel-consumer-proxy/demo/`: U35 owns the reference demo, its `Dockerfile` and the mode-contract implementation; this unit owns `run.sh` and `docker-compose.yml`, the broker-backed one-command path.
 - **Test scenarios:**
   - Covers AE8, AE22. Concurrency exceeds partition count while no key is ever processed at two workers at once.
   - Covers AE2. After a restart mid-run, no completed record is reprocessed and no incomplete record is skipped.
   - Covers AE4. A record reported terminally failed reaches the terminal topic, its offset advances, and it is never redelivered.
   - A worker process killed mid-run has its records redelivered with attempt counts unchanged, and the run still completes.
   - `demo/run.sh` completes with the JVM artifact and with the native artifact.
-  - `demo/run.sh` prompts on a TTY, takes `--mock` and the environment variable without prompting, and on no TTY and no flag runs mocked while saying so on its first line of output - never blocking on stdin.
+  - `demo/run.sh` prompts on a TTY, takes `--mock`, the own-cluster flags and the environment variable without prompting, and on no TTY and no flag runs mocked while saying so on its first line of output - never blocking on stdin.
 - **Verification:** `bin/ci-integration-test.sh -pl :parallel-consumer-proxy -am` green, and `demo/run.sh` completes on a clean machine.
 
 ### U32. Package publishing per language
@@ -1529,29 +1541,30 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
   - Every published artifact reports the same version.
 - **Verification:** a dry-run release succeeds for all eleven targets, and a real release of one pre-release version installs cleanly in each language.
 
-### U35. Demo reference, per-language containers, and the hosted gallery
+### U35. Demo reference and per-language containers
 
-- **Goal:** Any visitor can run any language's demo without knowing how to build that language, and can see one on the website without running anything at all.
-- **Requirements:** R72, R73, R74, R20. Governed by KTD40.
-- **Dependencies:** U25 for the reference demo and the container pattern; U24 for a complete gallery.
+- **Goal:** Any visitor can run any language's demo without knowing how to build that language - against a broker, a mock, or their own cluster and their own data.
+- **Requirements:** R72, R73, R75, R76, R77, R20. Governed by KTD40.
+- **Dependencies:** U25 for the reference demo and the container pattern; U24 for the full per-language set to verify the contract across.
 - **Files:**
-  - `parallel-consumer-proxy/demo/` - the reference demo, its `Dockerfile` and the mode-contract implementation
+  - `parallel-consumer-proxy/demo/` - the reference demo, its `Dockerfile` and the demo-contract implementation
   - each client module's `demo/` - built in that language's own wave, mirroring the reference
-  - the website's demo gallery
 - **Approach:**
-  1. **This unit lands in two parts, deliberately.** The reference demo and the container pattern land with U25, so the ten languages that mirror them have something that exists rather than a description. The gallery fills in as each wave lands its demo, and is complete after U24. That split is KTD30's in-wave principle applied to demos: batching eleven demos into one late unit means writing them all at once, from the outside, by someone reconstructing what each client does.
-  2. **Implement KTD40's mode contract once, in the reference, and specify it in the client-authoring guide** so the other ten copy a written rule rather than a Java file. Broker by default with a real Testcontainers broker; `--mock` and its environment variable selectable; a prompt on a TTY; **mock on no TTY and no flag**, announced on the first line of output. A demo container that blocks on stdin in CI or on a hosted runner is the classic failure of this shape, which is why the fallback is decided rather than left per language. One further container rule, decided here because ten authors would otherwise each resolve it reasonably and differently: **a demo container is never granted the host Docker socket.** Broker mode inside the container reaches a broker started as a compose sibling on the demo's network, never one the container starts itself - a documented socket mount is root-equivalent host access taught as the normal way to run the product.
-  3. **A container per demo, Java included.** Java is not exempted because it is the language we build in - a visitor evaluating "does this work in my language" reads an exempted Java as an admission that the other ten are the hard case.
-  4. **R39 does not govern a demo, and say so where the flags are defined.** R39 is about how configuration reaches the proxy, and a demo is an application. Without that sentence in the demo's own README someone reads `--mock` as a violation of the plan's own rule and removes it.
-  5. **Host the gallery against the mock**, so a hosted demo boots fast and cannot fail on a broker it does not have. Each entry shows a prettified snippet of that language's client code beneath the running visual.
-  6. **Treat the gallery as product, not documentation.** The argument for this whole project is how little code a client library needs; a snippet beside a running demo makes that argument in one screen, in ten languages, to someone who will not read a README. Give it the review and the polish a product surface gets.
+  1. **This unit lands in two parts, deliberately.** The reference demo and the container pattern land with U25, so the ten languages that mirror them have something that exists rather than a description. The per-language demos then land in their own waves, and this unit's second half - complete after U24 - is verifying the contract holds identically across all eleven. (It used to be a hosted gallery; R74 is retired and that idea is parked in `docs/inflight/parked-demo-gallery.md`.) The split is KTD30's in-wave principle applied to demos: batching eleven demos into one late unit means writing them all at once, from the outside, by someone reconstructing what each client does.
+  2. **Implement KTD40's demo contract once, in the reference, and specify it in the client-authoring guide** so the other ten copy a written rule rather than a Java file. Three modes: broker by default with a real Testcontainers broker; `--mock` and its environment variable selectable; own-cluster taking the user's bootstrap servers and topic through the same prompt-or-flags shape; a prompt on a TTY; **mock on no TTY and no flag**, announced on the first line of output. A demo container that blocks on stdin in CI or on a hosted runner is the classic failure of this shape, which is why the fallback is decided rather than left per language. One further container rule, decided here because ten authors would otherwise each resolve it reasonably and differently: **a demo container is never granted the host Docker socket.** Broker mode inside the container reaches a broker started as a compose sibling on the demo's network, never one the container starts itself - a documented socket mount is root-equivalent host access taught as the normal way to run the product.
+  3. **The reference demo decides the serde extension point and the output shape, once.** The marker - a comment block reading `PLACE SERDE SETUP IN YOUR LANGUAGE HERE`, rendered idiomatically per language - sits where the user's deserializer goes, with the bytes/string fallback working untouched, per R76: the demo doubles as the user's starting template, so this surface gets designed rather than discovered. Output is reading statistics plus a dynamically rate-limited sample of message content, per R77, so a replay or backlog samples rather than spams; the sampling shape decided here is what ten languages mirror. And own-cluster mode takes user credentials into a demo, so the credential-hygiene rules - nothing logged, nothing echoed - are implemented and asserted here first.
+  4. **A container per demo, Java included.** Java is not exempted because it is the language we build in - a visitor evaluating "does this work in my language" reads an exempted Java as an admission that the other ten are the hard case.
+  5. **R39 does not govern a demo, and say so where the flags are defined.** R39 is about how configuration reaches the proxy, and a demo is an application. Without that sentence in the demo's own README someone reads `--mock` as a violation of the plan's own rule and removes it.
+  6. **The hosted gallery is out of scope, deliberately.** R74 is retired; the idea - mock-backed hosted demos per language, a prettified snippet of the client code beneath each visual - is parked in `docs/inflight/parked-demo-gallery.md`, tied to the parked docs site (astubbs#208), so it is not lost. Nothing in this unit builds hosting.
 - **Execution note:** The mode logic is the part that will drift, because eleven authors each have a reasonable opinion about it. It is specified centrally for exactly that reason, and a divergence found at a wave sync is resolved into the guide rather than tolerated.
 - **Test scenarios:**
   - Covers AE32. Each language's demo container runs on a host with Docker and no other toolchain, and processes records concurrently.
-  - Covers AE31. Two languages' demos are driven through all four mode paths - TTY, flag, environment variable, no TTY and no flag - and behave identically, prompt wording included.
+  - Covers AE31. Two languages' demos are driven through all five mode paths - TTY prompt, mock flag, own-cluster flags, environment variable, no TTY and no flag - and behave identically, prompt wording included.
   - No demo blocks on stdin in a non-interactive environment. The negative control is running every container with stdin closed.
-  - Each hosted demo boots against the mock with no broker reachable, and shows its code snippet.
-- **Verification:** every language's demo container runs from a clean machine with only Docker; the four mode paths agree across all eleven; the gallery renders every language with its snippet.
+  - Own-cluster mode pointed at a compose-sibling broker standing in for the user's cluster consumes from the named topic, and the supplied bootstrap and credential values appear in no log line and are never echoed.
+  - The serde marker is present in the reference demo's source, the demo runs untouched on bytes/string payloads, and dropping a deserializer in at the marker renders the demo's structured fixtures - the proof the extension point is real rather than decorative.
+  - Against a seeded backlog, the output is a rate-limited sample plus running statistics rather than one line per record - and the record count in the statistics still matches the records consumed, so sampling the display never means sampling the processing.
+- **Verification:** every language's demo container runs from a clean machine with only Docker; the five mode paths agree across all eleven; the serde marker and the sampled-output shape are mirrored from the reference in each language.
 
 ### U17. End-user documentation and the proxy's data records
 
@@ -1641,10 +1654,10 @@ Do not re-plan. A record can return to scheduling with no verdict and no retry c
 
 ### From 2026-08-14 review
 
-Recorded by the document review, not decided. Each needs a product call before the unit it names starts.
+Recorded by the document review. Items 1 and 4 were decided by the user on 2026-08-14 and are resolved in place below; each remaining entry still needs a product call before the unit it names starts.
 
-1. **R74's hosted gallery has no substrate, no owner, and no recorded security posture.** No website exists: the documentation site is parked behind astubbs#208 with platform and domain undecided, and "a running demo per language" needs a runtime host, not a static site generator - no unit builds, sequences, or owns that infrastructure, so R74 is currently a Product Contract commitment no unit can land, and it is this plan's only internet-facing deployment. Options: (a) unpark astubbs#208 and decide whether that platform can host live mock demos; (b) separate hosting running the demo containers server-side - needs compute, isolation and an operator, plus the security posture nothing yet records (no visitor input reaching a demo or sidecar process, resource limits per demo, only the web frontend internet-reachable); (c) in-browser or recorded captures - cheapest, but weakens "demonstrated rather than claimed" to something nearer a screenshot. Until decided, U35's gallery half is blocked; its reference-demo and container half is not.
+1. **R74's hosted gallery has no substrate, no owner, and no recorded security posture.** No website exists: the documentation site is parked behind astubbs#208 with platform and domain undecided, and "a running demo per language" needs a runtime host, not a static site generator - no unit builds, sequences, or owns that infrastructure, so R74 is currently a Product Contract commitment no unit can land, and it is this plan's only internet-facing deployment. Options: (a) unpark astubbs#208 and decide whether that platform can host live mock demos; (b) separate hosting running the demo containers server-side - needs compute, isolation and an operator, plus the security posture nothing yet records (no visitor input reaching a demo or sidecar process, resource limits per demo, only the web frontend internet-reachable); (c) in-browser or recorded captures - cheapest, but weakens "demonstrated rather than claimed" to something nearer a screenshot. Until decided, U35's gallery half is blocked; its reference-demo and container half is not. **Resolved (user, 2026-08-14): the gallery is out of scope.** R74 is retired and U35 keeps only its reference-demo and container half; the idea is parked in `docs/inflight/parked-demo-gallery.md`, referencing the parked docs site (astubbs#208), so the hosting substrate, owner and security posture are questions for whoever unparks it - not gaps in this plan.
 2. **KTD38's executor-count function is named but never defined, and its delivery ordering collides with U11's fork-safety rule.** Undefined: is the count `maxConcurrency` itself, or capped? Identity means a Python application with max concurrency 500 spawns 500 worker processes, and R41 keeps the proxy deliberately blind to whether executors are processes or goroutines, so one language-blind formula must serve both - U10's test scenario ("equals the pure function") is unfalsifiable until the function is stated. Collision: U11 requires the worker pool to exist before any gRPC channel opens, yet the pool's size arrives in `Configured`, which travels over that channel. Reviewer-recommended resolution, not yet adopted: define the function in KTD38 and U18's frozen specification - e.g. `min(max concurrency, client-supplied executor cap)`, the cap being client-supplied connect-time configuration so the no-observed-input property holds - and have the client compute it locally before opening the channel, treating the count in `Configured` as confirmation, with a mismatch a protocol error. That reading keeps R47's letter (the proxy still decides, via the specified function, and says so) but it is a protocol-semantics decision ten clients inherit, so it needs a deliberate yes.
 3. **Lease expiry on a stalled-but-alive client can put one key at two workers.** R46 returns a record to scheduling the moment heartbeats lapse, with no protection window - but an admin stalled by GC or CPU starvation while its workers keep running is exactly the case where the original worker is still executing that key's code. KTD8's epoch fences the stale report, so every host-side invariant reads green while AE8's guarantee is violated in fact - the same argument the plan itself makes against immediate return on connection loss. Options: route lease expiry through the R42 window (reviewer-recommended: expiry closes the stream and the reconnect machinery reconciles; costs up to the window's length on genuinely dead clients that reported nothing), or accept the risk as-is (cheaper, but AE8 is stated absolutely and would need weakening to be honest). This changes R46's product semantics either way, so it is not applied.
-4. **Is breadth-at-launch the deliberate bet, or may Java, Go and Python release first?** The one client with confirmed demand cannot reach a user until all seven remaining languages complete: U32 is the only publishing unit, it depends on U24, and R68 makes release lockstep. If breadth-at-launch is the marketing bet R74 hints at, the plan should say so and name the flagship's delay as its accepted cost; if not, the wave-sync after U11 is the natural point to reconsider a partial lockstep release (Java, Go, Python at one version). Either answer is a KTD to record, not a default to drift into.
+4. **Is breadth-at-launch the deliberate bet, or may Java, Go and Python release first?** The one client with confirmed demand cannot reach a user until all seven remaining languages complete: U32 is the only publishing unit, it depends on U24, and R68 makes release lockstep. If breadth-at-launch is the marketing bet, the plan should say so and name the flagship's delay as its accepted cost; if not, the wave-sync after U11 is the natural point to reconsider a partial lockstep release (Java, Go, Python at one version). Either answer is a KTD to record, not a default to drift into. **Resolved (user, 2026-08-14): breadth-at-launch is the deliberate bet.** The full decided language set ships from the start, until a point where evidence says change it. The wave syncs (KTD23) and the effort-budget stop condition (R16, ASM1) remain the mechanism that would trigger that change - the set narrows when the recorded evidence says so, never pre-emptively - and the flagship's delay behind the full set is the accepted cost.
 5. **Numbers and names the freeze needs that nothing states.** The lease duration and heartbeat interval have no defaults or stated derivation - ASM6 numbers only the reconnect window, yet U8 implements both clocks and U18 freezes them into a specification ten clients implement. And nobody is named to perform the R71 idiomatic-API reviews or the KTD23 wave-sync resolution - a human, a fresh agent, or the same wave agent - though the independence R15 and R71 claim turns on the answer.
