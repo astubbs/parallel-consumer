@@ -29,6 +29,12 @@ diff is enforced empty, not audited by hand.
 - **Serialization:** protobuf (proto3) per the frozen `.proto`. Every scalar field carries explicit
   presence (`optional`), deliberately: presence-vs-absence is meaningful throughout, and explicit presence
   is frozen now because retrofitting it later is a source break in several generated languages.
+- **Generated-code placement is in the schema, for every language** (`java_package`, `go_package`,
+  `csharp_namespace`, `ruby_package`, `php_namespace`, `objc_class_prefix`, `swift_prefix`). File options
+  serialize nothing, so they are invisible to this contract - but `buf breaking`'s `FILE` category freezes
+  them alongside it, which is why they are the one authority and a per-client `protoc` override is not. How to
+  run a generator at all - sourcing `protoc` and the well-known type descriptors - is the client-authoring
+  guide's codegen section, which **owns** that topic.
 - **Golden bytes:** `parallel-consumer-proxy-protocol/src/test/resources/bz/stub/parallelconsumer/proxy/protocol/`
   holds `golden-client-messages.bin` and `golden-proxy-messages.bin` - one canonical scripted session,
   length-delimited (standard varint-prefixed) messages, covering every message type, a beyond-int32 epoch, a
@@ -191,6 +197,16 @@ unaccounted for when the window expires are returned to scheduling, attempt coun
 reconciliation the proxy replies with the unchanged effective `Configured`, then any `Drop`s, then resumes
 dispatching; the client may report from the moment `Configured` arrives.
 
+**Known gap: the wire does not distinguish a transient loss from the proxy having exited.** A completed
+drain, a parent-death exit and a genuinely transient network loss all terminate the stream, and nothing in
+this protocol tells the client which it was - the stream end carries no reason a client can rely on across
+gRPC implementations, and by construction the proxy that could say so is the one that may be gone. A client
+reconnecting into a dead sidecar therefore retries for the whole `reconnect_window` to no purpose. This is
+named as an open v1 gap rather than solved: the proxy end of it needs no change (its records are already
+governed by the window), and the client end - the process handle it necessarily holds, since it spawned the
+proxy as a child - is out of band, so any resolution is a client-side decision, not a wire addition. Nothing
+in v1 depends on it while `manifest` is un-negotiated.
+
 ### Worker death
 
 The window and the lease are backstops. The **primary** reclaim path is `WorkerDied`: the client library
@@ -221,7 +237,10 @@ records to scheduling immediately, attempt counts unchanged, without waiting for
   topic, bounded retention - and the proxy cannot enforce broker-side ACLs, so it does not claim to.
 - **`Released`** - the client returns a record it never ran (the `Shutdown` path for queued records). The
   proxy treats it exactly as an abandonment at the captured epoch: back to scheduling, attempt count
-  unchanged. The client never invents a verdict for work it did not do.
+  unchanged. The client never invents a verdict for work it did not do. **Gated by the `shutdown`
+  capability**, the same token that gates the `Shutdown` message: on a session that did not negotiate it,
+  `Released` is an un-negotiated message and must not be sent - see
+  [Shutdown and drain](#shutdown-and-drain) for what such a client does with its queue instead.
 
 **`OUTCOME_NOT_SET` is a protocol violation, settled here.** A receiver seeing a `Report` with no
 recognized outcome is seeing either a client bug or an outcome variant added by a revision the handshake
@@ -250,11 +269,32 @@ abruptly (the peer, if any half-dead remnant is still reading, observes stream t
 order). Uncommitted records redeliver to the next group member as an ordinary rebalance.
 
 **Client-initiated** (the application closing its client): the client performs the same sequence unprompted
-- stop hand-out, `Released` for the queue, final reports for executing records - and then **half-closes**
-the stream (calls its language's "no more sends"). The half-close is the shutdown signal; there is no
-shutdown request message, deliberately, because a client that has already reported or released everything
-has nothing left to say. The proxy then drains, commits, completes the stream, and exits with its group
-membership cleanly ended.
+- stop hand-out, deal with the queue per the rule below, final reports for executing records - and then
+**half-closes** the stream (calls its language's "no more sends"). The half-close is the shutdown signal;
+there is no shutdown request message, deliberately, because a client that has already reported or released
+everything has nothing left to say. The proxy then drains, commits, completes the stream, and exits with its
+group membership cleanly ended.
+
+**Without the `shutdown` capability, the queue is discarded, not released - this specification settles it, a
+client does not choose.** The drain above and the capability rule collide for exactly one session shape, and
+it is the common one today: `Released` is gated by `shutdown`, a client-initiated close is available on every
+session, and a session negotiating only `["dispatch"]` (the test-mode harness, and any proxy whose shutdown
+machinery is not yet built) therefore has no legal message for a queued record. Both of the first two client
+waves met it and resolved it identically; the rule is theirs, written down so the tenth author does not
+re-derive it:
+
+- **`shutdown` negotiated:** report every queued record `Released`, then half-close - the sequence above.
+- **`shutdown` not negotiated:** the client **discards** the queued records, reports nothing for them, and
+  half-closes once its executing records have reported. Sending `Released` anyway would be the ordinary
+  un-negotiated-message violation, and it is the client's violation, not the proxy's.
+
+**What the proxy guarantees for records a client discards**: exactly what it guarantees for any record left
+unreported at the end of a stream - their offsets are never committed, so they return to scheduling with
+their **attempt counts unchanged** and are redelivered to this group's next member (or to the next process
+that assumes the partition). No verdict is invented, and nothing is lost; discarding costs a redelivery, not
+correctness. This is the same guarantee that makes the connection-loss discard safe (see
+[Connection loss](#connection-loss-the-window-and-the-manifest)) and it is why the queue may be discarded
+without a message to say so.
 
 An application killed without running any code (SIGKILL) is the parent-death case above: the watchdog
 exits the process, and the rebalance does the rest.
@@ -340,9 +380,32 @@ only the exception **class**, never its message - Kafka's configuration exceptio
 and `kafka_properties` may carry credentials, which must never reach the stream or a log.
 
 Non-fatal discards (unknown token, superseded epoch, malformed report, un-negotiated message) do not close
-the stream; the proxy logs and continues. The client-side protocol violation - a `Dispatch` overflowing the
-client's queue beyond `max_concurrency` - is failed by the **client** with `FAILED_PRECONDITION` naming the
-count.
+the stream; the proxy logs and continues.
+
+### The one client-side protocol violation, and why it is not a status
+
+A `Dispatch` overflowing the client's queue beyond `max_concurrency` is the proxy exceeding its own declared
+in-flight ceiling: a protocol violation, detectable only on the client side. **The client cannot answer it
+with a status code.** In gRPC only the server end of a call sets one; the client's only unilateral
+termination is cancelling the call, which the proxy observes as `CANCELLED`. An earlier revision of this
+document said the client "fails the stream with `FAILED_PRECONDITION` naming the count", and that instruction
+is unimplementable in every language - established independently by two client waves before it was corrected
+here.
+
+The contract, both sides:
+
+- **The client** cancels the `Session` call and surfaces a local error naming the count - the queue depth, the
+  effective `max_concurrency`, and the offending record's token - to its application. It does not drop
+  records to make room, and it does not grow the queue. The error's spelling is the client library's, named
+  in that library's documentation; the client-authoring guide's dispatch-queue section is normative on the
+  behaviour.
+- **The proxy** sees a cancelled stream, indistinguishable from any other client-side cancellation, and takes
+  its ordinary connection-loss path: with `manifest` negotiated it holds the records for `reconnect_window`;
+  otherwise they return to scheduling with attempt counts unchanged when the stream ends. The admission slot
+  is released either way.
+- **The count never reaches the proxy.** v1 defines no client→proxy diagnostic message, so the evidence lives
+  only in the client's error and logs. Adding one would be an additive message with its own capability token,
+  under the freeze rules above - not something a client improvises.
 
 ## Message reference
 
@@ -633,6 +696,11 @@ Decisions a client author might otherwise wonder about, recorded with their reas
   [Capabilities](#capabilities-and-versioning).
 - **No shutdown-request message.** Client-initiated shutdown is report-everything-then-half-close; a
   message would carry no information the half-close does not.
+- **A client cancels; it does not set a status.** The queue-overflow violation is client-detected and
+  client-reported, because gRPC gives only the server end a status to set. See
+  [The one client-side protocol violation](#the-one-client-side-protocol-violation-and-why-it-is-not-a-status).
+- **Without `shutdown`, a closing client discards its queue** rather than sending a gated `Released`; the
+  records redeliver with attempt counts unchanged. See [Shutdown and drain](#shutdown-and-drain).
 - **The executor-count formula is unspecified on purpose** - it is an open product question, and the wire
   is already shaped so any answer (including a future dynamic one, via `SetExecutorCount` plus its
   capability) is additive.

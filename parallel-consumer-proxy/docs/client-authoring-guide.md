@@ -11,6 +11,46 @@ record divergences in their own `docs/inflight/clients/<lang>.md`.
 Author from the specification alone. Do not read the proxy's Java source - a question the specification
 cannot answer is a specification defect to file (astubbs#242), not a reason to go around it.
 
+## 0. Generating the stubs from the frozen schema
+
+Numbered zero because it happens before anything else here, and because every later section is cited by
+number from the per-language notes - the numbering below it does not move.
+
+**Placement comes from the `.proto`, never from your command line.** The frozen file carries the placement
+option for every language whose generator needs one: `java_package` / `java_multiple_files` /
+`java_outer_classname`, `go_package`, `csharp_namespace`, `ruby_package`, `php_namespace`,
+`objc_class_prefix`, `swift_prefix`. Languages whose generators derive placement from the proto package and
+file path (Python, Rust, C++, TypeScript; Kotlin rides the `java_*` options) need nothing. Do **not** pass an
+override - `--go_opt=M<file>=<path>` and its equivalents - even though it works: `buf breaking`'s `FILE`
+category treats a change to one of these options as breaking, so the file is the one authority on where
+generated code lands and an override is a second, silently divergent one. A language whose option is missing
+is a specification defect to file (astubbs#242), not a command line to invent.
+
+**Sourcing `protoc` and the well-known types.** The schema imports `google/protobuf/duration.proto` and
+`google/protobuf/timestamp.proto`, so a generator needs both a `protoc` and an include path that resolves
+those - "generate from the `.proto` by path" is not sufficient, and the Go wave lost time to it. Both tools
+are in mise:
+
+```bash
+mise use -g protoc@latest buf@latest      # protoc 35.1, buf 1.72.0 at the time of writing
+protoc -I <repo>/parallel-consumer-proxy-protocol/src/main/proto \
+       --<lang>_out=<dir> parallelconsumer/proxy/v1/proxy.proto
+```
+
+The mise `protoc` ships its own `include/` directory, which `protoc` finds relative to its own binary, so the
+well-known types resolve with **no second `-I`** - that command compiles the frozen schema as written. `buf`
+bundles them the same way.
+
+Without mise, the fallback is the one the Go wave built and it is worth knowing exists: the protocol module's
+`protobuf-maven-plugin` downloads a `protoc` into the local Maven repository, but the Maven artifact is a bare
+executable **without** `include/`, so the well-known types have to be unzipped out of the `protobuf-java` jar
+beside it. Worked example:
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/scripts/generate-proto.sh`.
+
+Whether the generated stubs are committed is your language's packaging question (Go has no codegen step at
+`go get` time, so it commits them). Where they are committed, regenerating from an unchanged `.proto` must
+leave `git status` clean - that is the check that the committed stubs are the schema's.
+
 ## 1. The architecture every client follows
 
 One shape, ten languages (KTD3, KTD4):
@@ -53,6 +93,33 @@ pass an idiomatic review in its own language's terms (errors-as-values in Go, `R
 
 Keys and values are **bytes** on this surface; deserialization belongs to the user's code.
 
+### Does `poll(processor)` block? A per-language choice, with one thing it must preserve
+
+**Unsettled across languages, deliberately, and not settleable by one wave.** Whether `poll` returns as soon
+as the session is open or blocks for the session's life decides whether a language needs a `Done`/`Err`/await
+surface at all, so the Go wave named it the sharpest hole in this guide - it chose *returns immediately*, with
+`Done()` and `Err()`, because a blocking call interruptible only from another goroutine is not how Go
+expresses a background service. That reasoning is idiomatic, not protocol: a language whose users expect
+`await consumer.run()` should say so instead.
+
+What the choice must preserve, whichever way it goes:
+
+- **The caller can learn the session died, and why, without polling for it.** This is the real content of the
+  question. A mid-session stream error, a cancelled call (§3.2), a sidecar exit and a completed drain all end
+  the session; a surface where `poll` has already returned and nothing reports the end leaves the application
+  believing it is still consuming. That exact defect is open on the Java reference client - a stream error
+  parks every executor with no listener to tell the caller - so **the reference surface is not the authority
+  here; do not mirror its silence.**
+- **Nothing per-record changes.** The session's end is admin-level; executors still report per record with the
+  token echoed, and the queue rules of §3 are unaffected by which shape you pick.
+- **The client documents its own answer in its README**, in one sentence naming the shape (blocking, handle,
+  future, channel, callback) and how a caller observes the end.
+
+> **PLACEHOLDER - the settled cross-language shape.** Wave two answers this in five languages at once; the
+> resolver fills this block from those answers (and, if they converge, promotes it from "per-language choice"
+> to a rule). Until then a client picks its idiom and documents it - it is **not** free to leave the caller
+> with no way to observe the session ending.
+
 ## 2. Spawning and finding the sidecar
 
 - The application supplies the sidecar binary's location **explicitly** (an absolute path, or a
@@ -79,18 +146,33 @@ decision ten authors would otherwise each invent. Conformance scenario:
    head-of-line-blocks its own control plane. Read continuously; buffer.
 2. **The queue's depth is `Configured.max_concurrency`** - the proxy's own in-flight ceiling, so in a
    correct system it can never overflow. Overflow is therefore a **protocol violation, not a load
-   condition**: fail the stream with `FAILED_PRECONDITION` naming the count. Never drop records, never
-   grow unbounded.
+   condition**: never drop records to make room, never grow unbounded. What a client may *do* about it is
+   constrained by gRPC - **only the server side of a call sets a status, so a client cannot fail the stream
+   with `FAILED_PRECONDITION`**, which is what this rule said until the Go and Python waves each hit it
+   independently and resolved it the same way. The implementable form, which every client now follows:
+   **cancel the call** (your language's cancel/abort on the streaming call - the proxy observes `CANCELLED`),
+   and **raise a local protocol-violation error naming the count** - the depth, the negotiated
+   `max_concurrency`, and the overflowing record's token - through whatever surface you chose for a dead
+   session (§1). Name that error in your README. The count reaches nobody but the application: v1 has no
+   client→proxy diagnostic message, so the proxy learns only that the stream was cancelled and takes its
+   ordinary connection-loss path (specification, "Errors the proxy returns"). A diagnostic message would be an
+   additive change with its own capability token, not something to improvise.
 3. **Hand-out is FIFO** - by arrival, and within one `Dispatch` by record order. FIFO is not an ordering
    guarantee (shard ordering is the engine's); it is the one order every language expresses identically,
    which keeps ten clients comparable.
 4. **A queued record is already leased, and that is fine.** The lease is extended by connection-level
    heartbeats, not by the record being worked on, so queue time cannot expire it. **Never withhold
    heartbeats because the queue is full.**
-5. **On `Shutdown`, release the queue - do not run it, do not abandon it.** Stop hand-out; report every
-   queued record `Released`; let executing records finish and report normally. `Released` returns the
-   record to scheduling with its attempt count unchanged - the client never invents a verdict for work it
-   did not do.
+5. **At shutdown, release the queue when `shutdown` is negotiated - otherwise discard it.** Stop hand-out
+   either way; let executing records finish and report normally; never run the queue, never invent a verdict
+   for work you did not do. Which of the two applies is decided by `Configured.capabilities`, not by
+   preference: `Released` is gated by the `shutdown` token (§4), so on a session without it - the test-mode
+   harness is exactly this case, negotiating only `["dispatch"]` - sending `Released` would itself be the
+   un-negotiated-message violation. **With `shutdown`:** report every queued record `Released`, which returns
+   it to scheduling with its attempt count unchanged. **Without `shutdown`:** drop the queued records and
+   report nothing for them; their offsets never committed, so the proxy returns them to scheduling on its own
+   (specification, "Shutdown and drain"). The specification settles this so a client does not have to; both
+   waves that met it resolved it this way before it was written down.
 6. **On connection loss, discard the queue.** Queued records are held by no live worker, so they must not
    appear in the reconnect `Manifest` - discarding them is what keeps the manifest truthful. The proxy
    returns them to scheduling as unmanifested records; nothing is lost. (Executing records are the
@@ -112,9 +194,13 @@ decision ten authors would otherwise each invent. Conformance scenario:
   admin half-closes
 ```
 
+The `Shutdown` message only arrives on a session that negotiated `shutdown`, so the `released` report above is
+legal by construction; the harness's `["dispatch"]`-only session reaches close the other way, by the
+application closing the client, and drops what it has queued (§3.5, §5).
+
 A fourth record arriving while A, B, C are all unresolved would overflow the queue - and is exactly the
-proxy exceeding its own declared ceiling: fail the stream naming the count (that is the conformance
-suite's negative control on this section).
+proxy exceeding its own declared ceiling: cancel the call and raise the counted protocol violation (§3.2).
+That is the conformance suite's negative control on this section.
 
 ## 4. Liveness duties
 
@@ -138,12 +224,28 @@ guess at.
 - Never build a per-record processing deadline. The lease is connection liveness, not a time budget for
   the user's function.
 
+**Known gap, owed to the reconnect wave: nothing on the wire separates "connection lost, reconnect" from "the
+sidecar has exited".** A clean drain, a parent-death exit and a genuinely transient loss all reach the client
+as the same receive error - `EOF`, `UNAVAILABLE` or `CANCELLED` in some combination, language by language - so
+a client that starts reconnecting after the sidecar is gone spins against a dead port for the whole
+`reconnect_window`. It costs nothing today because no session negotiates `manifest`; it is a correctness
+problem the moment one does. **Do not invent a mechanism for it here.** The wave that implements §4's
+reconnect settles it, and the obvious candidate is out-of-band rather than on the wire - the client spawned
+the sidecar and holds its process handle (§2), so the child's exit is observable without any protocol change -
+but it is unproven, and the decision (including whether the reconnect loop must be bounded regardless) belongs
+to that wave and lands in §9.
+
 ## 5. Shutdown duties
 
-- **Proxy-initiated** (`Shutdown` arrives): §3.5's sequence, then half-close the stream.
-- **Client-initiated** (the application closes the client): same sequence unprompted - stop hand-out,
-  `Released` for every queued record, wait for executing records to report - then half-close. The
-  half-close is the signal; there is no shutdown-request message.
+- **Proxy-initiated** (`Shutdown` arrives): §3.5's sequence, then half-close the stream. `Shutdown` only
+  arrives when `shutdown` is negotiated, so its queued records go back as `Released`.
+- **Client-initiated** (the application closes the client): same sequence unprompted - stop hand-out, deal
+  with the queue per §3.5, wait for executing records to report - then half-close. The half-close is the
+  signal; there is no shutdown-request message. **This is the path that reaches a session without
+  `shutdown`**, where §3.5's discard branch applies: drop the queue silently, report only what your executors
+  were actually running, half-close. The proxy returns the dropped records to scheduling with their attempt
+  counts unchanged - it never committed their offsets, so nothing is lost and nothing is guessed
+  (specification, "Shutdown and drain").
 - After half-close, drain your executors and reap the sidecar process (it exits once drained and
   committed). Do not kill it while the stream is open - that turns a clean drain into a reconnect-window
   recovery for the next group member.
@@ -177,17 +279,23 @@ classpath: build with `bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
 no arguments for its usage text, which is authoritative for its flags. The conventions a test needs:
 
 - **The scenario name is also the topic name.** `Configure` subscribes to the scenario name as its one
-  topic; the seeded records arrive from it.
+  topic; the seeded records arrive from it - but the subscription does not *select* them (see the fourth
+  divergence below).
 - **`kafka_properties` may be empty** - `--mock` builds mock Kafka clients and reads no properties. Real
   credentials never belong in a conformance test.
-- **The harness is not the shipped sidecar, and it diverges from the lifecycle contract in three ways a
+- **The harness is not the shipped sidecar, and it diverges from the lifecycle contract in four ways a
   test must absorb** (each is a harness limitation, not protocol): its stdout carries logging *before*
   the `port: <n>` line, so scan for the line rather than asserting it comes first (production spawn code
   still implements the specification's first-line contract); it serves sessions **until stdin EOF** - it
-  does not exit after a client-initiated drain, so reap it by closing its stdin, never by waiting; and it
+  does not exit after a client-initiated drain, so reap it by closing its stdin, never by waiting; it
   currently negotiates only `["dispatch"]`, so the liveness, manifest, terminal and shutdown duties are
   off by negotiation (their `Configured` fields absent) until the engine units land and their tokens are
-  granted - which is the same statement as the "named now" table below.
+  granted - which is the same statement as the "named now" table below; and **the mock ignores the
+  subscription entirely**, seeding the scenario's records unconditionally on a mock consumer, from a record
+  whose `topic` is the scenario name. Subscribing to the wrong topic - or to nothing at all - still passes
+  every scenario, so **the subscription cannot be used as a negative control**, and a client that never
+  populates `Configure.topics` will look conformant here while failing against a real broker. Found by the
+  Go wave, which lost a control to it. Assert the subscription you sent against `Configured`'s echo instead.
 - **The harness process carries no verdict channel**: it exits 0 whether or not the scenario's assertion
   held, and prints no result. Where an assertion names engine state a client cannot see (the committed
   offset in the first two scenarios), that assertion runs JVM-side; the client-side test asserts the
@@ -289,4 +397,18 @@ the *proxy*, and everything above reaches only the demo.
 ## 9. Wave-sync ledger
 
 Resolved divergences land here, dated, with the losing alternatives named - so the next wave inherits
-decisions, not debates. (Empty at the freeze; the first fan-out wave writes the first entries.)
+decisions, not debates.
+
+**2026-08-14, from the Go and Python waves** (each found the first two independently, without seeing the
+other's work, which is why they are treated as specification defects rather than local choices):
+
+| Divergence | Settled as | Alternative rejected |
+|---|---|---|
+| Queue overflow (§3.2) | Cancel the call; raise a local, counted protocol-violation error | Failing the stream with `FAILED_PRECONDITION` - unimplementable in any language, since only a gRPC server sets a status |
+| The queue at close on a session without `shutdown` (§3.5, §5) | Discard it and report nothing; the proxy reclaims | Sending `Released` regardless - it is the un-negotiated-message violation, and the harness session is exactly that case |
+| Generated-code placement (§0) | Read from the `.proto`'s own options, one authority for all languages | Per-language `protoc` overrides, nine command lines that `buf breaking` would later pin anyway |
+| Sourcing `protoc` and the well-known types (§0) | mise (`protoc@latest`, which ships `include/`) | Assuming a system `protoc`; the Maven-plus-unzip route survives as the no-mise fallback |
+
+**Open, not settled here:** whether `poll(processor)` blocks (§1) - wave two answers it in five languages
+simultaneously and the resolver fills that section's placeholder from those answers. Recording it as open is
+the decision: settling it from one language's idiom is what the placeholder exists to prevent.
