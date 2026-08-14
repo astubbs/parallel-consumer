@@ -456,6 +456,50 @@ revisiting once the audit has been in use.
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
 
+### Cross-module test clones (the file-similarity backlog behind astubbs#40)
+
+Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the
+`MockConsumer*` family - is done: they now share `MockConsumerTestBase`. The audit of the rest of the
+tree found the remaining high-similarity pairs are overwhelmingly **cross-module clones**, which is a
+different and much larger job, because deduplicating them means a generified test base in core's
+test-jar that each module parameterises with its own processor type. Ranked, with a verdict, so the
+next reader does not re-derive the list.
+
+Every figure below is **measured**, off the `duplicate-code-detection-tool` report this PR's own CI
+posted, and quoted as a band for the same reason the `MockConsumer*Test` figures are: the measure is
+corpus-relative, so decimals drift on merges that touch none of these files. Nothing here is
+estimated from reading the source - an earlier draft of this section was, and every one of its five
+numbers was wrong, by 7 to 48 points.
+
+- **`Mutiny*Test` ↔ `Reactor*Test`** (`MutinyBatchTest`/`ReactorBatchTest` **high 70s**,
+  `MutinyPCTest`/`ReactorPCTest` **low 70s**). The real prize: two reactive integrations tested by the
+  same script with the publisher type swapped. Wants a shared generified base, not a copy. Vertx is a
+  third, looser member of the family (`VertxBatchTest` pairs with either around 50%). Note
+  `MutinyUnitTestBase`/`ReactorUnitTestBase` is **not** part of the prize - it lands in the **low
+  30s**, barely over the check's `ignore_below: 30` floor, because the shared wiring there is already
+  extracted into core's test-jar. The duplication is in the scripts, not their bases.
+- **`VeryLargeMessageVolumeTest` and its neighbours** (core `test-integration`, all *within*-module):
+  ↔ `MultiInstanceHighVolumeTest` **high 50s**, ↔ `TransactionAndCommitModeTest` **mid 50s**. One
+  volume-test shape reused three ways, so it is a single extraction rather than two. Nowhere near the
+  check's `fail_above: 80` - a tidiness item, not a gate risk - and they are broker ITs, so it needs
+  Docker to verify, not a desk refactor. Note these are *not* the repo's largest within-module pairs;
+  the top of that list is production code (`RunLengthV1`/`V2EncodingNotSupported` ~63,
+  `JStreamParallelEoSStreamProcessor`/`JStreamParallelStreamProcessor` ~62), which is out of scope
+  for astubbs#40 and untouched here.
+- **`TestConventionsArchTest` x4** (**89-91%** across the six module pairings). **Leave alone.** The
+  only pairs here over `fail_above: 80`, and they are documented as irreducible in
+  `TestConventionRules`' javadoc: a module can only point ArchUnit at its own classes, so the shared
+  part is already extracted and what remains is the four-line pointer. Being over `fail_above` does
+  not fail the build: the check runs `compare_with_base: true`, and these pairs are long-standing -
+  they appear in neither the report's *new* nor its *increased* section.
+- **`CommitRejectionTestBase` ↔ `MockConsumerTestBase`** - **nothing to do, and nothing reported.**
+  Worth recording because the prediction was wrong: extracting the harness was expected to put these
+  two small abstract classes around 70% on the check, on the reasoning that a whole-file token
+  measure mostly sees their shared package declaration and imports. It did not - neither file reaches
+  the check's 30% reporting floor against anything (PR astubbs#206). The `MockConsumer*Test` scenarios
+  themselves came out at 34-37%, down from the 70.7% that astubbs#34 flagged. Estimate similarity from the
+  tool, not from a reading of the source.
+
 ## Abandoned draft branches (idea bank)
 
 Never-merged fork branches - **design references only** (bitrotted). These are the
