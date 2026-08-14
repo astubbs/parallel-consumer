@@ -38,14 +38,14 @@ the thing they actually have to answer. Say the strategy and why in a line or tw
 That is a delivery rule, not a licence to skip it: the message still gets written, and written
 properly.
 
-**Do not pass `--subject`.** `gh pr merge --squash` lands a subject ending `... (#265)` because
-GitHub appends the PR number - but only when the subject is not overridden. Passing `--subject` uses
-your text verbatim, so the number silently never appears and the commit lands out of step with every
-neighbour on master; astubbs#206 needed a force-push to master to correct. Omit the flag and the PR
-title is used. If the title is wrong, **fix the title** - it is what reviewers saw, and `AGENTS.md`
-already asks for it to be kept in step. `--body-file` on its own does not affect the subject, so a
-hand-written message still works. `.claude/hooks/check-squash-subject.sh` refuses the flag for Claude
-Code; the rule binds anyone merging by hand.
+**If you override the subject, end it with `(#N)`.** `gh pr merge --squash` lands a subject ending
+`... (#265)` because GitHub appends the PR number - but only when the subject is not overridden.
+Pass `--subject` (or its short form `-t`) and your text is used verbatim, so the number silently
+never appears and the commit lands out of step with every neighbour on master; astubbs#206 needed a
+force-push to master to correct. Simplest is to omit the flag entirely and let the PR title be used
+- and if the title is wrong, fix the title, since it is what reviewers saw.
+`.claude/hooks/check-squash-subject.sh` refuses an override without the suffix for Claude Code; the
+rule binds anyone merging by hand.
 
 ### Rebase-merge as-is
 

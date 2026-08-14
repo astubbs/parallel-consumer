@@ -59,10 +59,17 @@ echo
 echo "--- check-squash-subject.sh ---"
 
 
+fails=${fails:-0}
+
 verdict() { # <bash-command> -> ALLOW | DENY
-    local payload out
-    payload=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1")
-    out=$(printf '%s' "$payload" | "$HOOKS/check-squash-subject.sh" 2>/dev/null)
+    # The command goes to the JSON builder on STDIN, never argv: one case here is a 150 KB command,
+    # and passing that as an argument hits the same E2BIG the case exists to detect - the harness
+    # would die and the failure would read as the hook's.
+    local out tmp
+    tmp=$(mktemp)
+    printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
+    out=$("$HOOKS/check-squash-subject.sh" < "$tmp" 2>/dev/null)
+    rm -f "$tmp"
     case "$out" in
         *'"deny"'*) echo DENY ;;
         *)          echo ALLOW ;;
@@ -74,13 +81,27 @@ expect() { # <expected> <name> <command>
     if [ "$got" = "$1" ]; then echo "ok:   $2"; else echo "FAIL: $2 (expected $1, got $got)"; fails=$((fails + 1)); fi
 }
 
-expect DENY  "a bare --subject"                    'gh pr merge 2999 --squash --subject "foo"'
-expect DENY  "--subject even WITH a (#N)"          'gh pr merge 2999 --squash --subject "foo (#2999)"'
+expect DENY  "--subject with no (#N)"              'gh pr merge 2999 --squash --subject "foo"'
+expect DENY  "-t, the documented SHORT form"       'gh pr merge 2999 --squash -t "foo"'
 expect DENY  "--subject= equals form"              'gh pr merge 2999 --squash --subject=foo'
+expect DENY  "-t= equals form"                     'gh pr merge 2999 --squash -t=foo'
+expect DENY  "(#N) present but not at the END"     'gh pr merge 2999 --squash --subject "port (#2999) to master"'
+expect ALLOW "--subject ending with (#N)"          'gh pr merge 2999 --squash --subject "foo (#2999)"'
+expect ALLOW "-t ending with (#N)"                 'gh pr merge 2999 --squash -t "foo (#2999)"'
+expect ALLOW "--subject mentioned inside --body"   'gh pr merge 2999 --squash --body "why --subject matters"'
+expect ALLOW "escaped apostrophe, number present"  'gh pr merge 2999 --squash --subject '"'"'don'"'"'\'"'"''"'"'t drop it (#2999)'"'"''
 expect ALLOW "--body-file does not touch subject"  'gh pr merge 2999 --squash --body-file b.txt'
 expect ALLOW "no subject override at all"          'gh pr merge 2999 --squash'
 expect ALLOW "not a merge command"                 'gh pr view 2999 --json title'
 expect ALLOW "the word --subject in other text"    'echo "we discussed --subject and why"'
+
+# A 150 KB command used to hit E2BIG and exit having printed nothing, which reads as ALLOW.
+big=$(python3 -c "print('gh pr merge 2999 --squash --subject bad # ' + 'x'*150000)")
+if [ "$(verdict "$big")" = DENY ]; then
+    echo "ok:   a 150 KB command does not fail open"
+else
+    echo "FAIL: a 150 KB command fails open"; fails=$((fails + 1))
+fi
 
 # Negative control: prove it can deny. A guard that has never fired proves nothing (bin/AGENTS.md).
 if [ "$(verdict 'gh pr merge 2999 --squash --subject "x"')" = DENY ] \
@@ -153,6 +174,13 @@ assert "--no-verify in a LATER command is not this commit's bypass" 2 \
     "$(gate_rc "$red" 'git commit -m x && echo --no-verify')"
 assert "--no-verify in an EARLIER command is not this commit's bypass" 2 \
     "$(gate_rc "$red" 'echo --no-verify && git commit -m x')"
+# TWO REAL COMMITS, one asking for a bypass and one not. The bypass used to be judged over the
+# whole payload, so the second commit's flag exempted the first - which in a clone with no
+# core.hooksPath meant that first commit landed with no gate run at all.
+assert "a later commit's --no-verify does not exempt an earlier one" 2 \
+    "$(gate_rc "$red" 'git commit -m first; git commit --no-verify -m second')"
+assert "both commits asking for a bypass is honoured" 0 \
+    "$(gate_rc "$red" 'git commit --no-verify -m a; git commit --no-verify -m b')"
 assert "git -C <path> commit --no-verify is still a bypass" 0 \
     "$(gate_rc "$red" 'git -C /some/path commit --no-verify -m x')"
 

@@ -91,11 +91,18 @@ except Exception:
     sys.exit(0)                      # unparseable payload: treat as bypass, never block on our bug
 
 
-def commit_requests_bypass(line):
-    """True when a `git commit` in COMMAND POSITION on this line carries --no-verify itself."""
+def commit_bypass_counts(line):
+    """(commits, bypassing) for `git commit` in COMMAND POSITION on this line.
+
+    Counted rather than short-circuited because ONE command line can hold SEVERAL commits, and a
+    later one asking for a bypass must not exempt an earlier one that did not:
+    `git commit -m first; git commit --no-verify -m second` used to exit 0 for both, so in a clone
+    with no core.hooksPath the first commit landed with no gate run at all.
+    """
     lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     tokens = list(lexer)
+    commits = bypassing = 0
     i, at_command = 0, True
     while i < len(tokens):
         token = tokens[i]
@@ -114,18 +121,23 @@ def commit_requests_bypass(line):
                 end = j
                 while end < len(tokens) and tokens[end] not in OPERATORS:
                     end += 1
+                commits += 1
                 if "--no-verify" in tokens[j:end]:
-                    return True
+                    bypassing += 1
                 i = end
                 at_command = True
                 continue
         at_command = False
         i += 1
-    return False
+    return commits, bypassing
 
 
 try:
-    bypass = any(commit_requests_bypass(line) for line in cmd.splitlines())
+    counts = [commit_bypass_counts(line) for line in cmd.splitlines()]
+    commits = sum(c for c, _ in counts)
+    bypassing = sum(b for _, b in counts)
+    # EVERY commit in the payload must ask for it. One that did not is gated, so the gate runs.
+    bypass = commits > 0 and commits == bypassing
 except ValueError:
     bypass = re.search(r"(?<!\S)--no-verify(?!\S)", cmd) is not None
 sys.exit(0 if bypass else 1)
