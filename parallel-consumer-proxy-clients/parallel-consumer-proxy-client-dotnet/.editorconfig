@@ -1,0 +1,18 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# C# conventions for this module only. It deliberately does NOT set `root = true`, so the
+# repository's own .editorconfig still applies - this file overrides just the two settings whose
+# repo-wide defaults were chosen for Java and XML and are wrong for C#: the `[*]` block sets a
+# two-space indent and no final newline, and every C# tool (the SDK templates, `dotnet format`,
+# Visual Studio) assumes four spaces and a trailing newline.
+
+[*.cs]
+indent_size = 4
+tab_width = 4
+insert_final_newline = true
+
+# The protobuf and gRPC stubs are generated into obj/ on every build. Marking them generated is
+# what keeps the analyzers - which are this module's lint, and run as build errors - from judging
+# code that is not this module's to fix.
+[**/obj/**.cs]
+generated_code = true

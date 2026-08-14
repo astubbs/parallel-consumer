@@ -1,0 +1,39 @@
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    The .NET client library for the Parallel Consumer language proxy.
+
+    THE STUBS ARE GENERATED AT BUILD TIME AND NOT COMMITTED. Grpc.Tools runs protoc plus the C#
+    gRPC plugin as an ordinary MSBuild step, carrying its own protoc binary, so a consumer of this
+    project needs neither a protoc on PATH nor a generated-code directory in git - unlike Go, where
+    `go get` has no codegen step and the stubs must be committed. The .proto is referenced by path
+    at its one authoritative location; it is FROZEN and this module never edits it.
+
+    The C# namespace of the generated code comes from the .proto's own `csharp_namespace` option,
+    never from a command line here - one authority for where generated code lands, for every
+    language.
+
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Bz.Stub.ParallelConsumer.Proxy.Client</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="$(ProtobufVersion)" />
+    <PackageReference Include="Grpc.Net.Client" Version="$(GrpcVersion)" />
+    <PackageReference Include="Grpc.Tools" Version="$(GrpcVersion)" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- GrpcServices="Client": the service stub this module needs is the client half. -->
+    <Protobuf Include="$(ProxyProtoRoot)/parallelconsumer/proxy/v1/proxy.proto"
+              ProtoRoot="$(ProxyProtoRoot)"
+              GrpcServices="Client" />
+  </ItemGroup>
+
+</Project>

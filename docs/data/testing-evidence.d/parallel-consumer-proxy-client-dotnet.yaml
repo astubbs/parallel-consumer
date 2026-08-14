@@ -6,9 +6,30 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-dotnet
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the .NET client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the .NET client wave of the language-proxy plan.
+  - id: proxy-client-dotnet
+    artifact: parallel-consumer-proxy-client-dotnet
+    coverage: >-
+      One conformance scenario, a-processed-record-advances-the-committed-offset, run end to end
+      over real gRPC against the test-mode sidecar: the sidecar is spawned as a child process, its
+      port read from the lifecycle channel, the fresh-session handshake completed, a dispatch wave
+      queued and handed to a task executor, the user function run, the outcome reported with the
+      token echoed verbatim, and the session closed by half-close and the lifecycle pipe. The
+      assertion that it can fail was established by a negative control - returning Outcome.Fail from
+      the user function instead of succeeding produced two redeliveries with the attempt count
+      incremented and the failure reason verbatim, and the test went red. The module's lint is the
+      SDK's own Roslyn analyzers at latest-recommended with warnings as errors, running on every
+      local build; that it can fail was established the same way, by deliberately introducing a
+      possibly-null dereference (CS8602) and a culture-dependent string comparison (CA1310) and
+      watching the build go red.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/tests/Bz.Stub.ParallelConsumer.Proxy.Client.Tests/SessionTests.cs
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/Directory.Build.props
+    limitation: >-
+      One scenario of eleven, and the harness negotiates only the dispatch capability, so every
+      liveness, reconnect, worker-death, terminal and drain duty is untested because it is
+      un-negotiated rather than because it passed. Subscription is not a live variable either: the
+      mock harness seeds its records regardless of the topic a client subscribes to, so a
+      wrong-topic run still passes and cannot be used as a control. The client-side dispatch queue
+      is exercised only at a depth of one record - FIFO hand-out across several executors, and the
+      overflow protocol violation, have no test because the harness dispatches no wave large enough
+      to reach them.

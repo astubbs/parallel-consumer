@@ -17,11 +17,27 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over the .NET SDK (ParallelConsumer.Proxy.Client.csproj beside this
-        file). The commands below run ONLY under -Dpc.foreignClients - see the foreign-clients
-        profile in the clients aggregator for why opt-in is load-bearing. Skeleton until the .NET
-        wave of the language-proxy plan (astubbs#242) starts; that wave owns everything in this
-        directory, including refining these commands.
+        Thin Maven wrapper over the .NET SDK. The commands below run ONLY under
+        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this pom and runs
+        no .NET toolchain at all.
+
+        The bare `build` and `test` arguments resolve because this directory holds exactly one
+        solution file, Bz.Stub.ParallelConsumer.Proxy.Client.sln, which names both the library
+        (src/) and its tests (tests/). Keep it that way: a second solution or a stray project file
+        at this level makes every `dotnet` command here ambiguous, including the CI row's
+        `dotnet format analyzers` verification, which also takes no project argument.
+
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND MAVEN CANNOT ORDER THAT FOR US. `dotnet
+        test` here spawns the conformance harness (TestModeMain, in parallel-consumer-proxy's test
+        jar), but this module deliberately has NO Maven dependency on the proxy - no client depends
+        on the engine - so `-am` does not pull it into the reactor ahead of us. Build it first:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The test fails with that command in its message rather than skipping, because a test that
+        quietly does not run is not a passing test. The same hole exists for every non-JVM client;
+        recorded as a wave finding in docs/inflight/clients/dotnet.md (astubbs#242).
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>

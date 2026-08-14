@@ -7,8 +7,35 @@ schema_version: 1
 kind: module-maturity
 modules:
   - artifact: parallel-consumer-proxy-client-dotnet
-    deferred:
-      reason: >-
-        Empty skeleton seeded ahead of the fan-out; the .NET client wave has not begun, and no maturity or support claim is published for a module with no content.
-      lifted_by: >-
-        astubbs#242 - the .NET client wave of the language-proxy plan records this module's first real row when its wave starts.
+    maturity: alpha
+    minimum_java: 17
+    package_ecosystem: nuget
+    package_coordinate: >-
+      Bz.Stub.ParallelConsumer.Proxy.Client - NOT PUBLISHED. The assembly is named for the package
+      it will become; nothing is pushed to nuget.org, and the module is consumed from a checkout.
+    reliability_confidence: >-
+      Wave one only: one record carried end to end over the real wire against the test-mode
+      sidecar. The connect, configure, dispatch, invoke, report and clean-shutdown path works; the
+      liveness lease, heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes
+      and the shutdown drain are not implemented at all, so nothing about a session that loses its
+      connection or outlives a lease has been exercised.
+    api_expectation: >-
+      PROVISIONAL. The surface (ConnectAsync/PollAsync/DisposeAsync, a delegate returning an
+      Outcome, a thrown exception translated to a failure) has not yet had its idiomatic-C# review,
+      and the reference wrapper surface it mirrors may itself move when the fan-out's wave syncs
+      resolve divergences - the blocking-or-not question behind PollAsync's returned Task above all.
+    support_posture: >-
+      Not supported for external use, and not published to NuGet. It exists to falsify the frozen
+      protocol documents - whether an author with no access to the proxy's Java can build a working
+      client from them - and the answer to that, in docs/inflight/clients/dotnet.md, is its real
+      output.
+    evidence_id: proxy-client-dotnet
+    tracking: astubbs#242
+    opt_in: >-
+      Nothing reaches it unless an application constructs it. Its Maven module runs no .NET
+      toolchain at all unless -Dpc.foreignClients is passed, so the reactor build is unaffected by
+      its presence.
+    isolated_from_stable_modules: true
+    use_this_if: >-
+      You are working on the language-proxy fan-out itself and want the async/await rendering of the
+      shared client shape. Nobody should consume it from an application yet.
