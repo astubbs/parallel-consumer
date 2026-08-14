@@ -65,7 +65,17 @@ subagents that background a long build stop instead of resuming (tell them to wa
 and parallel agents in one worktree share `target/`, so a root build's `clean` destroys siblings'
 output (scope every dispatched build to its own module).
 
-**10. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
+**10. The git index is shared state between parallel agents, and `git add` is a trap.** File
+ownership was split so no two agents edited the same file — but every agent in a worktree shares one
+*index*, so `git add <mine> && git commit` commits whatever anyone else happens to have staged at
+that moment. It happened here: an orchestrator's documentation commit swallowed a language agent's
+pending file deletion. Nothing broke, because content was correct and only attribution was wrong —
+but the same mechanism could commit another agent's half-finished work under a message that does not
+describe it, and the diff would look deliberate forever after. **The fix is one character of
+discipline: `git commit -- <paths>`, never `git add` then commit.** Worth a dispatch-prompt clause
+and, better, a pre-commit hook that refuses a commit whose staged set exceeds its pathspec.
+
+**11. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
 interrogate the shared surface: no-exception languages test whether outcomes are really values,
 single-threaded runtimes test whether the concurrency model is really the engine's, forked-process
 runtimes test whether the client is really stateless. Questions the reference language cannot ask
