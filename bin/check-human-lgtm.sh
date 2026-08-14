@@ -29,7 +29,16 @@
 # check that names the missing half, instead of a human trying to remember across a dozen open
 # PRs which ones he has personally read.
 #
-# THE MATCHING RULE, IN FULL
+# THE MATCHING RULE, IN FULL - AND THIS IS THE ONLY COPY OF IT
+#
+# docs/ci.md owns the GATE contract ("both halves must pass, and here is what each half is").
+# This file owns the MATCHING RULE - the clause-by-clause "what counts as an LGTM" below - and
+# docs/ci.md links here rather than restating it. Those are two different facts at two
+# different altitudes, and each has exactly one home. The rule is not restated in docs, in
+# AGENTS.md, or in the workflow, because a duplicate of it drifted from its original inside a
+# single PR: the survey under TOKEN below was restated in four files and was wrong in all four.
+# The executable version of this rule is the awk program at the bottom of this file, which is
+# why the prose lives beside it - prose and code in one file cannot drift apart unnoticed.
 #
 # A PR satisfies this check when at least one SUBMITTED PULL-REQUEST REVIEW exists such that:
 #
@@ -46,13 +55,25 @@
 #                   repo over a capital letter is a worse failure than the one it prevents.
 #   3. TOKEN      - the body contains `LGTM`:
 #                     * CASE-INSENSITIVE. `lgtm`, `LGTM` and `Lgtm` all count, and this was
-#                       decided by looking rather than by taste. Every owner LGTM this repo
-#                       has ever received - 18 of them, across PRs astubbs#210 to
-#                       astubbs#292 - is the lower-case bare word `lgtm`, seventeen of them
-#                       alone on a line and one as "lgtm to try". A case-sensitive rule would
-#                       have gone red on all eighteen and told the owner to retype his own
-#                       habit in capitals, which is how a memory aid turns into a nuisance
-#                       people route around. The cost is real and is stated under "WHAT IT
+#                       decided by looking rather than by taste. THE SURVEY IS STATED HERE AND
+#                       NOWHERE ELSE, because the first version of it was stated in four places
+#                       and was wrong in all four. Every owner LGTM this repo has ever
+#                       received, re-derived from
+#                       `repos/astubbs/parallel-consumer/pulls/<n>/reviews` over all 181 PRs:
+#                       50 submitted reviews across 38 PRs, from astubbs#63 to astubbs#292.
+#                       Of those 50, forty-nine spell it `lgtm` and ONE - astubbs#84 - is
+#                       `Lgtm`, so case-insensitivity is not a courtesy: it is the difference
+#                       between accepting and rejecting a stamp the owner has already given.
+#                       Forty-six are the bare word alone on a line; the other four carry a
+#                       trailing clause ("lgtm to try" on astubbs#280, and three of the form
+#                       "lgtm, @claude can you take a look please"). One of those three,
+#                       astubbs#73's "lgtm, @claude how about you?", ENDS IN A QUESTION MARK
+#                       and must still pass - which is why the `?` clause below rejects only a
+#                       `?` touching the token rather than one anywhere in the body. And all
+#                       50 are `COMMENTED` reviews, not approvals. A rule wanting capitals, or
+#                       wanting APPROVED, would have gone red on every stamp this repo has ever
+#                       been given, which is how a memory aid turns into a nuisance people
+#                       route around. The cost is real and is stated under "WHAT IT
 #                       DELIBERATELY DOES NOT PROVE": a review DISCUSSING an lgtm reads the
 #                       same as one giving it.
 #                     * as a WHOLE WORD - no letter or digit either side - so `ALGTM`,
@@ -217,7 +238,12 @@ scan_result=$(awk \
                 else if (negated(pre)) note_near("negated")
                 else { seg_ok = 1; return }
             }
-            rest = post
+            # Advance to the LAST CHARACTER of the token just examined, not past it. Advancing
+            # past it dropped the character the next candidate needs to see, so glued repeats
+            # walked straight through the whole-word guard: in `LGTMLGTM` the second token
+            # became the start of a fresh string, where there is no preceding character to
+            # reject it, and `xLGTMLGTM` passed a rule written to refuse `xLGTM`.
+            rest = substr(rest, start + 3)
         }
     }
 
@@ -242,8 +268,31 @@ scan_result=$(awk \
         reset_segment()
     }
 
+    # GitHub stores review bodies as they were typed, so a body can arrive with CRLF endings.
+    # Strip the carriage return before any rule looks at the line: it is invisible in every
+    # failure message, and it defeats the fence-close test below, which requires nothing but
+    # whitespace after the backticks. A CRLF body would therefore never close a fence and would
+    # silently swallow every LGTM after it. No real body has done this yet - 0 of the 365 owner
+    # review bodies in this repo carry a CR - which is precisely why it needs a test rather than
+    # a wait for the first person to paste from an editor that does.
+    { sub(/\r$/, "") }
+
     NF == 7 && $1 == "<!--" && $2 == "check-human-lgtm" && $3 == token && $7 == "-->" {
         settle(); open = 1; submitted = $4; login = $5; state = $6; next
+    }
+
+    # A line carrying the token for THIS RUN, and the name of THIS checker, but not the full
+    # seven-field shape, is a marker we emitted and cannot parse. Close the open segment rather
+    # than reading it as more of the previous body. Without this, a marker that lost a field -
+    # an innocent --jq edit, or a `state` that came back empty - would leave the previous
+    # segment open and merge the NEXT review into it, so a stranger LGTM would be reported as
+    # "astubbs submitted a review containing LGTM". Fail closed instead.
+    #
+    # Deliberately keyed on the token, which is unguessable and never reaches the run log, so a
+    # body cannot trigger this: a review quoting the marker shape out of this documentation
+    # carries no token and still reads as ordinary prose, which is the property case 21 pins.
+    $1 == "<!--" && $2 == "check-human-lgtm" && $3 == token {
+        settle(); next
     }
 
     # CommonMark fence tracking, the same rule bin/check-review-posted.sh applies to task-list

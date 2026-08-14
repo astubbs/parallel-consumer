@@ -421,12 +421,12 @@ Nothing lints commit messages, so all of this is on you.
   mechanically block the merge (only that route can open inline review threads), or dispatch
   `claude-code-review-dispatch.yml --ref master -f pr=<number> -f focus="<steer>"` when you want a
   steer or the packaged review procedure. Enforced by the required `review: bot + human LGTM`
-  check, which also wants **your own LGTM** - a review you submit whose body says so - so
-  **a red gate on a PR nobody has reviewed yet is the expected state, not a fault**,
+  check, so **a red gate on a PR nobody has reviewed yet is the expected state, not a fault**,
   and never something to fix by editing the gate. What exactly satisfies that check is stated in
   one place only - [`docs/ci.md`](docs/ci.md), "The gate asks..." - along with which route to
   reach for and why `--ref master` is required. Do not restate the rule here; it has drifted
-  before.
+  before, and the sentence that used to sit in this spot describing what the check wants was
+  itself the drift.
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the
   specific review comment, NOT as a separate top-level PR comment - a summary comment leaves the
   original conversation unresolved and can block merge on "unresolved conversations". When a finding

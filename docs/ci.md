@@ -358,6 +358,11 @@ the two halves are worded so you never have to open the job to tell them apart:
   `NO HUMAN LGTM ON THIS PR`, and there are three of them: he has not reviewed it at all, he has
   reviewed it and never said the word, or he wrote something the rule refuses (`lgtm?`, a
   negation, or an LGTM inside a code fence) - in which case the message says which.
+- **the human half could not be scanned** - `Could not scan this PR's reviews for a human LGTM`,
+  which deliberately does **not** start `NO HUMAN LGTM ON THIS PR`, because it is not one. The
+  scan itself failed, so the checker refused to guess and treated the PR as unstamped. This one
+  is a bug to fix rather than a review to do, and it is the only red here that means "the
+  instrument broke" rather than "the work is outstanding".
 
 Both halves are evaluated on every run, even when the other has already failed, so one look tells
 you everything that is outstanding.
@@ -376,7 +381,9 @@ job then re-runs the gate with both halves already true.
 ### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
 
 <!-- CANONICAL: the gate contract. Nowhere else states what satisfies the gate - everything else
-     links here. If you change this paragraph, run bin/check-review-gate-contract.sh. -->
+     links here. If you change this paragraph, run bin/check-review-gate-contract.sh.
+     The sub-contract of the human half - what counts as an LGTM - is canonical in
+     bin/check-human-lgtm.sh, NOT here. Do not paste a copy of it back into this file. -->
 
 **Two things satisfy it, and it needs both**, whenever either of them happened:
 
@@ -387,30 +394,19 @@ A review of the first commit therefore vouches for the twentieth, and so does an
 That is a deliberate reversal of the rule this repo shipped first, and it is now applied to both
 halves alike.
 
-**The human half, exactly.** The full rule with its reasoning lives in `bin/check-human-lgtm.sh`;
-this is what it comes to:
+**What exactly counts as an LGTM is stated in `bin/check-human-lgtm.sh` and only there** - the
+whole-word rule, the `?` and negation clauses, why a fenced or quoted LGTM does not stamp, why an
+empty `APPROVED` does not count while a `DISMISSED` review does, and the survey of every owner LGTM
+this repo has actually received that settled case-insensitivity. That file is the executable
+version of the rule, so its prose sits beside the awk that implements it and the two cannot drift;
+a copy here could, and did. An earlier draft of this section carried a seven-clause restatement of
+it, with a summary of that survey that was wrong in every particular - wrong count, wrong PR range,
+and wrong about the one capitalised `Lgtm` that makes case-insensitivity load-bearing rather than
+merely kind. It was wrong in four files at once, because it had been pasted into four.
 
-- it must be a **submitted review** (`pulls/<n>/reviews`) - not a comment in the ordinary comment
-  box, and not an inline comment on a line of code;
-- by **`astubbs`**, compared case-insensitively, taken from the API rather than from anything
-  written in a body;
-- whose body contains **`lgtm` as a whole word, in any case** - so `LGTM`, `lgtm` and `(lgtm)` all
-  count, `ALGTM` and `lgtm2` do not;
-- **not** followed by `?`, and **not** immediately preceded by `not`, `no`, `never` or an `n't`
-  contraction - so `lgtm?` and `NOT LGTM` are refused;
-- **not** inside a fenced code block or a blockquote, so a review quoting somebody else's LGTM, or
-  discussing this rule, does not stamp the PR by accident;
-- **review state is not consulted**, except that a `PENDING` (never submitted) review is ignored.
-  An **APPROVED review with an empty body does not count** - the request was for a visible,
-  deliberate word, and a silent Approve is the reflex this exists to interrupt. A **DISMISSED
-  review still counts**, which is load-bearing: this repo's ruleset sets
-  `dismiss_stale_reviews_on_push`, so reading state would have made the human half head-sensitive
-  through the back door.
-
-Case-insensitivity was settled by looking at what actually happens here rather than by taste: all
-18 owner LGTMs this repo has received, from astubbs#210 to astubbs#292, are the lower-case bare
-word `lgtm`, and every one of them was a `COMMENTED` review rather than an approval. A
-capitals-only rule, or one that wanted APPROVED, would have gone red on all eighteen.
+The two altitudes: **this section owns the gate contract** - what satisfies the gate, which is the
+two numbered items above. **`bin/check-human-lgtm.sh` owns the matching rule** - what satisfies the
+human half of it. Link, do not paraphrase, in either direction.
 
 **Neither half proves the reviewer read anything**, and the human half proves less than the
 automated one: it is a **memory aid**, not a control. The owner is both the person it asserts

@@ -38,10 +38,19 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 
 ## Two conventions that will bite you
 
-- **Job names are an API.** `review: bot + human LGTM`, `shell: sigpipe`, `workflows: action versions`,
-  `Check PR Dependencies` and the `maven.yml` suites are required status checks matched **by
-  name** in the master ruleset. Rename a job and the ruleset silently stops being satisfied by
-  anything - it does not fail, it just never passes.
+- **Job names are an API.** `review: bot + human LGTM`, `claude-review`, `shell: sigpipe`,
+  `workflows: action versions`, `Check PR Dependencies` and the `maven.yml` suites are required
+  status checks matched **by name** in the master ruleset. Rename a job and the ruleset silently
+  stops being satisfied by anything - it does not fail, it just never passes.
+  - **`claude-review` is TRANSITIONAL, and is the one currently required.** The gate's job was
+    renamed to `review: bot + human LGTM`; ruleset `15055005` still requires the OLD context, so
+    `claude-code-review.yml` carries a second job reporting `claude-review` under the old
+    contract until the ruleset is swapped. **Do not delete that job before the swap.** A required
+    context that nothing reports blocks every open PR, with no way to clear it and no red check to
+    explain why - and the swap is the *last* step of the cutover, not the first. The ordering, the
+    exact `PUT`, and the deletion condition are in [`docs/ci.md`](../../docs/ci.md) and in that
+    job's own header. Being listed here is not a claim that it is permanent; it is a claim that it
+    is load-bearing right now, which is the property this list is about.
 - **Most of these run PR-authored code.** A `pull_request` job checks out the PR, so anything it
   executes is whatever the PR says it is. That is why the review jobs hold no write scope, and why
   `actions: write` lives alone in a job that checks nothing out. See "The reviewer runs PR code"
