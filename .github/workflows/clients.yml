@@ -119,9 +119,17 @@ jobs:
             # and the Maven cache is its dependency cache.
             toolchain: ''
             scanner: detekt
+            # The CLI fat jar is resolved from Maven Central, not the GitHub release
+            # page: Central artifacts are immutable once published, where a release
+            # asset can be replaced in place under the same URL. The sha256 is pinned
+            # on top of that - it makes the download tamper-evident end to end and
+            # names the exact bytes reviewed (byte-identical to the v1.23.7 GitHub
+            # release asset when pinned, 2026-08-14). A version bump recomputes it:
+            # sha256sum on the freshly fetched jar.
             scanner-cmd: >-
               curl -sSL --fail -o /tmp/detekt-cli.jar
-              https://github.com/detekt/detekt/releases/download/v1.23.7/detekt-cli-1.23.7-all.jar
+              https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/1.23.7/detekt-cli-1.23.7-all.jar
+              && echo '84beded283012cb2b38bcaef4996452fcd6069d2e9ca74b50eaa79e0ad21897e  /tmp/detekt-cli.jar' | sha256sum -c -
               && java -jar /tmp/detekt-cli.jar --input src --build-upon-default-config
             cache-path: ''
             lockfile: ''
@@ -150,35 +158,74 @@ jobs:
       # reason and lifted_by) while the module is a seeded-but-unstarted skeleton.
       # While it is present, this row skips and quotes the reason; the wave that
       # starts the module removes the block from that one file - which it already
-      # owns - and the row starts gating for real. A MISSING fragment is a hard
-      # error, not a green light: U27's corpus requires one per module, so its
-      # absence means the corpus is broken, and running an unstarted module's build
-      # on that evidence would turn a bookkeeping defect into a misleading red.
+      # owns - and the row starts gating for real.
+      #
+      # The fragment is read STRUCTURALLY, with the same parse bin/check-docs-data.sh
+      # applies (PyYAML ships on the ubuntu-latest image): the modules entry named by
+      # the filename is deferred iff it carries a `deferred` key. A text grep here
+      # would be a second reader with different semantics for the same file - prose
+      # that merely mentions 'deferred:' must not skip a started row. Every shape
+      # this reader cannot classify - a MISSING fragment, an empty or unparseable
+      # one, no entry for this artifact - is a HARD ERROR, never a fall-through to
+      # started: U27's corpus requires a well-formed fragment per module, so an
+      # unreadable one means the corpus is broken, and running an unstarted module's
+      # build on that evidence would turn a bookkeeping defect into a misleading red.
       - name: Gate on the module's maturity fragment
         id: gate
         run: |
-          frag="docs/data/module-maturity.d/${{ matrix.module }}.yaml"
-          if [ ! -f "$frag" ]; then
-            echo "::error file=$frag::maturity fragment missing - every client module carries one (astubbs#242); restore it rather than deleting it"
-            exit 1
-          fi
-          if grep -qE '^[[:space:]]+deferred:' "$frag"; then
-            echo "deferred=true" >> "$GITHUB_OUTPUT"
-            {
-              echo "## clients: ${{ matrix.language }} - SKIPPED (module wave not started)"
-              echo
-              echo "Derived from \`$frag\` - its \`deferred:\` block, quoted below, is why."
-              echo "To start this row, that module's wave removes the block from that file;"
-              echo "nobody edits clients.yml."
-              echo
-              echo '```yaml'
-              sed -n '/^[[:space:]]*deferred:/,$p' "$frag"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "Row skipped: ${{ matrix.module }} is deferred in $frag (reason in the job summary)"
-          else
-            echo "deferred=false" >> "$GITHUB_OUTPUT"
-          fi
+          python3 - "docs/data/module-maturity.d/${{ matrix.module }}.yaml" \
+                    "${{ matrix.module }}" "${{ matrix.language }}" <<'PYTHON'
+          import os
+          import sys
+
+          import yaml
+
+          frag, module, language = sys.argv[1:4]
+
+
+          def broken(message):
+              """Corpus defect: hard-error like a missing fragment, never fall through to started."""
+              print(f"::error file={frag}::{message}")
+              sys.exit(1)
+
+
+          if not os.path.exists(frag):
+              broken("maturity fragment missing - every client module carries one "
+                     "(astubbs#242); restore it rather than deleting it")
+          try:
+              with open(frag, encoding="utf-8") as handle:
+                  doc = yaml.safe_load(handle)
+          except Exception as exc:
+              broken("maturity fragment does not parse as YAML "
+                     f"({str(exc).splitlines()[0]}) - fix the fragment; this row will not guess")
+          entries = doc.get("modules") if isinstance(doc, dict) else None
+          entry = next((item for item in entries or []
+                        if isinstance(item, dict) and item.get("artifact") == module), None)
+          if entry is None:
+              broken(f"maturity fragment carries no modules entry for artifact '{module}' - "
+                     "the corpus is broken (bin/check-docs-data.sh pins its shape); restore "
+                     "the entry rather than letting this row guess")
+
+          deferred = "deferred" in entry  # the same structural test bin/check-docs-data.sh applies
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"deferred={str(deferred).lower()}\n")
+          if deferred:
+              block = entry["deferred"] if isinstance(entry["deferred"], dict) else {}
+              reason = block.get("reason") or "no reason recorded"
+              lifted_by = block.get("lifted_by") or "not recorded"
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(
+                      f"## clients: {language} - SKIPPED (module wave not started)\n"
+                      "\n"
+                      f"Derived from `{frag}` - its parsed `deferred:` entry is why.\n"
+                      "To start this row, that module's wave removes the block from that file;\n"
+                      "nobody edits clients.yml.\n"
+                      "\n"
+                      f"- **reason:** {reason}\n"
+                      f"- **lifted_by:** {lifted_by}\n"
+                  )
+              print(f"Row skipped: {module} is deferred in {frag} (reason in the job summary)")
+          PYTHON
 
       # ── Shared JVM toolchain: every row drives its build through ./mvnw ──────
       - uses: actions/setup-java@v5
