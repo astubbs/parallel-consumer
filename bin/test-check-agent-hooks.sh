@@ -49,14 +49,15 @@ assert() { # <description> <expected> <actual>
 # ---------------------------------------------------------------------------------------------
 # check-squash-subject.sh
 #
-# The subject the hook must judge is the one `gh` will actually use: the LAST `--subject`, inside
-# the `gh pr merge` command, cross-checked against the PR being merged. Cases 1-6 are the six
-# defects found in review; the rest is behaviour that already worked and must not regress.
-#
-# The fixture numbers are four digits on purpose. bin/check-issue-refs.sh flags an unqualified
-# `#NNN` below 1000 on any added line, and it is right to - these literals are indistinguishable
-# from a real citation. The cases do not depend on the values, so they sit above the threshold.
+# The rule is now "no --subject on gh pr merge at all", so there is nothing to parse and nothing
+# to get subtly wrong. The previous version policed CORRECT use of the flag - last-occurrence
+# semantics, PR-number cross-check, shell quoting - in 343 lines that review found wrong in both
+# directions. These cases exist to stop that creeping back.
 # ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- check-squash-subject.sh ---"
+
 
 verdict() { # <bash-command> -> ALLOW | DENY
     local payload out
@@ -68,196 +69,26 @@ verdict() { # <bash-command> -> ALLOW | DENY
     esac
 }
 
-echo "--- check-squash-subject.sh ---"
+expect() { # <expected> <name> <command>
+    local got; got=$(verdict "$3")
+    if [ "$got" = "$1" ]; then echo "ok:   $2"; else echo "FAIL: $2 (expected $1, got $got)"; fails=$((fails + 1)); fi
+}
 
-# 1. `gh` honours the LAST --subject. Reading the first one allowed the bad subject to land while
-#    reporting the good one as proof it was fine.
-assert "two --subject flags, the LAST one is bad" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "ok (#1299)" --subject "bad no number"')"
+expect DENY  "a bare --subject"                    'gh pr merge 2999 --squash --subject "foo"'
+expect DENY  "--subject even WITH a (#N)"          'gh pr merge 2999 --squash --subject "foo (#2999)"'
+expect DENY  "--subject= equals form"              'gh pr merge 2999 --squash --subject=foo'
+expect ALLOW "--body-file does not touch subject"  'gh pr merge 2999 --squash --body-file b.txt'
+expect ALLOW "no subject override at all"          'gh pr merge 2999 --squash'
+expect ALLOW "not a merge command"                 'gh pr view 2999 --json title'
+expect ALLOW "the word --subject in other text"    'echo "we discussed --subject and why"'
 
-# 2. A `--subject` elsewhere on the command line is not part of the merge. A regex over the whole
-#    line matched the decoy and never looked at the real one.
-assert "a decoy --subject before the merge command" DENY \
-    "$(verdict 'echo --subject "x (#1001)" ; gh pr merge 1299 --squash --subject "bad no number"')"
-
-# 3. Any `(#N)` used to satisfy the check, so the astubbs#206 shape - a number pointing at a
-#    DIFFERENT PR - passed while the right number was sitting in the same command.
-assert "a (#N) naming the wrong PR" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "tooling: thing (#1206)"')"
-
-# 4. Same defect, the commoner spelling of it: an issue reference read as a PR number.
-assert "a (#N) that is an issue reference, not the PR" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "fixes the thing (#1012)"')"
-
-# 5. FALSE POSITIVE. An escaped apostrophe ends the shell string, so a regex capture stopped before
-#    the suffix and denied a correct merge. A PreToolUse deny is hard - the agent cannot argue.
-assert "escaped apostrophe inside the subject" ALLOW \
-    "$(verdict "gh pr merge 1299 --squash --subject 'don'\''t drop it (#1299)'")"
-
-# 6. FALSE POSITIVE. The words "--subject" inside --body text are body content, not a flag.
-assert "the word --subject appearing inside --body" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --body "we discussed --subject and why" --subject "tidy: thing (#1299)"')"
-
-assert "plain correct subject" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "tooling: thing (#1299)"')"
-assert "plain subject with no (#N) at all" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "tooling: thing"')"
-assert "no --subject: GitHub appends the number itself" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --body-file /tmp/body.md')"
-assert "not a merge command at all" ALLOW \
-    "$(verdict 'git commit -m "hello"')"
-
-# Boundaries, pinned so a later tightening is a deliberate act rather than a surprise.
-assert "--subject=VALUE form is read too" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject="tooling: thing"')"
-assert "no PR argument, so no cross-check is possible" ALLOW \
-    "$(verdict 'gh pr merge --squash --subject "tooling: thing (#1206)"')"
-# The convention puts (#N) in the TRAILING slot, and this hook deliberately does not require it -
-# raised in review, kept on purpose. What is unfixable after a merge is a number that is MISSING or
-# points at the WRONG PR, and both of those are denied above. A number that is present and correct
-# but sits mid-subject is a visible, cosmetic deviation that review catches and that still links
-# correctly; a hard PreToolUse deny for it would block "port (#N) to master" and every other
-# unusual-but-fine subject, with no way for the agent to argue. Pinned so tightening it later is a
-# deliberate act - see the BOUNDARY note in .claude/hooks/check-squash-subject.sh.
-assert "a correct (#N) outside the trailing slot is allowed (stated boundary)" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "fix(core) (#1299): detail"')"
-assert "...but the same shape with the WRONG number is still denied" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "fix(core) (#1206): detail"')"
-assert "two merges chained, the second is bad" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "a (#1299)" && gh pr merge 1300 --squash --subject "b"')"
-assert "unbalanced quotes fail OPEN, never on our own parse bug" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "unterminated')"
-# Round three. All three of these were live holes, reproduced before being fixed - `-t` and the
-# URL selector let the mistake through, the unexpanded subject blocked a legitimate merge.
-#
-# 7. `-t` is gh's documented short form of --subject. Reading only the long spelling meant the
-#    parser saw NO override, took the "GitHub appends the number itself" branch, and allowed a
-#    subject that lands verbatim with no number - the astubbs#206 shape via another spelling.
-assert "-t is --subject: no number is still denied" DENY \
-    "$(verdict 'gh pr merge 1299 --squash -t "tooling: thing with no number"')"
-assert "-tVALUE attached form" DENY \
-    "$(verdict 'gh pr merge 1299 --squash -t"tooling: thing with no number"')"
-assert "-t=VALUE form" DENY \
-    "$(verdict 'gh pr merge 1299 --squash -t="tooling: thing with no number"')"
-assert "-t inside a combined shorthand group" DENY \
-    "$(verdict 'gh pr merge 1299 --squash -st "tooling: thing with no number"')"
-assert "-t carrying the right number is allowed" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash -t "tooling: thing (#1299)"')"
-assert "-t naming the WRONG PR" DENY \
-    "$(verdict 'gh pr merge 1299 --squash -t "tooling: thing (#1206)"')"
-# `t` here is part of -b's VALUE, not a flag. Reading it as a subject would deny a merge whose
-# real subject is fine - so the shorthand scan stops at the first value-taking letter.
-assert "a 't' inside another short flag's value is not a subject" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash -bt --subject "tooling: thing (#1299)"')"
-
-# 8. FALSE POSITIVE. shlex does not expand shell variables, so the hook was judging a string that
-#    is not the one gh will send - and denying it. Every other unresolvable case fails open; this
-#    one hard-blocked a legitimate merge, which the header calls the more expensive direction.
-assert "an unexpanded \$VAR subject fails OPEN" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "$SUBJECT"')"
-assert "an unexpanded command substitution fails OPEN" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "$(cat msg.txt)"')"
-
-# 9. The PR selector may be a number, a URL or a branch. Only `isdigit()` was read, so a URL left
-#    the cross-check switched off entirely and ANY number satisfied it - including a wrong one.
-assert "a URL selector still cross-checks the number" DENY \
-    "$(verdict 'gh pr merge https://github.com/astubbs/parallel-consumer/pull/1299 --squash --subject "thing (#1206)"')"
-assert "a URL selector with the right number is allowed" ALLOW \
-    "$(verdict 'gh pr merge https://github.com/astubbs/parallel-consumer/pull/1299 --squash --subject "thing (#1299)"')"
-# A branch name carries no number and resolving it needs the network, so any (#N) is accepted -
-# the same stated boundary as a merge with no selector at all. Pinned, not incidental.
-assert "a branch-name selector cannot be cross-checked (stated boundary)" ALLOW \
-    "$(verdict 'gh pr merge some-branch --squash --subject "thing (#1206)"')"
-assert "a branch-name selector with NO number is still denied" DENY \
-    "$(verdict 'gh pr merge some-branch --squash --subject "thing with no number"')"
-# A flag VALUE that looks like a PR number must not be read as the selector. Discriminating on
-# purpose: read 1206 as the PR and the correct (#1299) becomes a mismatch, so the old parser
-# hard-denied a perfectly good merge.
-assert "a flag value is not mistaken for the PR selector" ALLOW \
-    "$(verdict 'gh pr merge --body 1206 --squash 1299 --subject "thing (#1299)"')"
-
-# Round four. Segmenting the command with a regex over the RAW line found `gh pr merge` inside
-# quoted body text, cut the line into two slices that each had unbalanced quotes, and fail-opened
-# both - so the real --subject was never judged. Body text could switch the hook off. Segmentation
-# now runs over shlex TOKENS, where a quoted body is a single token and cannot look like a command.
-assert "the phrase 'gh pr merge' inside --body does not disable the guard" DENY \
-    "$(verdict 'gh pr merge 1299 --body "text gh pr merge here" --subject "bad no number"')"
-assert "...and the same body with a correct subject still passes" ALLOW \
-    "$(verdict 'gh pr merge 1299 --body "text gh pr merge here" --subject "tooling: thing (#1299)"')"
-assert "the phrase inside the SUBJECT does not disable the guard either" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "how to gh pr merge safely"')"
-# An absolute path to gh is still gh; a word merely ending in those letters is not a command.
-assert "an absolute path to gh is still matched" DENY \
-    "$(verdict '/usr/local/bin/gh pr merge 1299 --squash --subject "tooling: thing"')"
-
-# Round five. A slice ran to the next `gh pr merge`, so it swallowed everything after `&&`/`;`/`|`
-# and an unrelated command's --subject became "the last one" - in BOTH directions.
-assert "a decoy --subject after && cannot vouch for a bad merge" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "bad" && echo --subject "decoy (#1299)"')"
-assert "a later --subject after && cannot condemn a good merge" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "good (#1299)" && echo --subject "no number"')"
-assert "a pipe also ends the merge slice" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "good (#1299)" | tee --subject "x"')"
-
-# `fix/pull/1299` is a legal branch name (`git check-ref-format --branch` accepts it). Reading it
-# as a PR URL cross-checked the merge against 1299 and DENIED a correct subject - a false positive.
-assert "a branch named like a URL is not read as one" ALLOW \
-    "$(verdict 'gh pr merge fix/pull/1299 --squash --subject "tooling: thing (#1300)"')"
-assert "a real URL selector still cross-checks" DENY \
-    "$(verdict 'gh pr merge https://github.com/astubbs/parallel-consumer/pull/1299 --squash --subject "w (#1206)"')"
-
-# Round six. Registering the guard for EVERY Bash call (round five) widened what it must get right,
-# and review found seven more. Each was reproduced first; all seven go red against the prior parser.
-assert "a newline ends the merge slice, like any other boundary" DENY \
-    "$(verdict 'gh pr merge 1299 --subject "bad"
-echo --subject "decoy (#1299)"')"
-assert "a decoy after # is a comment, not a subject" DENY \
-    "$(verdict 'gh pr merge 1299 --subject "bad" # decoy --subject "x (#1299)"')"
-# FALSE POSITIVE, and one the hook created for itself by dropping its `if`: printing a command is
-# not running it, and hard-denying a diagnostic echo is exactly what an agent cannot argue with.
-assert "echo'ing the command is text, not a merge" ALLOW \
-    "$(verdict 'echo gh pr merge 1299 --subject bad')"
-assert "gh in command position after && is still a merge" DENY \
-    "$(verdict 'echo ready && gh pr merge 1299 --subject "bad no number"')"
-# `gh -R owner/repo pr merge ...` is valid and the local CLI accepts it; requiring `gh pr merge`
-# to be adjacent silently missed it.
-assert "a global flag before the subcommand is still a merge" DENY \
-    "$(verdict 'gh -R astubbs/parallel-consumer pr merge 1299 --subject "bad"')"
-assert "...and the same shape with a correct subject passes" ALLOW \
-    "$(verdict 'gh -R astubbs/parallel-consumer pr merge 1299 --subject "ok (#1299)"')"
-# AGENTS.md reserves the trailing parenthesised slot for the PR number ALONE - two bare numbers
-# recreate the issue-vs-PR ambiguity the convention exists to remove, whichever order they are in.
-assert "an extra (#N) alongside the right one is rejected" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "fix (#1206) (#1299)"')"
-assert "...in either order" DENY \
-    "$(verdict 'gh pr merge 1299 --squash --subject "fix (#1299) (#1206)"')"
-# shlex strips quoting, so a literal dollar looked exactly like an unresolved expansion and the
-# subject failed open with no number at all. Only real expansion syntax fails open now.
-assert "a literal \$5 is judged, not treated as an expansion" DENY \
-    "$(verdict "gh pr merge 1299 --squash --subject 'reduce cost to \$5'")"
-assert "a real \$VAR expansion still fails OPEN" ALLOW \
-    "$(verdict 'gh pr merge 1299 --squash --subject "$SUBJECT"')"
-
-# Round seven. Both are consequences of running on every Bash call: the parser now sees commands
-# it never used to, so what it treats as a command boundary and as an executable both matter more.
-#
-# FALSE POSITIVE. posix lexing strips quoting, so the `(` in an ordinary string argument looked
-# exactly like a subshell, reset command position, and hard-denied a harmless command.
-assert "a QUOTED paren is an argument, not a subshell" ALLOW \
-    "$(verdict 'echo "(" gh pr merge 1299 --subject bad')"
-assert "...while a real subshell still is one" DENY \
-    "$(verdict '( gh pr merge 1299 --subject "bad no number" )')"
-# `command gh ...` runs gh - Bash's own `help command` says so - and cleared command position.
-assert "a merge run through the 'command' builtin is still a merge" DENY \
-    "$(verdict 'command gh pr merge 1299 --subject "bad no number"')"
-assert "...and passes with the right number" ALLOW \
-    "$(verdict 'command gh pr merge 1299 --subject "tooling: thing (#1299)"')"
-assert "other execution wrappers count too" DENY \
-    "$(verdict 'sudo gh pr merge 1299 --subject "bad no number"')"
-
-assert "a non-Bash tool is ignored" ALLOW \
-    "$(printf '%s' '{"tool_name":"Read","tool_input":{"command":"gh pr merge 1299 --subject \"x\""}}' \
-        | "$HOOKS/check-squash-subject.sh" 2>/dev/null | grep -c '"deny"' | sed 's/^0$/ALLOW/;s/^[1-9].*/DENY/')"
+# Negative control: prove it can deny. A guard that has never fired proves nothing (bin/AGENTS.md).
+if [ "$(verdict 'gh pr merge 2999 --squash --subject "x"')" = DENY ] \
+   && [ "$(verdict 'gh pr merge 2999 --squash')" = ALLOW ]; then
+    echo "ok:   the guard distinguishes overridden from not"
+else
+    echo "FAIL: the guard does not distinguish overridden from not"; fails=$((fails + 1))
+fi
 
 # ---------------------------------------------------------------------------------------------
 # pre-commit-gate.sh
