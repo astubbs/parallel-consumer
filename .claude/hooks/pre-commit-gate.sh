@@ -41,7 +41,15 @@
 
 set -euo pipefail
 
-payload=$(cat)
+# THE PAYLOAD ARRIVES BY FILE, NOT BY ARGV. Linux caps a single argv string at ~128 KiB
+# (MAX_ARG_STRLEN), and a hook payload carries the whole prompt or command - a pasted diff or log
+# clears that easily. Passing it as an argument then fails with "Argument list too long" BEFORE
+# python starts, and since these hooks are built to fail open, the failure is silent: the hook
+# simply stops doing its job on exactly the large inputs a human is most likely to be mid-decision
+# on. A temp file has no such limit. mktemp is 0600 and the trap removes it.
+payload_file=$(mktemp)
+trap 'rm -f "$payload_file"' EXIT
+cat > "$payload_file"
 
 project_dir="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 gate="$project_dir/.githooks/pre-commit"
@@ -56,10 +64,11 @@ gate="$project_dir/.githooks/pre-commit"
 # token in a command line that merely CONTAINS a commit (`echo -n`, an unquoted `$(...)`), and a
 # bypass triggered by accident is a gate that silently stopped running. The long form is what the
 # hook headers and docs tell people to type, and it is unambiguous.
-if python3 - "$payload" <<'PY'
+if python3 - "$payload_file" <<'PY'
 import json, re, shlex, sys
 try:
-    cmd = json.loads(sys.argv[1]).get("tool_input", {}).get("command", "")
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        cmd = json.load(fh).get("tool_input", {}).get("command", "")
 except Exception:
     sys.exit(0)                      # unparseable payload: treat as bypass, never block on our bug
 try:

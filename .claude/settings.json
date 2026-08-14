@@ -23,7 +23,6 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(gh pr merge *)",
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-squash-subject.sh\""
           }
         ]

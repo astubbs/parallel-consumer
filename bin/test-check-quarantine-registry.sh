@@ -65,8 +65,11 @@ JAVA
 annotated "$fixture/parallel-consumer-core/src/test/java/Ordinary.java"
 
 # A sibling worktree: a full checkout of a DIFFERENT branch, carrying annotations this branch's
-# registry has never heard of. This is the file the whole exclusion exists for.
+# registry has never heard of. This is the file the whole exclusion exists for. BOTH worktree roots
+# get one - .gitignore names `.claude/worktrees` and `/.worktrees/`, and the first version of this
+# fix excluded only the first, which review caught precisely because no fixture covered the second.
 annotated "$fixture/.claude/worktrees/some-other-branch/parallel-consumer-core/src/test/java/Sibling.java"
+annotated "$fixture/.worktrees/another-branch/parallel-consumer-core/src/test/java/OtherRoot.java"
 
 # Cheap neighbours of the same shape, pinned so removing either exclusion is a deliberate act.
 annotated "$fixture/target/generated-sources/Generated.java"
@@ -97,6 +100,8 @@ assert "a file on this branch is scanned" YES \
     "$(contains "$found" "parallel-consumer-core/src/test/java/Ordinary.java")"
 assert "a sibling worktree under .claude is NOT scanned" NO \
     "$(contains "$found" ".claude/worktrees/some-other-branch/parallel-consumer-core/src/test/java/Sibling.java")"
+assert "a sibling worktree under .worktrees is NOT scanned" NO \
+    "$(contains "$found" ".worktrees/another-branch/parallel-consumer-core/src/test/java/OtherRoot.java")"
 assert "build output under target is NOT scanned" NO \
     "$(contains "$found" "target/generated-sources/Generated.java")"
 assert "a copy under .git is NOT scanned" NO \
@@ -117,6 +122,7 @@ audit_names() { # <substring> -> YES | NO
 
 assert "the audit lists a file on this branch" YES "$(audit_names "Ordinary.java")"
 assert "the audit does NOT list a sibling worktree" NO "$(audit_names "Sibling.java")"
+assert "the audit does NOT list the other worktree root" NO "$(audit_names "OtherRoot.java")"
 assert "the audit does NOT list build output" NO "$(audit_names "Generated.java")"
 
 echo "--- negative control: the fixture must reach the defect ---"
@@ -127,6 +133,8 @@ echo "--- negative control: the fixture must reach the defect ---"
 old=$(previous_implementation | sed 's|^\./||' | sort)
 assert "the PREVIOUS implementation does leak the sibling worktree" YES \
     "$(contains "$old" ".claude/worktrees/some-other-branch/parallel-consumer-core/src/test/java/Sibling.java")"
+assert "the PREVIOUS implementation does leak the other worktree root" YES \
+    "$(contains "$old" ".worktrees/another-branch/parallel-consumer-core/src/test/java/OtherRoot.java")"
 assert "the PREVIOUS implementation does leak the .git copy" YES \
     "$(contains "$old" ".git/some-tooling-copy/Stashed.java")"
 assert "the PREVIOUS implementation already excluded target" NO \

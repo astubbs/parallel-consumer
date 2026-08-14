@@ -24,7 +24,15 @@
 
 set -euo pipefail
 
-payload=$(cat)
+# THE PAYLOAD ARRIVES BY FILE, NOT BY ARGV. Linux caps a single argv string at ~128 KiB
+# (MAX_ARG_STRLEN), and a hook payload carries the whole prompt or command - a pasted diff or log
+# clears that easily. Passing it as an argument then fails with "Argument list too long" BEFORE
+# python starts, and since these hooks are built to fail open, the failure is silent: the hook
+# simply stops doing its job on exactly the large inputs a human is most likely to be mid-decision
+# on. A temp file has no such limit. mktemp is 0600 and the trap removes it.
+payload_file=$(mktemp)
+trap 'rm -f "$payload_file"' EXIT
+cat > "$payload_file"
 
 project_dir="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 checklist="$project_dir/docs/merge-checklist.md"
@@ -32,10 +40,11 @@ checklist="$project_dir/docs/merge-checklist.md"
 
 # Match merge-prep intent. Deliberately broad on the verbs and narrow on the nouns: a false positive
 # costs a few hundred tokens of checklist, a false negative costs the thing this exists to prevent.
-if ! python3 - "$payload" <<'PY'
+if ! python3 - "$payload_file" <<'PY'
 import json, re, sys
 try:
-    prompt = json.loads(sys.argv[1]).get("prompt", "")
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        prompt = json.load(fh).get("prompt", "")
 except Exception:
     sys.exit(1)
 pattern = re.compile(

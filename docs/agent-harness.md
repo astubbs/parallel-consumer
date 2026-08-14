@@ -127,6 +127,26 @@ non-zero:
 And the positive control, which is the half that is easy to forget - after moving `if`, a
 `git commit` prompt still fires the gate, so the fix filtered the hook rather than disabling it.
 
+### ...and `if` matches a PREFIX, so only one of the two hooks can use it
+
+`if: "Bash(gh pr merge *)"` fires only when the command *starts* with `gh pr merge`. Every other
+shape the merge guard exists for - `/usr/local/bin/gh pr merge ...`, `echo ready && gh pr merge ...`
+- never reached it. That is worse than a plain gap: `bin/test-check-agent-hooks.sh` asserted those
+shapes were denied, and they were, *by the script* - which the harness was never going to invoke for
+them. **A self-test can only prove what the script does; whether the script is reached is a
+different question, and it needs asking separately.**
+
+So the two hooks are registered differently, on purpose:
+
+| Hook | `if` | Why |
+|---|---|---|
+| `check-squash-subject.sh` | **none** - runs on every Bash call | It can only ever allow, or deny a real `gh pr merge`. A `grep` for `merge` in the payload rejects the overwhelming majority before python starts, so the cost is a shell test. |
+| `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`. Firing it on every Bash call is the outage described above - and it must stay prefix-matched anyway, because it gates *the session's* repository, which is only the right one when the command has no `cd` in front of it. |
+
+The `git commit` case that `if` therefore misses (`cd sub && git commit`) is covered by
+`.githooks/pre-commit`, which git runs inside the target repository. That is the layering working
+as intended, not a hole - see *Known gaps*.
+
 ## What is wired up today
 
 **`.githooks/pre-commit`** - runs the fast read-only gates (~1.5s total): copyright headers, issue

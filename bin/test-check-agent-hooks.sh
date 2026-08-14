@@ -190,6 +190,22 @@ assert "the phrase inside the SUBJECT does not disable the guard either" DENY \
 assert "an absolute path to gh is still matched" DENY \
     "$(verdict '/usr/local/bin/gh pr merge 1299 --squash --subject "tooling: thing"')"
 
+# Round five. A slice ran to the next `gh pr merge`, so it swallowed everything after `&&`/`;`/`|`
+# and an unrelated command's --subject became "the last one" - in BOTH directions.
+assert "a decoy --subject after && cannot vouch for a bad merge" DENY \
+    "$(verdict 'gh pr merge 1299 --squash --subject "bad" && echo --subject "decoy (#1299)"')"
+assert "a later --subject after && cannot condemn a good merge" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash --subject "good (#1299)" && echo --subject "no number"')"
+assert "a pipe also ends the merge slice" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash --subject "good (#1299)" | tee --subject "x"')"
+
+# `fix/pull/1299` is a legal branch name (`git check-ref-format --branch` accepts it). Reading it
+# as a PR URL cross-checked the merge against 1299 and DENIED a correct subject - a false positive.
+assert "a branch named like a URL is not read as one" ALLOW \
+    "$(verdict 'gh pr merge fix/pull/1299 --squash --subject "tooling: thing (#1300)"')"
+assert "a real URL selector still cross-checks" DENY \
+    "$(verdict 'gh pr merge https://github.com/astubbs/parallel-consumer/pull/1299 --squash --subject "w (#1206)"')"
+
 assert "a non-Bash tool is ignored" ALLOW \
     "$(printf '%s' '{"tool_name":"Read","tool_input":{"command":"gh pr merge 1299 --subject \"x\""}}' \
         | "$HOOKS/check-squash-subject.sh" 2>/dev/null | grep -c '"deny"' | sed 's/^0$/ALLOW/;s/^[1-9].*/DENY/')"
@@ -262,9 +278,13 @@ assert "absent gate script fails OPEN" 0 \
 echo
 echo "--- inject-merge-checklist.sh ---"
 
+# The prompt reaches the JSON builder on STDIN, never as argv - the harness has the same ~128 KiB
+# MAX_ARG_STRLEN ceiling as the hook it is testing, and a test that dies building its own fixture
+# would report the hook broken (or fixed) for reasons that have nothing to do with the hook.
 injected() { # <prompt> -> YES | NO
     local out
-    out=$(python3 -c 'import json,sys; print(json.dumps({"prompt":sys.argv[1]}))' "$1" \
+    out=$(printf '%s' "$1" \
+        | python3 -c 'import json,sys; print(json.dumps({"prompt":sys.stdin.read()}))' \
         | CLAUDE_PROJECT_DIR="$REPO_ROOT" "$HOOKS/inject-merge-checklist.sh" 2>/dev/null)
     [ -n "$out" ] && echo YES || echo NO
 }
@@ -293,6 +313,12 @@ assert "the checklist is injected verbatim from its own file" verbatim "$got"
 
 preamble=${body%%$'\n'*}
 if [ "${#preamble}" -le 200 ]; then got=pointer_only; else got="carries its own advice (${#preamble} chars)"; fi
+# A hook payload carries the whole prompt. Passed as argv it hit Linux's ~128 KiB MAX_ARG_STRLEN
+# and died with "Argument list too long" BEFORE python started - so on exactly the long, pasted-in
+# prompts a human is most likely to be mid-decision on, the checklist silently did not appear.
+big_prompt="ready to merge $(head -c 150000 /dev/zero | tr '\0' 'x')"
+assert "a 150 KB merge-prep prompt is still injected" YES "$(injected "$big_prompt")"
+
 assert "the preamble points at the doc rather than restating it" pointer_only "$got"
 
 echo

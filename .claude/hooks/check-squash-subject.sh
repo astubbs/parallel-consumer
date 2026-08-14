@@ -64,13 +64,30 @@
 
 set -euo pipefail
 
-payload=$(cat)
+# THE PAYLOAD ARRIVES BY FILE, NOT BY ARGV. Linux caps a single argv string at ~128 KiB
+# (MAX_ARG_STRLEN), and a hook payload carries the whole prompt or command - a pasted diff or log
+# clears that easily. Passing it as an argument then fails with "Argument list too long" BEFORE
+# python starts, and since these hooks are built to fail open, the failure is silent: the hook
+# simply stops doing its job on exactly the large inputs a human is most likely to be mid-decision
+# on. A temp file has no such limit. mktemp is 0600 and the trap removes it.
+payload_file=$(mktemp)
+trap 'rm -f "$payload_file"' EXIT
+cat > "$payload_file"
 
-python3 - "$payload" <<'PY'
+# The matcher in .claude/settings.json can only match a command PREFIX, which misses every shape
+# this hook is built for - `/usr/local/bin/gh pr merge ...`, `echo x && gh pr merge ...`. So the
+# hook is registered for every Bash call and does its own filtering, and this is the cheap first
+# cut: no `merge` anywhere in the payload means no `gh pr merge`, decided without starting python.
+if ! grep -q merge "$payload_file"; then
+    exit 0
+fi
+
+python3 - "$payload_file" <<'PY'
 import json, re, shlex, sys
 
 try:
-    tool = json.loads(sys.argv[1])
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        tool = json.load(fh)
 except Exception:
     sys.exit(0)                      # unparseable: never block on our own bug
 
@@ -89,7 +106,11 @@ SHORT_VALUE_FLAGS = {"t": "--subject", "b": "--body", "F": "--body-file",
                      "A": "--author-email", "R": "--repo"}
 
 # `gh pr merge [<number> | <url> | <branch>]`. Only the first two carry a number to cross-check.
-PR_URL = re.compile(r"/pull/(\d+)")
+# ANCHORED TO A REAL URL. Searching any non-numeric selector for `/pull/<digits>` also matched a
+# perfectly legal BRANCH name - `git check-ref-format --branch fix/pull/1299` accepts it - so
+# merging that branch was cross-checked against 1299 and a correct subject naming the real PR was
+# DENIED. A false positive, in the class this hook weights hardest.
+PR_URL = re.compile(r"^https?://\S+/pull/(\d+)(?:[/?#]|$)")
 
 # A subject that still contains a shell variable or command substitution when we see it. `shlex`
 # does not expand either, so the text we are holding is not the text `gh` will send.
@@ -102,10 +123,22 @@ UNEXPANDED = re.compile(r"[$`]")
 # slices that each had unbalanced quotes, so both fail-opened and the real `--subject` was never
 # judged at all. Splitting first and matching on tokens makes the body a single token, so text
 # inside it can no longer look like a command.
+# `shlex.split` alone will not do: with default settings `a;b` is ONE token, so shell operators
+# have to be lexed as tokens in their own right for the slice to end at them. `commenters` is
+# cleared because a `#` in an unquoted subject is text here, not the start of a comment.
 try:
-    tokens = shlex.split(cmd)
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    tokens = list(lexer)
 except ValueError:
     sys.exit(0)                      # unbalanced quotes: our own parse limit, never block on it
+
+# Where one command ends and the next begins. A slice that ran to the next `gh pr merge` instead
+# swallowed everything after `&&`/`;`/`|`, so an unrelated later command's `--subject` became "the
+# last one" - a decoy could vouch for a bad merge, and a trailing `echo --subject "no number"`
+# could condemn a good one. Both directions, from the same missing boundary.
+OPERATORS = {"&&", "||", ";", ";;", "|", "&", "\n"}
 
 
 def is_gh(token):
@@ -116,7 +149,17 @@ starts = [i for i in range(len(tokens) - 2)
           if is_gh(tokens[i]) and tokens[i + 1] == "pr" and tokens[i + 2] == "merge"]
 if not starts:
     sys.exit(0)
-bounds = list(zip(starts, starts[1:] + [len(tokens)]))
+
+
+def slice_end(start):
+    """One `gh pr merge` runs until a shell operator or the next merge - whichever comes first."""
+    for j in range(start + 3, len(tokens)):
+        if tokens[j] in OPERATORS or j in starts:
+            return j
+    return len(tokens)
+
+
+bounds = [(start, slice_end(start)) for start in starts]
 
 
 def subjects_and_pr(slice_tokens):
