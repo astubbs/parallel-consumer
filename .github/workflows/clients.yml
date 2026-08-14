@@ -1,0 +1,274 @@
+# Proxy-client language matrix: one row per non-Java client language (astubbs#242).
+# The three Java client modules are in the Maven reactor and are covered by maven.yml's
+# ordinary lanes; Kotlin is JVM but NOT Java, so it rides this matrix like the others -
+# its row just needs no foreign toolchain beyond the shared JDK.
+#
+# THIS FILE HAS ONE WRITER, AND IT ALREADY RAN. It was seeded complete by U23 of
+# docs/plans/2026-08-14-001-feat-language-proxy-plan.md, and no language wave edits it:
+# a row flips from skipped to running when its module's OWN maturity fragment
+# (docs/data/module-maturity.d/<module>.yaml) drops its `deferred:` block - the gate
+# step below derives the skip from that file on every run. Editing this workflow to
+# start a wave is therefore always wrong; edit your module's fragment instead.
+#
+# Skip semantics (KTD35): a row whose module's wave has not begun runs its gate step,
+# writes the fragment's stated reason into the job summary, and skips everything else -
+# green-as-skipped, never red, so a red row during the fan-out always means a real
+# failure in a STARTED module. fail-fast is off so one language's breakage cannot
+# hide another's.
+#
+# Caching strategy: same discipline as maven.yml - explicit cache/restore + cache/save
+# with a rotating (run_id-suffixed) save key, restore-keys as fallback. Do NOT switch a
+# row to a setup-* action's built-in cache (`cache: maven`, setup-go's `cache: true`,
+# `bundler-cache: true`): those use immutable keys and can freeze an incomplete cache
+# permanently. See the header of maven.yml and
+# docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md
+# The Maven cache is restore-only here; maven.yml's prepare-deps job owns saving it.
+# Each language's own package cache is per-language, keyed clients-<language>-.
+#
+# Pinning: GitHub-owned actions follow the repo's one-tag-everywhere rule
+# (bin/check-action-versions.sh; Dependabot bumps all uses together). Every non-GitHub
+# action is pinned to a commit SHA, matching the astubbs/* precedent in maven.yml.
+# Language toolchains are exact versions in the matrix - a version that stops resolving
+# fails loudly at setup, per the plan's pinnability check (ASM8), and the wave that
+# starts a module owns bumping its pins from then on. Nothing here uses
+# pull_request_target, and nothing here may ever pair it with a mutable ref.
+
+name: Clients
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  client:
+    name: "clients: ${{ matrix.language }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Fail the row, not the matrix: one language's breakage must not hide another's.
+      fail-fast: false
+      matrix:
+        include:
+          # Fields:
+          #   language    - matrix key; also names the row and the per-language cache
+          #   module      - Maven artifactId, and the maturity fragment's filename stem
+          #   toolchain   - exact toolchain version the language's setup step installs
+          #   scanner     - the language-native static-analysis tool (step title)
+          #   scanner-cmd - how to run it, from the module directory
+          #   cache-path  - the language's package cache ('' = no per-language cache)
+          #   lockfile    - hashFiles() pattern keying that cache (empty hash until the
+          #                 wave lands one; restore-keys covers the gap)
+          - language: go
+            module: parallel-consumer-proxy-client-go
+            toolchain: '1.25.0'
+            scanner: go vet
+            scanner-cmd: go vet ./...
+            cache-path: ~/go/pkg/mod
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/go.sum
+          - language: python
+            module: parallel-consumer-proxy-client-python
+            toolchain: '3.13.5'
+            scanner: ruff
+            scanner-cmd: python -m pip install --quiet ruff==0.9.2 && ruff check .
+            cache-path: ~/.cache/pip
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/pyproject.toml
+          - language: swift
+            module: parallel-consumer-proxy-client-swift
+            toolchain: '6.1'
+            # swift-format ships inside the Swift 6 toolchain - no extra install to pin.
+            scanner: swift-format
+            scanner-cmd: swift format lint --strict --recursive Sources
+            cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/.build
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Package.resolved
+          - language: rust
+            module: parallel-consumer-proxy-client-rust
+            toolchain: '1.88.0'
+            scanner: clippy
+            scanner-cmd: cargo clippy --all-targets -- -D warnings
+            cache-path: ~/.cargo/registry
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/Cargo.lock
+          - language: dotnet
+            module: parallel-consumer-proxy-client-dotnet
+            toolchain: '8.0.404'
+            # Roslyn analyzers, driven by the SDK's own format tool - nothing external.
+            scanner: dotnet format analyzers
+            scanner-cmd: dotnet format analyzers --verify-no-changes
+            cache-path: ~/.nuget/packages
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/**/*.csproj
+          - language: typescript
+            module: parallel-consumer-proxy-client-typescript
+            toolchain: '22.17.0'
+            # --no-install: eslint and its config come from the module's own pinned
+            # devDependencies (the wave owns package-lock.json), never an ambient npx fetch.
+            scanner: eslint
+            scanner-cmd: npx --no-install eslint .
+            cache-path: ~/.npm
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript/package-lock.json
+          - language: kotlin
+            module: parallel-consumer-proxy-client-kotlin
+            # JVM language: the shared Temurin 17 step below is its whole toolchain,
+            # and the Maven cache is its dependency cache.
+            toolchain: ''
+            scanner: detekt
+            scanner-cmd: >-
+              curl -sSL --fail -o /tmp/detekt-cli.jar
+              https://github.com/detekt/detekt/releases/download/v1.23.7/detekt-cli-1.23.7-all.jar
+              && java -jar /tmp/detekt-cli.jar --input src --build-upon-default-config
+            cache-path: ''
+            lockfile: ''
+          - language: ruby
+            module: parallel-consumer-proxy-client-ruby
+            toolchain: '3.4.4'
+            scanner: rubocop
+            scanner-cmd: gem install --quiet rubocop -v 1.69.2 && rubocop
+            cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/vendor/bundle
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/Gemfile.lock
+          - language: cpp
+            module: parallel-consumer-proxy-client-cpp
+            # Compiler and cmake come from the runner image; the image version is the
+            # pin, which is the loosest in the matrix - the C++ wave tightens it if the
+            # image's drift ever bites.
+            toolchain: ''
+            scanner: cppcheck
+            scanner-cmd: cppcheck --enable=warning,style,performance --error-exitcode=1 --inline-suppr src
+            cache-path: ''
+            lockfile: ''
+    steps:
+      - uses: actions/checkout@v6
+
+      # ── The gate: derive this row's fate from its module's own fragment ──────
+      # docs/data/module-maturity.d/<module>.yaml carries a `deferred:` block (with
+      # reason and lifted_by) while the module is a seeded-but-unstarted skeleton.
+      # While it is present, this row skips and quotes the reason; the wave that
+      # starts the module removes the block from that one file - which it already
+      # owns - and the row starts gating for real. A MISSING fragment is a hard
+      # error, not a green light: U27's corpus requires one per module, so its
+      # absence means the corpus is broken, and running an unstarted module's build
+      # on that evidence would turn a bookkeeping defect into a misleading red.
+      - name: Gate on the module's maturity fragment
+        id: gate
+        run: |
+          frag="docs/data/module-maturity.d/${{ matrix.module }}.yaml"
+          if [ ! -f "$frag" ]; then
+            echo "::error file=$frag::maturity fragment missing - every client module carries one (astubbs#242); restore it rather than deleting it"
+            exit 1
+          fi
+          if grep -qE '^[[:space:]]+deferred:' "$frag"; then
+            echo "deferred=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## clients: ${{ matrix.language }} - SKIPPED (module wave not started)"
+              echo
+              echo "Derived from \`$frag\` - its \`deferred:\` block, quoted below, is why."
+              echo "To start this row, that module's wave removes the block from that file;"
+              echo "nobody edits clients.yml."
+              echo
+              echo '```yaml'
+              sed -n '/^[[:space:]]*deferred:/,$p' "$frag"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Row skipped: ${{ matrix.module }} is deferred in $frag (reason in the job summary)"
+          else
+            echo "deferred=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Shared JVM toolchain: every row drives its build through ./mvnw ──────
+      - uses: actions/setup-java@v5
+        if: steps.gate.outputs.deferred == 'false'
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see caching strategy note at top of file
+      - name: Restore Maven cache (restore-only; prepare-deps in maven.yml owns saving)
+        if: steps.gate.outputs.deferred == 'false'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # ── Per-language toolchain setup, exact-pinned via matrix.toolchain ──────
+      # `uses:` cannot be parameterised by the matrix, so each setup action gets a
+      # language-guarded step; everything after them is matrix-driven. Kotlin needs
+      # no step here (the shared JDK is its toolchain), and C++ compiles with the
+      # runner image's compilers.
+      - uses: actions/setup-go@v7
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'go'
+        with:
+          go-version: ${{ matrix.toolchain }}
+          cache: false   # explicit per-language cache below - see header
+      - uses: actions/setup-python@v7
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'python'
+        with:
+          python-version: ${{ matrix.toolchain }}
+      - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3.0.0-beta.1 - the v2 line stops at Swift 5.x
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'swift'
+        with:
+          swift-version: ${{ matrix.toolchain }}
+      - name: Set up Rust toolchain (rustup, preinstalled on the runner image)
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'rust'
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy
+          rustup default ${{ matrix.toolchain }}
+      - uses: actions/setup-dotnet@v6
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'dotnet'
+        with:
+          dotnet-version: ${{ matrix.toolchain }}
+      - uses: actions/setup-node@v7
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'typescript'
+        with:
+          node-version: ${{ matrix.toolchain }}
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'ruby'
+        with:
+          ruby-version: ${{ matrix.toolchain }}
+          bundler-cache: false   # explicit per-language cache below - see header
+      - name: Install cppcheck (compilers and cmake come with the runner image)
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'cpp'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cppcheck
+
+      # ── Per-language dependency cache (explicit restore/save, rotating key) ──
+      - name: Restore ${{ matrix.language }} cache
+        if: steps.gate.outputs.deferred == 'false' && matrix.cache-path != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ matrix.cache-path }}
+          key: clients-${{ matrix.language }}-${{ hashFiles(matrix.lockfile) }}
+          restore-keys: |
+            clients-${{ matrix.language }}-
+
+      # ── Build and test ───────────────────────────────────────────────────────
+      # The Maven wrapper drives everything: -Dpc.foreignClients activates the
+      # foreign-clients profile in the clients aggregator, whose exec bindings run
+      # this module's native build (compile phase) and tests (test phase). This row
+      # is exactly the place that flag is safe - the toolchain above is guaranteed
+      # present here, which is what lets it default OFF everywhere else. A failing
+      # native build exits non-zero and fails the row; Kotlin builds as ordinary
+      # Maven and the flag is a no-op for it.
+      - name: Build and test (${{ matrix.module }})
+        if: steps.gate.outputs.deferred == 'false'
+        run: ./mvnw --batch-mode -Pci test -pl :${{ matrix.module }} -am -Dpc.foreignClients
+
+      # ── Language-native static analysis ──────────────────────────────────────
+      - name: Static analysis (${{ matrix.scanner }})
+        if: steps.gate.outputs.deferred == 'false'
+        working-directory: parallel-consumer-proxy-clients/${{ matrix.module }}
+        run: ${{ matrix.scanner-cmd }}
+
+      - name: Save ${{ matrix.language }} cache (rotating key)
+        if: success() && steps.gate.outputs.deferred == 'false' && matrix.cache-path != ''
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ matrix.cache-path }}
+          key: clients-${{ matrix.language }}-${{ hashFiles(matrix.lockfile) }}-${{ github.run_id }}
