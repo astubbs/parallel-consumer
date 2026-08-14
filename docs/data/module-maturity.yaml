@@ -41,6 +41,10 @@ release_validation:
     - Verify the confluentinc#857 deadlock resolution with RebalanceEoSDeadlockTest and the post-fix parallel-integration proof.
     - Verify each alpha module's artifact boundary and user-facing setup against the built release artifact.
   on_failure: Do not cut the release; amend this data and the README to match the actual release posture.
+# Rows for modules that land in their own wave live as per-module fragments in module-maturity.d/,
+# one file per module, merged into this corpus by bin/check-docs-data.sh - the convention is stated
+# at 'fragment_collection' in schema.yaml. This file keeps only the shared preamble above and the
+# rows that predate the split; deferrals live in the fragments, never here.
 modules:
   - artifact: parallel-consumer-core
     maturity: production-use

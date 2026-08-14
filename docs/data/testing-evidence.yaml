@@ -118,6 +118,11 @@ test_harness:
     inspect:
       - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java
       - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ProgressProbe.java
+# Entries may also live as per-module fragments in testing-evidence.d/, one file per module,
+# merged into this corpus by bin/check-docs-data.sh (see 'fragment_collection' in schema.yaml).
+# The streams-alpha and connect-alpha entries below describe modules that are deliberately NOT in
+# the reactor yet: they are the evidence targets the staged maturity rows in staging/ point at,
+# which is why the checker's pom cross-check does not require module_evidence artifacts to resolve.
 module_evidence:
   - id: core
     artifact: parallel-consumer-core

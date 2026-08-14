@@ -1,0 +1,15 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the proxy work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - artifact: parallel-consumer-proxy
+    deferred:
+      reason: >-
+        No test evidence is claimed while the engine module is under construction; its harness and
+        conformance evidence land with the language-proxy plan's test units.
+      lifted_by: >-
+        astubbs#242 - the unit that lands the proxy harness records this module's evidence here.
