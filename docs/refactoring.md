@@ -280,6 +280,57 @@ Do not start one casually.
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
   brute-force transaction-commit retry.
+- **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
+  rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
+  **expected operational state**, not an internal fault. Two different questions decide the scope
+  here, and conflating them has been the recurring error:
+  - **Where is the callback invoked?** On broker-side asynchronous failures too - `ProducerBatch`
+    calls the same `onCompletion`. So the `log.error` fires for effectively every failed send.
+  - **Where can its throw escape?** Only from `KafkaProducer#doSend`'s synchronous
+    `catch (ApiException)` handler. `ProducerBatch` catches and logs whatever the callback throws,
+    so on the asynchronous path the throw is swallowed rather than propagated.
+
+  It is the second question that governs the exception type, since only there is the thrown type
+  observable to a caller. That set is narrower than "any pre-accumulator failure" - a serializer
+  throwing `SerializationException` propagates out of `doSend` without invoking the callback at all -
+  and wider than "oversized records": `RecordTooLargeException` is the case
+  `TransactionalPartialResultSetIT` exercises, while metadata and authorization failures on the same
+  handler (`TimeoutException`, `TopicAuthorizationException`) reach it too. So the type has to cover
+  environment failures as well as bad result records, but only those arriving as an `ApiException`.
+  **Do not model this as "the callback only runs on the synchronous path"** - it runs on both, and a
+  refactor built on that mistake would drop logging for every asynchronous send failure.
+  A name that says "internal" sends every reader, human or agent, to re-derive that whole chain
+  before they can conclude it is ordinary failure handling. It was verified from source and
+  kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
+  - **Preferred, non-breaking:** throw a specific subclass - e.g. `RecordPublishFailedException
+    extends InternalRuntimeException` - so existing `catch (InternalRuntimeException)` keeps
+    working while the type states the situation. Renaming `InternalRuntimeException` itself would
+    be user-visible and belongs in
+    [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
+    needing that.
+    - **The subclass alone is not enough, and this is the part that is easy to get wrong.** A
+      synchronous callback failure escapes `produceMessages` into
+      `ParallelEoSStreamProcessor#processAndProduceResults`, whose `catch (Exception e)` immediately
+      rethrows `new InternalRuntimeException("Error while waiting for produce results", e)`. The
+      specific type would survive only as a nested cause, so a caller still could not catch it and
+      the observable failure type would be exactly as generic as today. The refactor has to preserve
+      the subtype through that outer wrapper too - rethrow it unchanged, or introduce the specific
+      type at the wrapping point - otherwise it buys nothing beyond a better log line.
+  - **Drive-by while there:** the lambda parameter is bare `exception`. It is the *send* failure, not
+    a user-code exception (those are caught by `runUserFunction`, which wraps the `usersFunction.apply`
+    call made in `runUserFunctionInternal`), so name it `sendFailure`. Do **not** name it after user
+    code - that is the exact confusion this entry exists to stop.
+  - Naming only: it changes no behaviour and waits on nothing. `confluentinc#242` and its PR
+    `confluentinc#291` are precedent for the *shape* but cover the **user function** throwing
+    terminal/retry exceptions, not send-failure classification - see
+    [`docs/inflight/bug-poisoned-transaction-not-aborted-while-running.md`](inflight/bug-poisoned-transaction-not-aborted-while-running.md)
+    for why, and do not re-mirror either.
+
+*Prior art: [confluentinc#291](https://github.com/confluentinc/parallel-consumer/pull/291), closed
+unmerged in the 2023-06-15 sweep · already cited in `src/docs/README_TEMPLATE.adoc`, and worth adding to
+[astubbs#239](https://github.com/astubbs/parallel-consumer/issues/239)'s "Prior work", which names
+[confluentinc#366](https://github.com/confluentinc/parallel-consumer/pull/366) from the same cohort
+but not this.*
 
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
