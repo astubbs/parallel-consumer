@@ -84,6 +84,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java`**
 
+- TODO(refactor): InternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
 - todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
 - TODO talk about alternatives to this brute force approach for retrying committing transactions
 
@@ -159,7 +160,6 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/CloseAndOpenOffsetTest.java`**
 
 - todo remove - not even relevant to this test? smelly
-- TODO test for event/trigger instead - could consume offsets topic but have to decode the binary
 - TODO: fatal vs retriable exceptions. Retry limits particularly for draining state?
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/KafkaSanityTests.java`**

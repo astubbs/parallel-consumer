@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
@@ -23,9 +24,12 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -65,6 +69,36 @@ public class ManagedPCInstance implements Runnable {
     @Getter
     private volatile boolean started = false;
 
+    /**
+     * Single-flight guard for the start window: claimed by {@link #start} before submitting, released
+     * by {@link #run} once the PC is up. Without it, a stop/restart pair drawn while an earlier
+     * restart is still parked in {@code run()}'s close-wait loop submits {@code run()} twice, and the
+     * two invocations race on {@link #parallelConsumer} - leaving one PC orphaned (a group member
+     * nobody ever closes) and two threads closing the other's {@code KafkaConsumer}. That is the
+     * {@code ChaosRevokeUnderWorkCooperativeIT} failure under seed 8291601231857558952:
+     * {@code ConcurrentModificationException: KafkaConsumer is not safe for multi-threaded access}
+     * plus {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED}.
+     */
+    @ToString.Exclude
+    @Getter(AccessLevel.NONE) // class-level @Getter would hand out the mutable guard itself
+    private final AtomicBoolean startInFlight = new AtomicBoolean(false);
+
+    /**
+     * Set by a stop, cleared by a start. A {@code run()} still queued from an earlier start reads it
+     * after the close-wait loop and aborts, rather than bringing up a PC the conductor believes is
+     * stopped and will therefore never close.
+     * <p>
+     * This is the logical negation of {@link #started} at every write site except a rejected
+     * submission's rollback - harmless there, because no {@code run()} is in flight to abort. It is
+     * kept as its own field deliberately: {@code run()}'s abort then reads as a positive
+     * ("a stop happened") rather than a double negative, and the two names keep the toggle protocol
+     * and the queued-start abort separable. Do not "simplify" it away by folding it into
+     * {@code started} - getting that polarity backwards silently restores the double-submission race
+     * this class exists to prevent.
+     */
+    @Getter(AccessLevel.NONE) // internal signal, like the two guards above and below
+    private volatile boolean stopRequested = false;
+
     @ToString.Exclude
     private final Queue<String> consumedKeys = new ConcurrentLinkedQueue<>();
 
@@ -92,7 +126,10 @@ public class ManagedPCInstance implements Runnable {
             // See confluentinc#857.
             if (parallelConsumer != null) {
                 int waitMs = 0;
-                while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000) {
+                // bail out of the wait as soon as a stop lands: an aborting run() creates no
+                // replacement PC, so it does not need the old one to have finished closing, and
+                // this runs on a bounded work-stealing pool where sleeping holds a carrier thread
+                while (!parallelConsumer.isClosedOrFailed() && waitMs < 10_000 && !stopRequested) {
                     try {
                         Thread.sleep(100);
                         waitMs += 100;
@@ -104,6 +141,13 @@ public class ManagedPCInstance implements Runnable {
                 if (waitMs >= 10_000) {
                     log.warn("Instance {} previous PC did not close within 10s, proceeding anyway", instanceId);
                 }
+            }
+
+            // A stop drawn while this start was queued wins: bringing up a PC now would leave the
+            // conductor believing the instance is stopped, so nothing would ever close it.
+            if (stopRequested) {
+                log.info("Instance {} start aborted - stopped while this start was queued", instanceId);
+                return;
             }
 
             // started flag is set in start(), not here — prevents double-submission
@@ -131,6 +175,19 @@ public class ManagedPCInstance implements Runnable {
             this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));
             this.parallelConsumer.subscribe(of(config.inputTopic));
 
+            // Re-check: the pre-build check above is not enough. start() is fire-and-forget, so the
+            // conductor thread is free to draw a stop while this method is between that check and
+            // here - building and subscribing a PC is real work, not an instant. A stop landing in
+            // that window captured the OLD parallelConsumer (or null) and returned, so without this
+            // the instance would end up RUNNING a PC the conductor believes is stopped, which
+            // nothing would ever close.
+            if (stopRequested) {
+                log.info("Instance {} start aborted after build - stopped while the PC was coming up",
+                        instanceId);
+                closeQuietly(this.parallelConsumer);
+                return;
+            }
+
             parallelConsumer.poll(record -> {
                 if (config.pollDelayMs > 0) {
                     try {
@@ -143,47 +200,130 @@ public class ManagedPCInstance implements Runnable {
                 onConsumed.accept(record.key());
             });
         } finally {
+            // release the start window - a further start() may now submit (see startInFlight)
+            startInFlight.set(false);
             // pool threads are reused across instances - do not leak this instance id into later runners (PR astubbs#83 review)
             org.slf4j.MDC.remove(MDC_INSTANCE_ID);
         }
     }
 
-    /** True while a background close is in progress — prevents toggle from restarting prematurely */
-    private volatile boolean closePending = false;
+    /**
+     * The PCs this instance currently has a closer running for. Keyed by PC, not by instance: the
+     * hazard being guarded is two threads inside <em>one</em> {@code KafkaConsumer}
+     * ({@code ConcurrentModificationException} against its poll thread), which is a property of the
+     * PC, not of the instance that owns it.
+     * <p>
+     * An instance-wide flag would be both too strong and unsafe. Because {@code start()} does not
+     * wait for a close to finish, a restart can build a second PC while the first is still
+     * closing - and an instance-wide flag would then refuse the second PC's close entirely, leaving
+     * it open with nothing to retry it: an unaccounted group member, the very failure this class
+     * exists to prevent. Two <em>different</em> PCs closing at once was always safe.
+     */
+    @ToString.Exclude
+    @Getter(AccessLevel.NONE) // callers get the isClosePending() snapshot below, not the guard itself
+    private final Set<ParallelEoSStreamProcessor<String, String>> closingPcs = ConcurrentHashMap.newKeySet();
+
+    /** True while a background close is in progress for any of this instance's PCs. */
+    public boolean isClosePending() {
+        return !closingPcs.isEmpty();
+    }
+
+    /**
+     * Record that this instance is stopping, without closing anything. For the drain path, which
+     * closes the PC itself via {@code closeDrainFirst()} and so never goes through
+     * {@link #stop}/{@link #stopAsync} - leaving {@link #stopRequested} unset, and the queued-start
+     * abort in {@link #run} inert for the most frequently drawn stop action.
+     */
+    public void markStopRequested() {
+        stopRequested = true;
+        started = false;
+    }
+
+    /** Close a PC we are abandoning, without letting its failure mask the reason we abandoned it. */
+    private void closeQuietly(ParallelEoSStreamProcessor<String, String> pc) {
+        if (pc == null || !closingPcs.add(pc)) {
+            return;
+        }
+        try {
+            pc.close();
+        } catch (Exception e) {
+            log.warn("Instance {} close of abandoned PC failed: {}", instanceId, e.getMessage());
+        } finally {
+            closingPcs.remove(pc);
+        }
+    }
 
     public void stop() {
         log.info("Stopping instance {}", instanceId);
+        stopRequested = true;
         started = false;
-        parallelConsumer.close();
+        var pcToClose = parallelConsumer;
+        if (pcToClose == null) {
+            return;
+        }
+        // the same one-closer-per-PC rule stopAsync() enforces: a synchronous close racing the
+        // background one would put two threads inside the same KafkaConsumer, which is the
+        // ConcurrentModificationException this class was hardened against
+        if (!closingPcs.add(pcToClose)) {
+            log.info("Instance {} stop skipped - this PC is already being closed", instanceId);
+            return;
+        }
+        try {
+            pcToClose.close();
+        } finally {
+            closingPcs.remove(pcToClose);
+        }
     }
 
     /**
      * Non-blocking stop: signals close and returns immediately. The close completes
      * in a background thread. Use this from the chaos monkey so it isn't blocked for
-     * 30-40s while the PC shuts down. The {@link #closePending} flag prevents
+     * 30-40s while the PC shuts down. The close-in-progress state prevents
      * {@link #toggle} from restarting until close finishes.
      */
     public void stopAsync() {
-        log.info("Async stopping instance {}", instanceId);
+        stopRequested = true;
         started = false;
-        closePending = true;
         var pcToClose = parallelConsumer;
-        new Thread(() -> {
+        if (pcToClose == null) {
+            log.info("Instance {} async stop skipped - never started", instanceId);
+            return;
+        }
+        // one closer per PC: a second concurrent close() puts two threads inside the same
+        // KafkaConsumer, which throws ConcurrentModificationException against the poll thread.
+        // A *different* PC of this instance is a separate close and must not be refused here.
+        if (!closingPcs.add(pcToClose)) {
+            log.info("Instance {} async stop skipped - this PC is already being closed", instanceId);
+            return;
+        }
+        log.info("Async stopping instance {}", instanceId);
+        Thread closer = new Thread(() -> {
             try {
                 pcToClose.close();
             } catch (Exception e) {
                 log.warn("Instance {} background close error: {}", instanceId, e.getMessage());
             } finally {
-                closePending = false;
+                closingPcs.remove(pcToClose);
             }
-        }, "pc-close-" + instanceId).start();
+        }, "pc-close-" + instanceId);
+        // daemon, like chaos-conductor and chaos-drain-N: a close() that hangs under an injected
+        // broker failure must not keep the forked test JVM alive after the run has finished
+        closer.setDaemon(true);
+        closer.start();
     }
 
     /**
      * Restart: checks the previous PC's failure cause, classifies it, then resubmits to the executor.
      * Expected close exceptions are logged. Unexpected exceptions fail the test.
+     * <p>
+     * Single-flight: refuses (returning {@code false}) while an earlier start is still in flight, so
+     * one instance can never have two concurrent {@link #run()} invocations racing on
+     * {@link #parallelConsumer}. Callers must treat {@code false} as "still stopped" - see
+     * {@link #startInFlight}.
+     *
+     * @return true if this call submitted the start, false if it was refused
      */
-    public void start(ExecutorService pcExecutor) {
+    public boolean start(ExecutorService pcExecutor) {
         if (parallelConsumer != null) {
             Exception failureCause = parallelConsumer.getFailureCause();
             if (failureCause != null) {
@@ -197,13 +337,33 @@ public class ManagedPCInstance implements Runnable {
                 }
             }
         }
+        if (!startInFlight.compareAndSet(false, true)) {
+            log.warn("Instance {} start refused - an earlier start is still in flight", instanceId);
+            return false;
+        }
+        stopRequested = false;
         started = true; // set BEFORE submit so next toggle() sees it — prevents double-submission
         log.info("Starting instance {}", instanceId);
-        pcExecutor.submit(this);
+        try {
+            pcExecutor.submit(this);
+        } catch (RuntimeException e) {
+            started = false;
+            startInFlight.set(false); // never strand the guard on a rejected submission
+            throw e;
+        }
+        return true;
+    }
+
+    /**
+     * Test hook: seed the PC without bringing one up, so the close-path guards can be exercised
+     * without a broker. Production callers get their PC from {@link #run()}.
+     */
+    void setParallelConsumerForTest(ParallelEoSStreamProcessor<String, String> pc) {
+        this.parallelConsumer = pc;
     }
 
     public void toggle(ExecutorService pcExecutor) {
-        if (closePending) {
+        if (isClosePending()) {
             log.trace("Instance {} toggle skipped — close still pending", instanceId);
             return;
         }
