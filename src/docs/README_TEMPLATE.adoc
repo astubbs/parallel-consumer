@@ -57,7 +57,14 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 ====
 This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-It is a *drop-in replacement*: the Java API and package (`bz.stub.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+// The old spelling below MUST survive: this paragraph tells a reader arriving from upstream which
+// namespace they are moving OFF, and a summary that names only the destination cannot say that.
+// rename-packages.sh would otherwise rewrite it into a package that moves to itself.
+// rename-packages: freeze-begin(fork-summary)
+*Behaviour* is a drop-in replacement for upstream 0.5.x: the API is source-compatible, and the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets.
+Two identifiers do change in 0.6.0.0, and both are mechanical: the Maven `groupId` becomes `bz.stub.parallelconsumer`, and the Java packages *move* with it, from `io.confluent.parallelconsumer.*` to `bz.stub.parallelconsumer.*`.
+See <<upgrading-from-upstream,Upgrading from upstream 0.5.x>> for the steps.
+// rename-packages: freeze-end(fork-summary)
 
 [source,xml]
 ----
@@ -635,6 +642,55 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 
 [[upgrading]]
 == Upgrading
+
+[[upgrading-from-upstream]]
+=== From 0.5 to 0.6
+
+0.6.0.0 is the first release of this community fork, and it changes two identifiers: the Maven coordinates, and the Java package names.
+
+// Everything down to freeze-end MUST keep the old spelling: it is the instruction for getting off it,
+// and a migration step that names only the destination tells the reader nothing. rename-packages.sh
+// would otherwise rewrite these into a package moving to itself and a sed that does nothing - which
+// passes every check the script has, because the sweep hunts old spellings that SHOULD have been
+// rewritten and these are the ones that must NOT be.
+// rename-packages: freeze-begin(upgrade-instructions)
+Upstream's last release was published as `io.confluent.parallelconsumer`; this fork publishes as `bz.stub.parallelconsumer`, and uses that namespace in its own source.
+
+First, the dependency:
+
+[source,xml]
+----
+<dependency>
+    <!-- was: <groupId>io.confluent.parallelconsumer</groupId> -->
+    <groupId>bz.stub.parallelconsumer</groupId>
+    <artifactId>parallel-consumer-core</artifactId>
+    <version>0.6.0.0</version>
+</dependency>
+----
+
+Then your imports.
+A find-and-replace of `io.confluent.parallelconsumer` with `bz.stub.parallelconsumer` across your source is sufficient:
+
+[source,java]
+----
+// was: import io.confluent.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.ParallelStreamProcessor;
+----
+
+Across a whole tree, that is one line:
+
+[source,bash]
+----
+find . -name '*.java' -exec sed -i 's/io\.confluent\.parallelconsumer/bz.stub.parallelconsumer/g' {} +
+----
+
+NOTE: That `sed -i` is GNU syntax. On macOS or BSD, use `sed -i '' -e 's/…/…/g'` instead -- BSD `sed` reads the argument after `-i` as a backup-file suffix.
+// rename-packages: freeze-end(upgrade-instructions)
+
+Nothing else changes.
+The API is source-compatible, so beyond the import lines no source edit is needed, and most codebases reference only a handful of types.
+Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
+The library's shared internal utilities moved with the rest, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
 
 === From 0.4 to 0.5
 

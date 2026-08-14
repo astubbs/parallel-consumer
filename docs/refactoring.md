@@ -280,6 +280,57 @@ Do not start one casually.
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
   brute-force transaction-commit retry.
+- **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
+  rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
+  **expected operational state**, not an internal fault. Two different questions decide the scope
+  here, and conflating them has been the recurring error:
+  - **Where is the callback invoked?** On broker-side asynchronous failures too - `ProducerBatch`
+    calls the same `onCompletion`. So the `log.error` fires for effectively every failed send.
+  - **Where can its throw escape?** Only from `KafkaProducer#doSend`'s synchronous
+    `catch (ApiException)` handler. `ProducerBatch` catches and logs whatever the callback throws,
+    so on the asynchronous path the throw is swallowed rather than propagated.
+
+  It is the second question that governs the exception type, since only there is the thrown type
+  observable to a caller. That set is narrower than "any pre-accumulator failure" - a serializer
+  throwing `SerializationException` propagates out of `doSend` without invoking the callback at all -
+  and wider than "oversized records": `RecordTooLargeException` is the case
+  `TransactionalPartialResultSetIT` exercises, while metadata and authorization failures on the same
+  handler (`TimeoutException`, `TopicAuthorizationException`) reach it too. So the type has to cover
+  environment failures as well as bad result records, but only those arriving as an `ApiException`.
+  **Do not model this as "the callback only runs on the synchronous path"** - it runs on both, and a
+  refactor built on that mistake would drop logging for every asynchronous send failure.
+  A name that says "internal" sends every reader, human or agent, to re-derive that whole chain
+  before they can conclude it is ordinary failure handling. It was verified from source and
+  kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
+  - **Preferred, non-breaking:** throw a specific subclass - e.g. `RecordPublishFailedException
+    extends InternalRuntimeException` - so existing `catch (InternalRuntimeException)` keeps
+    working while the type states the situation. Renaming `InternalRuntimeException` itself would
+    be user-visible and belongs in
+    [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
+    needing that.
+    - **The subclass alone is not enough, and this is the part that is easy to get wrong.** A
+      synchronous callback failure escapes `produceMessages` into
+      `ParallelEoSStreamProcessor#processAndProduceResults`, whose `catch (Exception e)` immediately
+      rethrows `new InternalRuntimeException("Error while waiting for produce results", e)`. The
+      specific type would survive only as a nested cause, so a caller still could not catch it and
+      the observable failure type would be exactly as generic as today. The refactor has to preserve
+      the subtype through that outer wrapper too - rethrow it unchanged, or introduce the specific
+      type at the wrapping point - otherwise it buys nothing beyond a better log line.
+  - **Drive-by while there:** the lambda parameter is bare `exception`. It is the *send* failure, not
+    a user-code exception (those are caught by `runUserFunction`, which wraps the `usersFunction.apply`
+    call made in `runUserFunctionInternal`), so name it `sendFailure`. Do **not** name it after user
+    code - that is the exact confusion this entry exists to stop.
+  - Naming only: it changes no behaviour and waits on nothing. `confluentinc#242` and its PR
+    `confluentinc#291` are precedent for the *shape* but cover the **user function** throwing
+    terminal/retry exceptions, not send-failure classification - see
+    [`docs/inflight/bug-poisoned-transaction-not-aborted-while-running.md`](inflight/bug-poisoned-transaction-not-aborted-while-running.md)
+    for why, and do not re-mirror either.
+
+*Prior art: [confluentinc#291](https://github.com/confluentinc/parallel-consumer/pull/291), closed
+unmerged in the 2023-06-15 sweep · already cited in `src/docs/README_TEMPLATE.adoc`, and worth adding to
+[astubbs#239](https://github.com/astubbs/parallel-consumer/issues/239)'s "Prior work", which names
+[confluentinc#366](https://github.com/confluentinc/parallel-consumer/pull/366) from the same cohort
+but not this.*
 
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
@@ -317,6 +368,130 @@ Do not start one casually.
   to event/trigger-based waits removes the flake class and speeds the suite up. Related to *Remove
   static state* above, which is the other half of why these tests cannot run cleanly in parallel.
 
+### Test infrastructure - tests that do not run, or do not check anything
+
+Full per-test evidence, the disabling commit for each, and what coverage is actually lost:
+[`docs/test-hardening/inactive-tests-audit-2026-08-08.md`](test-hardening/inactive-tests-audit-2026-08-08.md).
+Only the items needing a decision are listed here - do not restate the inventory.
+
+**Outright defects, cheap to fix:**
+
+- **`assumeWorkingCodec` is not an assumption** - it is `return !encodingsThatFail.contains(encoding)`.
+  Five `OffsetEncoding` values run `OffsetEncodingTests.ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential`
+  with most assertions branched around and **report green rather than skipped**. Of the enum's 12
+  values, **3 run the full positive assertion path** - 4 are dropped by the real assumption, 5 are
+  branched around. Rename it to `isWorkingCodec`, or convert the sites to real per-value assumptions
+  so the skips appear in the report. **Same test, second problem:** it asserts
+  `doesNotContain(2500L)`, and 2500 is never a record offset there - so that assertion passes for a
+  working codec and a broken one alike. Delete it or re-target it at an offset the test produces.
+- **`OffsetEncodingTests` imports JUnit 4's `org.junit.Assume` in a Jupiter test.** No pom declares
+  JUnit 4 - it arrives transitively via testcontainers, and works only because the Jupiter engine
+  reflectively recognises JUnit 4's assumption exception when it happens to be on the classpath. The
+  day it falls off, that skip becomes a hard failure for four enum values. One-line fix to
+  `org.junit.jupiter.api.Assumptions`.
+- **`MultiInstanceHighVolumeTest` underscore misgrouping** - `30_000_00`. Read once as a typo that
+  lost a zero off 30M; it is not. History shows the value was **reduced from `10_000_000`** and the
+  intended value is **3,000,000**, which is what the literal already evaluates to. Regrouping it to
+  `3_000_000` is **byte-identical at runtime** - a legibility fix, nothing more. Raising the volume
+  is a separate and larger question, blocked by a **hard-coded 60-second `waitAtMost`** in the same
+  method.
+
+**Coverage decisions:**
+
+- **`ParallelEoSStreamProcessorTest.processInKeyOrder`** (`@Disabled`, no message on the annotation) -
+  the one real gap in the audit. Key ordering is well covered at the shard layer by `WorkManagerTest`,
+  but nothing asserts end-to-end, per-`CommitMode`, that offset *commits* respect key-order blocking
+  across partitions. `TransactionAndCommitModeTest`'s KEY arm does not close it: it produces **30,000
+  unique keys for 30,000 records**, so there is one record per shard and nothing ever blocks on a key.
+  **The cause is settled**: the abandoned branch `origin/bugs/turn-on-commit-tests` @ `009bb7122` is a
+  single commit deleting exactly this `@Disabled` and the next one, titled *"…which were dibbled when
+  the offset map feature was added"*. Re-enabling means reconciling the test with the commit semantics
+  `c1fefbc64` introduced in 2020 - **and that branch shows removing the annotation alone was tried and
+  abandoned at WIP**, so budget for the reconciliation.
+- **`ParallelEoSStreamProcessorTest.offsetsAreNeverCommittedForMessagesStillInFlightLong`** - same
+  commit, same branch, same reconciliation. Its siblings cover the invariant at lower volume; the
+  deeper in-flight interleaving is not covered elsewhere.
+- **`closeWithoutRunningShouldBeEventBasedFast` never measures "fast"** - add the timing assertion
+  from the test three lines above it, which already does `time(...)` + `assertThat(...).isLessThan(...)`.
+- **Assertions commented out, implying coverage that does not exist** -
+  `WorkManagerOffsetMapCodecManagerTest.stringVsByteVsBitSetEncoding` (computes four unused values,
+  asserts nothing), `MultiTopicTest.assertCommit` (waits on a branch that does not exist on master),
+  `VertxConcurrencyIT.assertNumberOfThreads`. Restore or delete - leaving them is the worst option.
+- **Delete candidates** - `VertxTest.handleHttpResponseCodes` (`assertThat(true).isFalse()`, never
+  ran, cannot pass), `sanity/StreamTest.test` (commented-out `@Test` over an infinite stream),
+  `SampleTestingFailsafePluginInclusionCore` (empty body), `JavaEnvTest.checkJavaEnvironment`
+  (`log.error` dump on every run).
+- **`LargeVolumeInMemoryTests` runs 500 messages, not 1,000,000 - and restoring it is real work, not
+  a value change.** The 1M line is commented out directly above, `git blame`d to 2020 and untouched
+  since. Previously recorded as fixed by astubbs#49; that PR never touched the file. **The OOM
+  diagnostics are now salvaged** into
+  [`docs/test-hardening/large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md`](test-hardening/large-volume-in-memory-tests-oom-diagnostics-2026-04-22.md)
+  (they existed only on `origin/refactor/test-hardening`, which is on the safe-to-delete list). They
+  show 1M producing `java.lang.OutOfMemoryError: Java heap space` in the PC close path. Anyone
+  picking this up needs **three changes, not one**:
+    1. **Stop retaining the producer history.** The test asserts
+       `producerSpy.history().hasSize(quantityOfMessagesToProduce)`, which forces every one of the 1M
+       produced records to be held live for the whole run. Replace it with a counter (and, if
+       ordering still needs checking, a small sampling buffer) so the assertion survives without the
+       retention.
+    2. **Raise the 30-second latch timeout *and actually check it*.** It is
+       `allMessagesConsumedLatch.await(defaultTimeoutSeconds, SECONDS)` and **the boolean return is
+       discarded**, so a timeout reads as a pass on the way to whatever fails next. Fix both
+       together - raising a timeout whose result is ignored achieves nothing. Note
+       `defaultTimeoutSeconds` is a shared static on `AbstractParallelEoSStreamProcessorTestBase`
+       (30s, used tree-wide), so this wants a test-local value, not a bump to the shared constant.
+    3. **Size the heap.** The diagnostics estimate **2-4GB**; surefire/failsafe defaults are far
+       below that. Set it explicitly, with a comment saying why.
+  - **Budget it x3.** This is a `@ParameterizedTest` over three `CommitMode`s, so both the runtime
+    and the peak memory cost are per-run times three - the heap figure is per fork, but the wall
+    clock is not.
+- **Should `TransactionAndCommitModeTest` tolerate any round without progress?** The test carried
+  `// todo rounds should be 1? progress should always be made` next to a `roundsAllowed` variable
+  that was assigned and never read - `ProgressTracker` is built with null rounds, and it rejects
+  being given both a round count and a timeout, so the rounds mechanism was structurally off. The
+  dead variable is gone; the question it was attached to is real and unanswered, so it lives here
+  now. Deciding it means choosing whether progress-per-round or total duration is the right
+  liveness signal for this test.
+- **The one deleted stub worth writing: `userSucceedsButProduceToBrokerFails`.** Ten test stubs were
+  deleted rather than implemented by upstream `confluentinc#493`, and audit §4 classifies all ten.
+  Nine need no test work (see below). This one does: the produce-failure path is reachable, but only
+  the `InvalidPidMappingException` special case is covered, by
+  `ParallelEoSStreamProcessorTest.closePCWhenInvalidPidMappingException`. **The general
+  produce-failure path, and its consequence - the offset is not committed and the work is retried -
+  are untested.**
+- **Three deleted stubs are missing *features*, not missing tests** - record them as issues, never as
+  test debt. `poisonPillGoesToDeadLetterQueue`: PC has no dead-letter-queue concept and never has
+  (zero DLQ occurrences in any `src/main/java`); tracked as astubbs#149, and already the
+  most-demanded missing feature in `docs/inflight/next-candidates.md`. `maxPerPartition` and
+  `maxPerTopic`: no per-partition or per-topic in-flight limit exists - `ParallelConsumerOptions` has
+  only the global `maxConcurrency`, and `ShardKey` never keys by topic. Nearest tracked: astubbs#160
+  and astubbs#236. **They were written as a trio with `maxOverall`, and only the global scope was
+  ever built** - it is `WorkManagerTest.maxInFlight` today. Neither adjacent issue is literally a
+  scoped in-flight cap, so if that debt should be visible it is **one new issue about scoped
+  concurrency limits**, not two test methods.
+- **Volumes checked and found not to need changing** (recorded so nobody re-flags them):
+  `VeryLargeMessageVolumeTest` was never reduced - it went `1_000_000` to `100_0000`, the same
+  number, to `1_000_000`, and the `2_000_000` was only ever an aspirational comment.
+  `TransactionAndCommitModeTest.numThreads = 64` was an *increase* for stability, not a reduction.
+  `LoadTest` stays at 4,000: it is untagged, so it runs in the gating lane, and it is already a
+  listed member of the load-tightness flake family at that volume.
+
+Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29. The three
+`@Timeout(60000L)` annotations (`MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`,
+`MockConsumerCommitTimeoutTest`) are owned by open PR astubbs#206, which replaces them with
+`@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
+`MockConsumerEarlyCloseTest` was missing - and **`@Timeout(60)` would have been wrong**, because two
+of those tests wait 45s and 50s internally, so it would have raced them rather than fixing them.
+`ProgressBarTest.width` is a deliberate manual check. Five of the ten deleted stubs (§4 of the audit)
+are already covered by named enabled tests, and `truncationOnCommit` is obsolete - on-commit
+truncation is structurally unreachable, and the truncation that does exist happens on the bootstrap
+poll and is covered by `PartitionStateCommittedOffsetTest`.
+
+A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.sh` shape) was
+considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
+such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
+revisiting once the audit has been in use.
+
 ### Build - jacoco coverage under forked surefire
 
 - `prepare-agent` writes ONE `jacoco.exec` in append mode, but the unit suite now runs
@@ -331,6 +506,50 @@ Do not start one casually.
   defect, copy-pasted four times. Not ours to fix, but the duplication is: fold it into one shared
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
+
+### Cross-module test clones (the file-similarity backlog behind astubbs#40)
+
+Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the
+`MockConsumer*` family - is done: they now share `MockConsumerTestBase`. The audit of the rest of the
+tree found the remaining high-similarity pairs are overwhelmingly **cross-module clones**, which is a
+different and much larger job, because deduplicating them means a generified test base in core's
+test-jar that each module parameterises with its own processor type. Ranked, with a verdict, so the
+next reader does not re-derive the list.
+
+Every figure below is **measured**, off the `duplicate-code-detection-tool` report this PR's own CI
+posted, and quoted as a band for the same reason the `MockConsumer*Test` figures are: the measure is
+corpus-relative, so decimals drift on merges that touch none of these files. Nothing here is
+estimated from reading the source - an earlier draft of this section was, and every one of its five
+numbers was wrong, by 7 to 48 points.
+
+- **`Mutiny*Test` ↔ `Reactor*Test`** (`MutinyBatchTest`/`ReactorBatchTest` **high 70s**,
+  `MutinyPCTest`/`ReactorPCTest` **low 70s**). The real prize: two reactive integrations tested by the
+  same script with the publisher type swapped. Wants a shared generified base, not a copy. Vertx is a
+  third, looser member of the family (`VertxBatchTest` pairs with either around 50%). Note
+  `MutinyUnitTestBase`/`ReactorUnitTestBase` is **not** part of the prize - it lands in the **low
+  30s**, barely over the check's `ignore_below: 30` floor, because the shared wiring there is already
+  extracted into core's test-jar. The duplication is in the scripts, not their bases.
+- **`VeryLargeMessageVolumeTest` and its neighbours** (core `test-integration`, all *within*-module):
+  ↔ `MultiInstanceHighVolumeTest` **high 50s**, ↔ `TransactionAndCommitModeTest` **mid 50s**. One
+  volume-test shape reused three ways, so it is a single extraction rather than two. Nowhere near the
+  check's `fail_above: 80` - a tidiness item, not a gate risk - and they are broker ITs, so it needs
+  Docker to verify, not a desk refactor. Note these are *not* the repo's largest within-module pairs;
+  the top of that list is production code (`RunLengthV1`/`V2EncodingNotSupported` ~63,
+  `JStreamParallelEoSStreamProcessor`/`JStreamParallelStreamProcessor` ~62), which is out of scope
+  for astubbs#40 and untouched here.
+- **`TestConventionsArchTest` x4** (**89-91%** across the six module pairings). **Leave alone.** The
+  only pairs here over `fail_above: 80`, and they are documented as irreducible in
+  `TestConventionRules`' javadoc: a module can only point ArchUnit at its own classes, so the shared
+  part is already extracted and what remains is the four-line pointer. Being over `fail_above` does
+  not fail the build: the check runs `compare_with_base: true`, and these pairs are long-standing -
+  they appear in neither the report's *new* nor its *increased* section.
+- **`CommitRejectionTestBase` ↔ `MockConsumerTestBase`** - **nothing to do, and nothing reported.**
+  Worth recording because the prediction was wrong: extracting the harness was expected to put these
+  two small abstract classes around 70% on the check, on the reasoning that a whole-file token
+  measure mostly sees their shared package declaration and imports. It did not - neither file reaches
+  the check's 30% reporting floor against anything (PR astubbs#206). The `MockConsumer*Test` scenarios
+  themselves came out at 34-37%, down from the 70.7% that astubbs#34 flagged. Estimate similarity from the
+  tool, not from a reading of the source.
 
 ## Abandoned draft branches (idea bank)
 
@@ -392,8 +611,18 @@ Cross-cutting above; the rest:
 - `origin/refactor/chaos-broker` @1b9bd385, `.../chaos-broker-challage-test` @c9acb00c,
   `.../test-consumer-disconnect` @6a968074 - ChaosBroker / broker-disconnect testing (draft
   `confluentinc#345`, issue `confluentinc#203`).
-- `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M.
-- `origin/refactor/empty-tests` @5f8b3dba - remove/implement the empty placeholder tests (draft `confluentinc#496`).
+- `origin/refactor/test-hardening` @16ce9727 - OOM diagnostics for `LargeVolumeInMemoryTests` at 1M,
+  plus a restore-to-1M commit. It **also** carried a 455-line audit of disabled/kneecapped/weakened
+  tests that this entry never mentioned, which is why nobody triaged it for four months. That audit
+  is now absorbed into [`docs/test-hardening/inactive-tests-audit-2026-08-08.md`](test-hardening/inactive-tests-audit-2026-08-08.md)
+  on master, with the two reasons its own git history refutes corrected - so the branch now holds
+  nothing the master copy lacks, and only the 1M/OOM work is left to salvage.
+- `origin/refactor/empty-tests` @5f8b3dba - **the removal half already landed** on master via
+  upstream `confluentinc#493`, which deleted `ParallelEoSStreamProcessorTest.avro`,
+  `WorkManagerOffsetMapCodecManagerTest.truncationOnCommit`, `WorkManagerTest.maxPerPartition` and
+  `.maxPerTopic`. What this branch (draft `confluentinc#496`) still holds is the *implement* half:
+  restoring them as `NotImplementedException` stubs so the debt is visible rather than absent. Never
+  merged; no PR on the fork.
 - `origin/improvements/test-perf` @932210b6, `.../multi-topic-test` @dd3ad77b - test perf / multi-topic.
 - `origin/client-factory` @9636c33d - client-factory config to prevent client reuse (draft `confluentinc#106`).
 - `origin/slf4j-no-logger` @9c9396b8 - warn when no SLF4J logger is bound (→ `confluentinc#139`; UX, not a refactor).

@@ -63,11 +63,16 @@ document. This section is the detail behind it.
   small fixture and surfaces only in production. shellcheck does not detect it, and the full
   mechanism is in the script's own header and in
   [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
-  `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows. Self-tests run first. **Two of the
-  three are required status checks** (`shell: sigpipe`, `workflows: action versions`) - which is exactly why
-  the job names are an API. They exist because the failures they catch are invisible rather than
-  loud, and they gate precisely so those failures cannot be skimmed past.
+  `rename` runs `bin/test-rename-packages.sh`, the self-test for the
+  package-rename tool (`bin/rename-packages.sh`) - a tool run by hand once per branch, which is
+  exactly the shape that rots unnoticed between the day it is written and the day the whole rename
+  depends on it. `actions` runs `bin/check-action-versions.sh`, keeping every
+  GitHub Action pinned to one version across all workflows. Self-tests run first. **`shell: sigpipe`
+  and `workflows: action versions` are required status checks** - which is exactly why the job names
+  are an API. They exist because the failures they catch are invisible rather than loud, and they
+  gate precisely so those failures cannot be skimmed past. `tooling: package rename` is not in the
+  ruleset yet: a required context no run produces blocks every PR whose base predates it, so it can
+  only be added once the job is on master.
   - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
     exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
@@ -543,6 +548,29 @@ For anything outside those two prefixes - the `ci-*-test.sh` wrappers, `./mvnw`,
   it. That discipline is the one nobody keeps - four check scripts arrived with
   astubbs/parallel-consumer#279, all four granted in that same PR, and its reviewer could run none of
   them - which is exactly why the two `bin/` families became patterns instead.
+
+
+### The second required check: `review: human LGTM`
+
+A separate job, and a separate required check, asserting one thing: the repository owner has left a
+review whose body contains `lgtm` - any case, anywhere in the body, on any commit. `bin/check-human-lgtm.sh`
+owns the rule and states it in full.
+
+It is a **memory aid, not a security control.** The owner is both the subject of the assertion and the
+person who wants the merge, so it stops nobody who wants not to be stopped. What it buys is that
+"have I read this one myself yet?" becomes a red check instead of something to remember across a
+dozen open PRs.
+
+**Every PR, with no bot exemption** - unlike the automated half, which skips bot-raised PRs. The two
+assert different things: a Dependabot PR does not need an *automated review*, but it is still a change
+going in, and the requirement is that the owner reviews everything himself. Having no guard also means
+there is no job to skip, and a skipped job would otherwise satisfy the required check having asserted
+nothing.
+
+It is deliberately a second job rather than a second step in `claude-review`, so the checks list says
+*which* half is missing without opening anything - and so `claude-review`, a required check matched by
+name in the master ruleset, did not have to be renamed. It is **not head-sensitive**, matching the
+automated half: an LGTM on any commit counts for the whole PR, permanently.
 
 ## Self-hosted lanes
 

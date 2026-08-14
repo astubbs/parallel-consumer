@@ -47,6 +47,41 @@ jobs:
       - name: No SIGPIPE-prone pipes in bin/
         run: bash bin/check-shell-sigpipe.sh
 
+  agent-hooks:
+    name: "agents: hook self-tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads .claude/hooks/* and docs/merge-checklist.md from the working tree; no history needed.
+      - uses: actions/checkout@v6
+
+      # The hooks in .claude/hooks/ enforce repo conventions on every agent session, and they are
+      # the one layer with no CI behind it - a broken hook either blocks work or silently stops
+      # checking, and both look like nothing happening. docs/agent-harness.md rule 3 ("give it a
+      # negative control") applies to the harness itself; this is that control.
+      - name: Self-test the agent hooks
+        run: bash bin/test-check-agent-hooks.sh
+
+  rename:
+    name: "tooling: package rename"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Needs to build fixture git repositories and make commits in them, but only in a temp dir -
+      # it never touches this checkout, so shallow is fine.
+      - uses: actions/checkout@v6
+
+      # bin/rename-packages.sh is run by hand, once per branch, on master and on ~29 open PRs. That
+      # is exactly the shape of tool that rots unnoticed: nobody exercises it between the day it is
+      # written and the day the whole rename depends on it, and by then a regression costs a
+      # conflict storm across every open PR. Seconds to run, so it runs on every PR.
+      #
+      # The self-test includes three NEGATIVE CONTROLS (a stale reference, a misspelt one, and the
+      # escaped-regex form the habitual `grep -rn "io\.confluent"` cannot see) plus the paired
+      # commit-shape experiment whose result set the script's default. See its header.
+      - name: Self-test the package-rename tool
+        run: bash bin/test-rename-packages.sh
+
   actions:
     name: "workflows: action versions"
     runs-on: ubuntu-latest

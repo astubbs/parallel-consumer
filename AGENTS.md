@@ -81,7 +81,19 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
+| [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
+| [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
+| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+
+**A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
+there, not after review catches you.** The table above routes the ones that exist today; `find . -name
+AGENTS.md` is the check that it is still complete. This rule is here because the routing was complete
+and got missed anyway: astubbs#206 added a `docs/inflight/` note describing work that PR itself landed,
+which the directory's first rule - track only what is currently OPEN - forbids. Routing is necessary
+but not sufficient: the nested `CLAUDE.md` bridges described in
+[`docs/agent-harness.md`](docs/agent-harness.md) are what make a directory's `AGENTS.md` arrive when
+a file in it is touched, rather than waiting to be opened.
 
 **Where work and knowledge are recorded:**
 
@@ -93,6 +105,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires a diagnosis, or a recorded owner-granted exception |
+| **`docs/test-hardening/`** | Dated audits of tests that do not run, do not assert, or were never written - per-test evidence and the commit that disabled each one | A live or generated registry - each audit is point-in-time; triage goes in `refactoring.md` |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
@@ -192,6 +205,33 @@ costs seconds.
 Worked example and method:
 [`docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md`](docs/solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md).
 
+## IN FLIGHT: rename your branch BEFORE you merge master
+
+One such inherited instruction, live now: the fork is moving `io.confluent.*` to `bz.stub.*` with
+`bin/rename-packages.sh`, branch by branch. It binds **any** agent merging **any** branch until no
+open branch predates the rename - then delete this section. Reasoning, measurements and the task
+inventory are in the script's own header and in
+`docs/plans/2026-08-11-001-refactor-package-rename-plan.md`, which arrives with
+astubbs/parallel-consumer#277 - the tooling merges first, so on master the plan lands after this
+section does.
+
+- **Run `bin/rename-packages.sh` on your branch, then merge master.** Both sides then agree on where
+  every file lives and what it is called, so the merge is ordinary.
+- **A clean merge is not evidence you were safe to skip it.** Merging renamed master into an
+  un-renamed branch reported **zero conflicts** and silently applied the streams module's ArchUnit
+  edit into the *mutiny* module's file - git paired the five near-identical
+  `TestConventionsArchTest.java` files across modules. Renamed on both sides, that case surfaces as
+  a rename/rename conflict on the right file, for a human to resolve.
+- **Sweep with `grep -rnE 'io[\\./]*conflu'`, never `grep -rn "io\.confluent"`.** Three files encode
+  the package as an escaped regex and one misspells it, so the habitual sweep reports success
+  without `bin/lib/quarantine-common.sh` even appearing in its output.
+- **Assert the renames git RECORDED *and* their pairing - a bare R-count reads a mis-paired rename
+  as healthy.** `bin/rename-packages.sh` asserts both; if you moved anything by hand, do both by
+  hand.
+- **Confirm the mutation lane scored mutants rather than trusting its tick.**
+  `bin/ci-mutation-test.sh` exits **0** printing "nothing to mutate, skipping" when its package
+  regex is stale, which is indistinguishable from a pass in the job summary.
+
 ## Overview
 
 Parallel Consumer is a Java library for concurrent message processing from Apache Kafka with a
@@ -266,6 +306,14 @@ chaos suite, the ambient probe - and wins where the two disagree. Four rules bin
 - **Quarantine is master-state, not PR-state.** A test red on only one PR is that PR's problem, not
   a quarantine candidate - and nothing enforces this, so it is on you. The rest of the quarantine
   discipline is in [`docs/testing.md`](docs/testing.md).
+- **A test that never runs is not a passing test, and nothing goes red to tell you.** Tests that are
+  disabled, assumption-skipped, assert nothing, or were never written are recorded in dated audits
+  under [`docs/test-hardening/`](docs/test-hardening/) - per-test evidence and the commit that
+  disabled each one; the current one is
+  [`inactive-tests-audit-2026-08-08.md`](docs/test-hardening/inactive-tests-audit-2026-08-08.md).
+  Read the newest before re-enabling, deleting, or rewriting a dark test - the reason it went dark
+  is usually already established there. Each audit is point-in-time: add a new dated one rather than
+  editing an old one.
 
 Unit tests are surefire (`src/test/java/`); integration tests are failsafe and need Docker
 (`src/test-integration/java/`).
@@ -346,24 +394,13 @@ Nothing lints commit messages, so all of this is on you.
   reading if it says where you looked, and ruling one out is a real result (astubbs#220 is the
   worked example). Do this at merge prep, once the class is understood; doing it mid-diagnosis just
   widens the investigation.
-- **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates fix-ups
-  nobody wants in the permanent log, but usually also two or three genuinely separate pieces of
-  work. Do not default; look at the actual commits:
-  - **Re-cut the commits** - `git reset --mixed <merge-base>`, restage into a handful of atomic
-    commits, rebase-merge - when the branch holds distinct workstreams someone will later want to
-    bisect to or revert independently. The test for "atomic" is whether the message needs an "and
-    also". **`git fetch origin master` first, every time**, and reset to the **merge-base**, not to
-    `origin/master`: a stale ref or the wrong base silently reverts whatever master gained
-    meanwhile, and the tell is files appearing in the staged set that the branch never touched.
-    Verify with `git diff <old-tip> HEAD` - it must be empty, proving history changed and content
-    did not.
-  - **Squash-merge** when the branch is one idea and the intermediate commits are noise. If you
-    recommend this, **write the suggested squash message out in full** - it becomes the permanent
-    record, and the default concatenation of every subject is unreadable.
-  - **Rebase-merge as-is** only when the existing commits are already clean and atomic.
-
-  Release notes are generated from the commit log, so this choice decides what a future changelog
-  has to work with.
+- **Before merging, recommend a merge strategy - and say why**, and **offer** to write the squash
+  message and to re-cut the commits into atomic units rather than doing either silently. Keep the
+  recommendation to a line or two: write the squash message where it is used, not into the
+  conversation, unless asked for it.
+  [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
+  generated release notes, the three strategies and when each applies, and the reset-to-merge-base
+  trap that silently reverts master.
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they know about, and a one-way link strands the other half. If the successor does

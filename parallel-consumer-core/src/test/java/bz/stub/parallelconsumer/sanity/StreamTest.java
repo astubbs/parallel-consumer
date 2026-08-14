@@ -23,14 +23,6 @@ import java.util.stream.StreamSupport;
 @Slf4j
 public class StreamTest {
 
-    //    @Test
-    public void test() {
-        Stream<Double> s = Stream.generate(() -> Math.random());
-        s.forEach(x -> {
-            log.info(x.toString());
-        });
-    }
-
     @Test
     public void testStreamSpliterators() {
         int max = 10;
