@@ -38,6 +38,15 @@ the thing they actually have to answer. Say the strategy and why in a line or tw
 That is a delivery rule, not a licence to skip it: the message still gets written, and written
 properly.
 
+**`--subject` suppresses the PR number.** `gh pr merge --squash` lands a subject ending `... (#265)`
+because GitHub appends the number - but only when the subject is *not* overridden. Pass
+`--subject "..."` and your text is used verbatim, so the number silently never appears, and the
+commit lands out of step with every neighbour on master. It is not fixable afterwards without
+rewriting a pushed commit, which is how astubbs#206 ended up needing one. Either put `(#<pr>)` in the
+subject yourself, or omit `--subject` and let the PR title be used; `--body-file` on its own does not
+affect the subject. `.claude/hooks/check-squash-subject.sh` refuses the bad form for Claude Code, but
+the rule binds anyone merging by hand.
+
 ### Rebase-merge as-is
 
 Only when the existing commits are already clean and atomic.

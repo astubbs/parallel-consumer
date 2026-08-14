@@ -17,6 +17,16 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.githooks/pre-commit\" || exit 2"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "if": "Bash(gh pr merge *)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-squash-subject.sh\""
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

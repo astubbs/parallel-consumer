@@ -15,8 +15,16 @@ QUARANTINE_ANNOTATION_ERE='^[[:space:]]*(@[[:alnum:]_.]+(\([^)]*\))?[[:space:]]*
 REGISTRY="${REGISTRY:-docs/quarantined-tests.md}"
 
 # All java files containing real annotation usage (repo-relative paths).
+#
+# .claude is excluded because it holds this repo's WORKTREES (.claude/worktrees/<name>), each a full
+# checkout of some other branch. Without the exclusion the scan is green in a worktree and red on a
+# clean master in the primary checkout, reporting drift from ~60 sibling branches - annotations that
+# are not on this branch at all, against a registry that is. It stayed hidden because the repo's own
+# rule is never to work in the primary checkout, so nobody ran it there; the pre-commit hook added in
+# this PR does. .git is excluded for the same shape of reason, cheaply.
 quarantined_files() {
-    grep -rlE --include='*.java' --exclude-dir=target "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null || true
+    grep -rlE --include='*.java' --exclude-dir=target --exclude-dir=.claude --exclude-dir=.git \
+        "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null || true
 }
 
 # Count of annotation usages in one file.
