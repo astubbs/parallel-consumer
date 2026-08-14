@@ -100,7 +100,11 @@
 #                       `not\n(LGTM)` still counts, because the negator is no longer the word
 #                       touching the token once a bracket is between them. That is the same
 #                       place the single-line rule stops (see `not LGTM/LGTM` below), and it
-#                       is a bound rather than a claim to be right about that sentence.
+#                       is a bound rather than a claim to be right about that sentence. And it
+#                       does not cross a HARD break (two trailing spaces, or a trailing
+#                       backslash), which renders as an actual line break rather than a space -
+#                       so `not<two spaces>LGTM` is two lines to a human, the negator is not
+#                       touching the token, and the stamp counts.
 #                     * on a line that is neither inside a fenced code block nor a blockquote
 #                       (`>`). A review DISCUSSING this rule, or quoting somebody else's
 #                       LGTM, must not stamp the PR by accident - and that is not a
@@ -326,8 +330,8 @@ scan_result=$(awk \
                 # paragraph break, where the words are not adjacent in the rendered text -
                 # separate them. The whole-word test above deliberately does not look across:
                 # a break is a space, so it cannot glue two tokens together.
-                epost = (post ~ /^[ \t]*$/) ? post " " nextl : post
-                epre = (pre ~ /^[ \t]*$/) ? prevl " " pre : pre
+                epost = (post ~ /^[ \t]*$/ && !hard_break(post)) ? post " " nextl : post
+                epre = (pre ~ /^[ \t]*$/ && !hard_break(prevl)) ? prevl " " pre : pre
                 if (epost ~ /^[ \t]*\?/) note_near("question")
                 else if (negated(epre)) note_near("negated")
                 else { seg_ok = 1; return }
@@ -387,6 +391,15 @@ scan_result=$(awk \
         if (starts_block(s)) return 0
         if (s ~ /^(`{3,}|~{3,})/) return 0
         return 1
+    }
+
+    # Does this line end in a Markdown HARD break - two or more trailing spaces, or a trailing
+    # backslash? The splice above exists because a SOFT break renders as a space, putting the
+    # two words next to each other. A hard break does the opposite: it renders a line break, so
+    # the words are NOT adjacent, and joining them refused a real stamp. `not  <hard>LGTM` reads
+    # to a human as two lines, and the negator is not touching the token at all.
+    function hard_break(line) {
+        return (line ~ /  $/ || line ~ /\\$/)
     }
 
     # Scanning runs ONE LINE BEHIND the reader, which is what makes the line after a candidate

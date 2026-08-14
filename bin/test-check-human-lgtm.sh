@@ -27,11 +27,14 @@
 #     9. LGTM?, LGTM ? and lgtm?                                           -> FAIL (1)
 #     9d. a question mark across a SOFT LINE BREAK - 'LGTM\n?'             -> FAIL (1)
 #     9e. ... but across a BLANK line, which is a paragraph break          -> pass (0)
+#     9f. ... nor across a HARD break, which renders as a real line break   -> pass (0)
+#     9g. ... but ONE trailing space is not a hard break                    -> FAIL (1)
 #    10. NOT LGTM / not LGTM / never LGTM / isn't LGTM                     -> FAIL (1)
 #    10e. 'not LGTM/LGTM' - where the negator rule deliberately stops      -> pass (0)
 #    10f. a negator across a soft line break - 'not\nLGTM'                 -> FAIL (1)
 #    10g. ... but not across a blank line                                  -> pass (0)
 #    10h-i. `src/t:` and `-Dtest=Foo-t:` are not `n't` contractions          -> pass (0)
+#    10j-k. a HARD break (two spaces, or a backslash) after the negator     -> pass (0)
 #    11. LGTM glued to a letter or digit either side                       -> FAIL (1)
 #    11b. LGTM glued to ANOTHER LGTM - LGTMLGTM, xLGTMLGTM                 -> FAIL (1)
 #    12. lgtm inside a fenced code block only                              -> FAIL (1)
@@ -236,6 +239,18 @@ assert "9e. a question mark in a LATER paragraph does not reach back" \
 
 ?')")"
 
+# A HARD BREAK IS NOT A SOFT ONE. Two trailing spaces render an actual line break, so the two
+# words are NOT adjacent in the rendered text and the splice must not join them - the opposite
+# of 9d/10f, where a soft break renders as a space. Joining them refused a real stamp. Reported
+# on astubbs/parallel-consumer#298.
+assert "9f. a hard break before the question mark leaves the LGTM standing" \
+    0 "$(run_checker "$(owner_review "$(printf 'LGTM  \n?')")")"
+
+# The boundary, so nobody widens 9f into "any trailing space": ONE space is not a hard break,
+# the line still renders as one paragraph, and 9d still applies.
+assert "9g. a single trailing space is not a hard break, so the question mark still refuses it" \
+    1 "$(run_checker "$(owner_review "$(printf 'LGTM \n?')")")"
+
 assert "10. NOT LGTM fails" \
     1 "$(run_checker "$(owner_review 'This is NOT LGTM until the flake is fixed')")"
 
@@ -278,6 +293,12 @@ assert "10h. a path segment ending in /t is not a contraction, so the LGTM stamp
 
 assert "10i. nor is a hyphenated identifier ending in -t" \
     0 "$(run_checker "$(owner_review 'Re-ran it with -Dtest=Foo-t: LGTM')")"
+
+assert "10j. a hard break after the negator leaves the LGTM standing" \
+    0 "$(run_checker "$(owner_review "$(printf 'I have read the retry path and this is not  \nLGTM stands on its own line')")")"
+
+assert "10k. a trailing backslash is a hard break too" \
+    0 "$(run_checker "$(owner_review "$(printf 'I have read the retry path and this is not\\\nLGTM stands on its own line')")")"
 
 assert "11. LGTM glued to a letter or digit either side fails" \
     1 "$(run_checker "$(owner_review 'ALGTM LGTMx LGTM2 xLGTM')")"

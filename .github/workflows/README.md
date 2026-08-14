@@ -8,7 +8,7 @@ What each file is, so you can pick the right one without opening every one of th
 
 | File | Runs when | What it is |
 |---|---|---|
-| `claude-code-review.yml` | every PR push | **the gate** - judges, never reviews. Produces the required check `review: bot + human LGTM` |
+| `claude-code-review.yml` | every PR push | **the gate** - judges, never reviews. Produces `review: bot + human LGTM` (advisory) and the currently required `claude-review` |
 | `claude-code-review-dispatch.yml` | `workflow_dispatch` | **the dispatched reviewer** - packaged procedure, takes a `focus` steer, cannot open inline threads |
 | `claude.yml` | an `@claude` comment | **the comment reviewer** - same tools, free-form, and the only route that can open inline review threads |
 

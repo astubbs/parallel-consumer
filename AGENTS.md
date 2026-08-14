@@ -427,8 +427,11 @@ Nothing lints commit messages, so all of this is on you.
   they are not interchangeable: comment **`@claude review this`** when you want findings that
   mechanically block the merge (only that route can open inline review threads), or dispatch
   `claude-code-review-dispatch.yml --ref master -f pr=<number> -f focus="<steer>"` when you want a
-  steer or the packaged review procedure. Enforced by the required `review: bot + human LGTM`
-  check, so **a red gate on a PR nobody has reviewed yet is the expected state, not a fault**,
+  steer or the packaged review procedure. Enforced by the review gate, which during the cutover
+  reports under two names - `claude-review` is the one the master ruleset currently *requires*,
+  and `review: bot + human LGTM` is advisory until the documented swap - and which also wants
+  **your own LGTM**, a review you submit whose body says so. So
+  **a red gate on a PR nobody has reviewed yet is the expected state, not a fault**,
   and never something to fix by editing the gate. What exactly satisfies that check is stated in
   one place only - [`docs/ci.md`](docs/ci.md), "The gate asks..." - along with which route to
   reach for and why `--ref master` is required. Do not restate the rule here; it has drifted
