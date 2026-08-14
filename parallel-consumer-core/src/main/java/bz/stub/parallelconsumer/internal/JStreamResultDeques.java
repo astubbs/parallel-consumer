@@ -26,12 +26,17 @@ import java.util.Deque;
 public class JStreamResultDeques {
 
     /**
-     * Drops anything the caller never consumed, so closing the processor actually releases it.
+     * Drops anything the caller never consumed, so closing the processor actually releases it - and warns,
+     * because a non-empty deque here is the leak this API is deprecated for, caught at the only moment it
+     * can be reported for free.
      * <p>
-     * Reports only <i>that</i> results were dropped, never how many: counting them means
-     * {@link java.util.concurrent.ConcurrentLinkedDeque#size()}, which walks the whole deque, and the
-     * backlog is largest exactly when this runs. {@link Deque#isEmpty()} answers the question the log line
-     * actually asks without touching more than the head.
+     * It reports <i>that</i> results were dropped, never how many. Counting them means
+     * {@link java.util.concurrent.ConcurrentLinkedDeque#size()}, which walks the whole deque, and the backlog
+     * is largest exactly when this runs; {@link Deque#isEmpty()} answers what the line actually asks without
+     * going past the head. That cost is why there is no warning during growth - the earlier sampled one was
+     * removed for being O(n) per check against an unbounded deque. A real signal belongs in the metrics of
+     * <a href="https://github.com/astubbs/parallel-consumer/issues/216">astubbs#216</a>; this is a shutdown-time
+     * backstop, not monitoring, and it cannot warn a process that never gets there.
      * <p>
      * Best-effort on a <b>failed</b> close: if the shutdown timed out, worker threads can still be live and
      * their callbacks may enqueue after this returns. A close that completes normally has no such window -
@@ -39,7 +44,10 @@ public class JStreamResultDeques {
      */
     public void clearOnClose(Deque<?> deque) {
         if (!deque.isEmpty()) {
-            log.info("Clearing unconsumed result(s) from the stream on close");
+            log.warn("Discarding unconsumed results from the JStream result stream on close. The stream was not " +
+                    "fully consumed, so these results accumulated in memory for the life of this processor - " +
+                    "the growth this API is deprecated for. Consume the stream as results arrive, or move to " +
+                    "the callback-based API. See https://github.com/astubbs/parallel-consumer/issues/122");
         }
         deque.clear();
     }
