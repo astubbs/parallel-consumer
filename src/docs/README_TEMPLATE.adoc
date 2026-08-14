@@ -61,7 +61,7 @@ This is a community-maintained fork of https://github.com/confluentinc/parallel-
 // namespace they are moving OFF, and a summary that names only the destination cannot say that.
 // rename-packages.sh would otherwise rewrite it into a package that moves to itself.
 // rename-packages: freeze-begin(fork-summary)
-*Behaviour* is a drop-in replacement for upstream 0.5.x: the API is source-compatible apart from one removed accessor, and the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets.
+*Behaviour* is a drop-in replacement for upstream 0.5.x: the API is source-compatible, and the committed offset format is unchanged, so an existing consumer group upgrades in place without resetting or migrating offsets.
 Two identifiers do change in 0.6.0.0, and both are mechanical: the Maven `groupId` becomes `bz.stub.parallelconsumer`, and the Java packages *move* with it, from `io.confluent.parallelconsumer.*` to `bz.stub.parallelconsumer.*`.
 See <<upgrading-from-upstream,Upgrading from upstream 0.5.x>> for the steps.
 // rename-packages: freeze-end(fork-summary)
@@ -687,12 +687,8 @@ find . -name '*.java' -exec sed -i 's/io\.confluent\.parallelconsumer/bz.stub.pa
 NOTE: That `sed -i` is GNU syntax. On macOS or BSD, use `sed -i '' -e 's/…/…/g'` instead -- BSD `sed` reads the argument after `-i` as a backup-file suffix.
 // rename-packages: freeze-end(upgrade-instructions)
 
-One method was removed, and it is the only source edit the rename does not cover: `WorkManager.getSuccessfulWorkListeners()`.
-Registration is now `wm.addSuccessfulWorkListener(listener)`, replacing `wm.getSuccessfulWorkListeners().add(listener)`.
-The getter handed out the live internal list, so any caller could clear or reorder another component's listeners, and registering while the consumer ran could stop it outright.
-It was an undocumented Lombok accessor on a field marked "useful for testing", so most codebases will not have called it -- but if yours did, it is a compile error rather than a silent behaviour change.
-
-Beyond that, the API is source-compatible, so past the import lines no source edit is needed, and most codebases reference only a handful of types.
+Nothing else changes.
+The API is source-compatible, so beyond the import lines no source edit is needed, and most codebases reference only a handful of types.
 Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
 The library's shared internal utilities moved with the rest, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
 
