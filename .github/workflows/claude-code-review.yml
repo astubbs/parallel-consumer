@@ -210,8 +210,7 @@ jobs:
       # only when the automated half never ran at all (fork refusal, failed self-test), where
       # there is nothing useful to add and a second error would just be noise.
       #
-      # The matching rule in full - what counts as an LGTM, why an empty APPROVED does not, and
-      # why a DISMISSED review still does: bin/check-human-lgtm.sh.
+      # The rule in full - and why it is deliberately this small: bin/check-human-lgtm.sh.
       - name: Assert the repository owner has left an LGTM
         if: ${{ !cancelled() && steps.automated-review.conclusion != 'skipped' }}
         env:
@@ -219,24 +218,17 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Same unguessable-token discipline as the half above, and for the same reason: a
-          # review body carrying a predictable marker could otherwise open a segment with an
-          # author field of its own choosing, and mint an owner LGTM out of anybody's comment.
-          MARKER_TOKEN=$(openssl rand -hex 16)
-          export MARKER_TOKEN
-
-          # THE REVIEWS ENDPOINT, NOT THE COMMENTS ONE. That is the rule, not an implementation
+          # THE REVIEWS ENDPOINT, NOT THE COMMENTS ONE - that is the rule, not an implementation
           # detail: a passing "lgtm" in the ordinary comment box is not the deliberate act this
-          # half is asking for. bin/test-check-human-lgtm.sh asserts this line still reads
-          # `/reviews`, so the two cannot drift apart silently.
+          # half asks for. The endpoint gives that for free.
           #
-          # One marker line per review, then that review's body. The submitted-at is carried for
-          # the human-readable message only; nothing compares it to anything - this half is
-          # head-insensitive by design. Keep this marker in step with bin/check-human-lgtm.sh
-          # and bin/test-check-human-lgtm.sh.
+          # The JSON goes to the script whole and the script filters it with jq. The previous
+          # version streamed marker lines and bodies as flat text, which is why it needed an
+          # unguessable token: with everyone's bodies in one stream, a body could forge a segment
+          # header and mint an owner LGTM out of a stranger's comment. Filtering on .user.login
+          # before any text is looked at removes the attack and the token with it.
           gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-              --jq '.[] | "<!-- check-human-lgtm \(env.MARKER_TOKEN) \(.submitted_at // "unknown") \(.user.login // "unknown") \(.state // "UNKNOWN") -->", (.body // "")' \
-            | bash bin/check-human-lgtm.sh "$MARKER_TOKEN"
+            | bash bin/check-human-lgtm.sh
 
   # ---------------------------------------------------------------------------------------
   # TRANSITIONAL. DELETE THIS JOB once the master ruleset requires "review: bot + human LGTM"
