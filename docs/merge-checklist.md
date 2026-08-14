@@ -25,11 +25,18 @@ The test for "atomic" is whether the message needs an "and also".
 
 ### Squash-merge
 
-When the branch is one idea and the intermediate commits are noise. If you recommend this, **write
-the suggested squash message out in full.** It becomes the permanent record, and GitHub's default -
-the PR title plus every commit subject concatenated - is a log of how the work happened rather than
-an explanation of what changed and why. The PR discussion is not in `git log`; the squash message is
-all a future reader gets.
+When the branch is one idea and the intermediate commits are noise. GitHub's default message - the PR
+title plus every commit subject concatenated - is a log of how the work happened rather than an
+explanation of what changed and why, and the PR discussion is not in `git log`, so the squash message
+is all a future reader gets. **Write a real one.**
+
+**Write it where it is used, not into the conversation.** Put it in the merge when you perform it, or
+in the PR body if the author is merging. Do not print it out in chat unless asked - it is long, the
+author is being asked for a decision rather than a proofread, and pasting it makes them scroll past
+the thing they actually have to answer. Say the strategy and why in a line or two; offer the message.
+
+That is a delivery rule, not a licence to skip it: the message still gets written, and written
+properly.
 
 ### Rebase-merge as-is
 
