@@ -244,14 +244,16 @@ A mirror records what a closed PR *said*. It does not keep the code. The 35 PRs 
 not a copy we control: if that repository goes, the commits go with it, and a mirror describing work
 whose diff no longer exists is close to useless.
 
-Deleting the *branch* behind a PR is **not** a loss event - `refs/pull/<n>/head` is held by the base
-repository and keeps the commit after its branch is gone. The exposure is loss of
-`confluentinc/parallel-consumer` itself.
+Two things are **not** loss events, and both are easy to assume are. Deleting the *branch* behind a
+PR does not lose the commit - `refs/pull/<n>/head` is held by the base repository and outlives its
+branch. Nor does a contributor's fork vanishing: all 35 heads were raised from branches in
+`confluentinc/parallel-consumer` itself (every `head.label` is `confluentinc:<branch>`), so no third
+party holds any of them. **The single exposure is loss of `confluentinc/parallel-consumer`.**
 
-All 35 heads were raised from branches in `confluentinc/parallel-consumer` itself (every `head.label`
-is `confluentinc:<branch>`), so the exposure is **upstream repository loss** - not a
-contributor's fork vanishing. That distinction matters because it is the upstream branch, not a third
-party, that has to be watched.
+There is a second, narrower risk, and it belongs to this fork rather than upstream: the 29 heads that
+are safe are safe only because some `origin/*` branch *contains* them. Deleting one of those fork
+branches can orphan a head that reads as preserved today. That - not any upstream branch - is what
+the recurring check below has to watch.
 
 Checked 2026-08-14 per PR with
 
@@ -288,11 +290,10 @@ facts. A corrected SHA updated in one copy while the other still read as authori
 drift this section exists to prevent; the table above carries only what does not change.
 
 Each tag's message carries the upstream title, author, head branch name and closure date, so the
-provenance survives without the upstream thread.
-
-confluentinc#443 is the one raised by an outside contributor (Robbie-Palmer), but its head lives on
-`confluentinc:pyallel-consumer` like the rest - that contributor's own fork is already gone, and it
-made no difference. Do not read this as fork-loss risk; the branch upstream is what matters.
+provenance survives without the upstream thread. confluentinc#443 is worth one note: it is the only
+one raised by an outside contributor, that contributor's own fork is already gone, and it made no
+difference - the head was on `confluentinc:pyallel-consumer` like every other, which is why the
+exposure above is stated as upstream-repository loss and nothing else.
 
 Tagging is deliberate over branching: tags are not swept by branch-cleanup tooling and read as
 archival rather than live work. An annotated tag is also fetched by every clone, which
@@ -305,7 +306,9 @@ Recording the SHAs in the manifest is what makes the check redoable without re-q
 PR numbers alone did not allow it.
 
 Their objects are not reachable from any branch, so a plain `git fetch` in a clone made before they
-were pushed will not bring them down - use `git fetch --tags` to get the commits locally. Verifying
+were pushed will not bring them down - use `git fetch origin --tags` to get the commits locally.
+Name the remote: on a branch tracking `upstream`, a bare `git fetch --tags` fetches from there and
+leaves all six fork-only tags unavailable. Verifying
 the tags still exist needs no fetch at all: `git ls-remote --tags origin 'archive/upstream-pr-*'`
 asks the remote directly.
 

@@ -84,7 +84,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java`**
 
-- TODO(refactor): InternalRuntimeException misnames this - a failed send is an expected state, not an
+- TODO(refactor): InternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
 - todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
 - TODO talk about alternatives to this brute force approach for retrying committing transactions
 

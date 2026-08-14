@@ -282,13 +282,15 @@ Do not start one casually.
   brute-force transaction-commit retry.
 - **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
   rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
-  **expected operational state**, not an internal fault: the throw is observable only on the
-  synchronous pre-accumulator path, because Kafka's `ProducerBatch` swallows callback throws on the
-  async one - and everything `KafkaProducer#doSend` raises before the accumulator arrives there, not
-  just size rejections. `RecordTooLargeException` is the one `TransactionalPartialResultSetIT`
-  exercises, but metadata and authorization failures on that same path (`TimeoutException`,
-  `TopicAuthorizationException` - both `ApiException`) reach it too, so the name has to cover
-  environment failures as well as bad result records.
+  **expected operational state**, not an internal fault. The callback is reached from exactly one
+  place: `KafkaProducer#doSend`'s `catch (ApiException)` handler, before the accumulator. That is
+  narrower than "any pre-accumulator failure" - a serializer throwing `SerializationException`
+  propagates out of `doSend` without ever invoking the callback - and wider than "oversized records":
+  `RecordTooLargeException` is the case `TransactionalPartialResultSetIT` exercises, while metadata
+  and authorization failures on that same handler (`TimeoutException`,
+  `TopicAuthorizationException`) reach it too. So the type has to cover environment failures as well
+  as bad result records, but only those arriving as an `ApiException`. Asynchronous failures never
+  reach it at all - Kafka's own `ProducerBatch` catches and logs whatever a callback throws.
   A name that says "internal" sends every reader, human or agent, to re-derive that whole chain
   before they can conclude it is ordinary failure handling. It was verified from source and
   kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.

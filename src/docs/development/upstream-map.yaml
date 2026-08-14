@@ -342,13 +342,15 @@ entries:
   # Do not trust the closure state of any 2023-era upstream item. Several of these
   # issue bodies claim "Implemented in #NNN" where #NNN was itself swept unmerged
   # (e.g. #372 -> PR #390, #319 -> PR #270, #203 -> PR #345, #191 -> PR #346).
-  # All swept PR head commits were verified reachable on 2026-08-07 - but only through
-  # upstream's own refs/pull/<n>/head. A containment re-check on 2026-08-14 found six of
-  # the 35 were reachable from NOTHING on this fork, and pinned them as archive tags
-  # (see preserved_heads below, and docs/upstream.md). The other 29 are reachable from a
-  # fork branch, which is not the same as being raised from one and is not permanent.
-  # Cite branch + SHA, not just the PR number - and re-run the containment check rather
-  # than trusting this note, which is a snapshot.
+  # The 2026-08-07 pass verified all 35 swept PR heads reachable, but it only ever checked
+  # upstream's own refs/pull/<n>/head - it did not ask whether anything on THIS fork contained
+  # them. The 2026-08-14 containment re-check asked that, and split the cohort: 29 are contained
+  # by some origin/* branch here, and SIX are contained by no fork ref at all. Those six - not
+  # the whole cohort - are what the archive tags exist for (see preserved_heads below, and
+  # docs/upstream.md). Being contained by a fork branch is not the same as being raised from
+  # one, and is not permanent: deleting that branch re-orphans the head. Cite branch + SHA, not
+  # just the PR number - and re-run the containment check rather than trusting this note, which
+  # is a snapshot.
   #
   # MIRROR THE WHOLE COHORT, INCLUDING THE ITEMS WE THINK ARE WORTHLESS. The point is
   # a clean, known cutoff: "every issue upstream closed administratively is accounted
