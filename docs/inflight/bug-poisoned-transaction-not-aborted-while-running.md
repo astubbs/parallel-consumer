@@ -58,9 +58,21 @@ away.
   set *when* to retry, never *whether to stop*. There is no max-attempt count and no terminal
   outcome, so a permanently unsendable record retries forever. `confluentinc#196` asks for exactly
   that missing max-retries-plus-callback.
-- **Terminal-vs-retryable exceptions were never built.** `confluentinc#291` proposed explicit
-  terminal and retry exception types precisely so poison pills could be classified; it is closed
-  unmerged.
+- **The retryable half exists; the terminal half does not - and neither covers sends.** A user
+  function can already signal retry by throwing the public `PCRetriableException`, which
+  `AbstractParallelEoSStreamProcessor` recognises on the user-function failure path. What was never
+  built is its opposite: no exception says *stop, this will never succeed*, so nothing can classify
+  a failure as terminal. `confluentinc#242` (issue, closed) asked for the retry half and got it; its
+  PR `confluentinc#291`, which added explicit terminal *and* retry types, is closed unmerged. Both
+  concern exceptions the user's **code** throws, so neither classifies a *send* failure - read them
+  as precedent for the shape, not as cover for this. Both are already accounted for and must not be re-mirrored: `confluentinc#291`
+  fell in the 2023-06-15 swept-PR half of `sweep-2023-admin-closure` and is recorded in
+  `upstream-map.yaml`; `confluentinc#242` is not sweep-affected, having been closed as completed by
+  astubbs in 2022.
+- **The send failure's own exception is misnamed**, which costs a rediscovery every time: the
+  non-transactional path throws `InternalRuntimeException` for what is an expected operational
+  state. Tracked in `docs/refactoring.md` under `internal/ProducerManager.java`; naming only, no
+  behaviour change, and it does not wait on the retry work.
 - **The failure-history control is inert.** See `bug-max-failure-history-is-inert.md` - a related
   decision that has to be made in the same area.
 
