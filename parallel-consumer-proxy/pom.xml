@@ -42,6 +42,17 @@
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+            The protocol module: proxy.proto's generated messages and gRPC stubs. Per the
+            language-proxy plan's KTD34, the dependency arrow runs engine -> protocol and never
+            the reverse - the protocol module must stay consumable by codegen alone, with no
+            engine on the classpath.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>

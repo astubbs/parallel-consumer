@@ -50,6 +50,9 @@
             protobuf-java runtime. For an offline build, -Dproxy.protoc=PATH switches to a protoc
             found on the system PATH - at whatever version that binary happens to be, so the
             default is what CI and releases must use.
+
+            src/test/scripts/verify-offline-protoc-parity.sh proves the two routes generate
+            byte-identical output - run it after touching this wiring.
         -->
         <proxy.protoc>${protobuf.version}</proxy.protoc>
     </properties>

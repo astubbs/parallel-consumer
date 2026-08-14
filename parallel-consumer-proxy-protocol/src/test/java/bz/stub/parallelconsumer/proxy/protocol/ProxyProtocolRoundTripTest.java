@@ -80,11 +80,28 @@ class ProxyProtocolRoundTripTest {
                 .build();
         assertThat(Report.parseFrom(failure.toByteArray())).isEqualTo(failure);
 
-        var clientMessage = ClientMessage.newBuilder().setReport(success).build();
-        assertThat(ClientMessage.parseFrom(clientMessage.toByteArray())).isEqualTo(clientMessage);
+        // The envelopes must preserve WHICH message travelled, not just its bytes: session logic switches on
+        // getMessageCase(), so every oneof case is wrapped and its case asserted - equality alone would pass a
+        // field-renumbering that swapped the cases, because both sides of the comparison would be equally wrong.
+        var clientConfigure = ClientMessage.newBuilder().setConfigure(configure).build();
+        var clientConfigureBack = ClientMessage.parseFrom(clientConfigure.toByteArray());
+        assertThat(clientConfigureBack).isEqualTo(clientConfigure);
+        assertThat(clientConfigureBack.getMessageCase()).isEqualTo(ClientMessage.MessageCase.CONFIGURE);
 
-        var proxyMessage = ProxyMessage.newBuilder().setDispatch(dispatch).build();
-        assertThat(ProxyMessage.parseFrom(proxyMessage.toByteArray())).isEqualTo(proxyMessage);
+        var clientReport = ClientMessage.newBuilder().setReport(success).build();
+        var clientReportBack = ClientMessage.parseFrom(clientReport.toByteArray());
+        assertThat(clientReportBack).isEqualTo(clientReport);
+        assertThat(clientReportBack.getMessageCase()).isEqualTo(ClientMessage.MessageCase.REPORT);
+
+        var proxyConfigured = ProxyMessage.newBuilder().setConfigured(configured).build();
+        var proxyConfiguredBack = ProxyMessage.parseFrom(proxyConfigured.toByteArray());
+        assertThat(proxyConfiguredBack).isEqualTo(proxyConfigured);
+        assertThat(proxyConfiguredBack.getMessageCase()).isEqualTo(ProxyMessage.MessageCase.CONFIGURED);
+
+        var proxyDispatch = ProxyMessage.newBuilder().setDispatch(dispatch).build();
+        var proxyDispatchBack = ProxyMessage.parseFrom(proxyDispatch.toByteArray());
+        assertThat(proxyDispatchBack).isEqualTo(proxyDispatch);
+        assertThat(proxyDispatchBack.getMessageCase()).isEqualTo(ProxyMessage.MessageCase.DISPATCH);
     }
 
     /**
