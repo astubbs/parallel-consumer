@@ -16,12 +16,16 @@
     <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
 
     <!--
-        SKELETON, deliberately. The shared Java wrapper surface - the API both transports
-        implement and the nine other languages mirror - lands with the Java reference
-        implementation on the language-proxy plan (astubbs#242). Seeded empty so the module tree,
-        aggregator entries and data fragments exist before any code does. Transport types (gRPC,
-        protobuf) must never appear on this surface; the direct sibling's dependency ban is what
-        makes that checkable.
+        The shared Java wrapper surface: the API both transports implement and the nine other
+        languages mirror, plus the transport-parameterised conformance suite in this module's
+        test-jar (astubbs#242, the plan's U29 spike; U20 grows the suite to the full set).
+
+        DEPENDENCY-FREE, deliberately: every arrow points INTO this module (api <- direct,
+        api <- grpc), and nothing here may depend on core, the protocol module, protobuf or gRPC.
+        Transport types must never appear on this surface; the direct sibling's bannedDependencies
+        rule is what makes that checkable - a transport type leaking in here fails THAT module's
+        build. The test tree is bound by the same rule, because the test-jar lands on the direct
+        module's test classpath.
     -->
 
 </project>

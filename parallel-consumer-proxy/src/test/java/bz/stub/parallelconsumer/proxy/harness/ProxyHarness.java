@@ -276,6 +276,27 @@ public class ProxyHarness implements AutoCloseable {
         return List.copyOf(mockProducer.history());
     }
 
+    /** The engine lane's counterpart of {@link #producedRecords()}: R6's produce payload, as the engine sent it. */
+    public List<ProducerRecord<byte[], byte[]>> engineProducedRecords() {
+        if (engineMockProducer == null) {
+            throw new IllegalStateException("the engine lane is not started - call startEngine first");
+        }
+        return List.copyOf(engineMockProducer.history());
+    }
+
+    /**
+     * The engine lane's standing leak check: how many records the engine currently counts as out for
+     * processing. Throws rather than answering zero before a client has configured the engine, because a
+     * vacuous zero would pass the very assertion this exists to make meaningful.
+     */
+    public int engineRecordsOutForProcessing() {
+        var currentEngine = engine;
+        if (currentEngine == null) {
+            throw new IllegalStateException("no engine yet - it exists once a client's Configure arrives");
+        }
+        return currentEngine.getNumberRecordsOutForProcessing();
+    }
+
     /** The most recently committed offset for the scenario's partition, whichever lane is active. */
     public OptionalLong lastCommittedOffset() {
         var history = (engineMockConsumer != null ? engineMockConsumer : mockConsumer).getCommitHistoryInt();

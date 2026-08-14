@@ -7,14 +7,19 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.state.ShardKey;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -41,8 +46,12 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * the wire as the bytes Kafka held, and deserialization happens in the worker's own language. A generic engine
  * here would need per-type serializers for state that is only ever bytes on both sides.
  * <p>
- * Not this unit's scope, deliberately: the produce payload of a success report (the spike's, per R6), terminal
- * failure (U9), leases, reconnect and worker death (U8), drain (U10 per KTD17).
+ * A success report's produce payload is produced here with the engine's own producer (R6, landed by the
+ * spike U29): the worker's only sanctioned Kafka output (KTD7), sent and acked before the input record's
+ * offset may become eligible to commit.
+ * <p>
+ * Not this unit's scope, deliberately: terminal failure (U9), leases, reconnect and worker death (U8), drain
+ * (U10 per KTD17).
  *
  * @author Antony Stubbs
  * @see DispatchSink
@@ -185,14 +194,57 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
         // claimed entry that never reaches the mailbox is exactly the counter drift the leak check exists for
         ReportResult result;
         if (report.getOutcomeCase() == Report.OutcomeCase.SUCCESS) {
-            wc.onUserFunctionSuccess();
-            result = ReportResult.APPLIED_SUCCESS;
+            try {
+                // R6: the produce payload is the worker's only sanctioned Kafka output (KTD7), and it is
+                // produced BEFORE the success hook, so the input offset cannot become eligible to commit
+                // ahead of the output existing - the at-least-once ordering
+                producePayload(report.getSuccess());
+                wc.onUserFunctionSuccess();
+                result = ReportResult.APPLIED_SUCCESS;
+            } catch (RuntimeException produceFailure) {
+                // the worker succeeded but its output did not: applied as a failure so the record returns to
+                // retry scheduling. The redelivered worker may produce duplicates - the at-least-once
+                // contract R6 states, not a defect
+                log.warn("Produce payload of a success report failed; applying the report as a failure so the "
+                        + "record is redelivered", produceFailure);
+                wc.onUserFunctionFailure(produceFailure);
+                result = ReportResult.APPLIED_FAILURE;
+            }
         } else {
             wc.onUserFunctionFailure(RecordCodec.toFailureCause(report.getFailure()));
             result = ReportResult.APPLIED_FAILURE;
         }
         addToMailbox(entry.context(), wc);
         return result;
+    }
+
+    /**
+     * Produces a success report's payload with the engine's own producer, blocking on the acks within the
+     * configured send timeout - mirroring core's own poll-and-produce flow, which waits for acks before the
+     * record may complete. Runs on the transport's report thread; the send itself is thread-safe, and no
+     * produce lock is needed outside the transactional commit mode, which the proxy refuses (KTD7).
+     */
+    private void producePayload(Report.Success success) {
+        if (success.getProduceCount() == 0) {
+            return;
+        }
+        var producerManager = getProducerManager().orElseThrow(() -> new IllegalStateException(
+                "a success report carries a produce payload but the engine has no producer"));
+        var outbound = new ArrayList<ProducerRecord<byte[], byte[]>>(success.getProduceCount());
+        for (ProduceRecord produceRecord : success.getProduceList()) {
+            outbound.add(RecordCodec.toProducerRecord(produceRecord));
+        }
+        var futures = producerManager.produceMessages(outbound);
+        for (var future : futures) {
+            try {
+                future.getRight().get(options.getSendTimeout().toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted awaiting a produce payload's ack", e);
+            } catch (ExecutionException | TimeoutException e) {
+                throw new IllegalStateException("a produce payload record was not acknowledged", e);
+            }
+        }
     }
 
     /**

@@ -16,11 +16,87 @@
     <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
 
     <!--
-        SKELETON, deliberately. The gRPC transport implements the shared API surface over the RPC
-        hop to the sidecar, depending on the api module and the protocol module; it lands with the
-        Java reference work on the language-proxy plan (astubbs#242,
-        docs/plans/2026-08-14-001-feat-language-proxy-plan.md). Seeded empty so the module tree,
-        aggregator entries and data fragments exist before any code does.
+        The gRPC transport: the shared API implemented over the RPC hop to the sidecar
+        (astubbs#242, docs/plans/2026-08-14-001-feat-language-proxy-plan.md - U29's spike; U25
+        makes it the reference implementation). It depends on the api module and the protocol
+        module (KTD34: engine and clients are both consumers of the protocol, which owns itself);
+        its tests run the api test-jar's transport-parameterised conformance suite against the
+        proxy test-jar's harness engine lane - a real gRPC server over mock Kafka clients, so the
+        whole suite stays in the surefire lane.
     -->
+
+    <properties>
+        <!--
+            This module's real runtime floor is Java 17, and it must say so - the transport stack
+            requires it, exactly as the proxy module's own release.target comment explains at
+            length (the release level constrains platform API, not classpath reads, so a too-low
+            setting ships bytecode claiming a JVM it cannot run on).
+        -->
+        <release.target>17</release.target>
+
+        <!-- Must match the protocol module's pin (parallel-consumer-proxy-protocol/pom.xml): the
+             generated stubs and the channel runtime must agree on one gRPC version. Repeated
+             rather than shared because Maven properties do not flow between sibling modules. -->
+        <grpc.version>1.73.0</grpc.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- the channel stack, matching the transport the proxy's feasibility gate cleared (shaded netty) -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <!-- the shared conformance suite - the same test classes the direct sibling runs (KTD20) -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!-- the harness engine lane: ProxyHarness in the proxy test-jar, plus the proxy classes it drives -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!-- LongPollingMockConsumer and friends, which the harness stands on; test scope is not transitive -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+            commons-lang3, and test scope is not transitive, so relying on core to supply it here
+            would break the moment core stopped using it.
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 
 </project>

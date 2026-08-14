@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.proxy.engine;
 
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Record;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
@@ -12,6 +13,7 @@ import bz.stub.parallelconsumer.state.WorkContainer;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Timestamp;
 import lombok.experimental.UtilityClass;
+import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -100,6 +102,17 @@ public class RecordCodec {
      */
     public static Throwable toFailureCause(Report.Failure failure) {
         return new WorkerReportedFailureException(failure.hasReason() ? failure.getReason() : "");
+    }
+
+    /**
+     * A success report's produce payload entry as the record the engine's own producer sends (R6) - the only
+     * sanctioned route for worker output (KTD7). The absent-versus-empty distinction is preserved in reverse:
+     * an unset wire field produces a {@code null} key or value, never a zero-length one.
+     */
+    public static ProducerRecord<byte[], byte[]> toProducerRecord(ProduceRecord produceRecord) {
+        return new ProducerRecord<>(produceRecord.getTopic(),
+                produceRecord.hasKey() ? produceRecord.getKey().toByteArray() : null,
+                produceRecord.hasValue() ? produceRecord.getValue().toByteArray() : null);
     }
 
     /**
