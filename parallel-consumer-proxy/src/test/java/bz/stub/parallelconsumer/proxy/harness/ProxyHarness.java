@@ -223,9 +223,11 @@ public class ProxyHarness implements AutoCloseable {
 
     /** Arrival-sync: waits until at least {@code atLeast} records have been handed to the client. */
     public void awaitDeliveries(int atLeast) {
+        // Counts the queue directly: deliveries() takes a full snapshot copy, wasted when only the
+        // size is asserted on every poll tick.
         Awaitility.await().atMost(CONVERGENCE_BUDGET).untilAsserted(() ->
                 assertWithMessage("records delivered to the client")
-                        .that(deliveries().size()).isAtLeast(atLeast));
+                        .that(deliveries.size()).isAtLeast(atLeast));
     }
 
     /** Waits for the scenario's convergent state within the default {@link #CONVERGENCE_BUDGET}. */

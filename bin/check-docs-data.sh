@@ -248,12 +248,13 @@ for path in sorted(glob.glob("docs/features/*.yaml") + glob.glob("docs/data/*.ya
         problems.append(f"{path}: kind '{kind}' is not declared in {SCHEMA_PATH}")
         continue
 
-    is_fragment = fragment_root(path) is not None
+    root_file = fragment_root(path)
+    is_fragment = root_file is not None
     if is_fragment:
         # A fragment is one module's record and nothing shared: same kind, same row schema, merged
         # into the root file's corpus. The root file's preamble fields (release, axes, reader
         # contract...) are repo-level, so the file-level required list does not apply here.
-        expected_kind = os.path.basename(fragment_root(path))[: -len(".yaml")]
+        expected_kind = os.path.basename(root_file)[: -len(".yaml")]
         if kind != expected_kind:
             problems.append(
                 f"{path}: a fragment in {os.path.dirname(path)}/ must carry kind "
