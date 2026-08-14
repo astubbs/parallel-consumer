@@ -34,6 +34,12 @@
             Only this module and mutiny are affected - core, vertx and reactor remain Java 8 (major 52).
         -->
         <release.target>17</release.target>
+
+        <!-- Must match the protocol module's pin (parallel-consumer-proxy-protocol/pom.xml): the
+             generated stubs this module serves and the transport runtime must agree on one gRPC
+             version. The pin is repeated rather than shared because Maven properties do not flow
+             between sibling modules, so a mismatch here is possible and this comment is the guard. -->
+        <grpc.version>1.73.0</grpc.version>
     </properties>
 
     <dependencies>
@@ -52,6 +58,17 @@
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-proxy-protocol</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <!--
+            The transport's server stack, U1's cleared gate: grpc-netty-shaded is the artifact the
+            feasibility probe proved end to end (loopback bind, :authority interception before the
+            service method, native-image build), so the transport uses it rather than unshaded
+            grpc-netty. It also serves as the client stack in this module's own transport tests.
+        -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+            <version>${grpc.version}</version>
         </dependency>
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
