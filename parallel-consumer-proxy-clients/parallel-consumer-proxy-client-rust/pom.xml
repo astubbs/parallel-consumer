@@ -19,14 +19,44 @@
     <!--
         Thin Maven wrapper over Cargo (Cargo.toml beside this file). The commands below run ONLY
         under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for
-        why opt-in is load-bearing. Skeleton until the Rust wave of the language-proxy plan
-        (astubbs#242) starts; that wave owns everything in this directory, including refining
-        these commands.
+        why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this skeleton
+        and runs no Rust toolchain at all.
+
+        THE BUILD STEP IS `cargo clippy`, NOT `cargo build`, AND THAT IS THE LINT GATE. The exact
+        command is the pc.foreign.build.args property below (an XML comment may not contain two
+        consecutive dashes, so its flags cannot be repeated here - that restriction is what makes
+        this paragraph read oddly, and it has already broken one sibling module's pom). Clippy
+        type-checks and lints every target, library and tests and build script alike, and denying
+        warnings turns every finding, clippy's and rustc's, into a failure; `cargo test` below then
+        does the real compile, so nothing is skipped by not running `cargo build`. Wiring the gate
+        here rather than only in CI means the command a developer runs locally is the one that
+        fails the Maven build. Proven to fail rather than assumed: see
+        docs/inflight/clients/rust.md (astubbs#242).
+
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND MAVEN CANNOT ORDER THAT FOR US. `cargo
+        test` here spawns the conformance harness (TestModeMain, in parallel-consumer-proxy's test
+        jar), but this module deliberately has NO Maven dependency on the proxy - no client depends
+        on the engine - so `-am` does not pull it into the reactor ahead of us. Build it first:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The Rust test fails with that command in its message rather than skipping, because a test
+        that quietly does not run is not a passing test.
+
+        `protoc` is required too: the crate generates from the frozen .proto in build.rs. Its
+        header names the three places it looks, one of which is the copy Maven itself downloads.
+
+        CARGO AND MAVEN SHARE target/, SO `mvn clean` DELETES THE RUST BUILD OUTPUT and the next
+        foreign build recompiles the dependency tree from scratch (about a minute; the downloaded
+        crates themselves are cached in ~/.cargo and are not re-fetched). Left deliberately: a
+        clean that leaves a foreign toolchain's output behind is a clean that lies, and moving
+        cargo's output elsewhere would need a .cargo/config.toml whose only purpose is to hide from
+        the clean.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
         <pc.foreign.build.executable>cargo</pc.foreign.build.executable>
-        <pc.foreign.build.args>build</pc.foreign.build.args>
+        <pc.foreign.build.args>clippy --all-targets -- -D warnings</pc.foreign.build.args>
         <pc.foreign.test.executable>cargo</pc.foreign.test.executable>
         <pc.foreign.test.args>test</pc.foreign.test.args>
     </properties>

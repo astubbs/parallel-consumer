@@ -6,9 +6,28 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-rust
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the Rust client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the Rust client wave of the language-proxy plan.
+  - id: proxy-client-rust
+    artifact: parallel-consumer-proxy-client-rust
+    coverage: >-
+      One conformance scenario, a-processed-record-advances-the-committed-offset, run end to end
+      over real gRPC against the test-mode sidecar: the sidecar is spawned as a child process, its
+      port read from the lifecycle channel, the fresh-session handshake completed, a dispatch wave
+      queued and handed to a tokio executor task, the user function run, the outcome reported with
+      the token echoed verbatim, and the session closed by half-close and the lifecycle pipe.
+      Fifteen unit tests cover the parts a live session cannot reach cheaply: queue FIFO order,
+      queue overflow as a protocol violation naming the count, a panicking processor becoming a
+      failure outcome, a Configured missing its ceiling or executor count, the port-line scan, the
+      declared capability set, and that the options type's Debug redacts kafka_properties. The
+      assertion that the end-to-end test can fail was established by a negative control - returning
+      Err from the user function instead of succeeding produced two redeliveries with the attempt
+      count incremented and the failure reason verbatim, and the test went red.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/tests/session.rs
+    limitation: >-
+      One scenario of eleven, and the harness negotiates only the dispatch capability, so every
+      liveness, reconnect, worker-death, terminal and drain duty is untested because it is
+      un-negotiated rather than because it passed. Subscription is not a live variable either: the
+      mock harness seeds its records regardless of the topic a client subscribes to, so a
+      wrong-topic run still passes and cannot be used as a control. Nothing exercises more than one
+      record, so FIFO hand-out across several executors and out-of-order reporting are covered only
+      by unit tests over the queue itself.

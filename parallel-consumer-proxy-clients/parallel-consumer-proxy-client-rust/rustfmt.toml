@@ -1,0 +1,6 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# rustfmt does not read .editorconfig, and the repository's is 120 columns for every language
+# ([*] max_line_length = 120). Without this file rustfmt would reformat to its own default of 100
+# and quietly put this crate at odds with every other file in the tree.
+max_width = 120
