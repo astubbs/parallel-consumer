@@ -53,9 +53,17 @@ instead of ten suites drifting apart.
   recovery (then the suite must tolerate late arrival without tolerating never), or the verdict path
   is deliberately separated from the cluster under test. Decide explicitly rather than discovering it
   in a red run.
-- **One result format across ten languages** is the same problem the wire already solved. Reuse the
-  approach, not the schema: a small, separately-frozen results message, generated per language from
-  one `.proto`, rather than JSON that each client spells differently.
+- **Do not build a second protocol for this.** A results schema with its own `.proto`, its own
+  freeze and its own codegen path would be the whole wire problem again, multiplied by ten
+  languages, to carry test data. Every added format costs ten implementations and ten maintenance
+  burdens - the horizontal cost is what makes a fan-out expensive, so the bar for adding anything is
+  much higher here than in a single-language project. Cheaper channels, in order of preference:
+  **the client test process's own exit code** is already a verdict and needs nothing built (the
+  probe's complaint was that the *sidecar* has no verdict channel, but each language's test runner
+  has an exit status the orchestrator can read); **plain lines or a JSON file** for anything richer,
+  since every language writes those without codegen and a human can read the failure; and only if a
+  Kafka-side channel is genuinely wanted, the existing produce path carrying **bytes in a trivial
+  agreed shape**, not a generated message type.
 
 ## Where this sits
 
