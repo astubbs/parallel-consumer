@@ -298,6 +298,14 @@ Do not start one casually.
     be user-visible and belongs in
     [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
     needing that.
+    - **The subclass alone is not enough, and this is the part that is easy to get wrong.** A
+      synchronous callback failure escapes `produceMessages` into
+      `ParallelEoSStreamProcessor#processAndProduceResults`, whose `catch (Exception e)` immediately
+      rethrows `new InternalRuntimeException("Error while waiting for produce results", e)`. The
+      specific type would survive only as a nested cause, so a caller still could not catch it and
+      the observable failure type would be exactly as generic as today. The refactor has to preserve
+      the subtype through that outer wrapper too - rethrow it unchanged, or introduce the specific
+      type at the wrapping point - otherwise it buys nothing beyond a better log line.
   - **Drive-by while there:** the lambda parameter is bare `exception`. It is the *send* failure, not
     a user-code exception (those are caught by `runUserFunction`, which wraps the `usersFunction.apply`
     call made in `runUserFunctionInternal`), so name it `sendFailure`. Do **not** name it after user

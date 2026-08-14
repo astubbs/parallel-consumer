@@ -249,9 +249,19 @@ is `confluentinc:<branch>`), so the exposure is **upstream branch or repository 
 contributor's fork vanishing. That distinction matters because it is the upstream branch, not a third
 party, that has to be watched.
 
-Checked 2026-08-14 with `git branch -r --contains <head>` per PR, against remote-tracking refs
-reconciled with a live `git ls-remote --heads origin` (three stale local tracking refs would
-otherwise have counted as safe). **29 were reachable from a branch that still exists on this fork** -
+Checked 2026-08-14 per PR with
+
+```bash
+git branch -r --contains <head> --list 'origin/*'
+```
+
+reconciled against a live `git ls-remote --heads origin`, because three stale local tracking refs
+would otherwise have counted as safe. **Restricting to `origin/*` is the whole point of the check**:
+a full clone of this fork also carries `upstream` (see AGENTS.md - `gh` defaults to the wrong repo
+here), and a head contained only in `upstream/*` is exactly the case being looked for. A bare
+`git branch -r --contains` searches every remote, so it would report the upstream-only heads as
+preserved and the archive would never have been created. **29 were reachable from a branch that
+still exists on this fork** -
 note *reachable from*, not *raised from*: confluentinc#271's own branch is long gone and its head
 survives only because an unrelated branch contains it, while confluentinc#22, confluentinc#270 and
 confluentinc#405 have same-named fork branches that do **not** contain their heads, which is why they
