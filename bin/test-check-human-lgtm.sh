@@ -47,7 +47,7 @@
 #    13b-d. a blockquote NESTED IN A LIST ITEM, three ways                 -> FAIL (1)
 #    13e-f. a bulleted LGTM, and an `->` arrow, both still stamp           -> pass (0)
 #    13g. a LAZY blockquote continuation - '> Bob said\nLGTM'              -> FAIL (1)
-#    13h-i. ... ended by a blank line, and by a list item                  -> pass (0)
+#    13h-j. ... ended by a blank line, a list item, and a heading          -> pass (0)
 #    14. LGTM wearing ordinary punctuation - (LGTM) LGTM! -- LGTM. LGTM,   -> pass (0)
 #    15. a rejected near-miss beside a real LGTM in the same body          -> pass (0)
 #
@@ -460,6 +460,14 @@ LGTM')")"
 assert "13i. a list item interrupts the quoted paragraph, so a bulleted LGTM stamps" \
     0 "$(run_checker "$(owner_review '> Bob asked whether this was fine
 - LGTM')")"
+
+# The second terminator in the same clause, which 13i cannot reach: a heading interrupts a
+# paragraph too, so the line after it is the owner's own. Without a case of its own the heading
+# half of the rule could be deleted with every other case still green.
+assert "13j. a heading also interrupts it, so the LGTM under it stamps" \
+    0 "$(run_checker "$(owner_review '> Bob asked whether this was fine
+## My own read
+LGTM')")"
 
 assert "14. LGTM wearing ordinary punctuation passes" \
     0 "$(run_checker "$(owner_review '(LGTM)')")"
