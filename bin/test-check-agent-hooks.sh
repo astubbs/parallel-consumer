@@ -238,6 +238,23 @@ assert "a literal \$5 is judged, not treated as an expansion" DENY \
 assert "a real \$VAR expansion still fails OPEN" ALLOW \
     "$(verdict 'gh pr merge 1299 --squash --subject "$SUBJECT"')"
 
+# Round seven. Both are consequences of running on every Bash call: the parser now sees commands
+# it never used to, so what it treats as a command boundary and as an executable both matter more.
+#
+# FALSE POSITIVE. posix lexing strips quoting, so the `(` in an ordinary string argument looked
+# exactly like a subshell, reset command position, and hard-denied a harmless command.
+assert "a QUOTED paren is an argument, not a subshell" ALLOW \
+    "$(verdict 'echo "(" gh pr merge 1299 --subject bad')"
+assert "...while a real subshell still is one" DENY \
+    "$(verdict '( gh pr merge 1299 --subject "bad no number" )')"
+# `command gh ...` runs gh - Bash's own `help command` says so - and cleared command position.
+assert "a merge run through the 'command' builtin is still a merge" DENY \
+    "$(verdict 'command gh pr merge 1299 --subject "bad no number"')"
+assert "...and passes with the right number" ALLOW \
+    "$(verdict 'command gh pr merge 1299 --subject "tooling: thing (#1299)"')"
+assert "other execution wrappers count too" DENY \
+    "$(verdict 'sudo gh pr merge 1299 --subject "bad no number"')"
+
 assert "a non-Bash tool is ignored" ALLOW \
     "$(printf '%s' '{"tool_name":"Read","tool_input":{"command":"gh pr merge 1299 --subject \"x\""}}' \
         | "$HOOKS/check-squash-subject.sh" 2>/dev/null | grep -c '"deny"' | sed 's/^0$/ALLOW/;s/^[1-9].*/DENY/')"

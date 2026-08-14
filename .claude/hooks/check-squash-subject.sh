@@ -131,9 +131,24 @@ EXPANSION = re.compile(r"\$[A-Za-z_{(]|`")
 # swallowed everything after `&&`/`;`/`|`, so an unrelated later command's `--subject` became "the
 # last one" - a decoy could vouch for a bad merge, and a trailing `echo --subject "no number"`
 # could condemn a good one. Both directions, from the same missing boundary.
-OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
+OPERATORS = {"&&", "||", ";", ";;", "|", "&", ")"}
+
+# `(` is NOT in the set above, and that is the fix for a false positive rather than an oversight.
+# posix lexing strips quoting, so the `(` in `echo "(" gh pr merge ...` - an ordinary string
+# argument - was indistinguishable from a subshell and reset command position, making the text
+# after it look like an executed merge and HARD-DENYING a harmless command. Recovering the quoting
+# is not available: a second, non-posix lex does not align token-for-token with the posix one (an
+# escaped apostrophe splits differently), and mis-aligning would resurrect an older false positive.
+#
+# Instead `(` is honoured only where a command could actually begin - see OPEN_SUBSHELL below.
+# `echo "("` cannot, because `echo` has already taken the command slot.
+OPEN_SUBSHELL = "("
 
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# Wrappers that RUN the next word, so command position survives them. `command gh pr merge ...` is
+# a real invocation Bash's own `help command` documents, and it was walking straight past the guard.
+EXEC_PREFIXES = {"command", "builtin", "exec", "env", "nohup", "time", "sudo", "nice", "stdbuf"}
 
 
 def is_gh(token):
@@ -156,8 +171,16 @@ def merge_slices(tokens):
             at_command = True
             i += 1
             continue
+        if token == OPEN_SUBSHELL:
+            # Only a `(` where a command could start opens a subshell; anywhere else it is an
+            # argument that happened to lose its quotes to the lexer.
+            i += 1
+            continue
         if at_command and ASSIGNMENT.match(token):
             i += 1                                   # env prefix, still command position
+            continue
+        if at_command and token in EXEC_PREFIXES:
+            i += 1                                   # wrapper runs the next word: still a command
             continue
         if at_command and is_gh(token):
             j = i + 1
