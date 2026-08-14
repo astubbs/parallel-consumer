@@ -37,6 +37,26 @@ option java_package = "bz.stub.parallelconsumer.proxy.protocol.v1";
 option java_multiple_files = true;
 option java_outer_classname = "ProxyProto";
 
+// Every other target language's placement option, declared here rather than
+// left to each client's protoc command line. Without them a generator either
+// refuses to run (Go) or derives a name from the proto package that the
+// client author then has to override identically in nine places - so the one
+// authority on where generated code lands is this file, for every language,
+// the same way it already is for Java.
+//
+// They are wire-invisible: file options name nothing that is serialized, so
+// the golden fixtures and every conformance stream are unchanged. They are
+// added BEFORE the freeze reaches master deliberately - `buf breaking`'s FILE
+// category treats a change to one of these as breaking, so a language that
+// arrives later would otherwise have to choose between a bad name and a gate
+// override. Found by the Go client wave, which hit the Go case first.
+option go_package = "github.com/astubbs/parallel-consumer/clients/go/parallelconsumer/gen/parallelconsumer/proxy/v1;proxyv1";
+option csharp_namespace = "Bz.Stub.ParallelConsumer.Proxy.Protocol.V1";
+option ruby_package = "Bz::Stub::ParallelConsumer::Proxy::V1";
+option php_namespace = "Bz\\Stub\\ParallelConsumer\\Proxy\\V1";
+option objc_class_prefix = "PCP";
+option swift_prefix = "PCP";
+
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
