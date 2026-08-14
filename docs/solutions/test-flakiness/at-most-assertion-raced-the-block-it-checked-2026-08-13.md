@@ -20,6 +20,8 @@ related:
   - "docs/inflight/test-load-tightness-flakes.md - the family this belonged to; entry shrunk to point here"
   - "unforceable-trigger-commit-lock-timeout-2026-08-07.md - the sibling in the same file. Its 'Explicitly NOT an instance' section is correct that this test latches its TRIGGER, but its conclusion that the 'tight assertion' label stands is only accidentally right - the tightness is nowhere near the assertion's threshold"
   - "docs/investigating.md - the control-arm method this was settled with"
+  - "assert-the-commit-frontier-not-the-tick-path.md (astubbs#264) - the residual left open below is an instance of its class: the injected sleep is keyed on the commit tick that carries an exact base offset, not on the frontier having advanced"
+  - "vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md - the sibling failure mode, and the one the CloseAndOpenOffsetTest sweep below turned up"
 ---
 
 # The assertion and the thing it was asserting against were both 5 seconds long
@@ -109,3 +111,46 @@ even when anchored. **This was never observed** - zero such commits across 9 ins
 the baseline runs those two records completed in the same millisecond - so it is left as-is, noted at
 the trigger site. Closing it would mean firing the slow commit on the first commit carrying any phase-2
 progress rather than on an exact base offset.
+
+That residual is an instance of the class in
+[`assert-the-commit-frontier-not-the-tick-path.md`](assert-the-commit-frontier-not-the-tick-path.md):
+it keys on *which tick* carried the progress rather than on the frontier having reached it, and every
+such key is hostage to a scheduler that is free to split the work across two ticks instead of one.
+Naming the class is also the fix shape - "the first commit carrying any phase-2 progress" **is** the
+frontier reading.
+
+## Other instances of this shape - a sweep, with one hit and one miss
+
+Both `pollDelay` sites in `CloseAndOpenOffsetTest` were checked, and they are not the same defect as
+each other. Fixed here, because the class is the point:
+
+**`correctOffsetVerySimple` - a real instance, of the vacuity variety.** It asserted that a freshly
+opened PC reads nothing back, having waited a flat 1s, with nothing establishing that PC had joined the
+group. Control arm, subscribing that PC to a topic that is not the one under test:
+
+| Arm | Result |
+|---|---|
+| original assertion, consumer pointed at a decoy topic | **passes** - it was asserting nothing |
+| anchored assertion, same decoy topic | **fails** at the assignment await |
+
+Now anchored on `PartitionStateManager#getPartitionState` being non-null (a `ConcurrentHashMap`, so
+unlike `Consumer#assignment` it is safe to read from the test thread), and followed by a record
+produced *after* the window that must be read - assignment proves it joined, the trailing record proves
+its poller actually reached the topic. Same rule as
+[`TransactionalPartialResultSetIT#proveVerifierIsActuallyReading`](../../../parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/TransactionalPartialResultSetIT.java):
+prove the detector works before trusting what it did not detect.
+
+**`largeNumberOfMessagesSmallOffsetBitmap` - not an instance.** Its assertion retries, so a slow start
+costs time rather than correctness. Two smaller things were true of it, and only the measured ones were
+acted on:
+
+- `atLeast(500ms)` behind `pollDelay(1000ms)` can never fire. Measured: with the `atLeast` raised to
+  1500ms the condition is reported "evaluated in 1 seconds 6 milliseconds", so at 500ms it was dead.
+  Removed.
+- The trailing `assertThat(...).hasSize(...)` was commented "double check after closing" while sitting
+  *inside* the try-with-resources, so it ran before close. **Moving it out does not earn the claim**:
+  produce an extra record after the await and flush it to the broker before close, and PC never
+  delivers it - it stops fetching at close - so both positions still pass. The assertion stays where it
+  is with a comment that says what it is (a restatement), rather than being relocated on a theory the
+  control refuted. Catching a genuinely late delivery needs a quiet window or a settle anchor while PC
+  is still running, and nothing has been seen that needs it.
