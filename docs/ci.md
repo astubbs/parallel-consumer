@@ -549,6 +549,29 @@ For anything outside those two prefixes - the `ci-*-test.sh` wrappers, `./mvnw`,
   astubbs/parallel-consumer#279, all four granted in that same PR, and its reviewer could run none of
   them - which is exactly why the two `bin/` families became patterns instead.
 
+
+### The second required check: `review: human LGTM`
+
+A separate job, and a separate required check, asserting one thing: the repository owner has left a
+review whose body contains `lgtm` - any case, anywhere in the body, on any commit. `bin/check-human-lgtm.sh`
+owns the rule and states it in full.
+
+It is a **memory aid, not a security control.** The owner is both the subject of the assertion and the
+person who wants the merge, so it stops nobody who wants not to be stopped. What it buys is that
+"have I read this one myself yet?" becomes a red check instead of something to remember across a
+dozen open PRs.
+
+**Every PR, with no bot exemption** - unlike the automated half, which skips bot-raised PRs. The two
+assert different things: a Dependabot PR does not need an *automated review*, but it is still a change
+going in, and the requirement is that the owner reviews everything himself. Having no guard also means
+there is no job to skip, and a skipped job would otherwise satisfy the required check having asserted
+nothing.
+
+It is deliberately a second job rather than a second step in `claude-review`, so the checks list says
+*which* half is missing without opening anything - and so `claude-review`, a required check matched by
+name in the master ruleset, did not have to be renamed. It is **not head-sensitive**, matching the
+automated half: an LGTM on any commit counts for the whole PR, permanently.
+
 ## Self-hosted lanes
 
 Setup and operation: [`docs/self-hosted-runner.md`](self-hosted-runner.md). None of these gate
