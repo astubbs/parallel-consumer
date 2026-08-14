@@ -192,3 +192,23 @@ and should not be reopened as one.
 Two values remain unset, and the plan carries them as explicit assumptions in its Planning Contract
 rather than as blockers: ASM1, the Go client's effort budget, and ASM2, the latency multiple the
 first success criterion is judged against. Each names what would falsify it.
+
+## From the first review checkpoint (2026-08-14): one decision owed, and freeze-window notes
+
+**Decision owed (human): should the testing-evidence corpus get the same forward reactor
+cross-check as module-maturity?** Today a module's `testing-evidence.d/` fragment — deferral and
+all — deletes cleanly with every gate green (verified empirically in review). The catch: example
+modules carry maturity fragments but no evidence records, so the check either scopes to the
+fragment convention or those modules need evidence deferrals seeded. Small either way; needs the
+scoping call first.
+
+**Carry to the schema freeze (U18), recorded here so the freeze unit finds them:**
+- `Token.epoch` is `int32`; its source `WorkContainer.deliveryCount` is a Java `long`. Widening
+  int32→int64 is a BREAKING change under `buf breaking` post-freeze — settle the width (or document
+  the bound) before freezing.
+- The test-mode sidecar's `port: NNNNN` stdout handshake carries no secret; a per-launch token in
+  `Configure` is a freeze-window decision (KTD11's deferred posture notes the mitigation shape).
+- Protocol ambiguities to settle at freeze: `OUTCOME_NOT_SET` vs future outcome variants;
+  `Configured.max_concurrency` absent = unlimited or not-echoed; no capabilities/version field yet.
+- A golden-bytes fixture (one canonical stream all ten languages parse) is a freeze-unit candidate —
+  the current round-trip suite is same-runtime by construction.
