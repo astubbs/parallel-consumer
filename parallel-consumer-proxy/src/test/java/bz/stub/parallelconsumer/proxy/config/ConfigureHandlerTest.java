@@ -21,6 +21,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.junit.jupiter.api.AfterEach;
@@ -265,6 +266,102 @@ class ConfigureHandlerTest {
         assertThat(status.getDescription()).contains("PERIODIC_TRANSACTIONAL_PRODUCER");
         assertWithMessage("refusal must precede client construction")
                 .that(clientsConstructed.get()).isEqualTo(0);
+    }
+
+    /** An invalid topic pattern is refused before any client is constructed, not after (F1 of the U7 review). */
+    @Test
+    void anInvalidTopicPatternClosesTheStreamBeforeConstructingClients() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(configureMessage(Configure.newBuilder().setTopicPattern("input-[")));
+
+        var status = Status.fromThrowable(session.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
+        assertThat(status.getDescription()).contains("topic_pattern");
+        assertWithMessage("refusal must precede client construction")
+                .that(clientsConstructed.get()).isEqualTo(0);
+        assertThat(handler.engine().isPresent()).isFalse();
+    }
+
+    /** A non-positive max_concurrency is refused by name before any client is constructed. */
+    @Test
+    void aNonPositiveMaxConcurrencyClosesTheStreamBeforeConstructingClients() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(configureMessage(Configure.newBuilder().addTopics(TOPIC).setMaxConcurrency(0)));
+
+        var status = Status.fromThrowable(session.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
+        assertThat(status.getDescription()).contains("max_concurrency");
+        assertWithMessage("refusal must precede client construction")
+                .that(clientsConstructed.get()).isEqualTo(0);
+    }
+
+    /**
+     * Forward compatibility: an enum wire number this proxy's schema does not know is a clean
+     * INVALID_ARGUMENT naming the number - not an escaped {@code getNumber()} throw from the rejection
+     * message itself.
+     */
+    @Test
+    void anUnknownEnumWireNumberIsRefusedCleanly() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(configureMessage(Configure.newBuilder().addTopics(TOPIC).setOrderingValue(99)));
+
+        var status = Status.fromThrowable(session.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
+        assertThat(status.getDescription()).contains("99");
+        assertWithMessage("refusal must precede client construction")
+                .that(clientsConstructed.get()).isEqualTo(0);
+    }
+
+    /**
+     * The construction-time half of F1: when a Kafka client constructor itself rejects the supplied
+     * kafka_properties AFTER an earlier client was built, everything half-built is released - the consumer is
+     * closed, no engine is published - the stream closes naming only the exception class (never Kafka's
+     * message, which embeds property values - R48), and the process still accepts a subsequent connection.
+     */
+    @Test
+    void aClientConstructorFailureReleasesTheHalfBuiltAndLeavesTheProcessConfigurable() {
+        var firstConsumer = new LongPollingMockConsumer<byte[], byte[]>(OffsetResetStrategy.EARLIEST);
+        var rejectedValue = "rejected-property-value-3f9";
+        var producerConstructionsAttempted = new AtomicInteger();
+        handler = ConfigureHandler.builder()
+                .clientFactory(new KafkaClientFactory() {
+                    @Override
+                    public Consumer<byte[], byte[]> consumer(Map<String, String> kafkaProperties) {
+                        return producerConstructionsAttempted.get() == 0 ? firstConsumer : mockConsumer;
+                    }
+
+                    @Override
+                    public Producer<byte[], byte[]> producer(Map<String, String> kafkaProperties) {
+                        if (producerConstructionsAttempted.getAndIncrement() == 0) {
+                            // the shape KafkaProducer's ctor produces for a bad config - message embeds the value
+                            throw new KafkaException("Invalid value " + rejectedValue + " for configuration x");
+                        }
+                        return mockProducer;
+                    }
+                })
+                .build();
+
+        var failed = new RecordingSession(handler);
+        failed.send(configureMessage(Configure.newBuilder().addTopics(TOPIC)));
+
+        var status = Status.fromThrowable(failed.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
+        assertWithMessage("the close status names the exception class and NOTHING of its message (R48)")
+                .that(status.getDescription()).contains("KafkaException");
+        assertThat(status.getDescription()).doesNotContain(rejectedValue);
+        assertWithMessage("the consumer built before the failure must be closed, not leaked")
+                .that(firstConsumer.closed()).isTrue();
+        assertWithMessage("no engine may be published from a failed configure")
+                .that(handler.engine().isPresent()).isFalse();
+
+        // the process is not wedged: a corrected client configures on a fresh connection
+        var second = new RecordingSession(handler);
+        second.send(configureMessage(Configure.newBuilder().addTopics(TOPIC)));
+        second.awaitConfigured();
+        assertThat(handler.engine().isPresent()).isTrue();
     }
 
     /**

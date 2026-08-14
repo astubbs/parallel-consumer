@@ -213,10 +213,21 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
         return false;
     }
 
+    /**
+     * Overridden at {@code close(DrainingMode)} - the funnel EVERY close route dispatches through: the no-arg
+     * {@code close()} and {@code closeDontDrainFirst()} defaults call it directly, and core's
+     * {@code close(Duration, DrainingMode)} sets the timeout then virtually calls it. Overriding only the
+     * {@code (Duration, DrainingMode)} overload missed the no-arg route entirely. The teardown sits in a
+     * {@code finally} because {@code super.close} sneaky-throws {@code TimeoutException} - and a close that
+     * times out must still stop the wave-window timer thread, or it leaks.
+     */
     @Override
-    public void close(Duration timeout, DrainingMode drainMode) {
-        super.close(timeout, drainMode);
-        waveAssembler.close();
+    public void close(DrainingMode drainMode) {
+        try {
+            super.close(drainMode);
+        } finally {
+            waveAssembler.close();
+        }
     }
 
     /**

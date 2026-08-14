@@ -15,6 +15,9 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.common.KafkaException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -180,22 +183,46 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 return;
             }
 
-            // R48: the credential map becomes the real clients here, and is never referenced again
-            var options = optionsBuilder
-                    .consumer(clientFactory.consumer(configure.getKafkaPropertiesMap()))
-                    .producer(clientFactory.producer(configure.getKafkaPropertiesMap()))
-                    .build();
-
             var negotiatedCapabilities = negotiate(configure.getCapabilitiesList());
             var sink = new StreamDispatchSink(negotiatedCapabilities.contains(CAPABILITY_DISPATCH));
 
-            var startedEngine = new ProxyProcessor(options, sink);
-            if (subscription.isPattern()) {
-                startedEngine.subscribe(Pattern.compile(subscription.pattern()));
-            } else {
-                startedEngine.subscribe(subscription.topics());
+            // R48: the credential map becomes the real clients here, and is never referenced again. Anything
+            // in this region can throw on client-suppliable input (a Kafka client constructor rejecting the
+            // property map is the live case), and by then real resources exist - a KafkaProducer's Sender
+            // thread, the engine's wave-window timer - so a throw must release whatever was built, or every
+            // reconnect leaks another set (F1 of the U7 review).
+            ParallelConsumerOptions<byte[], byte[]> options;
+            Consumer<byte[], byte[]> consumer = null;
+            Producer<byte[], byte[]> producer = null;
+            ProxyProcessor builtEngine = null;
+            try {
+                consumer = clientFactory.consumer(configure.getKafkaPropertiesMap());
+                producer = clientFactory.producer(configure.getKafkaPropertiesMap());
+                options = optionsBuilder.consumer(consumer).producer(producer).build();
+                builtEngine = new ProxyProcessor(options, sink);
+                if (subscription.isPattern()) {
+                    builtEngine.subscribe(Pattern.compile(subscription.pattern()));
+                } else {
+                    builtEngine.subscribe(subscription.topics());
+                }
+                builtEngine.start();
+            } catch (RuntimeException constructionFailure) {
+                releaseHalfBuilt(builtEngine, consumer, producer);
+                // R48 hygiene: name ONLY the exception class - a ConfigException's message embeds property
+                // VALUES from the credential map, so neither the message nor the exception itself may reach
+                // the stream or a log line
+                var status = constructionFailure instanceof KafkaException
+                        ? Status.INVALID_ARGUMENT : Status.INTERNAL;
+                closeStream(status.withDescription(
+                        "constructing the session's Kafka clients and engine failed with "
+                                + constructionFailure.getClass().getName() + "; the proxy remains "
+                                + "unconfigured and the admission slot is released - correct the "
+                                + "configuration and connect again. (The reason is withheld from this "
+                                + "message deliberately: Kafka's configuration exceptions embed property "
+                                + "values, and kafka_properties may carry credentials - R48)"));
+                return;
             }
-            startedEngine.start();
+            var startedEngine = builtEngine;
             engine = startedEngine;
 
             effectiveConfiguration =
@@ -211,6 +238,40 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
 
             if (engineStartedListener != null) {
                 engineStartedListener.engineStarted(startedEngine, subscription);
+            }
+        }
+
+        /**
+         * Releases whatever a failed configure managed to build, most-derived first. Each release is
+         * independent - one refusing does not strand the others - and each failure is logged by class name
+         * only, because a Kafka client's close-time exceptions can embed its configuration the same way its
+         * constructor's do (R48).
+         */
+        private void releaseHalfBuilt(ProxyProcessor builtEngine,
+                                      Consumer<byte[], byte[]> consumer,
+                                      Producer<byte[], byte[]> producer) {
+            if (builtEngine != null) {
+                try {
+                    // never started, so core's close transitions UNUSED -> CLOSED immediately; the close
+                    // funnel's finally tears down the wave-window timer either way
+                    builtEngine.close();
+                } catch (Exception e) { // Exception, not RuntimeException: core's close sneaky-throws checked ones
+                    log.warn("Half-built engine refused to close: {}", e.getClass().getName());
+                }
+            }
+            if (consumer != null) {
+                try {
+                    consumer.close();
+                } catch (Exception e) {
+                    log.warn("Consumer built by a failed configure refused to close: {}", e.getClass().getName());
+                }
+            }
+            if (producer != null) {
+                try {
+                    producer.close();
+                } catch (Exception e) {
+                    log.warn("Producer built by a failed configure refused to close: {}", e.getClass().getName());
+                }
             }
         }
 

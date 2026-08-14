@@ -137,6 +137,57 @@ class OptionsMapperTest {
     }
 
     /**
+     * An invalid {@code topic_pattern} is refused during mapping - compiled here, once, precisely so the
+     * refusal happens before any Kafka client is constructed. The message may embed the pattern: it is
+     * subscription data, never {@code kafka_properties}.
+     */
+    @Test
+    void anInvalidTopicPatternIsRefusedDuringMapping() {
+        var configure = Configure.newBuilder().setTopicPattern("input-[").build();
+
+        var rejection = assertThrows(OptionsMapper.ConfigureRejectedException.class,
+                () -> OptionsMapper.subscriptionOf(configure));
+
+        assertThat(rejection).hasMessageThat().contains("topic_pattern");
+        assertThat(rejection).hasMessageThat().contains("input-[");
+    }
+
+    /** A non-positive {@code max_concurrency} is refused by name, not left to a construction-time cap check. */
+    @Test
+    void aNonPositiveMaxConcurrencyIsRefusedByName() {
+        var configure = Configure.newBuilder().addTopics("in").setMaxConcurrency(0).build();
+
+        var rejection = assertThrows(OptionsMapper.ConfigureRejectedException.class,
+                () -> OptionsMapper.toOptionsBuilder(configure));
+
+        assertThat(rejection).hasMessageThat().contains("max_concurrency");
+    }
+
+    /**
+     * Forward compatibility: an enum wire number this proxy's schema does not know maps to
+     * {@code UNRECOGNIZED}, whose generated {@code getNumber()} throws - so each bridge must carry the raw
+     * wire int (the generated {@code get*Value()} accessor) into its rejection message, or the clean
+     * rejection itself blows up.
+     */
+    @Test
+    void unknownEnumWireNumbersAreRefusedCleanlyNamingTheNumber() {
+        var ordering = assertThrows(OptionsMapper.ConfigureRejectedException.class,
+                () -> OptionsMapper.toOptionsBuilder(
+                        Configure.newBuilder().addTopics("in").setOrderingValue(99).build()));
+        assertThat(ordering).hasMessageThat().contains("99");
+
+        var commitMode = assertThrows(OptionsMapper.ConfigureRejectedException.class,
+                () -> OptionsMapper.toOptionsBuilder(
+                        Configure.newBuilder().addTopics("in").setCommitModeValue(88).build()));
+        assertThat(commitMode).hasMessageThat().contains("88");
+
+        var policy = assertThrows(OptionsMapper.ConfigureRejectedException.class,
+                () -> OptionsMapper.toOptionsBuilder(
+                        Configure.newBuilder().addTopics("in").setInvalidOffsetMetadataPolicyValue(77).build()));
+        assertThat(policy).hasMessageThat().contains("77");
+    }
+
+    /**
      * KTD38: the executor count is the pure function of max concurrency - identity, until the plan's open
      * question ("KTD38's executor-count function is named but never defined") settles the formula - and it is
      * derived from connect-time configuration only, which this pins by deriving it twice from the same input.

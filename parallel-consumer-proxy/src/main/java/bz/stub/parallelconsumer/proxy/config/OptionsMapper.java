@@ -14,6 +14,8 @@ import lombok.experimental.UtilityClass;
 import java.time.Duration;
 import java.util.List;
 import java.util.function.IntUnaryOperator;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * Maps the wire {@code Configure} onto core's {@link ParallelConsumerOptions}, and a built options object back
@@ -101,9 +103,14 @@ public class OptionsMapper {
     }
 
     /**
-     * Reads the subscription out of a {@code Configure}, refusing an ambiguous one.
+     * Reads the subscription out of a {@code Configure}, refusing an ambiguous one. A pattern is compiled here,
+     * once, precisely so an invalid one is refused <em>before any Kafka client is constructed</em> - left to
+     * {@code ConfigureHandler}'s own {@code Pattern.compile} at subscribe time, the {@code PatternSyntaxException}
+     * would fire after the consumer, producer and engine were already built, leaking all three. The rejection
+     * message may embed the pattern: it is subscription data, never {@code kafka_properties}.
      *
-     * @throws ConfigureRejectedException when both a topic list and a pattern are given, or neither
+     * @throws ConfigureRejectedException when both a topic list and a pattern are given, or neither - or the
+     *                                    pattern does not compile
      */
     public static Subscription subscriptionOf(Configure configure) {
         boolean hasTopics = configure.getTopicsCount() > 0;
@@ -114,9 +121,16 @@ public class OptionsMapper {
                     + "topic pattern (R36)"
                     : "Configure names no subscription: give either a topic list or a topic pattern (R36)");
         }
-        return hasPattern
-                ? new Subscription(null, configure.getTopicPattern())
-                : new Subscription(List.copyOf(configure.getTopicsList()), null);
+        if (hasPattern) {
+            try {
+                Pattern.compile(configure.getTopicPattern());
+            } catch (PatternSyntaxException invalid) {
+                throw new ConfigureRejectedException(
+                        "topic_pattern is not a valid regular expression: " + invalid.getMessage());
+            }
+            return new Subscription(null, configure.getTopicPattern());
+        }
+        return new Subscription(List.copyOf(configure.getTopicsList()), null);
     }
 
     /**
@@ -143,13 +157,19 @@ public class OptionsMapper {
 
         var builder = ParallelConsumerOptions.<byte[], byte[]>builder();
         if (configure.hasMaxConcurrency()) {
+            if (configure.getMaxConcurrency() < 1) {
+                // refused by name here, not left to the engine constructor's wave-size-cap check - which fires
+                // only after the Kafka clients are already built, and names a derived quantity, not the field
+                throw new ConfigureRejectedException(
+                        "max_concurrency must be at least 1, got " + configure.getMaxConcurrency());
+            }
             builder.maxConcurrency(configure.getMaxConcurrency());
         }
         if (configure.getOrdering() != ProcessingOrder.PROCESSING_ORDER_UNSPECIFIED) {
-            builder.ordering(toCoreOrdering(configure.getOrdering()));
+            builder.ordering(toCoreOrdering(configure.getOrdering(), configure.getOrderingValue()));
         }
         if (configure.getCommitMode() != CommitMode.COMMIT_MODE_UNSPECIFIED) {
-            builder.commitMode(toCoreCommitMode(configure.getCommitMode()));
+            builder.commitMode(toCoreCommitMode(configure.getCommitMode(), configure.getCommitModeValue()));
         }
         if (configure.hasCommitInterval()) {
             builder.commitInterval(toJavaDuration(configure.getCommitInterval()));
@@ -185,7 +205,8 @@ public class OptionsMapper {
         }
         if (configure.getInvalidOffsetMetadataPolicy()
                 != InvalidOffsetMetadataPolicy.INVALID_OFFSET_METADATA_POLICY_UNSPECIFIED) {
-            builder.invalidOffsetMetadataPolicy(toCorePolicy(configure.getInvalidOffsetMetadataPolicy()));
+            builder.invalidOffsetMetadataPolicy(toCorePolicy(configure.getInvalidOffsetMetadataPolicy(),
+                    configure.getInvalidOffsetMetadataPolicyValue()));
         }
         return builder;
     }
@@ -227,8 +248,12 @@ public class OptionsMapper {
     }
 
     // --- enum and Duration bridges; each unrecognized wire value is a rejection, never a silent default ---
+    // Each inbound bridge takes the raw wire int alongside the enum: the unrecognized case it must report is
+    // exactly the one where the generated getNumber() THROWS ("Can't get the number of an unknown enum
+    // value"), so the number for the rejection message can only come from the get*Value() accessor.
 
-    private static ParallelConsumerOptions.ProcessingOrder toCoreOrdering(ProcessingOrder ordering) {
+    private static ParallelConsumerOptions.ProcessingOrder toCoreOrdering(ProcessingOrder ordering,
+                                                                          int wireValue) {
         switch (ordering) {
             case PROCESSING_ORDER_UNORDERED:
                 return ParallelConsumerOptions.ProcessingOrder.UNORDERED;
@@ -237,7 +262,7 @@ public class OptionsMapper {
             case PROCESSING_ORDER_KEY:
                 return ParallelConsumerOptions.ProcessingOrder.KEY;
             default:
-                throw new ConfigureRejectedException("unrecognized ordering value " + ordering.getNumber());
+                throw new ConfigureRejectedException("unrecognized ordering value " + wireValue);
         }
     }
 
@@ -253,7 +278,7 @@ public class OptionsMapper {
         }
     }
 
-    private static ParallelConsumerOptions.CommitMode toCoreCommitMode(CommitMode commitMode) {
+    private static ParallelConsumerOptions.CommitMode toCoreCommitMode(CommitMode commitMode, int wireValue) {
         switch (commitMode) {
             case COMMIT_MODE_PERIODIC_CONSUMER_SYNC:
                 return ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
@@ -261,7 +286,7 @@ public class OptionsMapper {
                 return ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
             default:
                 // the transactional mode was already refused by name before this bridge runs
-                throw new ConfigureRejectedException("unrecognized commit mode value " + commitMode.getNumber());
+                throw new ConfigureRejectedException("unrecognized commit mode value " + wireValue);
         }
     }
 
@@ -279,7 +304,7 @@ public class OptionsMapper {
     }
 
     private static ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy toCorePolicy(
-            InvalidOffsetMetadataPolicy policy) {
+            InvalidOffsetMetadataPolicy policy, int wireValue) {
         switch (policy) {
             case INVALID_OFFSET_METADATA_POLICY_FAIL:
                 return ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL;
@@ -287,7 +312,7 @@ public class OptionsMapper {
                 return ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE;
             default:
                 throw new ConfigureRejectedException(
-                        "unrecognized invalid-offset-metadata policy value " + policy.getNumber());
+                        "unrecognized invalid-offset-metadata policy value " + wireValue);
         }
     }
 

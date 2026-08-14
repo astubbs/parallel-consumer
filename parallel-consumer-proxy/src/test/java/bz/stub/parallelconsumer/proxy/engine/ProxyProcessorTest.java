@@ -24,9 +24,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -346,6 +348,38 @@ class ProxyProcessorTest {
 
         fixture.awaitCommittedOffset(3);
         fixture.awaitNoRecordsOutForProcessing();
+    }
+
+    /**
+     * Close funnels through the wave assembler's teardown whichever overload starts it: the no-arg
+     * {@code close()} route (DrainingCloseable's default &rarr; {@code close(DrainingMode)}) must stop the
+     * wave-window timer thread just as the {@code (Duration, DrainingMode)} route does - and the teardown must
+     * survive a {@code super.close} that throws, which is why it sits in a {@code finally} (F5 of the U7
+     * review). Thread identity is tracked relative to a pre-test snapshot, so another engine's timer cannot
+     * pollute the assertion.
+     */
+    @Test
+    void closeStopsTheWaveWindowTimerThread() {
+        var preexisting = waveWindowThreads();
+        fixture.start(ProcessingOrder.KEY);
+        fixture.seed("k", "v");
+        fixture.reportSuccess(fixture.takeDispatch().getToken());
+        var spawned = waveWindowThreads();
+        spawned.removeAll(preexisting);
+        assertWithMessage("the wave-window timer must be live while the engine runs")
+                .that(spawned).isNotEmpty();
+
+        fixture.close(); // deliberately the no-arg close() route
+
+        Awaitility.await().untilAsserted(() ->
+                assertWithMessage("the wave-window timer thread must terminate on close")
+                        .that(spawned.stream().anyMatch(Thread::isAlive)).isFalse());
+    }
+
+    private static Set<Thread> waveWindowThreads() {
+        return Thread.getAllStackTraces().keySet().stream()
+                .filter(thread -> "pc-proxy-wave-window".equals(thread.getName()))
+                .collect(Collectors.toCollection(HashSet::new));
     }
 
     /**
