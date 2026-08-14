@@ -7,19 +7,31 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.proxy.config.ConfigureHandler;
+import bz.stub.parallelconsumer.proxy.config.KafkaClientFactory;
+import bz.stub.parallelconsumer.proxy.config.OptionsMapper;
+import bz.stub.parallelconsumer.proxy.engine.ProxyProcessor;
+import bz.stub.parallelconsumer.proxy.transport.ProxyServer;
 import com.github.bsideup.jabel.Desugar;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.awaitility.Awaitility;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -69,15 +81,6 @@ public class ProxyHarness implements AutoCloseable {
     public static final Duration RETRY_DELAY = Duration.ofMillis(50);
 
     /**
-     * ENGINE SEAM - STUBBED. The message {@link #startEngine()} throws until the engine units land.
-     */
-    public static final String ENGINE_SEAM_PENDING_MESSAGE =
-            "the proxy engine is not built yet: ProxyHarness.startEngine() is the seam the engine units fill in "
-                    + "docs/plans/2026-08-14-001-feat-language-proxy-plan.md - U5 (transport/ProxyServer), "
-                    + "U6 (engine/ProxyProcessor), U7 (config/ConfigureHandler). Until they land, drive the "
-                    + "harness with an in-JVM client via ProxyHarness.start(Client)";
-
-    /**
      * The in-JVM client seam: the same contract a foreign worker has over the wire, with the transport layer
      * removed. Return normally to report success; throw to report a failure (the record will be redelivered
      * with its failure history); never return to report nothing (the negative control - the harness must then
@@ -121,6 +124,19 @@ public class ProxyHarness implements AutoCloseable {
 
     private ParallelEoSStreamProcessor<String, String> parallelConsumer;
 
+    // --- the engine lane: real gRPC transport + ProxyProcessor over byte[] mock clients. Separate mock pair
+    // because the engine never deserializes (its record types are byte[]), while the in-JVM lane above speaks
+    // Strings; the two lanes are mutually exclusive per harness instance. ---
+
+    private ProxyServer engineServer;
+
+    /** The engine the configuring client booted; set by the engine-started listener. */
+    private volatile ProxyProcessor engine;
+
+    private LongPollingMockConsumer<byte[], byte[]> engineMockConsumer;
+
+    private MockProducer<byte[], byte[]> engineMockProducer;
+
     public ProxyHarness(HarnessScenario scenario) {
         this.scenario = scenario;
         this.topic = scenario.name();
@@ -130,9 +146,8 @@ public class ProxyHarness implements AutoCloseable {
     /**
      * Boots PC over the mock clients and hands every delivered record to the given in-JVM {@link Client}.
      * <p>
-     * This is the path that works today. When the engine units land, {@link #startEngine()} becomes the
-     * higher-fidelity route for anything that can speak gRPC; this direct route remains the harness's own
-     * stub-client lane - the one that proves the harness can fail.
+     * {@link #startEngine()} is the higher-fidelity route for anything that can speak gRPC; this direct route
+     * remains the harness's own stub-client lane - the one that proves the harness can fail.
      */
     public void start(Client client) {
         if (parallelConsumer != null) {
@@ -178,16 +193,68 @@ public class ProxyHarness implements AutoCloseable {
     }
 
     /**
-     * ENGINE SEAM - STUBBED, awaiting the engine units. Once U5-U7 land, this boots the real proxy engine
-     * (gRPC server on an ephemeral loopback port, {@code ProxyProcessor} behind it) over this harness's mock
-     * clients and returns the bound port, so any client that can speak the production protocol - in any
-     * language - runs against the same fixture. {@link bz.stub.parallelconsumer.proxy.testmode.TestModeMain}
-     * is the process entry point that calls this on behalf of a spawned, non-JVM test.
+     * The engine lane: boots the real proxy transport (gRPC server on an ephemeral loopback port,
+     * {@code ConfigureHandler} as the session service, {@code ProxyProcessor} behind it once a client
+     * configures) over this harness's mock clients and returns the bound port - so any client that can speak
+     * the production protocol, in any language, runs against the same fixture.
+     * {@link bz.stub.parallelconsumer.proxy.testmode.TestModeMain} is the process entry point that calls this
+     * on behalf of a spawned, non-JVM test.
+     * <p>
+     * The mock clients replace the Kafka clients the credential map would build - the R39-exception the
+     * test-mode sidecar's usage text records. The engine itself only exists once the client's {@code Configure}
+     * arrives (connect-time configuration, the plan's U7); at that moment the harness performs the manual
+     * rebalance dance on the engine's mock consumer and seeds the scenario, so the connecting client must
+     * configure the scenario's name as its topic.
      *
-     * @return the ephemeral loopback port the engine's gRPC server bound (once implemented)
+     * @return the ephemeral loopback port the engine's gRPC server bound
      */
     public int startEngine() {
-        throw new UnsupportedOperationException(ENGINE_SEAM_PENDING_MESSAGE);
+        if (parallelConsumer != null || engineServer != null) {
+            throw new IllegalStateException("harness already started");
+        }
+        engineMockConsumer = new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
+        engineMockProducer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+
+        var handler = ConfigureHandler.builder()
+                .clientFactory(new KafkaClientFactory() {
+                    @Override
+                    public Consumer<byte[], byte[]> consumer(Map<String, String> kafkaProperties) {
+                        return engineMockConsumer;
+                    }
+
+                    @Override
+                    public Producer<byte[], byte[]> producer(Map<String, String> kafkaProperties) {
+                        return engineMockProducer;
+                    }
+                })
+                .engineStartedListener(this::onEngineStarted)
+                .build();
+        try {
+            engineServer = ProxyServer.builder()
+                    .sessionService(handler)
+                    .build()
+                    .start();
+        } catch (IOException e) {
+            throw new UncheckedIOException("engine transport failed to bind", e);
+        }
+        return engineServer.port();
+    }
+
+    /**
+     * Fires on the configuring stream's transport thread, after the engine is subscribed and started: the
+     * manual rebalance dance from core's {@code MockConsumerTestBase} (see the class javadoc), then the
+     * scenario's records - seeding must follow assignment, because {@code MockConsumer#addRecord} refuses a
+     * partition the consumer is not assigned.
+     */
+    private void onEngineStarted(ProxyProcessor startedEngine, OptionsMapper.Subscription subscription) {
+        this.engine = startedEngine;
+        engineMockConsumer.subscribeWithRebalanceAndAssignment(List.of(topic), 1);
+        startedEngine.onPartitionsAssigned(List.of(topicPartition));
+        long offset = 0;
+        for (HarnessScenario.SeedRecord seed : scenario.seeds()) {
+            engineMockConsumer.addRecord(new ConsumerRecord<>(topic, topicPartition.partition(), offset++,
+                    seed.key().getBytes(StandardCharsets.UTF_8), seed.value().getBytes(StandardCharsets.UTF_8)));
+        }
     }
 
     /** Seeds the scenario's records into the mock consumer, offsets assigned in seed order from zero. */
@@ -209,9 +276,9 @@ public class ProxyHarness implements AutoCloseable {
         return List.copyOf(mockProducer.history());
     }
 
-    /** The most recently committed offset for the scenario's partition, if anything has committed yet. */
+    /** The most recently committed offset for the scenario's partition, whichever lane is active. */
     public OptionalLong lastCommittedOffset() {
-        var history = mockConsumer.getCommitHistoryInt();
+        var history = (engineMockConsumer != null ? engineMockConsumer : mockConsumer).getCommitHistoryInt();
         for (int i = history.size() - 1; i >= 0; i--) {
             var offsetAndMetadata = history.get(i).get(topicPartition);
             if (offsetAndMetadata != null) {
@@ -255,6 +322,18 @@ public class ProxyHarness implements AutoCloseable {
     @Override
     public void close() {
         Awaitility.reset();
+
+        // transport first, so the engine is not dispatching into a dying server while it drains down
+        if (engineServer != null) {
+            engineServer.close();
+        }
+        if (engine != null && !engine.isClosedOrFailed()) {
+            engine.close();
+        }
+        if (engine != null) {
+            assertWithMessage("the engine ended with a failure cause; the scenario did not expect one")
+                    .that(engine.getFailureCause()).isNull();
+        }
 
         if (parallelConsumer != null && !parallelConsumer.isClosedOrFailed()) {
             parallelConsumer.close();

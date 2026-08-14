@@ -21,6 +21,7 @@ option java_package = "bz.stub.parallelconsumer.proxy.protocol.v1";
 option java_multiple_files = true;
 option java_outer_classname = "ProxyProto";
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 // The single bidirectional session stream between a client library's admin
@@ -46,22 +47,104 @@ message ProxyMessage {
   }
 }
 
-// Connect-time configuration: the first message on the stream, and the only
-// place configuration ever travels. Deliberately skeletal until the spike has
-// run - option mapping is a later unit's work.
-message Configure {
-  // The subscription, fixed for the process lifetime.
-  repeated string topics = 1;
-
-  // Maximum records the proxy may have in flight to this client.
-  optional int32 max_concurrency = 2;
+// Mirrors core's ParallelConsumerOptions.ProcessingOrder. UNSPECIFIED means
+// "take core's default" - the proxy never guesses a different one.
+enum ProcessingOrder {
+  PROCESSING_ORDER_UNSPECIFIED = 0;
+  PROCESSING_ORDER_UNORDERED = 1;
+  PROCESSING_ORDER_PARTITION = 2;
+  PROCESSING_ORDER_KEY = 3;
 }
 
-// The proxy's reply: the effective values it is running with, so a client can
-// assert what it got rather than what it asked for.
+// Mirrors core's ParallelConsumerOptions.CommitMode. The transactional mode is
+// expressible but always refused at Configure time (KTD7: exactly-once through
+// the proxy is impossible in v1); it stays in the enum so the refusal can name
+// exactly what was asked for.
+enum CommitMode {
+  COMMIT_MODE_UNSPECIFIED = 0;
+  COMMIT_MODE_PERIODIC_TRANSACTIONAL_PRODUCER = 1;
+  COMMIT_MODE_PERIODIC_CONSUMER_SYNC = 2;
+  COMMIT_MODE_PERIODIC_CONSUMER_ASYNCHRONOUS = 3;
+}
+
+// Mirrors core's ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.
+enum InvalidOffsetMetadataPolicy {
+  INVALID_OFFSET_METADATA_POLICY_UNSPECIFIED = 0;
+  INVALID_OFFSET_METADATA_POLICY_FAIL = 1;
+  INVALID_OFFSET_METADATA_POLICY_IGNORE = 2;
+}
+
+// Connect-time configuration: the first message on the stream, and the only
+// place configuration ever travels (R39). Only scalar, enum and Duration
+// options are expressible - the five object-valued core options (consumer,
+// producer, meterRegistry, metricsTags, retryDelayProvider) never travel,
+// per R10. An unset optional field or UNSPECIFIED enum means "take core's
+// default", and Configured reports the defaulted value.
+message Configure {
+  // The subscription, fixed for the process lifetime (R36). Exactly one of
+  // topics or topic_pattern must be given.
+  repeated string topics = 1;
+  optional string topic_pattern = 3;
+
+  // Maximum records the proxy may have in flight to this client (R40).
+  optional int32 max_concurrency = 2;
+
+  // The Kafka client credentials and connection settings (R48): the proxy
+  // constructs its consumer and producer from these. They are received, used,
+  // and never echoed - Configured has no counterpart field, and no proxy log
+  // line may carry an entry of this map at any level.
+  map<string, string> kafka_properties = 4;
+
+  // The message-type capabilities this client can receive. Empty means the
+  // pre-capability baseline (everything a v1 proxy sends). The proxy replies
+  // with the intersection and sends nothing outside it (R38).
+  repeated string capabilities = 5;
+
+  ProcessingOrder ordering = 6;
+  CommitMode commit_mode = 7;
+  google.protobuf.Duration commit_interval = 8;
+  google.protobuf.Duration default_message_retry_delay = 9;
+  google.protobuf.Duration send_timeout = 10;
+  google.protobuf.Duration offset_commit_timeout = 11;
+  google.protobuf.Duration shutdown_timeout = 12;
+  google.protobuf.Duration drain_timeout = 13;
+  google.protobuf.Duration threshold_for_time_spend_in_queue_warning = 14;
+  google.protobuf.Duration sasl_authentication_retry_timeout = 15;
+  google.protobuf.Duration sasl_authentication_exception_retry_backoff = 16;
+  optional int32 max_failure_history = 17;
+  InvalidOffsetMetadataPolicy invalid_offset_metadata_policy = 18;
+}
+
+// The proxy's reply: the EFFECTIVE values it is running with, so a client can
+// assert what it got rather than what it asked for. Structurally excludes
+// Configure's kafka_properties - the echo must never carry credentials, so
+// the field does not exist here rather than being present-but-emptied.
 message Configured {
   repeated string topics = 1;
-  optional int32 max_concurrency = 2;
+  optional string topic_pattern = 3;
+  int32 max_concurrency = 2;
+
+  // How many executors the client should run: a pure function of connect-time
+  // configuration, computed once, sent once here, never revised (KTD38, R47).
+  int32 executor_count = 4;
+
+  // The negotiated intersection of the client's declared capabilities and the
+  // proxy's own. The proxy sends no message type outside this list.
+  repeated string capabilities = 5;
+
+  ProcessingOrder ordering = 6;
+  CommitMode commit_mode = 7;
+  google.protobuf.Duration commit_interval = 8;
+  google.protobuf.Duration default_message_retry_delay = 9;
+  google.protobuf.Duration send_timeout = 10;
+  google.protobuf.Duration offset_commit_timeout = 11;
+  google.protobuf.Duration shutdown_timeout = 12;
+  google.protobuf.Duration drain_timeout = 13;
+  google.protobuf.Duration threshold_for_time_spend_in_queue_warning = 14;
+  google.protobuf.Duration sasl_authentication_retry_timeout = 15;
+  google.protobuf.Duration sasl_authentication_exception_retry_backoff = 16;
+  int32 max_failure_history = 17;
+  InvalidOffsetMetadataPolicy invalid_offset_metadata_policy = 18;
 }
 
 // The fencing token, modelled as (record_id, epoch): Kafka's own exactly-once

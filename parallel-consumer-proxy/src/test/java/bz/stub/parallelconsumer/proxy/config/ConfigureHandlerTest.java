@@ -1,0 +1,383 @@
+package bz.stub.parallelconsumer.proxy.config;
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
+import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import io.grpc.Status;
+import io.grpc.stub.StreamObserver;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.slf4j.LoggerFactory;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+
+/**
+ * The stream state machine of connect-time configuration (the language-proxy plan's U7), exercised in-memory -
+ * {@code session(..)} invoked directly, no netty - so the assertions are about THIS class's behaviour: the
+ * Configure-first rule, the second-Configure refusal, capability negotiation, and above all credential hygiene,
+ * proven by capturing every log line at TRACE and grepping for the test credential.
+ * <p>
+ * The same service behind the real wire is {@code TestModeMainTest}'s end-to-end scenario.
+ *
+ * @author Antony Stubbs
+ */
+@Timeout(120)
+class ConfigureHandlerTest {
+
+    static final String TOPIC = "configure-handler-test";
+
+    static final String SECRET = "super-secret-sasl-password-7a1";
+
+    static final Map<String, String> CREDENTIALS = Map.of(
+            "bootstrap.servers", "localhost:9092",
+            "group.id", "proxy-under-test",
+            "sasl.jaas.config", "org.apache.kafka.common.security.plain.PlainLoginModule required "
+                    + "username=\"proxy\" password=\"" + SECRET + "\";");
+
+    /** How long a negative control watches for a message that must not arrive. */
+    static final Duration NEGATIVE_CONTROL_BUDGET = Duration.ofSeconds(2);
+
+    private final LongPollingMockConsumer<byte[], byte[]> mockConsumer =
+            new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
+
+    private final MockProducer<byte[], byte[]> mockProducer =
+            new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+
+    /** Records what the handler hands the factory - the "credentials reach the constructed consumer" probe. */
+    private final AtomicReference<Map<String, String>> propertiesTheFactorySaw = new AtomicReference<>();
+
+    private final AtomicInteger clientsConstructed = new AtomicInteger();
+
+    private ConfigureHandler handler;
+
+    private ConfigureHandler newHandler() {
+        handler = ConfigureHandler.builder()
+                .clientFactory(recordingMockFactory())
+                .build();
+        return handler;
+    }
+
+    private ConfigureHandler newHandlerWithSeededRecord() {
+        handler = ConfigureHandler.builder()
+                .clientFactory(recordingMockFactory())
+                .engineStartedListener((engine, subscription) -> {
+                    // the manual rebalance dance the harness documents, then one record to dispatch
+                    mockConsumer.subscribeWithRebalanceAndAssignment(List.of(TOPIC), 1);
+                    engine.onPartitionsAssigned(List.of(new TopicPartition(TOPIC, 0)));
+                    mockConsumer.addRecord(new ConsumerRecord<>(TOPIC, 0, 0,
+                            "key".getBytes(StandardCharsets.UTF_8), "hello".getBytes(StandardCharsets.UTF_8)));
+                })
+                .build();
+        return handler;
+    }
+
+    private KafkaClientFactory recordingMockFactory() {
+        return new KafkaClientFactory() {
+            @Override
+            public Consumer<byte[], byte[]> consumer(Map<String, String> kafkaProperties) {
+                propertiesTheFactorySaw.set(kafkaProperties);
+                clientsConstructed.incrementAndGet();
+                return mockConsumer;
+            }
+
+            @Override
+            public Producer<byte[], byte[]> producer(Map<String, String> kafkaProperties) {
+                clientsConstructed.incrementAndGet();
+                return mockProducer;
+            }
+        };
+    }
+
+    @AfterEach
+    void closeEngine() {
+        if (handler != null) {
+            handler.engine().ifPresent(engine -> {
+                if (!engine.isClosedOrFailed()) {
+                    engine.close();
+                }
+            });
+        }
+    }
+
+    /** R39: any first message other than Configure closes the stream, and nothing real gets constructed. */
+    @Test
+    void aFirstMessageOtherThanConfigureClosesTheStream() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(ClientMessage.newBuilder()
+                .setReport(Report.newBuilder()
+                        .setToken(Token.newBuilder().setRecordId("t/0/0").setEpoch(1))
+                        .setSuccess(Report.Success.newBuilder()))
+                .build());
+
+        var status = Status.fromThrowable(session.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.FAILED_PRECONDITION);
+        assertThat(status.getDescription()).contains("Configure");
+        assertWithMessage("a refused stream must have constructed no Kafka client")
+                .that(clientsConstructed.get()).isEqualTo(0);
+        assertThat(handler.engine().isPresent()).isFalse();
+    }
+
+    /** R48: the credential map reaches the factory that constructs the consumer, verbatim. */
+    @Test
+    void credentialsFromConfigureReachTheClientFactory() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(configureMessage(Configure.newBuilder()
+                .addTopics(TOPIC)
+                .setMaxConcurrency(3)
+                .putAllKafkaProperties(CREDENTIALS)));
+
+        var configured = session.awaitConfigured();
+        assertThat(configured.getMaxConcurrency()).isEqualTo(3);
+        assertThat(configured.getExecutorCount()).isEqualTo(3);
+        assertThat(propertiesTheFactorySaw.get()).containsEntry("sasl.jaas.config",
+                CREDENTIALS.get("sasl.jaas.config"));
+        assertWithMessage("the effective echo must not carry the credential map")
+                .that(configured.toString()).doesNotContain(SECRET);
+    }
+
+    /**
+     * The hygiene gate: with EVERY logger capturing at TRACE, a full session - configure with credentials,
+     * a refused second Configure, a discarded report - writes the credential to no log line at any level.
+     */
+    @Test
+    void credentialsAppearInNoLogLineAtAnyLevel() {
+        var root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        var previousLevel = root.getLevel();
+        var capture = new ListAppender<ILoggingEvent>();
+        capture.start();
+        root.addAppender(capture);
+        root.setLevel(Level.TRACE);
+        try {
+            var session = new RecordingSession(newHandler());
+            session.send(configureMessage(Configure.newBuilder()
+                    .addTopics(TOPIC)
+                    .putAllKafkaProperties(CREDENTIALS)));
+            session.awaitConfigured();
+
+            // the refusal path must be as silent about the map as the happy path
+            session.send(configureMessage(Configure.newBuilder()
+                    .addTopics("some-other-topic")
+                    .putAllKafkaProperties(CREDENTIALS)));
+            session.awaitConfigured();
+
+            // and the report path, which logs discards
+            session.send(ClientMessage.newBuilder()
+                    .setReport(Report.newBuilder()
+                            .setToken(Token.newBuilder().setRecordId("unknown/0/0").setEpoch(1))
+                            .setSuccess(Report.Success.newBuilder()))
+                    .build());
+        } finally {
+            root.setLevel(previousLevel);
+            root.detachAppender(capture);
+        }
+
+        for (ILoggingEvent event : capture.list) {
+            assertWithMessage("log line leaks the credential (logger %s): %s",
+                    event.getLoggerName(), event.getFormattedMessage())
+                    .that(event.getFormattedMessage()).doesNotContain(SECRET);
+        }
+        assertWithMessage("the capture saw the session at all - an empty capture proves nothing")
+                .that(capture.list).isNotEmpty();
+    }
+
+    /**
+     * A second Configure on a configured stream is refused without killing the session: the proxy re-sends the
+     * ORIGINAL effective configuration unchanged, so the client reads back a configuration that is not what it
+     * asked for - a truthful refusal under the assert-what-you-got contract - and the subscription stays fixed
+     * (R36). Closing the stream instead would drop in-flight records with no reconnect reconciliation until U8.
+     */
+    @Test
+    void aSecondConfigureIsRefusedAndTheOriginalConfigurationStands() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(configureMessage(Configure.newBuilder().addTopics(TOPIC).setMaxConcurrency(4)));
+        var original = session.awaitConfigured();
+
+        session.send(configureMessage(Configure.newBuilder().addTopics("hijack-topic").setMaxConcurrency(99)));
+        var refusal = session.awaitConfigured();
+
+        assertWithMessage("the refusal echoes the ORIGINAL configuration, unchanged")
+                .that(refusal).isEqualTo(original);
+        assertThat(refusal.getTopicsList()).containsExactly(TOPIC);
+        assertThat(refusal.getMaxConcurrency()).isEqualTo(4);
+        assertWithMessage("the session survived the refusal").that(session.error.get()).isNull();
+    }
+
+    /** R36 for patterns: a pattern subscription is fixed; a later change attempt echoes the original pattern. */
+    @Test
+    void aTopicPatternSubscriptionIsFixedForTheProcessLifetime() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(configureMessage(Configure.newBuilder().setTopicPattern("input-.*")));
+        var original = session.awaitConfigured();
+        assertThat(original.getTopicPattern()).isEqualTo("input-.*");
+
+        session.send(configureMessage(Configure.newBuilder().setTopicPattern("other-.*")));
+        var refusal = session.awaitConfigured();
+
+        assertThat(refusal.getTopicPattern()).isEqualTo("input-.*");
+    }
+
+    /** A rejected Configure (KTD7's transactional mode) closes the stream before any client is constructed. */
+    @Test
+    void aRejectedConfigureClosesTheStreamBeforeConstructingClients() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(configureMessage(Configure.newBuilder()
+                .addTopics(TOPIC)
+                .setCommitMode(bz.stub.parallelconsumer.proxy.protocol.v1.CommitMode
+                        .COMMIT_MODE_PERIODIC_TRANSACTIONAL_PRODUCER)));
+
+        var status = Status.fromThrowable(session.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.INVALID_ARGUMENT);
+        assertThat(status.getDescription()).contains("PERIODIC_TRANSACTIONAL_PRODUCER");
+        assertWithMessage("refusal must precede client construction")
+                .that(clientsConstructed.get()).isEqualTo(0);
+    }
+
+    /**
+     * R38's intersection rule: a client declaring an older capability set - one without {@code dispatch} -
+     * receives a {@code Configured} naming only the intersection, and the proxy then sends NO message type
+     * outside it: a seeded record produces no {@code Dispatch} on the stream.
+     */
+    @Test
+    void anOlderCapabilitySetReceivesTheIntersectionAndNothingOutsideIt() throws InterruptedException {
+        var session = new RecordingSession(newHandlerWithSeededRecord());
+
+        session.send(configureMessage(Configure.newBuilder()
+                .addTopics(TOPIC)
+                .addCapabilities("some-older-capability")));
+
+        var configured = session.awaitConfigured();
+        assertWithMessage("the intersection of {some-older-capability} and {dispatch} is empty")
+                .that(configured.getCapabilitiesList()).isEmpty();
+
+        var unexpected = session.messages.poll(NEGATIVE_CONTROL_BUDGET.toMillis(), TimeUnit.MILLISECONDS);
+        assertWithMessage("no message type outside the negotiated intersection may be sent")
+                .that(unexpected).isNull();
+    }
+
+    /** The positive control for the negative above: with {@code dispatch} declared, the record IS dispatched. */
+    @Test
+    void aClientDeclaringDispatchReceivesTheSeededRecord() {
+        var session = new RecordingSession(newHandlerWithSeededRecord());
+
+        session.send(configureMessage(Configure.newBuilder()
+                .addTopics(TOPIC)
+                .addCapabilities(ConfigureHandler.CAPABILITY_DISPATCH)
+                .addCapabilities("some-future-capability")));
+
+        var configured = session.awaitConfigured();
+        assertThat(configured.getCapabilitiesList()).containsExactly(ConfigureHandler.CAPABILITY_DISPATCH);
+
+        var dispatch = session.awaitMessage().getDispatch();
+        assertThat(dispatch.getRecord().getValue().toStringUtf8()).isEqualTo("hello");
+    }
+
+    /** After one stream configured the engine, a new stream cannot reconfigure the process (U8 owns reconnect). */
+    @Test
+    void aNewStreamAfterConfigurationIsRefusedNamingTheReconnectUnit() {
+        var handler = newHandler();
+        var first = new RecordingSession(handler);
+        first.send(configureMessage(Configure.newBuilder().addTopics(TOPIC)));
+        first.awaitConfigured();
+
+        var second = new RecordingSession(handler);
+        second.send(configureMessage(Configure.newBuilder().addTopics(TOPIC)));
+
+        var status = Status.fromThrowable(second.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.FAILED_PRECONDITION);
+        assertThat(status.getDescription()).contains("U8");
+    }
+
+    private static ClientMessage configureMessage(Configure.Builder configure) {
+        return ClientMessage.newBuilder().setConfigure(configure).build();
+    }
+
+    /** One in-memory session: the handler's inbound observer plus a recording outbound one. */
+    private static final class RecordingSession {
+
+        final BlockingQueue<ProxyMessage> messages = new LinkedBlockingQueue<>();
+        final AtomicReference<Throwable> error = new AtomicReference<>();
+        private final StreamObserver<ClientMessage> inbound;
+
+        RecordingSession(ConfigureHandler handler) {
+            this.inbound = handler.session(new StreamObserver<>() {
+                @Override
+                public void onNext(ProxyMessage message) {
+                    messages.add(message);
+                }
+
+                @Override
+                public void onError(Throwable t) {
+                    error.set(t);
+                }
+
+                @Override
+                public void onCompleted() {
+                    // nothing to record: the tests assert on messages and errors
+                }
+            });
+        }
+
+        void send(ClientMessage message) {
+            inbound.onNext(message);
+        }
+
+        Configured awaitConfigured() {
+            var message = awaitMessage();
+            assertWithMessage("expected a Configured, got %s", message.getMessageCase())
+                    .that(message.hasConfigured()).isTrue();
+            return message.getConfigured();
+        }
+
+        ProxyMessage awaitMessage() {
+            try {
+                var message = messages.poll(30, TimeUnit.SECONDS);
+                assertWithMessage("no message arrived within the budget (stream error: %s)", error.get())
+                        .that(message).isNotNull();
+                return message;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        }
+
+        Throwable awaitError() {
+            assertWithMessage("expected the stream to be closed with an error").that(error.get()).isNotNull();
+            return error.get();
+        }
+    }
+}

@@ -166,19 +166,6 @@ class ProxyHarnessTest {
         }
     }
 
-    /**
-     * The engine seam is stubbed, deliberately and loudly, until the engine units land - and the refusal names
-     * them, so a client author who arrives early is routed rather than stranded.
-     */
-    @Test
-    void engineSeamRefusesLoudlyUntilTheEngineUnitsLand() {
-        try (var harness = new ProxyHarness(HarnessScenario.A_PROCESSED_RECORD_ADVANCES_THE_COMMITTED_OFFSET)) {
-            var pending = assertThrows(UnsupportedOperationException.class, harness::startEngine);
-            assertThat(pending).hasMessageThat().contains("ProxyProcessor");
-            assertThat(pending).hasMessageThat().contains("start(Client)");
-        }
-    }
-
     /** The scenario registry resolves every conformance scenario by its stable name, and refuses strangers. */
     @Test
     void everyConformanceScenarioIsResolvableByItsStableName() {
