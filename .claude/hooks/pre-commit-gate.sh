@@ -133,13 +133,17 @@ def commit_bypass_counts(line):
 
 
 try:
-    counts = [commit_bypass_counts(line) for line in cmd.splitlines()]
-    commits = sum(c for c, _ in counts)
-    bypassing = sum(b for _, b in counts)
+    # The WHOLE command is lexed at once. Splitting into lines first breaks a quoted multiline
+    # message down the middle, so the first line raises ValueError and the fallback below finds
+    # `--no-verify` in the MESSAGE TEXT - which meant `git commit -m "...\n--no-verify\n..."`
+    # skipped the gate entirely. shlex handles the newlines; the line split never needed to.
+    commits, bypassing = commit_bypass_counts(cmd)
     # EVERY commit in the payload must ask for it. One that did not is gated, so the gate runs.
     bypass = commits > 0 and commits == bypassing
 except ValueError:
-    bypass = re.search(r"(?<!\S)--no-verify(?!\S)", cmd) is not None
+    # Genuinely unbalanced quoting. Fail OPEN so a hook bug cannot jam the tool call shut, but do
+    # not try to read the flag out of text we could not lex.
+    bypass = True
 sys.exit(0 if bypass else 1)
 PYGATE
 then

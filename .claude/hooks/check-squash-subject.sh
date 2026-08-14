@@ -75,6 +75,10 @@ for start, end in zip(starts, starts[1:] + [len(cmd)]):
             if t.startswith(flag + "="):
                 subject = t[len(flag) + 1:]
                 break
+            # A SHORT flag may carry its value attached: -tbad == -t bad. Long flags do not.
+            if len(flag) == 2 and t.startswith(flag) and len(t) > 2:
+                subject = t[2:]
+                break
         i += 1
 
     if subject is None:

@@ -85,6 +85,8 @@ expect DENY  "--subject with no (#N)"              'gh pr merge 2999 --squash --
 expect DENY  "-t, the documented SHORT form"       'gh pr merge 2999 --squash -t "foo"'
 expect DENY  "--subject= equals form"              'gh pr merge 2999 --squash --subject=foo'
 expect DENY  "-t= equals form"                     'gh pr merge 2999 --squash -t=foo'
+expect DENY  "-tVALUE attached short form"         'gh pr merge 2999 --squash -tfoo'
+expect ALLOW "-tVALUE attached, with (#N)"         'gh pr merge 2999 --squash -t"foo (#2999)"'
 expect DENY  "(#N) present but not at the END"     'gh pr merge 2999 --squash --subject "port (#2999) to master"'
 expect ALLOW "--subject ending with (#N)"          'gh pr merge 2999 --squash --subject "foo (#2999)"'
 expect ALLOW "-t ending with (#N)"                 'gh pr merge 2999 --squash -t "foo (#2999)"'
@@ -181,6 +183,12 @@ assert "a later commit's --no-verify does not exempt an earlier one" 2 \
     "$(gate_rc "$red" 'git commit -m first; git commit --no-verify -m second')"
 assert "both commits asking for a bypass is honoured" 0 \
     "$(gate_rc "$red" 'git commit --no-verify -m a; git commit --no-verify -m b')"
+# A quoted MULTILINE message containing the flag. Lexing line-by-line split this down the middle,
+# the first line raised ValueError, and the fallback then found the flag in the message text.
+assert "a multiline message mentioning the flag is not a bypass" 2 \
+    "$(gate_rc "$red" 'git commit -m "line1
+--no-verify
+line3"')"
 assert "git -C <path> commit --no-verify is still a bypass" 0 \
     "$(gate_rc "$red" 'git -C /some/path commit --no-verify -m x')"
 
