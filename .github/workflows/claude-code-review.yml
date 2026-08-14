@@ -138,3 +138,72 @@ jobs:
           gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
               --jq '.[] | "<!-- check-review-posted \(env.MARKER_TOKEN) \(.created_at) \(.user.login) -->", (.body // "")' \
             | bash bin/check-review-posted.sh "$MARKER_TOKEN"
+
+  # ---------------------------------------------------------------------------------------
+  # THE HUMAN HALF. A SEPARATE JOB, AND A SEPARATE REQUIRED CHECK, ON PURPOSE.
+  #
+  # It asserts one thing: the repository owner has left a review saying `lgtm`. That is a
+  # memory aid, not a security control - the owner is both the subject of the assertion and
+  # the person who wants the merge, so it stops nobody who wants not to be stopped. What it
+  # buys is that "have I read this one myself yet?" stops being something to carry across a
+  # dozen open PRs and becomes a red check with its own name.
+  #
+  # WHY NOT A SECOND STEP IN `claude-review`. Two reasons, and the first is the whole point:
+  # two checks say WHICH half is missing from the checks list, without opening anything. One
+  # combined check is red either way. The second is blast radius - `claude-review` is a
+  # required status check in the master ruleset, matched by name, so folding this in would
+  # have meant renaming that job, a transitional duplicate to keep the old name reporting,
+  # and an ordered ruleset swap that bricks the repo if done in the wrong order. Adding a
+  # job costs none of that: `claude-review` is untouched, and this context becomes required
+  # by adding it to the ruleset once it has merged and is reporting.
+  #
+  # NOT HEAD-SENSITIVE, deliberately and to match the half above: an LGTM on any commit
+  # counts for the whole PR, permanently. The owner only stamps a PR once it is near merge,
+  # so later commits must not un-stamp it.
+  # ---------------------------------------------------------------------------------------
+  human-lgtm:
+    name: "review: human LGTM"
+    # NO BOT EXEMPTION, UNLIKE THE HALF ABOVE, AND THAT ASYMMETRY IS THE POINT. The two jobs assert
+    # different things: a bot-raised PR genuinely does not need an AUTOMATED review, but it is still
+    # a change going in, and the requirement here is "I review everything myself". Dependabot
+    # included - a dependency bump is exactly where a human should look.
+    #
+    # Deleting the guard also removes a whole bug class rather than fixing it. `github.event.sender`
+    # is the event ACTOR, not the PR author, so a human PR synchronized or reopened by a bot or a
+    # GitHub App would have skipped this job - and a SKIPPED job satisfies a required check, so the
+    # context would have gone green having asserted nothing. Keying on `pull_request.user.type`
+    # instead would fix the direction but keep the skip; no guard at all means there is nothing to
+    # skip. If this proves too noisy on bot PRs, add the exemption back deliberately.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Read-only. This job posts nothing.
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Ahead of the gate it protects, like the automated half's self-test.
+      - name: Self-test the human-LGTM check
+        run: bash bin/test-check-human-lgtm.sh
+
+      - name: Assert the repository owner has left an LGTM
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # THE REVIEWS ENDPOINT, NOT THE COMMENTS ONE - that is the rule, not an
+          # implementation detail: an "lgtm" typed into the ordinary comment box is not the
+          # deliberate act this asks for. The endpoint gives that distinction for free.
+          #
+          # The JSON goes to the script whole and the script filters it with jq, so no
+          # marker or per-run token is needed: filtering on .user.login before any text is
+          # read means a stranger's body cannot be attributed to the owner.
+          gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+            | bash bin/check-human-lgtm.sh
