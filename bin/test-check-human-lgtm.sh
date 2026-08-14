@@ -41,9 +41,13 @@
 #    12f. a CRLF body still closes its fence, so a later LGTM counts       -> pass (0)
 #    12g. a fence opened BEHIND A LIST MARKER still hides the LGTM         -> FAIL (1)
 #    12h. ... but a marker-prefixed line inside a block does not close it  -> FAIL (1)
+#    12i. a FOUR-space-indented fence does not close the block             -> FAIL (1)
+#    12j. ... a three-space-indented one still does                        -> pass (0)
 #    13. LGTM inside a blockquote only                                     -> FAIL (1)
 #    13b-d. a blockquote NESTED IN A LIST ITEM, three ways                 -> FAIL (1)
 #    13e-f. a bulleted LGTM, and an `->` arrow, both still stamp           -> pass (0)
+#    13g. a LAZY blockquote continuation - '> Bob said\nLGTM'              -> FAIL (1)
+#    13h-i. ... ended by a blank line, and by a list item                  -> pass (0)
 #    14. LGTM wearing ordinary punctuation - (LGTM) LGTM! -- LGTM. LGTM,   -> pass (0)
 #    15. a rejected near-miss beside a real LGTM in the same body          -> pass (0)
 #
@@ -374,6 +378,32 @@ Still reading.'
 assert "12h. a marker-prefixed fence line inside a block does not close it" \
     1 "$(run_checker "$(owner_review "$LIST_FENCE_CLOSE_BODY")")"
 
+# A CLOSING FENCE MAY CARRY AT MOST THREE SPACES; the fourth makes it code and the block stays
+# OPEN. The old rule allowed any leading whitespace, so this body's block ended on a line
+# CommonMark keeps inside it and the LGTM after it landed in open prose. Reported on
+# astubbs/parallel-consumer#298.
+INDENTED_CLOSE_BODY='Explaining the fence rule to a contributor:
+
+```
+this next line does not close the block:
+    ```
+LGTM
+```
+
+Still reading.'
+assert "12i. a four-space-indented fence does not close the block" \
+    1 "$(run_checker "$(owner_review "$INDENTED_CLOSE_BODY")")"
+
+# The other side of that limit, so nobody "fixes" 12i by refusing indentation outright: three
+# spaces is legal and DOES close, which is what makes the LGTM after this one a real stamp.
+THREE_SPACE_CLOSE_BODY='```
+LGTM
+   ```
+
+And having read the diff myself: LGTM'
+assert "12j. a three-space-indented fence still closes, so the LGTM after it counts" \
+    0 "$(run_checker "$(owner_review "$THREE_SPACE_CLOSE_BODY")")"
+
 QUOTED_BODY='> LGTM
 
 That was Bob, not me. I have not read it yet.'
@@ -407,6 +437,29 @@ assert "13e. an LGTM in a plain list item still stamps" \
 assert "13f. a line-leading arrow is prose, not a bullet and a blockquote" \
     0 "$(run_checker "$(owner_review 'Read it end to end.
 -> LGTM')")"
+
+# COMMONMARK LAZINESS. A paragraph inside a blockquote continues onto following lines that drop
+# the `>`, so this body renders as ONE quoted paragraph - "Bob asked whether this was fine and I
+# said LGTM" - with nothing of the owner's own outside it. Judging each line alone read the
+# second line as prose and stamped the PR. Reported on astubbs/parallel-consumer#298.
+assert "13g. a lazy blockquote continuation does not stamp" \
+    1 "$(run_checker "$(owner_review '> Bob asked whether this was fine and I said
+LGTM')")"
+
+# WHERE LAZINESS ENDS, and the reason it is a bounded rule rather than "everything after a
+# quote". A blank line closes the quoted paragraph, so this LGTM is the owner speaking. Without
+# this case, refusing every line after a `>` for the rest of the body passes 13g just as well -
+# and would refuse most real reviews, which quote a line and then answer it.
+assert "13h. a blank line ends the continuation, so the LGTM after it stamps" \
+    0 "$(run_checker "$(owner_review '> Bob asked whether this was fine
+
+LGTM')")"
+
+# The other terminator: a list (like a fence, and unlike ordinary prose) interrupts a paragraph,
+# so this bullet is the owner's own and not part of the quote above it.
+assert "13i. a list item interrupts the quoted paragraph, so a bulleted LGTM stamps" \
+    0 "$(run_checker "$(owner_review '> Bob asked whether this was fine
+- LGTM')")"
 
 assert "14. LGTM wearing ordinary punctuation passes" \
     0 "$(run_checker "$(owner_review '(LGTM)')")"

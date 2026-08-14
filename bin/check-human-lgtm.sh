@@ -103,12 +103,20 @@
 #                       (`>`). A review DISCUSSING this rule, or quoting somebody else's
 #                       LGTM, must not stamp the PR by accident - and that is not a
 #                       hypothetical, because the review of the PR that introduced this check
-#                       necessarily quotes it. BOTH EXCLUSIONS SURVIVE LIST NESTING: CommonMark
-#                       lets a block start after a list marker, so `- > LGTM` is a blockquote
-#                       and ``- ```py `` opens a fence just as surely as the unindented forms,
-#                       and a leading `- ` used to walk an LGTM straight past both. Continuation
-#                       lines of a list item are plain indentation and always worked; it is the
-#                       marker line itself that did not.
+#                       necessarily quotes it. Three shapes of that rule are worth naming,
+#                       because a line-at-a-time reading missed all three and each renders as
+#                       quoted or fenced text to every human who opens the PR:
+#                         - LIST NESTING. CommonMark lets a block start after a list marker, so
+#                           `- > LGTM` is a blockquote and ``- ```py `` opens a fence just as
+#                           surely as the unindented forms. Continuation lines of a list item
+#                           are plain indentation and always worked; the marker line did not.
+#                         - LAZINESS. A paragraph inside a blockquote continues onto following
+#                           lines that DROP the `>`, so `> Bob said\nLGTM` is one quoted
+#                           paragraph. The continuation ends at a blank line, a fence, or a line
+#                           starting a block a paragraph cannot lazily continue into.
+#                         - THE CLOSING-FENCE INDENT. A closing fence may carry at most three
+#                           spaces; the fourth makes it code and the block stays OPEN. Treating
+#                           it as a close ended the block early and put the rest into prose.
 #   4. STATE      - is NOT consulted, with one exception: a `PENDING` review (started, never
 #                   submitted) is ignored, because it has not been submitted. APPROVED,
 #                   COMMENTED, CHANGES_REQUESTED and DISMISSED are all treated alike; the
@@ -159,6 +167,31 @@
 # check as a stamp. That is the price of matching the owner's actual habit rather than a habit
 # invented for the checker, and it is the right way round: this half exists to catch a
 # forgotten review, not a lying one.
+#
+# AND THE FENCE/QUOTE EXCLUSIONS ARE A BOUNDED HEURISTIC, NOT A COMMONMARK PARSER. This is
+# stated because three successive review rounds each found a real CommonMark shape the previous
+# rule missed - list nesting, laziness, the closing-fence indent - and the supply of such shapes
+# is not exhausted. Known and DELIBERATELY not excluded, as of this writing:
+#
+#   * an INDENTED CODE BLOCK (four spaces after a blank line) - `    LGTM` is code and does not
+#     render as prose, and this checker will still count it;
+#   * an HTML block, a setext heading, a link reference definition, and the several other block
+#     starts a real parser knows about.
+#
+# Closing that list properly means a CommonMark implementation, and this file cannot have one:
+# it runs as a step of a REQUIRED check ahead of the gate it protects, so a dependency that is
+# present on today's runner image and absent from tomorrow's can brick every open PR - the same
+# argument that keeps bin/test-check-human-lgtm.sh on awk rather than PyYAML.
+#
+# What makes that acceptable rather than merely convenient is the DIRECTION OF THE ERROR, and
+# the size of the hole this is a corner of. Above, in plain terms: this check already cannot
+# tell a review GIVING an LGTM from one TALKING about one. "I would want an lgtm from someone
+# else first" stamps the PR today. Against a hole that wide, an indented code block is a corner
+# of a corner - and every one of these exclusions narrows a memory aid, not a security control.
+# So each fix here is worth its cost only while it is cheap and exact. IF FALSE POSITIVES EVER
+# MATTER MORE THAN THAT, the fix is not more awk in this file: it is to tighten the TOKEN rule -
+# for instance to require the bare word alone on a line, which 46 of the 50 real stamps already
+# are. That is a change to what the owner has to type, so it is his call and not this file's.
 #
 # It also cannot tell a THOROUGH review from a two-second one, cannot notice that the LGTM was
 # aimed at an earlier version of the change (see head-insensitivity above, which is a choice,
@@ -296,10 +329,21 @@ scan_result=$(awk \
     }
 
     # A fence may OPEN behind a list marker but may only CLOSE in the plain form, because the
-    # lines between the two are literal code where a marker is just text.
+    # lines between the two are literal code where a marker is just text - and a closing fence
+    # may carry AT MOST THREE SPACES of indentation, because the fourth makes it code. An
+    # unrestricted `^[ \t]*` here ended the block early on a line CommonMark keeps inside it,
+    # which put every following LGTM into open prose.
     function fence_line(line) {
-        return fenced ? (line ~ /^[ \t]*(`{3,}|~{3,})/) \
+        return fenced ? (line ~ /^ {0,3}(`{3,}|~{3,})/) \
                       : (strip_markers(line) ~ /^(`{3,}|~{3,})/)
+    }
+
+    # Does this line START a block that a paragraph cannot lazily continue into? Only the two
+    # that matter here; a fence is handled by the rule above, before laziness is consulted.
+    function starts_block(line,   s) {
+        s = line
+        sub(/^[ \t]+/, "", s)
+        return (s ~ /^([-*+]|[0-9]+[.)])([ \t]|$)/ || s ~ /^#{1,6}([ \t]|$)/)
     }
 
     # Scanning runs ONE LINE BEHIND the reader, which is what makes the line after a candidate
@@ -326,7 +370,7 @@ scan_result=$(awk \
     function reset_segment() {
         open = 0; fenced = 0; fence_ch = ""; fence_len = 0
         submitted = ""; login = ""; state = ""; seg_ok = 0; seg_near = ""
-        pending = ""; have_pending = 0; prev_line = ""
+        pending = ""; have_pending = 0; prev_line = ""; in_quote = 0
     }
 
     # Charges the finished segment to the verdict. PENDING is the one state consulted: it
@@ -391,18 +435,27 @@ scan_result=$(awk \
         after = substr(norm, RSTART + RLENGTH)
         if (!fenced) { fenced = 1; fence_ch = ch; fence_len = len }
         else if (ch == fence_ch && len >= fence_len && after ~ /^[ \t]*$/) { fenced = 0 }
+        in_quote = 0
         next
     }
 
     # Quoted or fenced text is discussion, not a stamp - but an LGTM in there is worth
     # reporting back, because "you wrote it inside a code block" is a fix nobody would guess.
-    open && (fenced || strip_markers($0) ~ /^>/) {
+    #
+    # The third clause is CommonMark LAZINESS: a paragraph inside a blockquote continues onto
+    # the following lines even when they drop the `>`, so `> Bob said\nLGTM` is ONE quoted
+    # paragraph and reads to a human as quoted text. Judging each line alone accepted that as a
+    # stamp. The continuation ends at a blank line, at a fence (the rule above), or at a line
+    # starting a block a paragraph cannot lazily continue into.
+    open && (fenced || strip_markers($0) ~ /^>/ \
+             || (in_quote && $0 ~ /[^ \t]/ && !starts_block($0))) {
         break_para()
+        if (!fenced) in_quote = 1
         if ($0 ~ /[Ll][Gg][Tt][Mm]/) note_near("quoted")
         next
     }
 
-    open { flush($0); pending = $0; have_pending = 1 }
+    open { in_quote = 0; flush($0); pending = $0; have_pending = 1 }
 
     END {
         settle()
