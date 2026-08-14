@@ -60,11 +60,10 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 ## Breaking changes queued for next major version
 
 API/behaviour changes that are ready in principle but must wait for a major-version
-bump - **which 0.6.0.0 is**, so these are live candidates rather than indefinitely
-deferred. Unlike the internal refactors below - which are non-breaking and can land
-any time - these change the public, user-visible surface, so they are
-**release-gated**: do not fold them into a minor/patch. Collected here so a
-major-release prep can action them in one pass.
+bump (current line is 0.6.x). Unlike the internal refactors below - which are
+non-breaking and can land any time - these change the public, user-visible surface,
+so they are **release-gated**: do not fold them into a minor/patch. Collected here
+so a major-release prep can action them in one pass.
 
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
