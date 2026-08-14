@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+
+# Repo pre-commit gate. Runs the fast, read-only checks that CI runs anyway, so a violation is
+# caught in the second before the commit rather than the ten minutes after the push.
+#
+# WHY THIS EXISTS RATHER THAN A DOCUMENTED RULE. Every check below is already written down, and
+# every one has still been missed - by humans and by agents - because a document only fires if
+# somebody chooses to read it. A hook fires because git runs it. That is the whole point: this file
+# is the enforcement layer for things that must not depend on anyone remembering. See
+# docs/agent-harness.md for the layer map and for how to add to it.
+#
+# ENABLE IT (per clone, once - hooks cannot be committed into .git/hooks):
+#     git config core.hooksPath .githooks
+# One clone's config covers every worktree of that clone.
+#
+# BYPASS: `git commit --no-verify`. Deliberately easy - a gate people cannot skip when they have a
+# reason is a gate they disable permanently. CI is the authority; this is the fast mirror of it.
+#
+# COST BUDGET: the whole run is ~1.5s. Keep it that way. A pre-commit hook that takes ten seconds
+# gets --no-verify'd by habit, and then it protects nothing. Anything slower belongs in CI only.
+
+set -euo pipefail
+
+# Each entry: <script>:<soft-exit-codes>
+# A "soft" code means the gate COULD NOT RUN (a missing interpreter, no merge base) as opposed to
+# finding a violation. That distinction is load-bearing: blocking a commit because node is absent
+# teaches people to bypass the hook, and the next real violation goes with it. Soft results warn.
+GATES=(
+    "check-copyright-headers.sh:"
+    "check-issue-refs.sh:2"
+    "check-docs-data.sh:"
+    "check-shell-sigpipe.sh:"
+    "check-quarantine-registry.sh:"
+    "check-action-versions.sh:"
+)
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+failed=()
+skipped=()
+
+for entry in "${GATES[@]}"; do
+    script="bin/${entry%%:*}"
+    soft_codes="${entry#*:}"
+
+    # A branch older than a gate simply does not have it. Not an error.
+    [ -x "$script" ] || continue
+
+    set +e
+    output=$("$script" 2>&1)
+    rc=$?
+    set -e
+
+    if [ "$rc" -eq 0 ]; then
+        continue
+    fi
+
+    # Compare against the soft list without a pipeline - see bin/AGENTS.md on `| grep -q` under
+    # `set -o pipefail`, where the reader closing the pipe turns a MATCH into a failure.
+    if [ -n "$soft_codes" ] && grep -qx "$rc" <<<"$(tr ',' '\n' <<<"$soft_codes")"; then
+        skipped+=("${entry%%:*} (exit $rc - could not run)")
+        continue
+    fi
+
+    failed+=("${entry%%:*}")
+    printf '\n--- %s failed (exit %s) ---\n%s\n' "$script" "$rc" "$output" >&2
+done
+
+for s in "${skipped[@]:-}"; do
+    [ -n "$s" ] && printf 'pre-commit: skipped %s\n' "$s" >&2
+done
+
+if [ ${#failed[@]} -gt 0 ]; then
+    printf '\npre-commit: %d gate(s) failed: %s\n' "${#failed[@]}" "${failed[*]}" >&2
+    printf 'Fix them, or commit with --no-verify if you have a reason.\n' >&2
+    exit 1
+fi
+
+exit 0
