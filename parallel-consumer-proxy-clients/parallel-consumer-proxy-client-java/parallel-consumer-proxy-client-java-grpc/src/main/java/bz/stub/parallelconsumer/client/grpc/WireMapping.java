@@ -33,10 +33,24 @@ final class WireMapping {
     private WireMapping() {
     }
 
+    /**
+     * The tokens this transport actually implements, declared rather than left empty.
+     * <p>
+     * An empty {@code capabilities} list does not mean "nothing" on the wire - the specification reads it as the
+     * complete v1 baseline, so declaring nothing claims heartbeats, manifest reconciliation, worker-death
+     * reporting, terminal outcomes and the shutdown drain. This transport performs exactly one of those. The
+     * claim was harmless only while the proxy's own set was {@code dispatch} alone and the negotiated
+     * intersection could not exceed it; once the proxy grants {@code heartbeat}, a client that never heartbeats
+     * has every in-flight record returned at lease expiry and its later reports fenced as superseded, so nothing
+     * commits. Grow this list as each duty is genuinely implemented, never ahead of it.
+     */
+    private static final String DISPATCH_CAPABILITY = "dispatch";
+
     /** The connect-time {@code Configure}: the API's options carried to the sidecar, unmodified (KTD5, R39). */
     static Configure toConfigure(ClientOptions options) {
         var configure = Configure.newBuilder()
                 .addAllTopics(options.topics())
+                .addCapabilities(DISPATCH_CAPABILITY)
                 .putAllKafkaProperties(options.kafkaProperties());
         options.maxConcurrency().ifPresent(configure::setMaxConcurrency);
         options.ordering().ifPresent(ordering -> configure.setOrdering(toWireOrdering(ordering)));
