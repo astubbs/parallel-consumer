@@ -296,24 +296,48 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
         try (var asyncThree = new ParallelEoSStreamProcessor<String, String>(optionsThree)) {
             asyncThree.subscribe(UniLists.of(topic));
 
-            // read what we're given
-            var readByThree = new ArrayList<ConsumerRecord<String, String>>();
+            // read what we're given - concurrent, as the assertions below read it from the test thread while
+            // PC's worker thread may be adding to it
+            var readByThree = new ConcurrentLinkedQueue<ConsumerRecord<String, String>>();
             asyncThree.poll(x -> {
                 log.info("Three read: {}", x.value());
                 readByThree.add(x.getSingleConsumerRecord());
             });
 
-            // for at least normalTimeout, nothing should be read back (will be long enough to be sure it never is)
-            await().alias("nothing should be read back (will be long enough to be sure it never is)")
+            // Asserting an ABSENCE proves nothing unless the consumer that saw nothing was actually listening,
+            // so anchor the window to the assignment first. PartitionStateManager only holds a state for a
+            // partition it has been assigned (onPartitionsAssigned populates the map), and that map is a
+            // ConcurrentHashMap - so unlike Consumer#assignment, this is safe to read from the test thread
+            // while PC's poll thread is running.
+            var partition = new TopicPartition(topic, 0);
+            await().alias("PC three has been assigned the partition - without this, 'nothing was read' is equally "
+                            + "true of a consumer that never finished joining the group")
+                    .atMost(timeoutToUse)
+                    .until(() -> asyncThree.getWm().getPm().getPartitionState(partition) != null);
+
+            // nothing should be read back: asyncOne processed and committed the only record there was.
+            // No atLeast() here - pollDelay already puts the single evaluation at >= 1s, so an atLeast at or
+            // below that can never fail, and an assertion that cannot fail is decoration.
+            await().alias("nothing should be read back")
                     .pollDelay(ofSeconds(1))
                     .atMost(ofSeconds(2))
-                    .atLeast(ofSeconds(1))
                     .untilAsserted(() -> {
                                 assertThat(readByThree).as("Nothing should be read into the collection")
                                         .extracting(ConsumerRecord::value)
                                         .isEmpty();
                             }
                     );
+
+            // Prove the detector works. Assignment says three joined; it does not say three's poller ever
+            // reached the topic. A record produced now must come through - if it does not, the emptiness above
+            // was measuring a consumer that could not have reported a re-read even if one had happened.
+            String afterCommitPayload = "1";
+            getKcu().getProducer().send(new ProducerRecord<>(topic, afterCommitPayload, afterCommitPayload));
+            await().alias("a record produced after the absence window IS read - proves three was live throughout it")
+                    .atMost(timeoutToUse)
+                    .untilAsserted(() -> assertThat(readByThree)
+                            .extracting(ConsumerRecord::value)
+                            .containsExactly(afterCommitPayload));
         }
     }
 
@@ -390,9 +414,10 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
                     readByThree.add(x.value());
                 });
 
+                // No atLeast() - pollDelay already puts the single evaluation at >= 1s, so an atLeast at or
+                // below that can never fail, and an assertion that cannot fail is decoration
                 await().alias("Only the one remaining failing message should be submitted for processing")
                         .pollDelay(ofMillis(1000))
-                        .atLeast(ofMillis(500))
                         .untilAsserted(() -> {
                                     assertThat(readByThree)
                                             .as("Contains only previously failed messages")
@@ -400,8 +425,13 @@ class CloseAndOpenOffsetTest extends BrokerIntegrationTest<String, String> {
                                 }
                         );
 
-                //
-                assertThat(readByThree).hasSize(numberOfFailingMessages); // double check after closing
+                // A restatement, not an independent check - it cannot fail unless the await above passed.
+                // Its previous comment claimed it was a "double check after closing", which it never was: it
+                // sits inside the try, so it runs before close. Moving it out does not earn the claim either -
+                // measured, by producing an extra record here and letting it reach the broker before close:
+                // PC stops fetching at close, so the record is never delivered and BOTH positions still pass.
+                // Catching a late delivery would need a quiet window or a settle anchor while PC still runs.
+                assertThat(readByThree).hasSize(numberOfFailingMessages);
             }
         }
     }
