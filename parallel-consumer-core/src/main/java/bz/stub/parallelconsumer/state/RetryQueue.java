@@ -31,10 +31,7 @@ import java.util.stream.Collectors;
  */
 public class RetryQueue {
 
-    // No accessors on the three fields below. They were annotated "visible for testing" and had no caller anywhere -
-    // main, test or integration - so all they did was hand out this class's lock-protected state with none of the
-    // locking every real method takes. That is the same shape astubbs#267 removed from WorkManager, where an
-    // unused-looking accessor was what hid a live concurrency defect from a sweep looking for exactly it.
+    // No accessors: these are lock-protected, and handing them out bypasses every lock in this class.
     private final Map<WorkContainerKey, WorkContainerSortKey> unique = new HashMap<>();
     private final NavigableMap<WorkContainerSortKey, WorkContainer<?, ?>> sorted;
 

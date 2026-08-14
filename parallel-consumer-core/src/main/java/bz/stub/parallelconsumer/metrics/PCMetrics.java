@@ -13,7 +13,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.ToDoubleFunction;
 
@@ -35,14 +35,17 @@ public class PCMetrics {
     /**
      * Tracking of registered meters for removal from registry on shutdown.
      * <p>
-     * Concurrent because the two ends of this field's life run on different threads. {@link #close()} iterates it on
-     * the control thread, while the four registration methods append from the broker-poll thread on every rebalance -
-     * and none of those four is {@code synchronized}, so the monitor on {@code close()} excludes nothing that matters.
-     * A plain list breaks its own iteration when a registration lands mid-close, and the resulting
-     * {@link java.util.ConcurrentModificationException} escapes into {@code doClose}'s {@code finally}, skipping the
-     * {@code state = CLOSED} transition that block exists to guarantee.
+     * Concurrent because {@link #close()} iterates this on the control thread while the registration methods append
+     * from the broker-poll thread on every rebalance - and none of them is {@code synchronized}, so the monitor on
+     * {@code close()} excludes nothing. {@code PCMetricsConcurrentRegistrationTest} owns what the resulting
+     * {@link java.util.ConcurrentModificationException} costs.
+     * <p>
+     * A set rather than a list, for two reasons beyond that. Registration happens per partition inside a rebalance
+     * callback, and copy-on-write copies the whole backing array on every add - quadratic in meter count, on the
+     * poll thread. And micrometer returns the existing meter when one is already registered for an id, so a list
+     * accumulated a duplicate entry each time.
      */
-    private final List<Meter.Id> registeredMeters = new CopyOnWriteArrayList<>();
+    private final Set<Meter.Id> registeredMeters = ConcurrentHashMap.newKeySet();
 
     /**
      * Common metrics tags added to all meters - for example PC instance. Configurable through Parallel Consumer
@@ -53,6 +56,13 @@ public class PCMetrics {
 
     @Getter
     private Tag instanceTag;
+
+    /**
+     * How many times {@link #close()} re-walks {@link #registeredMeters} to pick up meters registered during the
+     * previous walk. More than one pass is already unusual; the bound exists so a caller registering in a loop
+     * cannot hold shutdown open indefinitely.
+     */
+    private static final int MAX_CLOSE_DRAIN_PASSES = 4;
 
     private final AtomicBoolean isClosed = new AtomicBoolean(true);
 
@@ -216,9 +226,26 @@ public class PCMetrics {
             return;
         }
         log.debug("Closing PCMetrics");
-        // clean up the instance resources
-        this.registeredMeters.forEach(this.meterRegistry::remove);
-        this.registeredMeters.clear();
+        // Drain, rather than walk-then-clear. Any iteration here runs over what was registered when it started, so a
+        // clear() afterwards would discard meters registered DURING the walk without ever unregistering them -
+        // trading the plain list's loud exception for a silent leak into the caller's registry, which is worse.
+        // Removing each id as it is unregistered leaves a late arrival in the set for the next pass instead.
+        int drained = 0;
+        for (int pass = 0; pass < MAX_CLOSE_DRAIN_PASSES && !registeredMeters.isEmpty(); pass++) {
+            for (var it = registeredMeters.iterator(); it.hasNext(); ) {
+                Meter.Id id = it.next();
+                it.remove();
+                this.meterRegistry.remove(id);
+                drained++;
+            }
+        }
+        log.debug("Unregistered {} meter(s) while closing PCMetrics", drained);
+        if (!registeredMeters.isEmpty()) {
+            // bounded rather than "until empty", so a caller still registering cannot hold shutdown open forever
+            log.warn("Gave up unregistering {} meter(s) still being registered while PCMetrics closed - they remain " +
+                    "in the meter registry. Registering meters against a closing consumer is the underlying problem.",
+                    registeredMeters.size());
+        }
         if (isNoop) {
             this.meterRegistry.close();
         }

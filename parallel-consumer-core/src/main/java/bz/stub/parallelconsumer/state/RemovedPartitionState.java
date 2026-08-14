@@ -38,9 +38,8 @@ import java.util.SortedSet;
 public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
 
     /**
-     * The name asserted read-only; the {@code TreeSet} it used to hold did not, and being {@code static} it was one
-     * instance shared by every partition and every PC in the JVM. A single caller mutating what it was handed would
-     * have changed what every other caller sees.
+     * Shared by every partition and every PC in the JVM, so it has to actually be immutable - the name is not
+     * enforcement.
      */
     private static final SortedSet<Long> READ_ONLY_EMPTY_SET = Collections.emptySortedSet();
 

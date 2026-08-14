@@ -79,10 +79,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * and removed on revoke, both of which arrive on the broker-poll thread as rebalance callbacks, while
      * {@link #incrementCounterIfPresent} reads them on the control thread for every record that completes.
      * <p>
-     * Nothing iterates these, so unlike the listener collections they cannot throw
-     * {@link java.util.ConcurrentModificationException} - the cost of getting it wrong is quieter. A {@code get}
-     * racing another thread's resize can miss an entry that is present, so the counter silently under-counts during
-     * a rebalance, which is exactly when an operator is most likely to be reading it.
+     * Not a {@link java.util.ConcurrentModificationException} risk - nothing iterates these. Quieter than that: a
+     * {@code get} racing another thread's resize can miss an entry that is present, so the counter under-counts
+     * during a rebalance. astubbs#267 judged these safe on the iteration argument alone; this is why that was too
+     * narrow.
      */
     private final Map<TopicPartition, Counter> succeededRecordsCounters = new ConcurrentHashMap<>();
     private final Map<TopicPartition, Counter> failedRecordsCounters = new ConcurrentHashMap<>();
@@ -329,8 +329,6 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private void initTopicPartitionSpecificMetrics(Collection<TopicPartition> partitions) {
         partitions.forEach(topicPartition -> {
-            // computeIfAbsent rather than containsKey-then-put: the concurrent map makes each call safe, but the
-            // check and the write are only one decision if they happen as one operation
             succeededRecordsCounters.computeIfAbsent(topicPartition,
                     tp -> pcMetrics.getCounterFromMetricDef(PCMetricsDef.PROCESSED_RECORDS, getWorkManagerCounterTags(tp)));
             failedRecordsCounters.computeIfAbsent(topicPartition,

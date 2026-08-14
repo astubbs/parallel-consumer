@@ -144,7 +144,6 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private void initPartitionCounters(Collection<TopicPartition> assignedPartitions) {
         assignedPartitions.forEach(topicPartition -> {
-            // computeIfAbsent rather than containsKey-then-put, so the check and the write are one decision
             slowWorkCounters.computeIfAbsent(topicPartition, tp -> pcMetrics
                     .getCounterFromMetricDef(PCMetricsDef.SLOW_RECORDS,
                             Tag.of("topic", tp.topic()),
