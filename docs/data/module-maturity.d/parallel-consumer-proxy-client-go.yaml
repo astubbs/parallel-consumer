@@ -7,8 +7,27 @@ schema_version: 1
 kind: module-maturity
 modules:
   - artifact: parallel-consumer-proxy-client-go
-    deferred:
-      reason: >-
-        Empty skeleton seeded ahead of the fan-out; the Go client wave has not begun, and no maturity or support claim is published for a module with no content.
-      lifted_by: >-
-        astubbs#242 - the Go client wave of the language-proxy plan records this module's first real row when its wave starts.
+    maturity: alpha
+    minimum_java: 17
+    package_ecosystem: go-modules
+    package_coordinate: >-
+      github.com/astubbs/parallel-consumer/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go
+    reliability_confidence: >-
+      Wave one only: one record carried end to end over the real wire against the test-mode
+      sidecar. The connect, configure, dispatch, invoke, report and clean-shutdown path works; the
+      liveness lease, heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes
+      and the shutdown drain are not implemented at all, so nothing about a session that loses its
+      connection or outlives a lease has been exercised.
+    api_expectation: >-
+      PROVISIONAL. The surface (Open/Poll/Close, a Processor returning an error for failure) has
+      not yet had its idiomatic-Go review, and the reference wrapper surface it mirrors may itself
+      move when the fan-out's wave syncs resolve divergences.
+    support_posture: >-
+      Not supported for external use. It exists to falsify the frozen protocol documents - whether
+      an author with no access to the proxy's Java can build a working client from them - and the
+      answer to that, in docs/inflight/clients/go.md, is its real output.
+    evidence_id: proxy-client-go
+    tracking: astubbs#242
+    use_this_if: >-
+      You are working on the language-proxy fan-out itself and want the smallest complete example
+      of a foreign-language client. Nobody should consume it from an application yet.

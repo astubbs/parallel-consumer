@@ -19,9 +19,19 @@
     <!--
         Thin Maven wrapper over the Go toolchain (go.mod beside this file). The commands below run
         ONLY under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator
-        for why opt-in is load-bearing. Skeleton until the Go wave of the language-proxy plan
-        (astubbs#242) starts; that wave owns everything in this directory, including refining
-        these commands.
+        for why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this
+        skeleton and runs no Go toolchain at all.
+
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND MAVEN CANNOT ORDER THAT FOR US. `go test`
+        here spawns the conformance harness (TestModeMain, in parallel-consumer-proxy's test jar),
+        but this module deliberately has NO Maven dependency on the proxy - no client depends on
+        the engine - so `-am` does not pull it into the reactor ahead of us. Build it first:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The Go test fails with that command in its message rather than skipping, because a test
+        that quietly does not run is not a passing test. Recorded as a wave finding in
+        docs/inflight/clients/go.md (astubbs#242).
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
