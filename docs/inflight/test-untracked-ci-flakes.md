@@ -117,7 +117,8 @@ and then catches up. Both new sightings are the metric **behind and never catchi
 burns its full 120s:
 
 ```
-PCMetricsTest.metricsRegisterBinding:108   (PARTITION_LAST_COMMITTED_OFFSET, partition 1)
+PCMetricsTest.metricsRegisterBinding
+  the await on PARTITION_LAST_COMMITTED_OFFSET vs counterP1 + p1StartingOffset (partition 1)
   attempt 1: expected: 1213.0  but was: 1209.0     (4 short)
   attempt 2: expected: 1207.0  but was: 1195.0    (12 short)
 ```
