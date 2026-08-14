@@ -122,8 +122,20 @@ PCMetricsTest.metricsRegisterBinding:108   (PARTITION_LAST_COMMITTED_OFFSET, par
   attempt 2: expected: 1207.0  but was: 1195.0    (12 short)
 ```
 
-**Both on the same head, back to back** - the second is a rerun of the first, so this is no longer a
-flapper you can rerun past. And the shortfall is not a fixed off-by-N: 4 then 12. No amount of
+A third failure the same day settles rule 2, on **`tooling/agent-harness-hooks`** - a branch with no
+connection to this one (run 31772010940, 05:07):
+
+```
+  expected: 1211.0  but was: 1201.0    (10 short)
+```
+
+This is the control the section above already establishes as the only working one: the unit lane
+exists on `pull_request` only, so a green or absent master run proves nothing, and other branches'
+lane runs are the evidence. Three post-fix failures, two unrelated branches, shortfalls of 4, 10 and
+12.
+
+**Both of the first two are on the same head, back to back** - the second is a rerun of the first, so
+this is no longer a flapper you can rerun past. And the shortfall is not a fixed off-by-N: 4 then 12. No amount of
 waiting closes a gap that varies, which is what distinguishes this from the lag the await was
 written for.
 
