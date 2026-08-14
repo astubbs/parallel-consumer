@@ -85,7 +85,10 @@ were hidden by the surefire retry until astubbs#224 removed it.
   unverified hypothesis and its falsification path are in
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
 
-- [ ] `PCMetricsTest.metricsRegisterBinding` - **re-quarantined**, having been released by
+- [ ] `PCMetricsTest.metricsRegisterBinding` - **re-quarantined as a rule-1 exception, by owner
+  direction**: the mechanism below is characterised but the root cause is not, and the owner directed
+  that a test released from quarantine which then re-occurs goes back in. Completing the diagnosis is
+  the open task. Released by
   astubbs#265 on a causal fix that addressed the opposite direction of the failure. That diagnosis was
   that the metric could be *more* current than the expectation testing it (`expected 203.0 but was
   207.0`), so the `Thread.sleep(1000)` became an `await().untilAsserted(...)` on the trailing meters.

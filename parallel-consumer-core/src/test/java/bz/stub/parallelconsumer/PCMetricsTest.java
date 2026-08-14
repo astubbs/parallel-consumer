@@ -39,7 +39,9 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
     @Test
     @SneakyThrows
     @Quarantined(
-            reason = "Re-quarantined: astubbs#265 released it on a causal fix that addressed the opposite "
+            reason = "Rule-1 exception by owner direction: the mechanism is characterised below but the "
+                    + "root cause is not, and the owner directed that a test released from quarantine "
+                    + "which then re-occurs goes back in. astubbs#265 released it on a causal fix that addressed the opposite "
                     + "direction of the failure. Its diagnosis was that the metric could be MORE current than "
                     + "the expectation (seen as PARTITION_HIGHEST_COMPLETED_OFFSET expected 203.0 but was 207.0 "
                     + "- four records completed in the gap), so the Thread.sleep(1000) became an "
