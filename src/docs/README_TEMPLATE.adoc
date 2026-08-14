@@ -525,8 +525,8 @@ After this setup, one then has the choice of interfaces:
 
 * `ParallelStreamProcessor`
 * `VertxParallelStreamProcessor`
-* `JStreamParallelStreamProcessor`
-* `JStreamVertxParallelStreamProcessor`
+* `JStreamParallelStreamProcessor` -- *deprecated for removal*, see <<callbacks-vs-streams>>
+* `JStreamVertxParallelStreamProcessor` -- *deprecated for removal*, see <<callbacks-vs-streams>>
 
 There is another interface: `ParallelConsumer` which is integrated, however there is currently no immediate implementation.
 See {base_confluent_url}/issues/12[confluentinc issue #12], and the `ParallelConsumer` JavaDoc:
@@ -557,12 +557,17 @@ You can also optionally provide a callback function to be run after the message(
 [source,java,indent=0]
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=exampleProduce]
 
+[[callbacks-vs-streams]]
 ==== Callbacks vs Streams
 
-You have the option to either use callbacks to be notified of events, or use the `Streaming` versions of the API, which use the `java.util.stream.Stream` system:
+Use the callbacks. The `Streaming` versions of the API, which hand back a `java.util.stream.Stream` of results, are *deprecated for removal*:
 
 * `JStreamParallelStreamProcessor`
 * `JStreamVertxParallelStreamProcessor`
+
+WARNING: They buffer every result in an unbounded queue that only drains when you consume the stream, so a slow or absent consumer grows it until the JVM runs out of memory -- and the returned `Stream` is single-shot, terminating the first time the queue is momentarily empty and unable to restart, after which everything produced accumulates behind a consumer that has already finished.
+Closing does not rescue what you have not read: it discards the queue, and `closeDrainFirst()` drains the queued *processing* rather than the stream.
+There is no bounded version to move to -- see link:https://github.com/astubbs/parallel-consumer/issues/122[astubbs#122] for why -- so take results through the callback forms shown above instead.
 
 In future versions, we plan to look at supporting other streaming systems like https://github.com/ReactiveX/RxJava[RxJava] via modules.
 
@@ -607,12 +612,6 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-ver
 <3> Called with the response - handle each result here, as it completes
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
-
-NOTE: The `JStream*` variants of these processors (which return a `java.util.stream.Stream` of results instead of
-taking a callback) are *deprecated for removal*. They buffer every result in an unbounded queue that only drains when
-you consume the stream, and the returned `Stream` is single-shot - it terminates the first time the queue is
-momentarily empty and cannot be restarted, so results produced after that accumulate until the JVM runs out of memory.
-Use the callback form shown above. See link:https://github.com/astubbs/parallel-consumer/issues/122[astubbs#122].
 
 [[project-reactor]]
 === Project Reactor
