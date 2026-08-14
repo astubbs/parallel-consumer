@@ -114,6 +114,21 @@ that: `Lint/ShadowedException` does not fire on a gem's own exception hierarchy,
 reasons only about the standard library's - so an unreachable `rescue GRPC::Cancelled` after
 `rescue StandardError` passes.
 
+## The wave's code is not in the wave's commit
+
+`git log -- parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby` points at
+**d07198e01**, whose subject is the *TypeScript* client. Nothing is wrong with the content; the
+attribution is. Parallel agents in this worktree share one git index, so this wave's `git add`
+followed by a sibling's `git commit` handed the whole Ruby module to that commit. The trap is
+already the compound ledger's item 10 in `docs/inflight/next-compound-engineering-ideas.md`,
+recorded there from a smaller instance - one swallowed file deletion - a few minutes earlier. This
+is the larger one, and it is what raises that entry from a tidiness point to a real risk: a commit
+message that does not describe its diff is not recoverable by reading the log, which is exactly
+where this repo keeps its reasoning, and where release notes are generated from.
+
+The wave's own reasoning therefore lives in the commit that added this section, and the fix stands
+as the ledger states it: **`git commit -- <paths>`, never `git add` then commit.**
+
 ## Owed to whoever picks this module up
 
 - **The CI matrix row pins Ruby 3.4.4; every run behind this wave happened on 4.0.6.** The library
