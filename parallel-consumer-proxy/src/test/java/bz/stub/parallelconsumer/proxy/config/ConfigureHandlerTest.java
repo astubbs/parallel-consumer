@@ -7,6 +7,7 @@ import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Manifest;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
@@ -24,6 +25,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -403,9 +405,12 @@ class ConfigureHandlerTest {
         assertThat(dispatch.getRecords(0).getRecord().getValue().toStringUtf8()).isEqualTo("hello");
     }
 
-    /** After one stream configured the engine, a new stream cannot reconfigure the process (U8 owns reconnect). */
+    /**
+     * After one stream configured the engine, a new stream cannot reconfigure the process: the subscription is
+     * fixed for the process lifetime, and a reconnect stream opens with a {@code Manifest} instead (R36, R43).
+     */
     @Test
-    void aNewStreamAfterConfigurationIsRefusedNamingTheReconnectUnit() {
+    void aReconnectStreamCarryingConfigureIsRefusedAndToldToSendAManifest() {
         var handler = newHandler();
         var first = new RecordingSession(handler);
         first.send(configureMessage(Configure.newBuilder().addTopics(TOPIC)));
@@ -416,7 +421,100 @@ class ConfigureHandlerTest {
 
         var status = Status.fromThrowable(second.awaitError());
         assertThat(status.getCode()).isEqualTo(Status.Code.FAILED_PRECONDITION);
-        assertThat(status.getDescription()).contains("U8");
+        assertThat(status.getDescription()).contains("Manifest");
+    }
+
+    /** A Manifest with no configured session behind it has nothing to reconcile against (R39). */
+    @Test
+    void aManifestBeforeAnythingConfiguredTheProxyIsRefused() {
+        var session = new RecordingSession(newHandler());
+
+        session.send(ClientMessage.newBuilder().setManifest(Manifest.getDefaultInstance()).build());
+
+        var status = Status.fromThrowable(session.awaitError());
+        assertThat(status.getCode()).isEqualTo(Status.Code.FAILED_PRECONDITION);
+        assertThat(status.getDescription()).contains("Configure");
+        assertWithMessage("a refused stream must have constructed no Kafka client")
+                .that(clientsConstructed.get()).isEqualTo(0);
+    }
+
+    /**
+     * The reconnect handshake end to end (R42, R43): a session drops with a record in flight, the record is
+     * NOT returned, and a new stream opening with a manifest that names it gets the unchanged effective
+     * configuration back and may report the record on the new stream. The report applying is the proof the
+     * delivery survived the connection loss - a returned-and-redelivered record would answer with a superseded
+     * or unknown token instead.
+     */
+    @Test
+    void aReconnectStreamOpensWithAManifestAndKeepsTheRecordItNames() {
+        var handler = newHandlerWithSeededRecord();
+        var first = new RecordingSession(handler);
+        first.send(configureMessage(Configure.newBuilder().addTopics(TOPIC)));
+        first.awaitConfigured();
+        var token = first.awaitMessage().getDispatch().getRecords(0).getToken();
+
+        first.drop();
+        assertWithMessage("connection loss must hold the record, not return it (R42)")
+                .that(handler.engine().orElseThrow().getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        var second = new RecordingSession(handler);
+        second.send(ClientMessage.newBuilder()
+                .setManifest(Manifest.newBuilder().addTokens(token))
+                .build());
+
+        var configured = second.awaitConfigured();
+        assertWithMessage("the reconnect echo is the ORIGINAL effective configuration, unchanged")
+                .that(configured.getTopicsList()).containsExactly(TOPIC);
+        assertThat(configured.getCapabilitiesList()).contains(ConfigureHandler.CAPABILITY_MANIFEST);
+
+        second.send(ClientMessage.newBuilder()
+                .setReport(Report.newBuilder().setToken(token).setSuccess(Report.Success.newBuilder()))
+                .build());
+
+        awaitNoRecordsOutForProcessing(handler);
+    }
+
+    /**
+     * R43's second reconciliation arm at the transport: a manifest token naming a delivery that has been
+     * superseded is answered with a {@code Drop} carrying that exact token, and the record's current delivery
+     * is left alone.
+     */
+    @Test
+    void aManifestTokenNamingASupersededDeliveryIsAnsweredWithADrop() {
+        var handler = newHandlerWithSeededRecord();
+        var first = new RecordingSession(handler);
+        first.send(configureMessage(Configure.newBuilder().addTopics(TOPIC)));
+        first.awaitConfigured();
+        var token = first.awaitMessage().getDispatch().getRecords(0).getToken();
+
+        first.drop();
+
+        var supersededToken = Token.newBuilder()
+                .setRecordId(token.getRecordId())
+                .setEpoch(token.getEpoch() - 1)
+                .build();
+        var second = new RecordingSession(handler);
+        second.send(ClientMessage.newBuilder()
+                .setManifest(Manifest.newBuilder().addTokens(supersededToken))
+                .build());
+
+        second.awaitConfigured();
+        var drop = second.awaitMessage();
+        assertWithMessage("expected a Drop, got %s", drop.getMessageCase()).that(drop.hasDrop()).isTrue();
+        assertThat(drop.getDrop().getToken()).isEqualTo(supersededToken);
+
+        // the record the manifest accounted for is still out; the live delivery may still be reported
+        second.send(ClientMessage.newBuilder()
+                .setReport(Report.newBuilder().setToken(token).setSuccess(Report.Success.newBuilder()))
+                .build());
+        awaitNoRecordsOutForProcessing(handler);
+    }
+
+    private static void awaitNoRecordsOutForProcessing(ConfigureHandler handler) {
+        var engine = handler.engine().orElseThrow();
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertWithMessage("records out for processing must return to baseline")
+                        .that(engine.getNumberRecordsOutForProcessing()).isEqualTo(0));
     }
 
     private static ClientMessage configureMessage(Configure.Builder configure) {
@@ -451,6 +549,11 @@ class ConfigureHandlerTest {
 
         void send(ClientMessage message) {
             inbound.onNext(message);
+        }
+
+        /** The connection going away underneath the session - the transport's own onError, as gRPC calls it. */
+        void drop() {
+            inbound.onError(new java.io.IOException("connection reset by peer (test)"));
         }
 
         Configured awaitConfigured() {

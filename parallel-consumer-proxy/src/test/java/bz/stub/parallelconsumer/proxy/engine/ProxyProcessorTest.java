@@ -3,48 +3,33 @@ package bz.stub.parallelconsumer.proxy.engine;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
-import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import bz.stub.parallelconsumer.proxy.engine.ProxyProcessor.ReportResult;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
-import org.apache.kafka.clients.producer.MockProducer;
-import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
- * The engine's product behaviours, driven through a {@link LongPollingMockConsumer} fixture with the test
- * standing in for the transport on both halves of the boundary: it receives waves as the {@link DispatchSink}
- * and answers them through {@link ProxyProcessor#report} - which also makes every hand-off a deterministic
- * rendezvous, so no scenario approximates concurrency with sleeps.
+ * The engine's product behaviours, driven through the shared {@link EngineFixture} with the test standing in
+ * for the transport on both halves of the boundary: it receives waves as the {@link DispatchSink} and answers
+ * them through {@link ProxyProcessor#report} - which also makes every hand-off a deterministic rendezvous, so
+ * no scenario approximates concurrency with sleeps. The liveness half of the engine's surface - leases,
+ * reconnect reconciliation, worker death - is {@link ProxyProcessorLivenessTest}'s.
  * <p>
  * Every scenario ends with the standing leak check: {@code getNumberRecordsOutForProcessing()} back at zero,
  * because a path out of the in-flight registry that misses the mailbox drifts that counter and stalls the
@@ -415,170 +400,4 @@ class ProxyProcessorTest {
                 .collect(Collectors.toCollection(HashSet::new));
     }
 
-    /**
-     * The engine-side fixture: mock Kafka clients, the manual rebalance dance core's {@code MockConsumerTestBase}
-     * family settled, and a {@link CollectingSink} standing in for the transport. Mirrors the harness fixture's
-     * conventions (budgets, arrival-sync before zero-state awaits) without reusing it - the harness boots core's
-     * own processor, and this fixture's whole point is booting {@link ProxyProcessor} instead.
-     */
-    static class EngineFixture implements AutoCloseable {
-
-        /** Sized for slow shared CI hardware; a healthy run converges in a fraction of it. */
-        static final Duration CONVERGENCE_BUDGET = Duration.ofSeconds(30);
-
-        /** Far below core's defaults, so commit and redelivery awaits converge fast. */
-        static final Duration COMMIT_INTERVAL = Duration.ofMillis(100);
-        static final Duration RETRY_DELAY = Duration.ofMillis(50);
-
-        final String topic;
-        final TopicPartition topicPartition;
-        final CollectingSink sink = new CollectingSink();
-
-        final LongPollingMockConsumer<byte[], byte[]> mockConsumer =
-                new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
-        final MockProducer<byte[], byte[]> mockProducer =
-                new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
-
-        ProxyProcessor processor;
-        private long nextOffset = 0;
-
-        EngineFixture(String topic) {
-            this.topic = topic;
-            this.topicPartition = new TopicPartition(topic, 0);
-        }
-
-        void start(ProcessingOrder ordering) {
-            startWith(options -> options.ordering(ordering), ProxyProcessor.DEFAULT_COALESCING_WINDOW);
-        }
-
-        void startWith(java.util.function.UnaryOperator<ParallelConsumerOptions.ParallelConsumerOptionsBuilder<byte[], byte[]>> customizer,
-                       Duration coalescingWindow) {
-            var options = customizer.apply(ParallelConsumerOptions.<byte[], byte[]>builder()
-                            .consumer(mockConsumer)
-                            .producer(mockProducer)
-                            .commitInterval(COMMIT_INTERVAL)
-                            .defaultMessageRetryDelay(RETRY_DELAY))
-                    .build();
-
-            processor = new ProxyProcessor(options, sink, coalescingWindow);
-            processor.subscribe(List.of(topic));
-
-            // MockConsumer#rebalance assigns the partition but fires no listener, so PC is told separately
-            mockConsumer.subscribeWithRebalanceAndAssignment(List.of(topic), 1);
-            processor.onPartitionsAssigned(List.of(topicPartition));
-
-            processor.start();
-        }
-
-        void seed(String key, String value) {
-            mockConsumer.addRecord(new ConsumerRecord<>(topic, topicPartition.partition(), nextOffset++,
-                    key.getBytes(StandardCharsets.UTF_8), value.getBytes(StandardCharsets.UTF_8)));
-        }
-
-        /** The next dispatched record - a hard rendezvous, failing loudly if none arrives within the budget. */
-        DispatchRecord takeDispatch() {
-            var dispatch = pollDispatch(CONVERGENCE_BUDGET);
-            assertWithMessage("no record was dispatched within the convergence budget").that(dispatch).isNotNull();
-            return dispatch;
-        }
-
-        /** Bounded poll for the negative assertions - null when nothing arrived in the given time. */
-        DispatchRecord pollDispatch(Duration budget) {
-            try {
-                return sink.dispatches.poll(budget.toMillis(), TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError("interrupted waiting for a dispatch", e);
-            }
-        }
-
-        ReportResult reportSuccess(Token token) {
-            var result = processor.report(Report.newBuilder()
-                    .setToken(token)
-                    .setSuccess(Report.Success.newBuilder())
-                    .build());
-            if (result == ReportResult.APPLIED_SUCCESS || result == ReportResult.APPLIED_FAILURE) {
-                sink.outstanding.decrementAndGet();
-            }
-            return result;
-        }
-
-        ReportResult reportFailure(Token token, String reason) {
-            var result = processor.report(Report.newBuilder()
-                    .setToken(token)
-                    .setFailure(Report.Failure.newBuilder().setReason(reason))
-                    .build());
-            if (result == ReportResult.APPLIED_FAILURE) {
-                sink.outstanding.decrementAndGet();
-            }
-            return result;
-        }
-
-        Optional<OffsetAndMetadata> lastCommitted() {
-            var history = mockConsumer.getCommitHistoryInt();
-            for (int i = history.size() - 1; i >= 0; i--) {
-                var offsetAndMetadata = history.get(i).get(topicPartition);
-                if (offsetAndMetadata != null) {
-                    return Optional.of(offsetAndMetadata);
-                }
-            }
-            return Optional.empty();
-        }
-
-        void awaitCommittedOffset(long expectedOffset) {
-            Awaitility.await().atMost(CONVERGENCE_BUDGET).untilAsserted(() ->
-                    assertWithMessage("committed offset for %s", topicPartition)
-                            .that(lastCommitted().map(OffsetAndMetadata::offset))
-                            .isEqualTo(Optional.of(expectedOffset)));
-        }
-
-        /**
-         * The standing leak check. Only meaningful after an arrival-synced assertion such as
-         * {@link #awaitCommittedOffset} - "no in-flight work" is vacuously true before anything was dispatched.
-         */
-        void awaitNoRecordsOutForProcessing() {
-            Awaitility.await().atMost(CONVERGENCE_BUDGET).untilAsserted(() ->
-                    assertWithMessage("records out for processing must return to baseline")
-                            .that(processor.getNumberRecordsOutForProcessing()).isEqualTo(0));
-        }
-
-        @Override
-        public void close() {
-            Awaitility.reset();
-            if (processor != null && !processor.isClosedOrFailed()) {
-                processor.close();
-            }
-            if (processor != null) {
-                assertWithMessage("PC ended with a failure cause; the scenario did not expect one")
-                        .that(processor.getFailureCause()).isNull();
-            }
-        }
-    }
-
-    /**
-     * The test's transport stand-in: waves land here. {@code outstanding} counts dispatched-minus-applied
-     * (the fixture decrements it as reports are applied) and {@code maxOutstanding} records its high-water
-     * mark - the ceiling assertion's evidence.
-     */
-    static class CollectingSink implements DispatchSink {
-
-        final BlockingQueue<DispatchRecord> dispatches = new LinkedBlockingQueue<>();
-        final List<Dispatch> waves = new CopyOnWriteArrayList<>();
-        final AtomicInteger outstanding = new AtomicInteger();
-        final AtomicInteger maxOutstanding = new AtomicInteger();
-
-        @Override
-        public void dispatch(Dispatch wave) {
-            waves.add(wave);
-            for (DispatchRecord dispatch : wave.getRecordsList()) {
-                int now = outstanding.incrementAndGet();
-                maxOutstanding.accumulateAndGet(now, Math::max);
-                dispatches.add(dispatch);
-            }
-        }
-
-        int dispatchCount() {
-            return waves.stream().mapToInt(Dispatch::getRecordsCount).sum();
-        }
-    }
 }

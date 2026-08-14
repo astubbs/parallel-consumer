@@ -8,9 +8,11 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.CommitMode;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
 import bz.stub.parallelconsumer.proxy.protocol.v1.InvalidOffsetMetadataPolicy;
+import bz.stub.parallelconsumer.proxy.engine.LivenessSettings;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProcessingOrder;
 import lombok.experimental.UtilityClass;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.function.IntUnaryOperator;
@@ -229,7 +231,8 @@ public class OptionsMapper {
      */
     public static Configured effectiveConfiguration(ParallelConsumerOptions<?, ?> options,
                                                     Subscription subscription,
-                                                    List<String> negotiatedCapabilities) {
+                                                    List<String> negotiatedCapabilities,
+                                                    LivenessSettings liveness) {
         var configured = Configured.newBuilder()
                 .setMaxConcurrency(options.getMaxConcurrency())
                 .setExecutorCount(executorCountFor(options))
@@ -260,7 +263,58 @@ public class OptionsMapper {
         } else {
             configured.addAllTopics(subscription.topics());
         }
+        // capability-gated, per the specification's carve-out: the numbers are absent, not defaulted, when the
+        // client did not negotiate the machinery they configure - a client must never be told to heartbeat on
+        // a session where no lease exists
+        if (negotiatedCapabilities.contains(ConfigureHandler.CAPABILITY_HEARTBEAT)) {
+            configured.setLeaseDuration(toWireDuration(liveness.leaseDuration()))
+                    .setHeartbeatInterval(toWireDuration(liveness.heartbeatInterval()));
+        }
+        if (negotiatedCapabilities.contains(ConfigureHandler.CAPABILITY_MANIFEST)) {
+            configured.setReconnectWindow(toWireDuration(liveness.reconnectWindow()));
+        }
         return configured.build();
+    }
+
+    /**
+     * The session's liveness numbers: whatever {@code Configure} named, the defaults for what it did not, and
+     * the {@code heartbeat} capability carried through as the switch that decides whether any lease clock runs
+     * at all (R46).
+     * <p>
+     * Rejection happens here for the same reason every other rejection does - before any Kafka client exists.
+     * A non-positive duration is meaningless in all three fields, and a heartbeat interval at or above the
+     * lease is a configuration that expires a client obeying it exactly.
+     *
+     * @throws ConfigureRejectedException on a non-positive duration, or an interval the lease cannot survive
+     */
+    public static LivenessSettings livenessSettingsOf(Configure configure, List<String> negotiatedCapabilities,
+                                                      Clock clock) {
+        var leaseDuration = durationOr(configure.hasLeaseDuration(), configure.getLeaseDuration(),
+                LivenessSettings.DEFAULT_LEASE_DURATION, "lease_duration");
+        var heartbeatInterval = durationOr(configure.hasHeartbeatInterval(), configure.getHeartbeatInterval(),
+                LivenessSettings.DEFAULT_HEARTBEAT_INTERVAL, "heartbeat_interval");
+        var reconnectWindow = durationOr(configure.hasReconnectWindow(), configure.getReconnectWindow(),
+                LivenessSettings.DEFAULT_RECONNECT_WINDOW, "reconnect_window");
+        if (heartbeatInterval.compareTo(leaseDuration) >= 0) {
+            throw new ConfigureRejectedException(
+                    "heartbeat_interval (" + heartbeatInterval + ") must be shorter than lease_duration ("
+                            + leaseDuration + "): a client heartbeating exactly as instructed would otherwise "
+                            + "have its records reclaimed while it is alive and working (R46)");
+        }
+        return new LivenessSettings(negotiatedCapabilities.contains(ConfigureHandler.CAPABILITY_HEARTBEAT),
+                leaseDuration, heartbeatInterval, reconnectWindow, clock);
+    }
+
+    private static Duration durationOr(boolean present, com.google.protobuf.Duration wire, Duration fallback,
+                                       String fieldName) {
+        if (!present) {
+            return fallback;
+        }
+        var duration = toJavaDuration(wire);
+        if (duration.isZero() || duration.isNegative()) {
+            throw new ConfigureRejectedException(fieldName + " must be positive, got " + duration);
+        }
+        return duration;
     }
 
     // --- enum and Duration bridges; each unrecognized wire value is a rejection, never a silent default ---

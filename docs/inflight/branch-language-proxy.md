@@ -203,23 +203,3 @@ all — deletes cleanly with every gate green (verified empirically in review). 
 modules carry maturity fragments but no evidence records, so the check either scopes to the
 fragment convention or those modules need evidence deferrals seeded. Small either way; needs the
 scoping call first.
-
-## Owed to the lease/reconnect unit (U8), from the engine-wave review (2026-08-14)
-
-Two validated P1 findings deliberately deferred INTO U8 because they live on the seam it owns:
-
-- **Rebalance-stranded registry entry crash-loops redelivery.** A dispatched-unreported record whose
-  partition is revoked and reassigned leaves a stale `InFlightRegistry` entry (lease `Instant.MAX`);
-  the redelivery's `register()` hits the putIfAbsent collision throw BEFORE the dispatch try-block,
-  escapes into core's user-function catch, and error-retries forever — shard blocked under
-  KEY/PARTITION ordering. Policy call U8 must make (both options named by the review):
-  replace-on-stale-container (collision with a different WorkContainer instance, or one failing
-  `wm.checkIfWorkIsStale`, replaces + warns; loud throw kept only for same-instance true double
-  flight) vs evict-on-`onPartitionsRevoked`. Record which and why; verify with a
-  rebalance-redelivery test.
-- **The plan-mandated latched concurrency test is still owed.** U6's scenario text requires the
-  abandon-then-redeliver overlap forced "with a latch at the production hook, injected through
-  PCModule; do not approximate it with sleeps" — the shipped superseded-epoch test is sequential.
-  Blocker found: `ExternalEngine` has no PCModule-taking constructor, so the seam needs choosing
-  (registry-level latch hook is the natural spot). Build the latch seam once in U8 and use it for
-  BOTH the superseded-epoch race and the rebalance-redelivery fix's test.

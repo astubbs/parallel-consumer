@@ -5,11 +5,14 @@ package bz.stub.parallelconsumer.proxy.config;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.proxy.engine.DispatchSink;
+import bz.stub.parallelconsumer.proxy.engine.LivenessSettings;
 import bz.stub.parallelconsumer.proxy.engine.ProxyProcessor;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Drop;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Manifest;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import io.grpc.Status;
@@ -19,6 +22,7 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.KafkaException;
 
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -26,21 +30,28 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * The proxy's session service: connect-time configuration and the engine&harr;transport bridge. U7 of the
- * language-proxy plan (astubbs#242); requirements R10, R36, R39, R40, R48; decisions KTD5, KTD11, KTD16, KTD38.
+ * The proxy's session service: connect-time configuration, reconnect reconciliation, and the
+ * engine&harr;transport bridge. U7 and U8 of the language-proxy plan (astubbs#242); requirements R10, R36, R39,
+ * R40, R42, R43, R45, R46, R48; decisions KTD5, KTD8, KTD11, KTD16, KTD38.
  * <p>
- * <b>The first message on the stream configures the proxy, and nothing before it does (R39).</b> The proxy
+ * <b>The first message on a fresh session configures the proxy, and nothing before it does (R39).</b> The proxy
  * starts with a listener and no consumer; it builds {@code ParallelConsumerOptions} and constructs the Kafka
  * clients only on receiving {@code Configure}, reading no file, no environment variable and no shell. A stream
  * whose first message is anything else is closed with {@code FAILED_PRECONDITION} - and because the transport's
  * {@code SingleConnectionGuard} releases its admission slot on stream termination, a refused stream frees the
  * slot rather than wedging the proxy, so a corrected client may simply connect again.
  * <p>
+ * <b>The first message on a RECONNECT stream is {@code Manifest}, and it carries no {@code Configure} (R43).</b>
+ * The configured session outlives its connection: the engine, the negotiated capability set and the effective
+ * configuration all survive, and the reconnecting stream inherits them rather than negotiating anything of its
+ * own. Reconciliation happens before the reply, so the {@code Configured} echo the client reads back is a
+ * session whose books already balance; the {@code Drop} orders follow it, and dispatching resumes after those.
+ * A {@code Configure} on such a stream is still refused - the subscription is fixed for the process lifetime.
+ * <p>
  * <b>A second {@code Configure} on a configured stream is refused without killing the session:</b> the proxy
  * re-sends the original effective {@code Configured} unchanged, which is a truthful refusal under the
  * assert-what-you-got contract - the client reads back a configuration that is not what it just asked for.
- * Closing the stream instead would drop a live session's in-flight records over a client bug, with no reconnect
- * reconciliation until U8. The subscription is fixed for the process lifetime either way (R36).
+ * Closing the stream instead would drop a live session's in-flight records over a client bug.
  * <p>
  * <b>Credential hygiene (R48/KTD11):</b> {@code kafka_properties} is handed to the {@link KafkaClientFactory}
  * and appears in no log line at any level. Concretely: no log statement in this class receives the
@@ -51,10 +62,9 @@ import java.util.regex.Pattern;
  * <b>The executor count (KTD38/R47)</b> travels once in {@code Configured}, computed by
  * {@link OptionsMapper#EXECUTOR_COUNT_FUNCTION} from connect-time configuration only, and is never revised.
  * <p>
- * Not this unit's scope, deliberately: reconnect reconciliation (U8 - a new stream after an earlier one
- * configured the engine is refused naming that unit), terminal-failure replies and protocol-error messages for
- * discarded reports (U9), and shutdown/drain lifecycle (U10 - closing the engine is its owner's job, reachable
- * through {@link #engine()}).
+ * Not this unit's scope, deliberately: terminal-failure replies and protocol-error messages for discarded
+ * reports (U9), and shutdown/drain lifecycle (U10 - closing the engine is its owner's job, reachable through
+ * {@link #engine()}).
  *
  * @author Antony Stubbs
  * @see OptionsMapper
@@ -71,14 +81,23 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
      */
     public static final String CAPABILITY_DISPATCH = "dispatch";
 
+    /** Gates {@code Heartbeat} and the whole lease semantics: without it, no lease clock runs at all (R46). */
+    public static final String CAPABILITY_HEARTBEAT = "heartbeat";
+
+    /** Gates {@code Manifest} reconnects and the {@code Drop} replies reconciliation produces (R43). */
+    public static final String CAPABILITY_MANIFEST = "manifest";
+
+    /** Gates {@code WorkerDied} - the primary reclaim path, ahead of both backstop clocks (R45). */
+    public static final String CAPABILITY_WORKER_DEATH = "worker-death";
+
     /**
-     * Everything this proxy can send beyond the handshake; the intersection with the client's set is what
-     * travels. Grows towards the specification's full v1 baseline as the engine units land the behaviours
-     * behind the remaining tokens (heartbeat/manifest/worker-death in U8, terminal in U9, shutdown in U10) -
-     * a token is declared here only once the proxy actually answers it, so the negotiation never promises
-     * what this build cannot do.
+     * Everything this proxy can send or answer beyond the handshake; the intersection with the client's set is
+     * what travels. Grows towards the specification's full v1 baseline as the engine units land the behaviours
+     * behind the remaining tokens (terminal in U9, shutdown in U10) - a token is declared here only once the
+     * proxy actually answers it, so the negotiation never promises what this build cannot do.
      */
-    public static final List<String> PROXY_CAPABILITIES = List.of(CAPABILITY_DISPATCH);
+    public static final List<String> PROXY_CAPABILITIES =
+            List.of(CAPABILITY_DISPATCH, CAPABILITY_HEARTBEAT, CAPABILITY_MANIFEST, CAPABILITY_WORKER_DEATH);
 
     /** Observation seam: fires once, after the engine is subscribed and started, before dispatches can flow. */
     @FunctionalInterface
@@ -88,13 +107,27 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
 
     private final KafkaClientFactory clientFactory;
     private final EngineStartedListener engineStartedListener;
+    private final Clock clock;
+
+    /**
+     * Routes dispatch waves at whichever stream currently holds the session - the indirection reconnect needs,
+     * because the engine is constructed once with one sink and outlives every connection that follows.
+     */
+    private final SessionRouter router = new SessionRouter();
 
     /** The one engine this process runs; set by the stream that configures it, fixed until process death. */
     private volatile ProxyProcessor engine;
 
+    /** Negotiated once, on the configuring stream, and surviving every connection loss (the spec's rule). */
+    private volatile List<String> negotiatedCapabilities = List.of();
+
+    /** The effective configuration sent on configure - re-sent unchanged on reconnect and on a second one. */
+    private volatile Configured effectiveConfiguration;
+
     private ConfigureHandler(Builder builder) {
         this.clientFactory = Objects.requireNonNull(builder.clientFactory, "clientFactory is required");
         this.engineStartedListener = builder.engineStartedListener;
+        this.clock = Objects.requireNonNull(builder.clock, "clock is required");
     }
 
     public static Builder builder() {
@@ -112,9 +145,9 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
     }
 
     /**
-     * One stream's state machine: awaiting-configure, then configured. gRPC serializes a stream's inbound
-     * callbacks, so the state fields need no locking; outbound sends do, because dispatch waves arrive from the
-     * engine's control-loop thread while the transport thread may be answering a report or a second Configure.
+     * One stream's state machine: awaiting its opening message, then established. gRPC serializes a stream's
+     * inbound callbacks, so the state fields need no locking; outbound sends do, because dispatch waves arrive
+     * from the engine's control-loop thread while the transport thread may be answering a report or a manifest.
      */
     private class SessionObserver implements StreamObserver<ClientMessage> {
 
@@ -124,8 +157,8 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
         /** Guarded by {@link #transmitLock}: once true, nothing more is written to the stream. */
         private boolean streamClosed = false;
 
-        /** The effective configuration sent on configure - re-sent, unchanged, as the second-Configure refusal. */
-        private Configured effectiveConfiguration;
+        /** Whether this stream got past its opening message - by configuring, or by reconnecting. */
+        private volatile boolean established;
 
         private SessionObserver(StreamObserver<ProxyMessage> responseObserver) {
             this.responseObserver = responseObserver;
@@ -133,17 +166,8 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
 
         @Override
         public void onNext(ClientMessage message) {
-            if (effectiveConfiguration == null) {
-                if (!message.hasConfigure()) {
-                    // R39: nothing before Configure configures - or does anything else. Closing releases the
-                    // admission slot (the guard releases on stream termination), so the refusal is recoverable.
-                    closeStream(Status.FAILED_PRECONDITION.withDescription(
-                            "the first client message on a session must be Configure (R39); got "
-                                    + message.getMessageCase() + ". The admission slot is released; connect "
-                                    + "again and configure first"));
-                    return;
-                }
-                handleConfigure(message.getConfigure());
+            if (!established) {
+                handleOpeningMessage(message);
                 return;
             }
             if (message.hasConfigure()) {
@@ -167,34 +191,85 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 }
                 return;
             }
-            // Heartbeat, Manifest and WorkerDied are frozen-schema messages this handler does not answer
-            // yet - they are the lease/reconnect unit's (U8) - and a truly unknown case is a newer client
-            // than this proxy; both are ignored rather than fatal, per the spec's forward-compatibility rule
-            log.warn("Ignoring client message this proxy does not implement yet: {}", message.getMessageCase());
+            if (message.hasHeartbeat()) {
+                if (negotiated(CAPABILITY_HEARTBEAT)) {
+                    engine.heartbeat();
+                } else {
+                    logUnnegotiated(message);
+                }
+                return;
+            }
+            if (message.hasWorkerDied()) {
+                if (negotiated(CAPABILITY_WORKER_DEATH)) {
+                    engine.onWorkerDied(message.getWorkerDied().getTokensList());
+                } else {
+                    logUnnegotiated(message);
+                }
+                return;
+            }
+            if (message.hasManifest()) {
+                // a manifest opens a reconnect stream and nothing else: mid-session it names a set of held
+                // tokens that the live stream has never stopped reporting on, so acting on it could return
+                // records a worker is running right now
+                log.warn("Ignoring a Manifest on an established stream: it is a reconnect stream's opening "
+                        + "message only (R43)");
+                return;
+            }
+            // a truly unknown case is a newer client than this proxy; ignored rather than fatal, per the
+            // specification's forward-compatibility rule
+            log.warn("Ignoring client message this proxy does not implement: {}", message.getMessageCase());
+        }
+
+        /**
+         * The opening message of a stream: {@code Configure} on a fresh session, {@code Manifest} on a
+         * reconnect. Which one is legal is decided by whether this process already has an engine, so a client
+         * cannot reconfigure a running session by reconnecting, and cannot reconcile one that never existed.
+         */
+        private void handleOpeningMessage(ClientMessage message) {
+            if (engine == null) {
+                if (message.hasConfigure()) {
+                    handleConfigure(message.getConfigure());
+                    return;
+                }
+                // R39: nothing before Configure configures - or does anything else. Closing releases the
+                // admission slot (the guard releases on stream termination), so the refusal is recoverable.
+                closeStream(Status.FAILED_PRECONDITION.withDescription(
+                        "the first client message on a session must be Configure (R39); got "
+                                + message.getMessageCase() + ". The admission slot is released; connect "
+                                + "again and configure first"));
+                return;
+            }
+            if (message.hasManifest()) {
+                handleReconnect(message.getManifest());
+                return;
+            }
+            if (message.hasConfigure()) {
+                closeStream(Status.FAILED_PRECONDITION.withDescription(
+                        "this proxy is already configured by an earlier connection, and its subscription is "
+                                + "fixed for the process lifetime (R36); a reconnect stream opens with a "
+                                + "Manifest of the tokens your live workers still hold, never a Configure (R43)"));
+                return;
+            }
+            closeStream(Status.FAILED_PRECONDITION.withDescription(
+                    "the first message on a reconnect stream must be Manifest (R43); got "
+                            + message.getMessageCase() + ". The admission slot is released; connect again"));
         }
 
         private void handleConfigure(Configure configure) {
-            if (engine != null) {
-                closeStream(Status.FAILED_PRECONDITION.withDescription(
-                        "this proxy is already configured by an earlier connection, and its subscription is "
-                                + "fixed for the process lifetime (R36); reconnect reconciliation is not built "
-                                + "yet (the language-proxy plan's U8)"));
-                return;
-            }
+            var capabilities = negotiate(configure.getCapabilitiesList());
 
             OptionsMapper.Subscription subscription;
             ParallelConsumerOptions.ParallelConsumerOptionsBuilder<byte[], byte[]> optionsBuilder;
+            LivenessSettings liveness;
             try {
-                // both run BEFORE any Kafka client is constructed: a refused Configure costs nothing
+                // all three run BEFORE any Kafka client is constructed: a refused Configure costs nothing
                 subscription = OptionsMapper.subscriptionOf(configure);
                 optionsBuilder = OptionsMapper.toOptionsBuilder(configure);
+                liveness = OptionsMapper.livenessSettingsOf(configure, capabilities, clock);
             } catch (OptionsMapper.ConfigureRejectedException rejected) {
                 closeStream(Status.INVALID_ARGUMENT.withDescription(rejected.getMessage()));
                 return;
             }
-
-            var negotiatedCapabilities = negotiate(configure.getCapabilitiesList());
-            var sink = new StreamDispatchSink(negotiatedCapabilities.contains(CAPABILITY_DISPATCH));
 
             // R48: the credential map becomes the real clients here, and is never referenced again. Anything
             // in this region can throw on client-suppliable input (a Kafka client constructor rejecting the
@@ -209,7 +284,8 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 consumer = clientFactory.consumer(configure.getKafkaPropertiesMap());
                 producer = clientFactory.producer(configure.getKafkaPropertiesMap());
                 options = optionsBuilder.consumer(consumer).producer(producer).build();
-                builtEngine = new ProxyProcessor(options, sink);
+                builtEngine = new ProxyProcessor(options, router, ProxyProcessor.DEFAULT_COALESCING_WINDOW,
+                        liveness);
                 if (subscription.isPattern()) {
                     builtEngine.subscribe(Pattern.compile(subscription.pattern()));
                 } else {
@@ -233,22 +309,53 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 return;
             }
             var startedEngine = builtEngine;
+            negotiatedCapabilities = capabilities;
+            effectiveConfiguration =
+                    OptionsMapper.effectiveConfiguration(options, subscription, capabilities, liveness);
             engine = startedEngine;
 
-            effectiveConfiguration =
-                    OptionsMapper.effectiveConfiguration(options, subscription, negotiatedCapabilities);
+            // bind before the reply: the client may report the moment Configured arrives, and a wave
+            // dispatched in that instant must have somewhere to go
+            established = true;
+            router.bind(this);
             transmit(ProxyMessage.newBuilder().setConfigured(effectiveConfiguration).build());
 
             // whitelist logging, rebuilt by hand - never the Configure message, whose toString prints the
             // credential map
             log.info("Session configured: subscription {}, maxConcurrency {}, executorCount {}, capabilities {}",
                     subscription.isPattern() ? "pattern " + subscription.pattern() : subscription.topics(),
-                    options.getMaxConcurrency(), OptionsMapper.executorCountFor(options),
-                    negotiatedCapabilities);
+                    options.getMaxConcurrency(), OptionsMapper.executorCountFor(options), capabilities);
 
             if (engineStartedListener != null) {
                 engineStartedListener.engineStarted(startedEngine, subscription);
             }
+        }
+
+        /**
+         * A reconnect stream's opening {@code Manifest} (R43): reconcile first, then reply with the unchanged
+         * effective {@code Configured}, then the {@code Drop} orders reconciliation produced. Dispatching
+         * resumes only once this stream holds the session, so no wave is written to a stream that has not yet
+         * been told what it is connected to.
+         */
+        private void handleReconnect(Manifest manifest) {
+            if (!negotiated(CAPABILITY_MANIFEST)) {
+                closeStream(Status.FAILED_PRECONDITION.withDescription(
+                        "this session did not negotiate the '" + CAPABILITY_MANIFEST + "' capability, so it "
+                                + "has no reconnect path; the original session's negotiated set governs every "
+                                + "stream that follows (R38, R43)"));
+                return;
+            }
+            var outcome = engine.reconcileManifest(manifest.getTokensList());
+
+            established = true;
+            router.bind(this);
+            transmit(ProxyMessage.newBuilder().setConfigured(effectiveConfiguration).build());
+            outcome.drops().forEach(token -> transmit(ProxyMessage.newBuilder()
+                    .setDrop(Drop.newBuilder().setToken(token))
+                    .build()));
+            log.info("Reconnected within the protection window: {} record(s) kept in flight, {} dropped, {} "
+                            + "returned to scheduling, {} manifest token(s) rejected",
+                    outcome.kept(), outcome.drops().size(), outcome.returned(), outcome.unissued().size());
         }
 
         /**
@@ -295,13 +402,18 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
             return List.copyOf(intersection);
         }
 
+        private void logUnnegotiated(ClientMessage message) {
+            log.warn("Ignoring a {} the session did not negotiate: neither side sends outside the negotiated "
+                    + "capability set (R38)", message.getMessageCase());
+        }
+
         @Override
         public void onError(Throwable t) {
-            // the peer went away; the engine keeps running - reconnect reconciliation is U8's
             log.debug("Session stream errored from the client side", t);
             synchronized (transmitLock) {
                 streamClosed = true;
             }
+            onStreamGone();
         }
 
         @Override
@@ -311,6 +423,19 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                     streamClosed = true;
                     responseObserver.onCompleted();
                 }
+            }
+            onStreamGone();
+        }
+
+        /**
+         * The peer went away. The engine keeps running and keeps its records: only the stream that actually
+         * holds the session may declare the connection lost, because a reconnect can be admitted before the
+         * old stream's termination callback arrives, and a late one must not suspend the leases of the live
+         * session that replaced it.
+         */
+        private void onStreamGone() {
+            if (router.unbind(this) && engine != null) {
+                engine.onConnectionLost();
             }
         }
 
@@ -342,37 +467,59 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 }
             }
         }
+    }
 
-        /**
-         * The transport's implementation of the engine's outbound boundary: one {@code ProxyMessage} per wave,
-         * the frozen multi-record {@link Dispatch} form (R50). Never throws, per the {@link DispatchSink}
-         * contract - a closed stream swallows the wave (the records stay registered in flight; U8's liveness
-         * machinery is their reclaim path), and a stream whose client did not negotiate the dispatch
-         * capability never receives one (R38's intersection rule).
-         */
-        private class StreamDispatchSink implements DispatchSink {
+    private boolean negotiated(String capability) {
+        return negotiatedCapabilities.contains(capability);
+    }
 
-            private final boolean dispatchNegotiated;
+    /**
+     * The engine's outbound boundary, held for the life of the engine rather than the life of a connection:
+     * one {@code ProxyMessage} per wave, the frozen multi-record {@link Dispatch} form (R50). Never throws,
+     * per the {@link DispatchSink} contract - a wave with no stream to write to is swallowed and the records
+     * stay registered in flight, where the reconnect window and the manifest are their reclaim path, and a
+     * session whose client did not negotiate the dispatch capability never receives one (R38's intersection
+     * rule).
+     */
+    private class SessionRouter implements DispatchSink {
 
-            private StreamDispatchSink(boolean dispatchNegotiated) {
-                this.dispatchNegotiated = dispatchNegotiated;
+        /** The stream currently holding the session; null between a connection loss and its replacement. */
+        private volatile SessionObserver active;
+
+        private synchronized void bind(SessionObserver observer) {
+            active = observer;
+        }
+
+        /** @return true only if this observer was the one holding the session - see {@code onStreamGone} */
+        private synchronized boolean unbind(SessionObserver observer) {
+            if (active != observer) {
+                return false;
             }
+            active = null;
+            return true;
+        }
 
-            @Override
-            public void dispatch(Dispatch wave) {
-                if (!dispatchNegotiated) {
-                    log.debug("Dropping a wave of {}: the client did not negotiate the '{}' capability",
-                            wave.getRecordsCount(), CAPABILITY_DISPATCH);
-                    return;
-                }
-                transmit(ProxyMessage.newBuilder().setDispatch(wave).build());
+        @Override
+        public void dispatch(Dispatch wave) {
+            if (!negotiated(CAPABILITY_DISPATCH)) {
+                log.debug("Dropping a wave of {}: the client did not negotiate the '{}' capability",
+                        wave.getRecordsCount(), CAPABILITY_DISPATCH);
+                return;
             }
+            var target = active;
+            if (target == null) {
+                log.debug("Dropping a wave of {}: no client stream holds the session. The records stay in "
+                        + "flight for the reconnect machinery", wave.getRecordsCount());
+                return;
+            }
+            target.transmit(ProxyMessage.newBuilder().setDispatch(wave).build());
         }
     }
 
     public static class Builder {
         private KafkaClientFactory clientFactory = KafkaClientFactory.production();
         private EngineStartedListener engineStartedListener;
+        private Clock clock = Clock.systemUTC();
 
         /** Defaults to {@link KafkaClientFactory#production()}; test fixtures substitute mock clients here. */
         public Builder clientFactory(KafkaClientFactory clientFactory) {
@@ -383,6 +530,13 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
         /** Optional observation seam - the test harness uses it for partition assignment and seeding. */
         public Builder engineStartedListener(EngineStartedListener engineStartedListener) {
             this.engineStartedListener = engineStartedListener;
+            return this;
+        }
+
+        /** The clock the session's lease and reconnect window are measured against; the system clock unless a
+         * test needs to advance time rather than sleep through it. */
+        public Builder clock(Clock clock) {
+            this.clock = clock;
             return this;
         }
 

@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.proxy.config;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.proxy.engine.LivenessSettings;
 import bz.stub.parallelconsumer.proxy.protocol.v1.CommitMode;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
@@ -11,6 +12,7 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.InvalidOffsetMetadataPolicy;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProcessingOrder;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 
@@ -78,7 +80,9 @@ class OptionsMapperTest {
 
         var options = OptionsMapper.toOptionsBuilder(configure).build();
         var configured = OptionsMapper.effectiveConfiguration(options,
-                OptionsMapper.subscriptionOf(configure), ConfigureHandler.PROXY_CAPABILITIES);
+                OptionsMapper.subscriptionOf(configure), ConfigureHandler.PROXY_CAPABILITIES,
+                OptionsMapper.livenessSettingsOf(configure, ConfigureHandler.PROXY_CAPABILITIES,
+                        Clock.systemUTC()));
 
         assertThat(configured.getTopicsList()).containsExactly("in");
         assertThat(configured.getMaxConcurrency())
@@ -203,6 +207,98 @@ class OptionsMapperTest {
                 .isEqualTo(OptionsMapper.executorCountFor(options));
     }
 
+    /** The liveness numbers default when the client names none, and travel in the echo it reads back. */
+    @Test
+    void theLivenessNumbersDefaultAndAreEchoed() {
+        var configure = Configure.newBuilder().addTopics("in").build();
+
+        var liveness = OptionsMapper.livenessSettingsOf(configure, ConfigureHandler.PROXY_CAPABILITIES,
+                Clock.systemUTC());
+        var configured = OptionsMapper.effectiveConfiguration(
+                OptionsMapper.toOptionsBuilder(configure).build(), OptionsMapper.subscriptionOf(configure),
+                ConfigureHandler.PROXY_CAPABILITIES, liveness);
+
+        assertThat(liveness.leasesEnabled()).isTrue();
+        assertThat(javaDuration(configured.getLeaseDuration()))
+                .isEqualTo(LivenessSettings.DEFAULT_LEASE_DURATION);
+        assertThat(javaDuration(configured.getHeartbeatInterval()))
+                .isEqualTo(LivenessSettings.DEFAULT_HEARTBEAT_INTERVAL);
+        assertThat(javaDuration(configured.getReconnectWindow()))
+                .isEqualTo(LivenessSettings.DEFAULT_RECONNECT_WINDOW);
+    }
+
+    /**
+     * The specification's carve-out: a capability-gated number is ABSENT, not defaulted, when its capability
+     * was not negotiated - a client must never be handed an interval for a lease that does not exist.
+     */
+    @Test
+    void theLivenessNumbersAreAbsentWhenTheirCapabilityWasNotNegotiated() {
+        var configure = Configure.newBuilder().addTopics("in").build();
+        var negotiated = List.of(ConfigureHandler.CAPABILITY_DISPATCH);
+
+        var liveness = OptionsMapper.livenessSettingsOf(configure, negotiated, Clock.systemUTC());
+        var configured = OptionsMapper.effectiveConfiguration(
+                OptionsMapper.toOptionsBuilder(configure).build(), OptionsMapper.subscriptionOf(configure),
+                negotiated, liveness);
+
+        assertWithMessage("no heartbeat capability means no lease machinery at all")
+                .that(liveness.leasesEnabled()).isFalse();
+        assertThat(configured.hasLeaseDuration()).isFalse();
+        assertThat(configured.hasHeartbeatInterval()).isFalse();
+        assertThat(configured.hasReconnectWindow()).isFalse();
+    }
+
+    /** A client's own numbers travel, and the echo reports what it actually got. */
+    @Test
+    void aClientsOwnLivenessNumbersAreHonoured() {
+        var configure = Configure.newBuilder()
+                .addTopics("in")
+                .setLeaseDuration(wireDuration(Duration.ofSeconds(90)))
+                .setHeartbeatInterval(wireDuration(Duration.ofSeconds(15)))
+                .setReconnectWindow(wireDuration(Duration.ofSeconds(45)))
+                .build();
+
+        var liveness = OptionsMapper.livenessSettingsOf(configure, ConfigureHandler.PROXY_CAPABILITIES,
+                Clock.systemUTC());
+
+        assertThat(liveness.leaseDuration()).isEqualTo(Duration.ofSeconds(90));
+        assertThat(liveness.heartbeatInterval()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(liveness.reconnectWindow()).isEqualTo(Duration.ofSeconds(45));
+    }
+
+    /**
+     * A heartbeat interval at or above the lease reclaims records from a client heartbeating exactly as
+     * instructed - refused here, before any Kafka client is constructed.
+     */
+    @Test
+    void aHeartbeatIntervalTheLeaseCannotSurviveIsRefused() {
+        var configure = Configure.newBuilder()
+                .addTopics("in")
+                .setLeaseDuration(wireDuration(Duration.ofSeconds(10)))
+                .setHeartbeatInterval(wireDuration(Duration.ofSeconds(10)))
+                .build();
+
+        var rejected = assertThrows(OptionsMapper.ConfigureRejectedException.class, () ->
+                OptionsMapper.livenessSettingsOf(configure, ConfigureHandler.PROXY_CAPABILITIES,
+                        Clock.systemUTC()));
+
+        assertThat(rejected).hasMessageThat().contains("heartbeat_interval");
+    }
+
+    @Test
+    void aNonPositiveLivenessDurationIsRefusedByName() {
+        var configure = Configure.newBuilder()
+                .addTopics("in")
+                .setReconnectWindow(wireDuration(Duration.ZERO))
+                .build();
+
+        var rejected = assertThrows(OptionsMapper.ConfigureRejectedException.class, () ->
+                OptionsMapper.livenessSettingsOf(configure, ConfigureHandler.PROXY_CAPABILITIES,
+                        Clock.systemUTC()));
+
+        assertThat(rejected).hasMessageThat().contains("reconnect_window");
+    }
+
     /**
      * The effective echo excludes the credential-bearing property map STRUCTURALLY: the wire {@code Configured}
      * has no field that could carry it, so no code path can leak what cannot be expressed.
@@ -222,7 +318,8 @@ class OptionsMapperTest {
 
         var configured = OptionsMapper.effectiveConfiguration(
                 OptionsMapper.toOptionsBuilder(configure).build(),
-                OptionsMapper.subscriptionOf(configure), List.of());
+                OptionsMapper.subscriptionOf(configure), List.of(),
+                OptionsMapper.livenessSettingsOf(configure, List.of(), Clock.systemUTC()));
 
         assertThat(configured.getTopicPattern()).isEqualTo("in-.*");
         assertThat(configured.getTopicsList()).isEmpty();
