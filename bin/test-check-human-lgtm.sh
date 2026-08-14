@@ -31,6 +31,7 @@
 #    10e. 'not LGTM/LGTM' - where the negator rule deliberately stops      -> pass (0)
 #    10f. a negator across a soft line break - 'not\nLGTM'                 -> FAIL (1)
 #    10g. ... but not across a blank line                                  -> pass (0)
+#    10h-i. `src/t:` and `-Dtest=Foo-t:` are not `n't` contractions          -> pass (0)
 #    11. LGTM glued to a letter or digit either side                       -> FAIL (1)
 #    11b. LGTM glued to ANOTHER LGTM - LGTMLGTM, xLGTMLGTM                 -> FAIL (1)
 #    12. lgtm inside a fenced code block only                              -> FAIL (1)
@@ -50,6 +51,8 @@
 #    13h-j. ... ended by a blank line, a list item, and a heading          -> pass (0)
 #    13k-m. ... and it only STARTS from a paragraph - not a heading, an
 #           empty `>`, or a fence inside the quote                        -> pass (0)
+#    13n. an ordered marker that cannot INTERRUPT a paragraph ('2.')       -> FAIL (1)
+#    13o. ... but '1.' can, so it does end the quote                       -> pass (0)
 #    14. LGTM wearing ordinary punctuation - (LGTM) LGTM! -- LGTM. LGTM,   -> pass (0)
 #    15. a rejected near-miss beside a real LGTM in the same body          -> pass (0)
 #
@@ -264,6 +267,17 @@ assert "10g. a negator in an EARLIER paragraph does not reach forward" \
     0 "$(run_checker "$(owner_review 'The first version of this was not
 
 LGTM, but this one is')")"
+
+# THE CONTRACTION CLAUSE REQUIRES THE `n`, and did not. The pattern read "any word, any
+# punctuation, a `t`", so any technical token of that shape immediately before the stamp - a
+# path segment, a hyphenated identifier, a flag - was read as an `n't` contraction and the real
+# stamp was refused. A FALSE NEGATIVE, and one the documented rule never described: the sentence
+# has always said "a contraction ending n't". Reported on astubbs/parallel-consumer#298.
+assert "10h. a path segment ending in /t is not a contraction, so the LGTM stamps" \
+    0 "$(run_checker "$(owner_review 'Traced the encoder as far as src/t: LGTM')")"
+
+assert "10i. nor is a hyphenated identifier ending in -t" \
+    0 "$(run_checker "$(owner_review 'Re-ran it with -Dtest=Foo-t: LGTM')")"
 
 assert "11. LGTM glued to a letter or digit either side fails" \
     1 "$(run_checker "$(owner_review 'ALGTM LGTMx LGTM2 xLGTM')")"
@@ -491,6 +505,20 @@ LGTM')")"
 assert "13m. a fence inside the quote cannot be continued lazily either, so the LGTM stamps" \
     0 "$(run_checker "$(owner_review '> ```
 LGTM')")"
+
+# STARTING A LIST AND INTERRUPTING A PARAGRAPH ARE DIFFERENT QUESTIONS. CommonMark lets an
+# ordered list interrupt a paragraph ONLY when it starts at 1 - otherwise a stray "2." in
+# running prose would silently become a list. So this LGTM is still inside the quote, and
+# treating every numeral as a terminator stamped it: a FALSE POSITIVE on the one exclusion that
+# exists because a review of THIS PR necessarily quotes the token. 13i is the control that keeps
+# the fix from swallowing the bullet form. Reported on astubbs/parallel-consumer#298.
+assert "13n. an ordered marker that cannot interrupt the paragraph leaves the LGTM quoted" \
+    1 "$(run_checker "$(owner_review '> Bob asked whether this was fine
+2. LGTM')")"
+
+assert "13o. ... but one starting at 1 does interrupt it, so that LGTM stamps" \
+    0 "$(run_checker "$(owner_review '> Bob asked whether this was fine
+1. LGTM')")"
 
 assert "14. LGTM wearing ordinary punctuation passes" \
     0 "$(run_checker "$(owner_review '(LGTM)')")"

@@ -108,12 +108,14 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   invokes no Claude and costs nothing, and asserts two things - an automated review, and a human
   LGTM from the repo owner - stated once, under
   ["The gate asks..."](#the-gate-asks-has-this-pr-been-reviewed-not-was-every-commit-reviewed)
-  below, and deliberately not repeated here. It produces the required check
+  below, and deliberately not repeated here. It produces the check
   **`review: bot + human LGTM`**, so the job name is an API here as it is in `repo-hygiene.yml`.
-  That check was called `claude-review` until the human half was added, and the rename is a
-  ruleset migration rather than an edit: while it is in flight the file carries a second,
-  transitional job still reporting the old name under the old contract, so that a required
-  context is never left with nothing producing it. Its header says when to delete it.
+  **During the cutover that name is produced but ADVISORY**: the check was called `claude-review`
+  until the human half was added, and the rename is a ruleset migration rather than an edit, so
+  while it is in flight the file carries a second, transitional job still reporting the old name
+  under the old contract - and `claude-review` is the context the ruleset still *requires*. Both
+  report on every PR; only the old one gates a merge until the documented `PUT` swaps them. Its
+  header says when to delete it.
 - **`claude-code-review-dispatch.yml`** - the **dispatched reviewer**, `workflow_dispatch` only.
   It carries the packaged review procedure, the tool allowlist and the review instructions, and
   takes an optional `focus` steer. It cannot open inline review comments. See "The automated
@@ -178,7 +180,7 @@ review" tightly enough that people batched pushes to avoid it. The two are now s
 
 | | Runs | Cost | Produces |
 |---|---|---|---|
-| **Gate** (`claude-code-review.yml`) | every PR push | none - no Claude, no JDK, no build | the required check `review: bot + human LGTM` |
+| **Gate** (`claude-code-review.yml`) | every PR push | none - no Claude, no JDK, no build | `review: bot + human LGTM` (advisory until the cutover) **and** the currently required `claude-review` |
 | **Reviewer** (`claude-code-review-dispatch.yml`) | when dispatched | a full review | the review itself |
 
 **`--ref master` is required, not cosmetic.** It is what lets the reviewer review a PR that edits

@@ -83,7 +83,9 @@
 #                       question; it does not stamp one.
 #                     * NOT immediately preceded by a negator - `not`, `no`, `never`, or a
 #                       contraction ending `n't` - so `NOT LGTM`, `not LGTM` and `isn't LGTM`
-#                       are refused.
+#                       are refused. The `n` is REQUIRED: the pattern once read "any word, any
+#                       punctuation, a `t`", which is wider than that sentence and refused an
+#                       ordinary stamp after a token like `src/t:` or `-Dtest=Foo-t:`.
 #                     * THE TWO CLAUSES ABOVE SEE ACROSS ONE SOFT LINE BREAK, because Markdown
 #                       does. A newline inside a paragraph renders as a space, so a body
 #                       reading "not\nLGTM" or "LGTM\n?" is displayed to every human as "not
@@ -268,8 +270,16 @@ scan_result=$(awk \
     # considered - "not LGTM" and "never LGTM" are refused, "I am not sure this is
     # LGTM" is not. A general negation detector is unbounded, and half of one that fires unpredictably
     # is worse than a rule you can state in a sentence.
+    # The contraction alternative REQUIRES THE LETTER N. It read `[A-Za-z]+<punct>[Tt]` - any
+    # word, any punctuation, a `t` - which is wider than the rule this file documents, where the
+    # contraction is the n-apostrophe-t one. So it refused an ordinary stamp after any token of
+    # that shape: `src/t: LGTM`, `-Dtest=Foo-t: LGTM`. A false negative, the direction this
+    # check exists to avoid, and it came from the regex being written wider than its own
+    # sentence. (No apostrophe appears in this comment on purpose - the whole awk program is a
+    # single-quoted shell string, and one here ends it. The suite caught that within seconds,
+    # which is what the harness self-check at the top of the self-test is for.)
     function negated(pre) {
-        return (pre ~ /(^|[^A-Za-z0-9])([Nn][Oo][Tt]|[Nn][Oo]|[Nn][Ee][Vv][Ee][Rr]|[A-Za-z]+[^A-Za-z0-9 \t][Tt])[^A-Za-z0-9]*$/)
+        return (pre ~ /(^|[^A-Za-z0-9])([Nn][Oo][Tt]|[Nn][Oo]|[Nn][Ee][Vv][Ee][Rr]|[A-Za-z]*[Nn][^A-Za-z0-9 \t][Tt])[^A-Za-z0-9]*$/)
     }
 
     # Records the strongest thing seen on one line of the CURRENT review body. A rejected
@@ -341,12 +351,24 @@ scan_result=$(awk \
                       : (strip_markers(line) ~ /^(`{3,}|~{3,})/)
     }
 
-    # Does this line START a block that a paragraph cannot lazily continue into? Only the two
-    # that matter here; a fence is handled by the rule above, before laziness is consulted.
+    # Does this line START a block at all? Any ordered marker opens a list here - the "must
+    # start at 1" restriction below applies only to INTERRUPTING a paragraph, which is a
+    # different question.
     function starts_block(line,   s) {
         s = line
         sub(/^[ \t]+/, "", s)
         return (s ~ /^([-*+]|[0-9]+[.)])([ \t]|$)/ || s ~ /^#{1,6}([ \t]|$)/)
+    }
+
+    # Can this line INTERRUPT a paragraph, and so end a lazy blockquote continuation? Not the
+    # same set: CommonMark lets an ordered list interrupt a paragraph ONLY when it starts at 1,
+    # so `> quoted text` followed by `2. LGTM` leaves that LGTM inside the quote. Accepting
+    # every numeral here ended the quote early and stamped a quoted LGTM - a false positive on
+    # the exclusion that exists because a review of THIS PR necessarily quotes the token.
+    function interrupts_paragraph(line,   s) {
+        s = line
+        sub(/^[ \t]+/, "", s)
+        return (s ~ /^[-*+][ \t]/ || s ~ /^1[.)][ \t]/ || s ~ /^#{1,6}([ \t]|$)/)
     }
 
     # Laziness carries from a PARAGRAPH inside the quote, and from nothing else. CommonMark
@@ -469,7 +491,7 @@ scan_result=$(awk \
     # stamp. The continuation ends at a blank line, at a fence (the rule above), or at a line
     # starting a block a paragraph cannot lazily continue into.
     open && (fenced || strip_markers($0) ~ /^>/ \
-             || (in_quote && $0 ~ /[^ \t]/ && !starts_block($0))) {
+             || (in_quote && $0 ~ /[^ \t]/ && !interrupts_paragraph($0))) {
         break_para()
         if (!fenced) in_quote = quote_is_paragraph($0)
         if ($0 ~ /[Ll][Gg][Tt][Mm]/) note_near("quoted")
