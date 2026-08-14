@@ -10,6 +10,8 @@ import org.apache.kafka.clients.consumer.MockConsumer;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+
 import static com.google.common.truth.Truth.assertThat;
 
 /**
@@ -39,7 +41,10 @@ class MockConsumerTest extends MockConsumerTestBase {
 
         startProcessing();
 
-        Awaitility.await().untilAsserted(() -> assertThat(processedRecords).hasSize(RECORDS));
+        // explicit budget, like every other scenario in the family - the no-failure baseline should be the
+        // fastest of them, so it gets the smallest
+        Awaitility.await().atMost(Duration.ofSeconds(30))
+                .untilAsserted(() -> assertThat(processedRecords).hasSize(RECORDS));
     }
 
 }
