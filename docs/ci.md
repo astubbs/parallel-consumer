@@ -105,17 +105,10 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
 | `claude.yml` | an `@claude` comment | **the comment reviewer**, and the general mention handler |
 
 - **`claude-code-review.yml`** - the **review gate**, not the reviewer. It runs on every PR push,
-  invokes no Claude and costs nothing, and asserts two things - an automated review, and a human
-  LGTM from the repo owner - stated once, under
+  invokes no Claude and costs nothing, and asserts exactly one thing - stated once, under
   ["The gate asks..."](#the-gate-asks-has-this-pr-been-reviewed-not-was-every-commit-reviewed)
-  below, and deliberately not repeated here. It produces the check
-  **`review: bot + human LGTM`**, so the job name is an API here as it is in `repo-hygiene.yml`.
-  **During the cutover that name is produced but ADVISORY**: the check was called `claude-review`
-  until the human half was added, and the rename is a ruleset migration rather than an edit, so
-  while it is in flight the file carries a second, transitional job still reporting the old name
-  under the old contract - and `claude-review` is the context the ruleset still *requires*. Both
-  report on every PR; only the old one gates a merge until the documented `PUT` swaps them. Its
-  header says when to delete it.
+  below, and deliberately not repeated here. It produces the required check `claude-review`, so
+  the job name is an API here as it is in `repo-hygiene.yml`.
 - **`claude-code-review-dispatch.yml`** - the **dispatched reviewer**, `workflow_dispatch` only.
   It carries the packaged review procedure, the tool allowlist and the review instructions, and
   takes an optional `focus` steer. It cannot open inline review comments. See "The automated
@@ -126,8 +119,8 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   not carry is the packaged procedure - a mention passes whatever was typed straight through as a
   free-form prompt - so `@claude review this` gets you a review, and `@claude why is X slow?` gets
   you an answer. **The gate cannot tell those two apart**: any finished `claude[bot]` comment
-  satisfies its automated half, so answering a `@claude` question on a PR clears that half. See
-  "What the gate proves" below.
+  satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
+  the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
   See [`docs/testing.md`](testing.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
@@ -180,7 +173,7 @@ review" tightly enough that people batched pushes to avoid it. The two are now s
 
 | | Runs | Cost | Produces |
 |---|---|---|---|
-| **Gate** (`claude-code-review.yml`) | every PR push | none - no Claude, no JDK, no build | `review: bot + human LGTM` (advisory until the cutover) **and** the currently required `claude-review` |
+| **Gate** (`claude-code-review.yml`) | every PR push | none - no Claude, no JDK, no build | the required check `claude-review` |
 | **Reviewer** (`claude-code-review-dispatch.yml`) | when dispatched | a full review | the review itself |
 
 **`--ref master` is required, not cosmetic.** It is what lets the reviewer review a PR that edits
@@ -258,14 +251,14 @@ to act. **If you want findings that hold the merge, ask for the review by commen
 The dispatch route keeps two advantages: `-f focus` for a steer, and the packaged
 `/code-review:code-review` procedure rather than whatever the comment said.
 
-Both routes now clear the gate's automated half themselves. Each has a `refresh-gate` job that
-re-runs the gate after a review that actually succeeded, because the gate only ever triggers on
+Both routes now clear the gate themselves. Each has a `refresh-gate` job that re-runs
+`claude-review` after a review that actually succeeded, because the gate only ever triggers on
 `pull_request` and a check run keeps its last conclusion until something re-runs it. **Neither
 refreshes it for a fork head** - see "A fork PR cannot turn the gate green" below, which the comment
 route has to enforce explicitly because, unlike the dispatched reviewer, it will happily answer on a
 fork PR.
 
-**Escape hatch, if a review posts (or an LGTM lands) and the gate stays red anyway:** re-run the gate's existing
+**Escape hatch, if a review posts and `claude-review` stays red anyway:** re-run the gate's existing
 run by hand. Re-running the *existing* run is what matters - it reports back into the same check
 suite on the same commit, where a fresh run would attach its check to the default branch and never
 satisfy the PR's required check.
@@ -332,7 +325,7 @@ once against a live PR, and read the run rather than assuming.
 refusal is about which workflow file *runs*, not about which code is *read*. A `--ref master`
 dispatch runs master's copy, so validation passes, and the checkout step below fetches
 `refs/pull/<n>/head` - so master's reviewer reads the PR's diff, including its edits to this
-workflow, and posts the summary comment that clears the gate's automated half. What cannot happen before
+workflow, and posts the summary comment that turns `claude-review` green. What cannot happen before
 the merge is exercising the PR's **new** reviewer behaviour; reviewing the PR is a different thing
 and it works.
 
@@ -347,80 +340,26 @@ action's own `conclusion` output and fails when it is empty. Without that step t
 eleven seconds long, and has reviewed nothing - which is
 [the defect this repo keeps meeting](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
 
-### A red gate is the expected state on an unreviewed PR
+### A red `claude-review` is the expected state on an unreviewed PR
 
 It is **not** a fault to diagnose and **not** something to fix by editing the gate. It means what
-it says: nobody has reviewed it yet. The fix is to ask for a review when the work is ready, and to
-leave an LGTM when you are happy for it to land. Each red says which of them is outstanding, and
-the two halves are worded so you never have to open the job to tell them apart:
+it says: nobody has asked for a review yet. The fix is to ask for one when the work is ready. Two
+distinct reds, each saying which it is:
 
 - **never reviewed** - `claude[bot]` has not commented. Normal for a new or in-progress PR.
 - **the reviewer left unticked boxes** - it started and did not finish, so ask again.
-- **no human LGTM** - `astubbs` has not submitted a review saying LGTM. Every one of these starts
-  `NO HUMAN LGTM ON THIS PR`, and there are three of them: he has not reviewed it at all, he has
-  reviewed it and never said the word, or he wrote something the rule refuses (`lgtm?`, a
-  negation, or an LGTM inside a code fence) - in which case the message says which.
-- **the human half could not be scanned** - `Could not scan this PR's reviews for a human LGTM`,
-  which deliberately does **not** start `NO HUMAN LGTM ON THIS PR`, because it is not one. The
-  scan itself failed, so the checker refused to guess and treated the PR as unstamped. This one
-  is a bug to fix rather than a review to do, and it is the only red here that means "the
-  instrument broke" rather than "the work is outstanding".
 
-Both halves are evaluated on every run, even when the other has already failed, so one look tells
-you everything that is outstanding.
-
-(A further red is possible and says so plainly: the PR's head is in a fork. See "A fork PR cannot
+(A third red is possible and says so plainly: the PR's head is in a fork. See "A fork PR cannot
 turn the gate green" below.)
-
-**The human half will usually need one re-run.** Submitting a review raises no `pull_request`
-event, so the gate does not re-evaluate itself when the LGTM lands - the same mechanism, and the
-same fix, as the escape hatch above: re-run the gate's existing run. Adding a `pull_request_review`
-trigger is the obvious fix and is **not wired**, deliberately: it changes when a required check
-runs, which is its own decision. It used to be a *trap* as well - the jobs were guarded on
-`github.event.sender.type`, and on that event the sender is the reviewer, so a bot-submitted review
-would have *skipped* the job, which satisfies a required check - and the workflow header records
-both that trap and its closure, since the guard now reads the PR author instead. Leaving the LGTM
-*before* asking for the automated review avoids the re-run entirely, because the reviewer's
-`refresh-gate` job then re-runs the gate with both halves already true.
 
 ### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
 
 <!-- CANONICAL: the gate contract. Nowhere else states what satisfies the gate - everything else
-     links here. If you change this paragraph, run bin/check-review-gate-contract.sh.
-     The sub-contract of the human half - what counts as an LGTM - is canonical in
-     bin/check-human-lgtm.sh, NOT here. Do not paste a copy of it back into this file. -->
+     links here. If you change this paragraph, run bin/check-review-gate-contract.sh. -->
 
-**Two things satisfy it, and it needs both**, whenever either of them happened:
-
-1. **Any finished `claude[bot]` review on the PR** - the automated half.
-2. **A pull-request review submitted by `astubbs` whose body says LGTM** - the human half.
-
-A review of the first commit therefore vouches for the twentieth, and so does an LGTM left on it.
-That is a deliberate reversal of the rule this repo shipped first, and it is now applied to both
-halves alike.
-
-**What exactly counts as an LGTM is stated in `bin/check-human-lgtm.sh` and only there** - the
-whole-word rule, the `?` and negation clauses, why a fenced or quoted LGTM does not stamp, why an
-empty `APPROVED` does not count while a `DISMISSED` review does, and the survey of every owner LGTM
-this repo has actually received that settled case-insensitivity. That file is the executable
-version of the rule, so its prose sits beside the awk that implements it and the two cannot drift;
-a copy here could, and did. An earlier draft of this section carried a seven-clause restatement of
-it, with a summary of that survey that was wrong in every particular - wrong count, wrong PR range,
-and wrong about the one capitalised `Lgtm` that makes case-insensitivity load-bearing rather than
-merely kind. It was wrong in four files at once, because it had been pasted into four.
-
-The two altitudes: **this section owns the gate contract** - what satisfies the gate, which is the
-two numbered items above. **`bin/check-human-lgtm.sh` owns the matching rule** - what satisfies the
-human half of it. Link, do not paraphrase, in either direction.
-
-**Neither half proves the reviewer read anything**, and the human half proves less than the
-automated one: it is a **memory aid**, not a control. The owner is both the person it asserts
-about and the person who wants the merge, so it stops nobody - what it does is turn "have I read
-this one myself yet?" from something to remember across a dozen open PRs into a red check that
-names which half is outstanding. That is not the self-asserted escape rejected at the end of this
-section, and the difference is the direction: an escape *removes* an obligation, and is worthless
-when the person asserting it wants the merge; a self-asserted *requirement* only ever makes the
-gate redder.
+**Any finished `claude[bot]` review on the PR satisfies it**, whenever it was posted. A review of
+the first commit therefore vouches for the twentieth, and that is a deliberate reversal of the
+rule this repo shipped first.
 
 **This paragraph is the only statement of that contract.** It was restated in nine files at one
 point, in nine slightly different sentences, and four of them were still describing the *previous*
@@ -484,7 +423,7 @@ Two honest options, in order:
 1. **Push the same commits to a branch in this repo and open the PR from there.** The reviewer runs
    and the check can go green. This is the path worth offering a contributor whose change you want
    to land.
-2. **Review it by hand and merge with the gate red**, which leaves the same permanent record
+2. **Review it by hand and merge with `claude-review` red**, which leaves the same permanent record
    as any other unreviewed merge.
 
 **Deliberately not offered: letting a maintainer declare the PR reviewed.** That is the
@@ -549,7 +488,7 @@ has the full roster and the guard-design rules. The reviewer-specific occurrence
 default branch's copy, so a PR cannot rewrite its own reviewer. Two consequences:
 
 - **`claude-code-review.yml` is no longer affected**, because it no longer invokes the action.
-  Editing the gate used to make its own required check unfixably red - re-running cannot
+  Editing the gate used to make its own `claude-review` check unfixably red - re-running cannot
   help, since the input is the workflow diff itself - and that meant an admin ruleset bypass to
   merge. It does not any more.
 - **The reviewer is not affected either, as long as it is dispatched `--ref master`.** A dispatch
@@ -609,6 +548,23 @@ For anything outside those two prefixes - the `ci-*-test.sh` wrappers, `./mvnw`,
   it. That discipline is the one nobody keeps - four check scripts arrived with
   astubbs/parallel-consumer#279, all four granted in that same PR, and its reviewer could run none of
   them - which is exactly why the two `bin/` families became patterns instead.
+
+
+### The second required check: `review: human LGTM`
+
+A separate job, and a separate required check, asserting one thing: the repository owner has left a
+review whose body contains `lgtm` - any case, anywhere in the body, on any commit. `bin/check-human-lgtm.sh`
+owns the rule and states it in full.
+
+It is a **memory aid, not a security control.** The owner is both the subject of the assertion and the
+person who wants the merge, so it stops nobody who wants not to be stopped. What it buys is that
+"have I read this one myself yet?" becomes a red check instead of something to remember across a
+dozen open PRs.
+
+It is deliberately a second job rather than a second step in `claude-review`, so the checks list says
+*which* half is missing without opening anything - and so `claude-review`, a required check matched by
+name in the master ruleset, did not have to be renamed. It is **not head-sensitive**, matching the
+automated half: an LGTM on any commit counts for the whole PR, permanently.
 
 ## Self-hosted lanes
 

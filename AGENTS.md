@@ -427,16 +427,12 @@ Nothing lints commit messages, so all of this is on you.
   they are not interchangeable: comment **`@claude review this`** when you want findings that
   mechanically block the merge (only that route can open inline review threads), or dispatch
   `claude-code-review-dispatch.yml --ref master -f pr=<number> -f focus="<steer>"` when you want a
-  steer or the packaged review procedure. Enforced by the review gate, which during the cutover
-  reports under two names - `claude-review` is the one the master ruleset currently *requires*,
-  and `review: bot + human LGTM` is advisory until the documented swap - and which also wants
-  **your own LGTM**, a review you submit whose body says so. So
-  **a red gate on a PR nobody has reviewed yet is the expected state, not a fault**,
+  steer or the packaged review procedure. Enforced by the required `claude-review` check, so
+  **a red `claude-review` on a PR nobody has reviewed yet is the expected state, not a fault**,
   and never something to fix by editing the gate. What exactly satisfies that check is stated in
   one place only - [`docs/ci.md`](docs/ci.md), "The gate asks..." - along with which route to
   reach for and why `--ref master` is required. Do not restate the rule here; it has drifted
-  before, and the sentence that used to sit in this spot describing what the check wants was
-  itself the drift.
+  before.
 - **Respond to review comments IN-THREAD and resolve the thread when addressed.** Reply to the
   specific review comment, NOT as a separate top-level PR comment - a summary comment leaves the
   original conversation unresolved and can block merge on "unresolved conversations". When a finding
