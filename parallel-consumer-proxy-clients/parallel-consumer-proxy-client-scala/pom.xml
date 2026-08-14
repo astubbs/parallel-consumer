@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Scala</name>
+    <artifactId>parallel-consumer-proxy-client-scala</artifactId>
+
+    <!--
+        SKELETON, deliberately - and the second client with NO foreign-toolchain wrapper, for the
+        same reason as Kotlin: Scala is a JVM language and builds with Maven directly
+        (scala-maven-plugin, from Central like any other plugin), so it needs nothing installed
+        that the JVM reactor does not already have. sbt is the ecosystem's usual build tool and is
+        deliberately NOT used here - it would be a second build system in a Maven reactor, and the
+        wave that writes this client should reach for it only if the Maven plugin genuinely cannot
+        express what Scala needs.
+
+        Seeded after the first fan-out wave rather than with the original nine, so unlike its
+        siblings this module has no CI row in .github/workflows/clients.yml yet - the Scala wave
+        adds one, mirroring the shape of the other rows. Its wave owns everything in this
+        directory, including the build wiring and the static-analysis setup that every other
+        client module carries.
+    -->
+
+</project>

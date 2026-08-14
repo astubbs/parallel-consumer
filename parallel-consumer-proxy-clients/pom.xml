@@ -42,6 +42,7 @@
         <module>parallel-consumer-proxy-client-kotlin</module>
         <module>parallel-consumer-proxy-client-ruby</module>
         <module>parallel-consumer-proxy-client-cpp</module>
+        <module>parallel-consumer-proxy-client-scala</module>
     </modules>
 
     <!--
