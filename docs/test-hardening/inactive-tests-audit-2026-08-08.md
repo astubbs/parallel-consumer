@@ -546,7 +546,7 @@ misclassifies badly in both directions.
 | `ReactorTest.publishOn`, `.subscribeOn` | same shape |
 | `JavaEnvTest.checkJavaEnvironment` | one `log.error` (also 3.4) |
 | `ParallelEoSStreamProcessorTest.closeWithoutRunningShouldBeEventBasedFast` | name/body mismatch (also 3.2) |
-| `MockConsumerEarlyCloseTest.mockConsumer` | 70-line hang test; the class `@Timeout` is the only check - **and it is broken, see 9.1. Both halves are fixed by open PR astubbs#206** |
+| `MockConsumerEarlyCloseTest.closesCleanlyWhileRetryingAPermanentlyFailingBroker` (was `mockConsumer`) | 70-line hang test; the class `@Timeout` is the only check - **and it is broken, see 9.1. Both halves are fixed by open PR astubbs#206** |
 | `ShardKeyTest.nullKey` | throws-only NPE regression guard |
 | `InterruptionTests.waitOnZeroCausesInfiniteWait` | `@Timeout(1, SECONDS)` is the check |
 | `WorkManagerOffsetMapCodecManagerTest.runLengthEncodingCompression` | helper verified to only log |
@@ -590,7 +590,7 @@ misclassifies badly in both directions.
 ### Which of the 15 matter
 
 Genuinely worth fixing: `closeWithoutRunningShouldBeEventBasedFast`, `stringVsByteVsBitSetEncoding`.
-`MockConsumerEarlyCloseTest.mockConsumer` belongs on that list too, but is **already owned by open PR
+`MockConsumerEarlyCloseTest.closesCleanlyWhileRetryingAPermanentlyFailingBroker` belongs on that list too, but is **already owned by open PR
 astubbs#206**, which both fixes its timeout (9.1) and gives it a real assertion - so it is not work
 for anyone else.
 
@@ -757,7 +757,7 @@ Four things found along the way that nobody was looking for.
 `MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`, `MockConsumerCommitTimeoutTest`.
 
 This is worse than cosmetic because of how it interacts with section 6:
-`MockConsumerEarlyCloseTest.mockConsumer` has **no assertion at all** - the entire test is "PC closes
+`MockConsumerEarlyCloseTest.closesCleanlyWhileRetryingAPermanentlyFailingBroker` has **no assertion at all** - the entire test is "PC closes
 rather than hanging", and the timeout *is* the assertion. With the unit wrong, it cannot fail by
 hanging within any realistic CI budget; it would simply wedge the job. Every other `@Timeout` in the
 tree is written correctly (`@Timeout(60)`, `@Timeout(120)`, `@Timeout(value = 3, unit = MINUTES)`),
@@ -794,13 +794,6 @@ remove the project's JUnit 4 surface: `CoreAppMetricsIntegrationTest` also impor
 
 **9.3 `assumeWorkingCodec` conceals what it does** - see section 5.1. Of everything in this audit,
 this is the finding most likely to mislead someone reading a green test report.
-
-**9.4 Wall-clock burned by a test that cannot fail.** `MockConsumerEarlyCloseTest.mockConsumer`
-sleeps 5 seconds unconditionally and asserts nothing - so with 9.1's broken timeout, that is ~5
-seconds per run spent on a test with no way to fail except by throwing. (`ProgressBarTest.width`
-sleeps 10 seconds by construction but is `@Disabled`, so it costs nothing.) The assertion half of
-this is fixed by astubbs#206; the unconditional sleep is not, and remains fair game once that PR
-lands.
 
 ---
 
