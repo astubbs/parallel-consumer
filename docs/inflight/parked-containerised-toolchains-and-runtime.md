@@ -62,6 +62,41 @@ containers earn their place for the genuinely awkward two (Swift on Linux, C++ w
 Not a workaround. A sidecar deployment puts the application and the proxy in one place whatever the
 packaging, so this is the shape users will actually ship. Two forms, both nearly reachable already:
 
+### The option set, settled 2026-08-14
+
+Three packagings, each available against either sidecar build (JVM jar plus a runtime, or the
+GraalVM native binary the feasibility gate proved at ~45MB with no JVM):
+
+| Packaging | Spawn + parent-death | Loopback posture |
+|---|---|---|
+| No Docker - sidecar as a child process | unchanged | unchanged |
+| **Same container** - app and sidecar together | unchanged | unchanged |
+| Independent sidecar container, with a **Compose template** shipped ready-wired | **client must attach, not spawn** | **needs a shared network namespace** |
+
+**Kubernetes is shelved until post-v6** by decision. Nothing is wasted by deferring it: the pod case
+is the independent-container option with a different supervisor, so whatever the Compose template
+needs is what K8s will need.
+
+**The independent-container option is the only one that changes the contract, and it changes two
+things at once:**
+
+- **Attach becomes a client configuration surface, in every language.** Nobody spawns a sidecar that
+  is already running, so a client needs an "attach to an endpoint" mode beside today's spawn path,
+  and must not assume it owns the sidecar's lifetime. The specification already has the vocabulary -
+  it separates operator-stop from parent-death, and `Shutdown` is on the frozen wire - but no client
+  implements attach today. **Decide this before the remaining language waves**, because retrofitting
+  a second lifecycle mode into eight finished clients is the expensive order.
+- **Loopback stops meaning "only us" across two containers**, so the sidecar would have to bind
+  beyond loopback and trip R18's opt-in and its no-authentication warning. Compose avoids this for
+  free with `network_mode: "service:<sidecar>"`, which shares a network namespace so `127.0.0.1`
+  still holds. **The template must do that**, or the independent option silently becomes the
+  unauthenticated-surface option.
+
+A refinement for whoever builds the JVM images: `jlink` produces a custom runtime well below a full
+JRE without native-image's constraints - the middle option if Graal proves awkward for some feature.
+
+### The shapes in detail
+
 **One container - application plus sidecar, client spawns it.** The contract is unchanged: spawn,
 loopback, parent-death all as specified. The JRE objection is already answered - the feasibility gate
 proved the sidecar builds as a **GraalVM native image, a 45MB binary with no JVM** - so the image is
