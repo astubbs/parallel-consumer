@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.hasCauseOfType;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -70,6 +71,56 @@ class ThrowableUtilsTest {
         assertThat(describeWithRootCause(hostile))
                 .as("falls back to something, rather than throwing out of the failure handler")
                 .contains("ThrowableUtilsTest");
+    }
+
+    @Test
+    void findsTheTypeWrappedAtAnyDepth() {
+        var buried = new IllegalStateException("buried",
+                new RuntimeException("outer wrapper",
+                        new UnsupportedOperationException("inner wrapper")));
+
+        // the depth is the point: an "is it retriable?" check that only reads the top answers no here, which is how
+        // an expected failure gets logged as an error
+        assertThat(hasCauseOfType(buried, UnsupportedOperationException.class)).isTrue();
+        assertThat(hasCauseOfType(buried, IllegalStateException.class)).as("the throwable itself counts").isTrue();
+        assertThat(hasCauseOfType(buried, NumberFormatException.class)).isFalse();
+    }
+
+    @Test
+    void subtypesCount() {
+        // isInstance, not equals: PCRetriableException is extended by users
+        assertThat(hasCauseOfType(new IllegalStateException(), RuntimeException.class)).isTrue();
+    }
+
+    @Test
+    void aNullThrowableIsNotAMatch() {
+        assertThat(hasCauseOfType(null, RuntimeException.class)).isFalse();
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void searchingACyclicChainTerminates() {
+        var head = new RuntimeException("head");
+        var tail = new RuntimeException("tail", head);
+        head.initCause(tail);
+
+        assertThat(hasCauseOfType(head, RuntimeException.class)).isTrue();
+        assertThat(hasCauseOfType(head, NumberFormatException.class)).as("absent, and the walk still ends").isFalse();
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void aThrowingGetCauseAnswersFalseRatherThanEscaping() {
+        var hostile = new RuntimeException("hostile") {
+            @Override
+            public synchronized Throwable getCause() {
+                throw new UnsupportedOperationException("no cause for you");
+            }
+        };
+
+        assertThat(hasCauseOfType(hostile, NumberFormatException.class))
+                .as("an unreadable chain answers false rather than replacing one failure with another")
+                .isFalse();
     }
 
     @Test

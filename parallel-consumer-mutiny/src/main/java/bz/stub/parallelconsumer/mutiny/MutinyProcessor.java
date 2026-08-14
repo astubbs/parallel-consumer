@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import io.smallrye.mutiny.Multi;
@@ -139,7 +140,9 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        if (throwable instanceof PCRetriableException) {
+        // the chain, not the top: Mutiny repackages what it propagates, so a PCRetriableException from user code
+        // routinely arrives wrapped - and then an expected retry was logged as an error
+        if (ThrowableUtils.hasCauseOfType(throwable, PCRetriableException.class)) {
             log.debug("Mutiny fail signal", throwable);
         } else {
             log.error("Mutiny fail signal", throwable);

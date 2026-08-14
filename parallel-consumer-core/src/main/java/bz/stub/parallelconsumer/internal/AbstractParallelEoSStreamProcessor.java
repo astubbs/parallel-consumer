@@ -43,6 +43,7 @@ import java.util.stream.Collectors;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.isEmpty;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.hasCauseOfType;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
@@ -1379,10 +1380,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             return Collections.emptyList();
         } catch (Exception e) {
             // handle fail
-            var cause = e.getCause();
             String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
                     " mailbox. Context: {}", context, e);
-            if (cause instanceof PCRetriableException) {
+            // the whole chain, not just e.getCause(): a PCRetriableException means "expected, retry me" regardless of
+            // how many wrappers it picked up on the way here, and the old check also missed it arriving unwrapped,
+            // because it never looked at e itself
+            if (hasCauseOfType(e, PCRetriableException.class)) {
                 log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
             } else {
                 log.error(msg, e);

@@ -56,6 +56,35 @@ public class ThrowableUtils {
     }
 
     /**
+     * Whether the throwable, or anything in its cause chain, is of the given type.
+     * <p>
+     * The chain, not the top - because whether an exception arrives wrapped is decided by whatever passed it on, not
+     * by what it means. A {@code PCRetriableException} says "expected, retry me" whether user code threw it directly,
+     * a wrapper caught and re-threw it, or a reactive framework repackaged it on the way out. Testing only the
+     * outermost object makes the answer depend on the plumbing, which is how an expected failure ends up logged as an
+     * error.
+     * <p>
+     * <b>Never throws</b>, for the same reason as {@link #describeWithRootCause}: callers use this on the failure
+     * path. An unreadable chain answers {@code false} rather than replacing one failure with another.
+     *
+     * @param t    the throwable to search; null answers false
+     * @param type the type to look for
+     */
+    public static boolean hasCauseOfType(Throwable t, Class<? extends Throwable> type) {
+        try {
+            var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+            for (var current = t; current != null && seen.add(current); current = current.getCause()) {
+                if (type.isInstance(current)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Throwable searchingItFailed) {
+            return false;
+        }
+    }
+
+    /**
      * The deepest cause, stopping on a repeat.
      * <p>
      * An identity set rather than a self-reference check, because a cause chain can cycle without any link pointing
