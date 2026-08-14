@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+
+# Repo pre-commit gate. Runs the fast, read-only checks that CI runs anyway, so a violation is
+# caught in the second before the commit rather than the ten minutes after the push.
+#
+# WHY THIS EXISTS RATHER THAN A DOCUMENTED RULE. Every check below is already written down, and
+# every one has still been missed - by humans and by agents - because a document only fires if
+# somebody chooses to read it. A hook fires because git runs it. That is the whole point: this file
+# is the enforcement layer for things that must not depend on anyone remembering. See
+# docs/agent-harness.md for the layer map and for how to add to it.
+#
+# ENABLE IT (per clone, once - hooks cannot be committed into .git/hooks):
+#     git config core.hooksPath .githooks
+# One clone's config covers every worktree of that clone.
+#
+# BYPASS: `git commit --no-verify`. Deliberately easy - a gate people cannot skip when they have a
+# reason is a gate they disable permanently. CI is the authority; this is the fast mirror of it.
+# `.claude/hooks/pre-commit-gate.sh`, which runs this same script for Claude Code, honours the same
+# flag for the same reason.
+#
+# SCOPE - AND IT IS NOT THE COMMIT. Every gate below reads the WORKING TREE. The commit records the
+# INDEX. Those differ whenever anything is staged selectively, and the gap goes both ways:
+#
+#   - stage a clean hunk, leave an unrelated dirty one -> blocked for content that is not being
+#     committed;
+#   - stage a violation, then fix it in the working tree without staging the fix -> the violation
+#     is gated green and lands.
+#
+# This is DOCUMENTED rather than fixed, deliberately. The usual fix, `git stash push --keep-index`
+# around the run, can destroy uncommitted work if the hook dies between the stash and the pop, and
+# a pre-commit hook that can eat your changes is worse than one with a known blind spot. CI reads
+# the pushed commit and has no such gap, so nothing escapes permanently; the second case above
+# costs one CI round trip. Open decision - see docs/agent-harness.md, "Known gaps".
+#
+# COST BUDGET: the whole run is ~1.5s. Keep it that way. A pre-commit hook that takes ten seconds
+# gets --no-verify'd by habit, and then it protects nothing. Anything slower belongs in CI only.
+
+set -euo pipefail
+
+# Each entry: <script>:<soft-exit-codes>
+# A "soft" code means the gate COULD NOT RUN (a missing interpreter, no merge base) as opposed to
+# finding a violation. That distinction is load-bearing: blocking a commit because node is absent
+# teaches people to bypass the hook, and the next real violation goes with it. Soft results warn.
+#
+# Keeping this list right means READING each gate's exit codes, not guessing them - this list was
+# written by guessing, and two of the three gates that need a soft code were missing one. Each of
+# the three below reserves 1 for a real finding and 2 for "I could not run", so no violation can be
+# reclassified as soft by these entries:
+#   - check-issue-refs.sh        - 2 when `node` is absent
+#   - check-docs-data.sh         - 2 for "no working Python 3 on PATH" and for "PyYAML is not
+#                                  installed"; 1 for structural violations
+#   - check-copyright-headers.sh - 2 when the fork-point commit is not in history (a shallow clone,
+#                                  and only when COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1); 1 for
+#                                  violations. Its own header states this contract on line "Exit
+#                                  codes:"; copyright.yml is the authoritative gate and fetches
+#                                  full history.
+# check-docs-data.sh was the expensive omission: PyYAML is a dependency nothing in this repo
+# installs, so a contributor without it was hard-blocked from committing ANYTHING, with
+# "check-docs-data.sh failed (exit 2)" as the only explanation - the precise outcome the paragraph
+# above exists to prevent. The remaining three gates exit 0 or 1 only, so they need no soft code:
+# check-shell-sigpipe.sh and check-action-versions.sh exit 1 on a finding, and
+# check-quarantine-registry.sh exits its own drift flag.
+GATES=(
+    "check-copyright-headers.sh:2"
+    "check-issue-refs.sh:2"
+    "check-docs-data.sh:2"
+    "check-shell-sigpipe.sh:"
+    "check-quarantine-registry.sh:"
+    "check-action-versions.sh:"
+)
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# Make the copyright gate's shallow-clone case REACH the soft-skip above instead of hiding.
+#
+# Left alone, `check-copyright-headers.sh` prints "WARNING: ... Skipping copyright header check."
+# and exits **0** when the fork-point commit is not in history. This loop discards the output of
+# any gate that exits 0, so the gate skipped itself and said nothing - and the `:2` soft code
+# configured for it was unreachable in the one situation it was configured for. A gate that stops
+# running with nobody told is the exact silent miss the NOT-EXECUTABLE branch below exists to
+# prevent, arriving by a different door.
+#
+# Asking it to hard-fail routes that case through the soft-code machinery: exit 2, classified
+# soft, reported as `pre-commit: skipped check-copyright-headers.sh (exit 2 - could not run)`.
+# The commit is not blocked either way - only the silence changes. Scoped to this hook; CI sets
+# the same flag for its own reason (there, full history is fetched, so it must be an error).
+export COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1
+
+failed=()
+skipped=()
+
+for entry in "${GATES[@]}"; do
+    script="bin/${entry%%:*}"
+    soft_codes="${entry#*:}"
+
+    # A branch older than a gate simply does not have it. Not an error - say nothing.
+    #
+    # A gate that is PRESENT but not executable is a different thing entirely, and the two used to
+    # share this one test. That is a silent miss in a tool whose whole job is to stop silent
+    # misses: a lost exec bit (a `cp` without -p, a checkout on a filesystem with no exec bit, a
+    # patch applied by hand) reads as "this branch predates the gate", and the gate simply stops
+    # running with nobody told. Report it.
+    if [ ! -e "$script" ]; then
+        continue
+    elif [ ! -x "$script" ]; then
+        skipped+=("${entry%%:*} (present but NOT EXECUTABLE - run: chmod +x $script)")
+        continue
+    fi
+
+    set +e
+    output=$("$script" 2>&1)
+    rc=$?
+    set -e
+
+    if [ "$rc" -eq 0 ]; then
+        continue
+    fi
+
+    # Compare against the soft list without a pipeline - see bin/AGENTS.md on `| grep -q` under
+    # `set -o pipefail`, where the reader closing the pipe turns a MATCH into a failure.
+    if [ -n "$soft_codes" ] && grep -qx "$rc" <<<"$(tr ',' '\n' <<<"$soft_codes")"; then
+        skipped+=("${entry%%:*} (exit $rc - could not run)")
+        continue
+    fi
+
+    failed+=("${entry%%:*}")
+    printf '\n--- %s failed (exit %s) ---\n%s\n' "$script" "$rc" "$output" >&2
+done
+
+for s in "${skipped[@]:-}"; do
+    [ -n "$s" ] && printf 'pre-commit: skipped %s\n' "$s" >&2
+done
+
+if [ ${#failed[@]} -gt 0 ]; then
+    printf '\npre-commit: %d gate(s) failed: %s\n' "${#failed[@]}" "${failed[*]}" >&2
+    printf 'Fix them, or commit with --no-verify if you have a reason.\n' >&2
+    exit 1
+fi
+
+exit 0

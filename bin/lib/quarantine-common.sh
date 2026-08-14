@@ -15,13 +15,34 @@ QUARANTINE_ANNOTATION_ERE='^[[:space:]]*(@[[:alnum:]_.]+(\([^)]*\))?[[:space:]]*
 REGISTRY="${REGISTRY:-docs/quarantined-tests.md}"
 
 # All java files containing real annotation usage (repo-relative paths).
+#
+# WORKTREE ROOTS ARE EXCLUDED, BOTH OF THEM. `.claude/worktrees/<name>` and `/.worktrees/` each hold
+# a full checkout of some OTHER branch - .gitignore names both, calling the second "the other root in
+# use". Without the exclusions the scan is green inside a worktree and red on a clean master in the
+# primary checkout, reporting drift from ~60 sibling branches: annotations that are not on this
+# branch at all, judged against a registry that is. It stayed hidden because the repo's own rule is
+# never to work in the primary checkout, so nobody ran it there; the pre-commit hook added in this PR
+# does. Excluding only one root was the same bug with a smaller blast radius - review caught it, and
+# bin/test-check-quarantine-registry.sh now has a fixture for each. .git is excluded for the same
+# shape of reason, cheaply.
 quarantined_files() {
-    grep -rlE --include='*.java' --exclude-dir=target "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null || true
+    grep -rlE --include='*.java' --exclude-dir=target --exclude-dir=.claude --exclude-dir=.worktrees \
+        --exclude-dir=.git "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null || true
 }
 
 # Count of annotation usages in one file.
 quarantined_occurrences() {
     grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null || echo 0
+}
+
+# The human-readable audit listing: every annotation usage with the following lines that carry its
+# `fixedBy`/reason. Lives here rather than in the caller because it needs the SAME exclusions as
+# quarantined_files() above - bin/quarantined-test.sh had its own copy of this grep without them,
+# so the worktree-pollution bug fixed there still reproduced in the audit output, listing
+# annotations from ~60 sibling branches. One pattern and one exclusion set, one place.
+quarantined_audit() {
+    grep -rnE --include='*.java' --exclude-dir=target --exclude-dir=.claude --exclude-dir=.worktrees \
+        --exclude-dir=.git -A 4 "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null
 }
 
 # Registry entries, one per line: `Class.method` (or `Class` for class-level quarantines).
