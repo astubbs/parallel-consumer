@@ -237,6 +237,87 @@ on a quiet day never trips the bulk-day heuristic, and a discussion with one dis
 tracked in
 [`docs/inflight/next-upstream-coverage-completeness.md`](inflight/next-upstream-coverage-completeness.md).
 
+### Swept PR heads that only upstream had - now preserved as tags
+
+A mirror records what a closed PR *said*. It does not keep the code. The 35 PRs closed in the
+2023-06-15 sweep were reachable through `refs/pull/<n>/head` **in the upstream repository**, which is
+not a copy we control: if that repository goes, the commits go with it, and a mirror describing work
+whose diff no longer exists is close to useless.
+
+Two things are **not** loss events, and both are easy to assume are. Deleting the *branch* behind a
+PR does not lose the commit - `refs/pull/<n>/head` is held by the base repository and outlives its
+branch. Nor does a contributor's fork vanishing: all 35 heads were raised from branches in
+`confluentinc/parallel-consumer` itself (every `head.label` is `confluentinc:<branch>`), so no third
+party holds any of them. **The single exposure is loss of `confluentinc/parallel-consumer`.**
+
+There is a second, narrower risk, and it belongs to this fork rather than upstream: the 29 heads that
+are safe are safe only because some `origin/*` branch *contains* them. Deleting one of those fork
+branches can orphan a head that reads as preserved today. That - not any upstream branch - is what
+the recurring check below has to watch.
+
+Checked 2026-08-14 per PR with
+
+```bash
+git branch -r --contains <head> --list 'origin/*'
+```
+
+reconciled against a live `git ls-remote --heads origin`, because three stale local tracking refs
+would otherwise have counted as safe. **Restricting to `origin/*` is the whole point of the check**:
+a full clone of this fork also carries `upstream` (see AGENTS.md - `gh` defaults to the wrong repo
+here), and a head contained only in `upstream/*` is exactly the case being looked for. A bare
+`git branch -r --contains` searches every remote, so it would report the upstream-only heads as
+preserved and the archive would never have been created. **29 were reachable from a branch that
+still exists on this fork** -
+note *reachable from*, not *raised from*: confluentinc#271's own branch is long gone and its head
+survives only because an unrelated branch contains it, while confluentinc#22, confluentinc#270 and
+confluentinc#405 have same-named fork branches that do **not** contain their heads, which is why they
+are in the table below. **Six were reachable from nothing on this fork.** They are now pinned as
+annotated tags:
+
+| Upstream PR | Author | What it was |
+|---|---|---|
+| confluentinc#22 | astubbs | Dynamic concurrency control (WIP) |
+| confluentinc#204 | astubbs | Run user functions on a Vert.x verticle instead of a Java thread pool |
+| confluentinc#270 | astubbs | Shared-nothing architecture - partition events |
+| confluentinc#405 | astubbs | Remove static state |
+| confluentinc#443 | **Robbie-Palmer** | Python support |
+| confluentinc#506 | astubbs | Fix chart links |
+
+Each is tagged `archive/upstream-pr-<n>`. **The tag name, target SHA and check date are deliberately
+not repeated here** - they live only in `sweep-2023-admin-closure.preserved_heads` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), this repo's owner of fork-upstream
+facts. A corrected SHA updated in one copy while the other still read as authoritative is exactly the
+drift this section exists to prevent; the table above carries only what does not change.
+
+Each tag's message carries the upstream title, author, head branch name and closure date, so the
+provenance survives without the upstream thread. confluentinc#443 is worth one note: it is the only
+one raised by an outside contributor, that contributor's own fork is already gone, and it made no
+difference - the head was on `confluentinc:pyallel-consumer` like every other, which is why the
+exposure above is stated as upstream-repository loss and nothing else.
+
+Tagging is deliberate over branching: tags are not swept by branch-cleanup tooling and read as
+archival rather than live work. An annotated tag is also fetched by every clone, which
+`refs/pull/<n>/head` is not - so the copy actually propagates. Note the tags do **not** put the
+objects outside the GitHub fork network; that is acceptable because deleting a public parent re-roots
+the network to a surviving fork rather than destroying its objects. If an out-of-network copy is ever
+wanted, `git bundle` is the tool, and nobody has decided it is needed.
+
+Recording the SHAs in the manifest is what makes the check redoable without re-querying upstream; the
+PR numbers alone did not allow it.
+
+Their objects are not reachable from any branch, so a plain `git fetch` in a clone made before they
+were pushed will not bring them down - use `git fetch origin --tags` to get the commits locally.
+Name the remote: on a branch tracking `upstream`, a bare `git fetch --tags` fetches from there and
+leaves all six fork-only tags unavailable. Verifying
+the tags still exist needs no fetch at all: `git ls-remote --tags origin 'archive/upstream-pr-*'`
+asks the remote directly.
+
+**Re-running this is not yet automated.** Branches get deleted, so a head safe today can be orphaned
+tomorrow - but no script checks it: `--audit` covers tracking and mirroring, not reachability, and
+would report clean with every tag above deleted. Until a containment check is wired into
+`upstream-sweep.sh`, this is a manual step to repeat whenever the sweep cohort is revisited. Tracked
+with the rest of the decision backlog in astubbs#300.
+
 ### Surfaces checked and ruled out
 
 Recorded here so they are not re-investigated (established 2026-08-07):

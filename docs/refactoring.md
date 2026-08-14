@@ -281,6 +281,57 @@ Do not start one casually.
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
   brute-force transaction-commit retry.
+- **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
+  rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
+  **expected operational state**, not an internal fault. Two different questions decide the scope
+  here, and conflating them has been the recurring error:
+  - **Where is the callback invoked?** On broker-side asynchronous failures too - `ProducerBatch`
+    calls the same `onCompletion`. So the `log.error` fires for effectively every failed send.
+  - **Where can its throw escape?** Only from `KafkaProducer#doSend`'s synchronous
+    `catch (ApiException)` handler. `ProducerBatch` catches and logs whatever the callback throws,
+    so on the asynchronous path the throw is swallowed rather than propagated.
+
+  It is the second question that governs the exception type, since only there is the thrown type
+  observable to a caller. That set is narrower than "any pre-accumulator failure" - a serializer
+  throwing `SerializationException` propagates out of `doSend` without invoking the callback at all -
+  and wider than "oversized records": `RecordTooLargeException` is the case
+  `TransactionalPartialResultSetIT` exercises, while metadata and authorization failures on the same
+  handler (`TimeoutException`, `TopicAuthorizationException`) reach it too. So the type has to cover
+  environment failures as well as bad result records, but only those arriving as an `ApiException`.
+  **Do not model this as "the callback only runs on the synchronous path"** - it runs on both, and a
+  refactor built on that mistake would drop logging for every asynchronous send failure.
+  A name that says "internal" sends every reader, human or agent, to re-derive that whole chain
+  before they can conclude it is ordinary failure handling. It was verified from source and
+  kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
+  - **Preferred, non-breaking:** throw a specific subclass - e.g. `RecordPublishFailedException
+    extends InternalRuntimeException` - so existing `catch (InternalRuntimeException)` keeps
+    working while the type states the situation. Renaming `InternalRuntimeException` itself would
+    be user-visible and belongs in
+    [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
+    needing that.
+    - **The subclass alone is not enough, and this is the part that is easy to get wrong.** A
+      synchronous callback failure escapes `produceMessages` into
+      `ParallelEoSStreamProcessor#processAndProduceResults`, whose `catch (Exception e)` immediately
+      rethrows `new InternalRuntimeException("Error while waiting for produce results", e)`. The
+      specific type would survive only as a nested cause, so a caller still could not catch it and
+      the observable failure type would be exactly as generic as today. The refactor has to preserve
+      the subtype through that outer wrapper too - rethrow it unchanged, or introduce the specific
+      type at the wrapping point - otherwise it buys nothing beyond a better log line.
+  - **Drive-by while there:** the lambda parameter is bare `exception`. It is the *send* failure, not
+    a user-code exception (those are caught by `runUserFunction`, which wraps the `usersFunction.apply`
+    call made in `runUserFunctionInternal`), so name it `sendFailure`. Do **not** name it after user
+    code - that is the exact confusion this entry exists to stop.
+  - Naming only: it changes no behaviour and waits on nothing. `confluentinc#242` and its PR
+    `confluentinc#291` are precedent for the *shape* but cover the **user function** throwing
+    terminal/retry exceptions, not send-failure classification - see
+    [`docs/inflight/bug-poisoned-transaction-not-aborted-while-running.md`](inflight/bug-poisoned-transaction-not-aborted-while-running.md)
+    for why, and do not re-mirror either.
+
+*Prior art: [confluentinc#291](https://github.com/confluentinc/parallel-consumer/pull/291), closed
+unmerged in the 2023-06-15 sweep · already cited in `src/docs/README_TEMPLATE.adoc`, and worth adding to
+[astubbs#239](https://github.com/astubbs/parallel-consumer/issues/239)'s "Prior work", which names
+[confluentinc#366](https://github.com/confluentinc/parallel-consumer/pull/366) from the same cohort
+but not this.*
 
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
@@ -456,6 +507,50 @@ revisiting once the audit has been in use.
   defect, copy-pasted four times. Not ours to fix, but the duplication is: fold it into one shared
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
+
+### Cross-module test clones (the file-similarity backlog behind astubbs#40)
+
+Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the
+`MockConsumer*` family - is done: they now share `MockConsumerTestBase`. The audit of the rest of the
+tree found the remaining high-similarity pairs are overwhelmingly **cross-module clones**, which is a
+different and much larger job, because deduplicating them means a generified test base in core's
+test-jar that each module parameterises with its own processor type. Ranked, with a verdict, so the
+next reader does not re-derive the list.
+
+Every figure below is **measured**, off the `duplicate-code-detection-tool` report this PR's own CI
+posted, and quoted as a band for the same reason the `MockConsumer*Test` figures are: the measure is
+corpus-relative, so decimals drift on merges that touch none of these files. Nothing here is
+estimated from reading the source - an earlier draft of this section was, and every one of its five
+numbers was wrong, by 7 to 48 points.
+
+- **`Mutiny*Test` ↔ `Reactor*Test`** (`MutinyBatchTest`/`ReactorBatchTest` **high 70s**,
+  `MutinyPCTest`/`ReactorPCTest` **low 70s**). The real prize: two reactive integrations tested by the
+  same script with the publisher type swapped. Wants a shared generified base, not a copy. Vertx is a
+  third, looser member of the family (`VertxBatchTest` pairs with either around 50%). Note
+  `MutinyUnitTestBase`/`ReactorUnitTestBase` is **not** part of the prize - it lands in the **low
+  30s**, barely over the check's `ignore_below: 30` floor, because the shared wiring there is already
+  extracted into core's test-jar. The duplication is in the scripts, not their bases.
+- **`VeryLargeMessageVolumeTest` and its neighbours** (core `test-integration`, all *within*-module):
+  ↔ `MultiInstanceHighVolumeTest` **high 50s**, ↔ `TransactionAndCommitModeTest` **mid 50s**. One
+  volume-test shape reused three ways, so it is a single extraction rather than two. Nowhere near the
+  check's `fail_above: 80` - a tidiness item, not a gate risk - and they are broker ITs, so it needs
+  Docker to verify, not a desk refactor. Note these are *not* the repo's largest within-module pairs;
+  the top of that list is production code (`RunLengthV1`/`V2EncodingNotSupported` ~63,
+  `JStreamParallelEoSStreamProcessor`/`JStreamParallelStreamProcessor` ~62), which is out of scope
+  for astubbs#40 and untouched here.
+- **`TestConventionsArchTest` x4** (**89-91%** across the six module pairings). **Leave alone.** The
+  only pairs here over `fail_above: 80`, and they are documented as irreducible in
+  `TestConventionRules`' javadoc: a module can only point ArchUnit at its own classes, so the shared
+  part is already extracted and what remains is the four-line pointer. Being over `fail_above` does
+  not fail the build: the check runs `compare_with_base: true`, and these pairs are long-standing -
+  they appear in neither the report's *new* nor its *increased* section.
+- **`CommitRejectionTestBase` ↔ `MockConsumerTestBase`** - **nothing to do, and nothing reported.**
+  Worth recording because the prediction was wrong: extracting the harness was expected to put these
+  two small abstract classes around 70% on the check, on the reasoning that a whole-file token
+  measure mostly sees their shared package declaration and imports. It did not - neither file reaches
+  the check's 30% reporting floor against anything (PR astubbs#206). The `MockConsumer*Test` scenarios
+  themselves came out at 34-37%, down from the 70.7% that astubbs#34 flagged. Estimate similarity from the
+  tool, not from a reading of the source.
 
 ## Abandoned draft branches (idea bank)
 
