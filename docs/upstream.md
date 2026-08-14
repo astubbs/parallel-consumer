@@ -272,18 +272,23 @@ confluentinc#405 have same-named fork branches that do **not** contain their hea
 are in the table below. **Six were reachable from nothing on this fork.** They are now pinned as
 annotated tags:
 
-confluentinc#22, confluentinc#204, confluentinc#270, confluentinc#405, confluentinc#443 and
-confluentinc#506. Each is pinned as `archive/upstream-pr-<n>`.
+| Upstream PR | Author | What it was |
+|---|---|---|
+| confluentinc#22 | astubbs | Dynamic concurrency control (WIP) |
+| confluentinc#204 | astubbs | Run user functions on a Vert.x verticle instead of a Java thread pool |
+| confluentinc#270 | astubbs | Shared-nothing architecture - partition events |
+| confluentinc#405 | astubbs | Remove static state |
+| confluentinc#443 | **Robbie-Palmer** | Python support |
+| confluentinc#506 | astubbs | Fix chart links |
 
-**The tag name, target SHA and check date live in one place only** -
-`sweep-2023-admin-closure.preserved_heads` in
-[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), which is this repo's owner of
-fork-upstream facts. They are deliberately not repeated here: a corrected SHA updated in one copy
-while the other still read as authoritative is exactly the failure this section exists to prevent.
+Each is tagged `archive/upstream-pr-<n>`. **The tag name, target SHA and check date are deliberately
+not repeated here** - they live only in `sweep-2023-admin-closure.preserved_heads` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), this repo's owner of fork-upstream
+facts. A corrected SHA updated in one copy while the other still read as authoritative is exactly the
+drift this section exists to prevent; the table above carries only what does not change.
 
 Each tag's message carries the upstream title, author, head branch name and closure date, so the
-provenance survives without the upstream thread. confluentinc#443 is the one raised by an outside
-contributor (Robbie-Palmer); see below for why that turned out not to matter.
+provenance survives without the upstream thread.
 
 confluentinc#443 is the one raised by an outside contributor (Robbie-Palmer), but its head lives on
 `confluentinc:pyallel-consumer` like the rest - that contributor's own fork is already gone, and it
