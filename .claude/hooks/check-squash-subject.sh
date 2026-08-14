@@ -105,6 +105,11 @@ LONG_VALUE_FLAGS = {
 SHORT_VALUE_FLAGS = {"t": "--subject", "b": "--body", "F": "--body-file",
                      "A": "--author-email", "R": "--repo"}
 
+# Flags `gh` accepts BETWEEN the executable and its subcommand: `gh -R owner/repo pr merge 1299`
+# is valid, and requiring `gh pr merge` to be adjacent silently missed it.
+GLOBAL_VALUE_FLAGS = {"-R", "--repo"}
+GLOBAL_BOOL_FLAGS = {"--help", "-h", "--version"}
+
 # `gh pr merge [<number> | <url> | <branch>]`. Only the first two carry a number to cross-check.
 # ANCHORED TO A REAL URL. Searching any non-numeric selector for `/pull/<digits>` also matched a
 # perfectly legal BRANCH name - `git check-ref-format --branch fix/pull/1299` accepts it - so
@@ -112,67 +117,80 @@ SHORT_VALUE_FLAGS = {"t": "--subject", "b": "--body", "F": "--body-file",
 # DENIED. A false positive, in the class this hook weights hardest.
 PR_URL = re.compile(r"^https?://\S+/pull/(\d+)(?:[/?#]|$)")
 
-# A subject that still contains a shell variable or command substitution when we see it. `shlex`
-# does not expand either, so the text we are holding is not the text `gh` will send.
-UNEXPANDED = re.compile(r"[$`]")
-
-# SEGMENT ON TOKENS, NEVER ON THE RAW STRING. One command line can carry more than one
-# `gh pr merge` (`a && b`, `a ; b`), and each must be judged on its own slice so a good merge
-# cannot vouch for a bad one. Finding those boundaries with a regex over the raw line also finds
-# the phrase inside QUOTED BODY TEXT: `--body "text gh pr merge here"` cut the line into two
-# slices that each had unbalanced quotes, so both fail-opened and the real `--subject` was never
-# judged at all. Splitting first and matching on tokens makes the body a single token, so text
-# inside it can no longer look like a command.
-# `shlex.split` alone will not do: with default settings `a;b` is ONE token, so shell operators
-# have to be lexed as tokens in their own right for the slice to end at them. `commenters` is
-# cleared because a `#` in an unquoted subject is text here, not the start of a comment.
-try:
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    tokens = list(lexer)
-except ValueError:
-    sys.exit(0)                      # unbalanced quotes: our own parse limit, never block on it
+# Shell expansion the shell will resolve and we cannot. NOT a bare `$`: shlex has already stripped
+# quoting by the time we see the value, so `'reduce cost to $5'` - a literal Bash sends verbatim -
+# looked identical to `"$SUBJECT"` and was allowed through with no number at all. Requiring a name,
+# a brace, a paren or a backtick keeps the real cases (`$VAR`, `${V}`, `$(cmd)`, backticks) failing
+# open while a literal dollar is judged like any other text.
+#
+# STATED RESIDUAL: a SINGLE-quoted `'$VAR'` is a literal too, and is still read as an expansion.
+# That is the fail-open direction, and recovering the quoting would mean lexing the line twice.
+EXPANSION = re.compile(r"\$[A-Za-z_{(]|`")
 
 # Where one command ends and the next begins. A slice that ran to the next `gh pr merge` instead
 # swallowed everything after `&&`/`;`/`|`, so an unrelated later command's `--subject` became "the
 # last one" - a decoy could vouch for a bad merge, and a trailing `echo --subject "no number"`
 # could condemn a good one. Both directions, from the same missing boundary.
-OPERATORS = {"&&", "||", ";", ";;", "|", "&", "\n"}
+OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
+
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def is_gh(token):
     return token == "gh" or token.endswith("/gh")
 
 
-starts = [i for i in range(len(tokens) - 2)
-          if is_gh(tokens[i]) and tokens[i + 1] == "pr" and tokens[i + 2] == "merge"]
-if not starts:
-    sys.exit(0)
+def merge_slices(tokens):
+    """Every `gh pr merge` in COMMAND POSITION, as (first-arg-index, end-index) pairs.
 
-
-def slice_end(start):
-    """One `gh pr merge` runs until a shell operator or the next merge - whichever comes first."""
-    for j in range(start + 3, len(tokens)):
-        if tokens[j] in OPERATORS or j in starts:
-            return j
-    return len(tokens)
-
-
-bounds = [(start, slice_end(start)) for start in starts]
+    Command position matters because this hook is registered for every Bash call: without it,
+    `echo gh pr merge 1299 --subject bad` - which only prints text - was hard-denied. A token is
+    in command position at the start of the line or straight after a shell operator, skipping
+    any leading `VAR=value` assignments.
+    """
+    out = []
+    i, at_command = 0, True
+    while i < len(tokens):
+        token = tokens[i]
+        if token in OPERATORS:
+            at_command = True
+            i += 1
+            continue
+        if at_command and ASSIGNMENT.match(token):
+            i += 1                                   # env prefix, still command position
+            continue
+        if at_command and is_gh(token):
+            j = i + 1
+            while j < len(tokens):                   # global flags before the subcommand
+                if tokens[j] in GLOBAL_VALUE_FLAGS:
+                    j += 2
+                elif tokens[j] in GLOBAL_BOOL_FLAGS or tokens[j].startswith("--repo="):
+                    j += 1
+                else:
+                    break
+            if j + 1 < len(tokens) and tokens[j] == "pr" and tokens[j + 1] == "merge":
+                start = j + 2
+                end = start
+                while end < len(tokens) and tokens[end] not in OPERATORS:
+                    end += 1
+                out.append((start, end))
+                i = end
+                at_command = True
+                continue
+        at_command = False
+        i += 1
+    return out
 
 
 def subjects_and_pr(slice_tokens):
-    """The subject values and the PR number in one already-tokenised `gh pr merge ...` slice.
+    """The subject values and the PR number in one `gh pr merge` argument list.
 
     Every spelling `gh` accepts for the subject counts, because the hook is worthless against the
     one it cannot read: `--subject X`, `--subject=X`, `-t X`, `-tX`, `-t=X`, and `-t` inside a
     combined shorthand group such as `-st X`. Flags that consume a value have theirs consumed here
     too, so a value is never mistaken for the PR selector.
-
     """
     values, pr = [], None
-    seen_merge = False
     selector_seen = False
     i = 0
     while i < len(slice_tokens):
@@ -219,67 +237,84 @@ def subjects_and_pr(slice_tokens):
             i += 2 if took_next else 1
             continue
 
-        if token == "merge":
-            seen_merge = True
-        elif seen_merge and not selector_seen:
+        if not selector_seen:
             # `gh pr merge [<number> | <url> | <branch>]` - the first bare argument is the
             # selector, whatever its form, so nothing after it can be re-read as one.
             selector_seen = True
             if token.isdigit():
                 pr = token
             else:
-                match = PR_URL.search(token)
+                match = PR_URL.match(token)
                 if match:
                     pr = match.group(1)
         i += 1
     return values, pr
 
 
-for start, end in bounds:
-    subjects, pr = subjects_and_pr(tokens[start:end])
+# A NEWLINE IS A COMMAND BOUNDARY, and `#` still starts a comment. Both were lost when the whole
+# payload was lexed in one go with newlines as plain whitespace and comments disabled: a decoy on
+# the next line, or after a `#` Bash would ignore, became "the last --subject" of the merge above
+# it. Lexing line by line restores both, and a subject's own `(#N)` is safe because it is quoted.
+for line in cmd.splitlines():
+    try:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        continue                     # unbalanced quotes: our own parse limit, never block on it
 
-    if not subjects:
-        continue                     # no override, so GitHub appends the number itself - fine
+    for start, end in merge_slices(tokens):
+        subjects, pr = subjects_and_pr(tokens[start:end])
 
-    subject = subjects[-1]           # gh honours the LAST occurrence, so that is the one judged
+        if not subjects:
+            continue                 # no override, so GitHub appends the number itself - fine
 
-    # `--subject "$SUBJECT"` / `--subject "$(cat msg.txt)"`: shlex does not expand either, so what
-    # we are holding is not what gh will send, and its `(#N)` may well be in there. Denying on a
-    # string we cannot resolve is the false-positive class this hook weights hardest against - and
-    # the header promises to fail open on our own limits, which this is one of.
-    if UNEXPANDED.search(subject):
-        continue
+        subject = subjects[-1]       # gh honours the LAST occurrence, so that is the one judged
 
-    found = re.findall(r"\(#(\d+)\)", subject)
-    pr_hint = f"(#{pr})" if pr else "(#<pr>)"
+        if EXPANSION.search(subject):
+            continue                 # not the text gh will send; judging it judges the wrong text
 
-    if not found:
-        reason = (
-            "This --subject has no PR-number suffix, and passing --subject suppresses the "
-            f"{pr_hint} that GitHub would otherwise append. "
-        )
-    elif pr is not None and pr not in found:
-        reason = (
-            f"This --subject carries (#{found[-1]}) but the merge is of PR #{pr}. A number that "
-            "points at the wrong PR - or at an issue - is worse than none: it reads as correct and "
-            "links a future reader somewhere else. "
-        )
-    else:
-        continue                     # carries the right number - fine
+        found = re.findall(r"\(#(\d+)\)", subject)
+        pr_hint = f"(#{pr})" if pr else "(#<pr>)"
 
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                reason
-                + "The commit would land out of step with every neighbour on master, and it is not "
-                "fixable afterwards without rewriting a pushed commit (this happened on "
-                f"astubbs#206). Either end the subject with ' {pr_hint}', or drop --subject "
-                "entirely and let the PR title be used - --body-file alone does not affect the "
-                "subject. See docs/merge-checklist.md."
-            ),
-        }
-    }))
-    break
+        if not found:
+            reason = (
+                "This --subject has no PR-number suffix, and passing --subject suppresses the "
+                f"{pr_hint} that GitHub would otherwise append. "
+            )
+        elif pr is not None and [n for n in found if n != pr]:
+            # ANY parenthesised number that is not this PR is a defect, even alongside the right
+            # one. `fix (#1206) (#1299)` recreates precisely the ambiguity AGENTS.md calls out -
+            # two bare numbers with no way to tell the issue from the squash-added PR number.
+            wrong = next(n for n in found if n != pr)
+            reason = (
+                f"This --subject carries (#{wrong}) but the merge is of PR #{pr}. A number that "
+                "points at the wrong PR - or at an issue - is worse than none: it reads as correct "
+                "and links a future reader somewhere else. AGENTS.md reserves the trailing "
+                "parenthesised slot for the PR number alone; cite an issue at the front of the "
+                "subject instead. "
+            )
+        elif pr is None and len(set(found)) > 1:
+            reason = (
+                f"This --subject carries more than one parenthesised number ({', '.join(sorted(set(found)))}), "
+                "so a future reader cannot tell which is the PR. "
+            )
+        else:
+            continue                 # carries the right number, and only that - fine
+
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    reason
+                    + "The commit would land out of step with every neighbour on master, and it is "
+                    "not fixable afterwards without rewriting a pushed commit (this happened on "
+                    f"astubbs#206). Either end the subject with ' {pr_hint}', or drop --subject "
+                    "entirely and let the PR title be used - --body-file alone does not affect the "
+                    "subject. See docs/merge-checklist.md."
+                ),
+            }
+        }))
+        sys.exit(0)
 PY

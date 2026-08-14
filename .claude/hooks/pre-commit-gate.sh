@@ -55,28 +55,81 @@ project_dir="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null |
 gate="$project_dir/.githooks/pre-commit"
 [ -x "$gate" ] || exit 0
 
-# Does this command carry a real `--no-verify` argument? `shlex` so that a commit MESSAGE mentioning
-# the flag (`git commit -m "document --no-verify"`) is not mistaken for the flag itself; a word-
-# boundary search only as the fallback when shlex cannot parse the line, because refusing to decide
-# would mean gating a commit the author explicitly asked not to gate.
+# NO PYTHON, NO GATE. The bypass below cannot be detected without parsing the payload, and the
+# repo's documented build requirements are JDK 17, Docker and the Maven wrapper - python is not
+# among them. Falling through on a missing interpreter meant `git commit --no-verify` ran the gates
+# and was blocked at exit 2 with no way to argue: the escape hatch the header calls load-bearing,
+# absent on exactly the machine that has no other way out. Fail open, like every other limit here;
+# `.githooks/pre-commit` and CI still gate the same commit.
+command -v python3 >/dev/null 2>&1 || exit 0
+
+# Does THIS COMMIT carry a real `--no-verify` argument? Three things are load-bearing:
+#
+#   - `shlex`, so a commit MESSAGE mentioning the flag (`git commit -m "document --no-verify"`) is
+#     not mistaken for the flag itself;
+#   - the search is scoped to the `git commit` command, not the whole payload. It used to scan the
+#     entire line, so `git commit -m x && echo --no-verify` bypassed a red gate for a commit that
+#     never asked - the violation lands, and the later command is what "requested" it;
+#   - a word-boundary search over the line only as the fallback when the line cannot be lexed,
+#     because refusing to decide would mean gating a commit the author explicitly asked not to gate.
 #
 # Only the long spelling counts. `git commit -n` means the same thing to git, but `-n` is a common
 # token in a command line that merely CONTAINS a commit (`echo -n`, an unquoted `$(...)`), and a
 # bypass triggered by accident is a gate that silently stopped running. The long form is what the
 # hook headers and docs tell people to type, and it is unambiguous.
-if python3 - "$payload_file" <<'PY'
+if python3 - "$payload_file" <<'PYGATE'
 import json, re, shlex, sys
+
+OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+GIT_VALUE_FLAGS = {"-C", "-c", "--git-dir", "--work-tree"}
+
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
         cmd = json.load(fh).get("tool_input", {}).get("command", "")
 except Exception:
     sys.exit(0)                      # unparseable payload: treat as bypass, never block on our bug
+
+
+def commit_requests_bypass(line):
+    """True when a `git commit` in COMMAND POSITION on this line carries --no-verify itself."""
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+    i, at_command = 0, True
+    while i < len(tokens):
+        token = tokens[i]
+        if token in OPERATORS:
+            at_command = True
+            i += 1
+            continue
+        if at_command and ASSIGNMENT.match(token):
+            i += 1
+            continue
+        if at_command and (token == "git" or token.endswith("/git")):
+            j = i + 1
+            while j < len(tokens) and tokens[j] in GIT_VALUE_FLAGS:
+                j += 2               # git global flags that consume a value
+            if j < len(tokens) and tokens[j] == "commit":
+                end = j
+                while end < len(tokens) and tokens[end] not in OPERATORS:
+                    end += 1
+                if "--no-verify" in tokens[j:end]:
+                    return True
+                i = end
+                at_command = True
+                continue
+        at_command = False
+        i += 1
+    return False
+
+
 try:
-    bypass = "--no-verify" in shlex.split(cmd)
+    bypass = any(commit_requests_bypass(line) for line in cmd.splitlines())
 except ValueError:
     bypass = re.search(r"(?<!\S)--no-verify(?!\S)", cmd) is not None
 sys.exit(0 if bypass else 1)
-PY
+PYGATE
 then
     exit 0
 fi

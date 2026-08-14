@@ -196,8 +196,13 @@ grants stay in `settings.local.json`, still ignored.
   original inline `pre-commit || exit 2` could not see the command it was gating, which left the
   agent with no escape hatch at all while the pre-commit header promises an easy one. It exits 2
   with the failing gate's output on stderr, so the model is told *why* rather than just "no".
-- `PreToolUse` on `Bash`, `if` `Bash(gh pr merge *)`, runs `.claude/hooks/check-squash-subject.sh`,
-  which refuses a `--subject` that would drop or misstate the PR number.
+- `PreToolUse` on `Bash`, **with no `if`** - it runs on every Bash call and filters itself - runs
+  `.claude/hooks/check-squash-subject.sh`, which refuses a `--subject` that would drop or misstate
+  the PR number. It carried `if: Bash(gh pr merge *)` until review pointed out that a prefix match
+  misses every shape it exists for (`/usr/local/bin/gh pr merge`, `echo x && gh pr merge`); see
+  *`if` matches a PREFIX* above for the reasoning and the measured cost of removing it. Because it
+  now sees every command, it only matches `gh` in **command position**, so `echo gh pr merge ...`
+  is text rather than a merge.
 - `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
   `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
   "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to

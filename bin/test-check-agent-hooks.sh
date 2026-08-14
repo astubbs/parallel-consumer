@@ -206,6 +206,38 @@ assert "a branch named like a URL is not read as one" ALLOW \
 assert "a real URL selector still cross-checks" DENY \
     "$(verdict 'gh pr merge https://github.com/astubbs/parallel-consumer/pull/1299 --squash --subject "w (#1206)"')"
 
+# Round six. Registering the guard for EVERY Bash call (round five) widened what it must get right,
+# and review found seven more. Each was reproduced first; all seven go red against the prior parser.
+assert "a newline ends the merge slice, like any other boundary" DENY \
+    "$(verdict 'gh pr merge 1299 --subject "bad"
+echo --subject "decoy (#1299)"')"
+assert "a decoy after # is a comment, not a subject" DENY \
+    "$(verdict 'gh pr merge 1299 --subject "bad" # decoy --subject "x (#1299)"')"
+# FALSE POSITIVE, and one the hook created for itself by dropping its `if`: printing a command is
+# not running it, and hard-denying a diagnostic echo is exactly what an agent cannot argue with.
+assert "echo'ing the command is text, not a merge" ALLOW \
+    "$(verdict 'echo gh pr merge 1299 --subject bad')"
+assert "gh in command position after && is still a merge" DENY \
+    "$(verdict 'echo ready && gh pr merge 1299 --subject "bad no number"')"
+# `gh -R owner/repo pr merge ...` is valid and the local CLI accepts it; requiring `gh pr merge`
+# to be adjacent silently missed it.
+assert "a global flag before the subcommand is still a merge" DENY \
+    "$(verdict 'gh -R astubbs/parallel-consumer pr merge 1299 --subject "bad"')"
+assert "...and the same shape with a correct subject passes" ALLOW \
+    "$(verdict 'gh -R astubbs/parallel-consumer pr merge 1299 --subject "ok (#1299)"')"
+# AGENTS.md reserves the trailing parenthesised slot for the PR number ALONE - two bare numbers
+# recreate the issue-vs-PR ambiguity the convention exists to remove, whichever order they are in.
+assert "an extra (#N) alongside the right one is rejected" DENY \
+    "$(verdict 'gh pr merge 1299 --squash --subject "fix (#1206) (#1299)"')"
+assert "...in either order" DENY \
+    "$(verdict 'gh pr merge 1299 --squash --subject "fix (#1299) (#1206)"')"
+# shlex strips quoting, so a literal dollar looked exactly like an unresolved expansion and the
+# subject failed open with no number at all. Only real expansion syntax fails open now.
+assert "a literal \$5 is judged, not treated as an expansion" DENY \
+    "$(verdict "gh pr merge 1299 --squash --subject 'reduce cost to \$5'")"
+assert "a real \$VAR expansion still fails OPEN" ALLOW \
+    "$(verdict 'gh pr merge 1299 --squash --subject "$SUBJECT"')"
+
 assert "a non-Bash tool is ignored" ALLOW \
     "$(printf '%s' '{"tool_name":"Read","tool_input":{"command":"gh pr merge 1299 --subject \"x\""}}' \
         | "$HOOKS/check-squash-subject.sh" 2>/dev/null | grep -c '"deny"' | sed 's/^0$/ALLOW/;s/^[1-9].*/DENY/')"
@@ -265,6 +297,27 @@ case "$stderr_text" in
     *)                   got="swallowed: $stderr_text" ;;
 esac
 assert "the failing gate's own output reaches stderr" forwarded "$got"
+
+
+# Round six. The bypass search scanned the WHOLE payload, so a later, unrelated command could
+# request a bypass the commit never asked for - and the violation lands.
+assert "--no-verify in a LATER command is not this commit's bypass" 2 \
+    "$(gate_rc "$red" 'git commit -m x && echo --no-verify')"
+assert "--no-verify in an EARLIER command is not this commit's bypass" 2 \
+    "$(gate_rc "$red" 'echo --no-verify && git commit -m x')"
+assert "git -C <path> commit --no-verify is still a bypass" 0 \
+    "$(gate_rc "$red" 'git -C /some/path commit --no-verify -m x')"
+
+# No python, no way to read the payload - so no way to see --no-verify. Running the gate anyway
+# blocked the documented escape hatch on the one machine with no other way out. Python is not among
+# the repo's build requirements (JDK 17, Docker, the Maven wrapper), so this is a real setup.
+nopython="$TMP/nopython"; mkdir -p "$nopython"
+for b in bash cat mktemp rm sh dirname env; do
+    resolved=$(command -v "$b" 2>/dev/null) && ln -sf "$resolved" "$nopython/$b"
+done
+nopython_rc=$(printf '%s' "$(python3 -c 'import json; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}))')" \
+    | PATH="$nopython" CLAUDE_PROJECT_DIR="$red" "$HOOKS/pre-commit-gate.sh" >/dev/null 2>&1; echo $?)
+assert "a missing python3 fails OPEN rather than blocking the bypass" 0 "$nopython_rc"
 
 # Fail open: no gate script in the project at all must not block every commit.
 empty="$TMP/empty$RANDOM"; mkdir -p "$empty"
