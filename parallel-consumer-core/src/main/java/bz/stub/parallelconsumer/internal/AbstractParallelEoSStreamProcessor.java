@@ -42,6 +42,7 @@ import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.isEmpty;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
@@ -856,8 +857,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     if (Thread.interrupted()) { //clear interrupted flag
                         log.debug("Thread interrupted flag cleared in control loop error handling");
                     }
-                    log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + describeWithRootCause(e), e);
-                    failureReason = new RuntimeException("Error from poll control thread: " + describeWithRootCause(e), e);
+                    // Describing the failure must never prevent shutting down because of it. describeWithRootCause
+                    // guarantees that for itself, but the logger walks the chain too, and rendering a throwable from
+                    // user code runs that user's overrides. Anything escaping here would skip doClose and leave a
+                    // running consumer whose control future has already failed - the shape this handler exists to
+                    // prevent, reached while describing it.
+                    try {
+                        var described = describeWithRootCause(e);
+                        log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e);
+                        failureReason = new RuntimeException("Error from poll control thread: " + described, e);
+                    } catch (Throwable describingTheFailureFailed) {
+                        failureReason = new RuntimeException("Error from poll control thread", e);
+                    }
                     doClose(shutdownTimeout); // attempt to close
                     throw failureReason;
                 }
@@ -1503,31 +1514,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         BrokerPollSystem.setLongPollTimeout(ofMillis);
     }
 
-    /**
-     * The exception's own message plus its root cause's, because the immediate message is routinely the least
-     * informative one available.
-     * <p>
-     * Two ways that bites, both on the control-loop failure path where this is the sentence a user actually reads: an
-     * NPE thrown from user code carries a null message, which is where "Error from poll control thread: null" comes
-     * from; and anything routed through {@link UserFunctions} reports that class's constant, so the user's own message
-     * sits one level down. Naming the root cause keeps both signals - that it came from user code, and what it said.
-     */
-    static String describeWithRootCause(Throwable t) {
-        // Identity set rather than a self-reference check, because a cause chain can cycle without any link pointing
-        // at itself: initCause refuses self-causation, but A -> B -> A is buildable and a chain read back from
-        // deserialization has no such guard at all. This runs in the control loop's catch block BEFORE doClose, so a
-        // spin here is not a bad log line - it is a consumer that never shuts down and a caller that waits forever.
-        // The JDK's own printStackTrace keeps an identity "dejaVu" set for exactly this.
-        var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
-        var root = t;
-        seen.add(root);
-        for (var cause = root.getCause(); cause != null && seen.add(cause); cause = cause.getCause()) {
-            root = cause;
-        }
-        return root == t
-                ? String.valueOf(t.getMessage())
-                : t.getMessage() + " - caused by " + root.getClass().getSimpleName() + ": " + root.getMessage();
-    }
 
     /**
      * Request a commit as soon as possible (ASAP), overriding other constraints.
