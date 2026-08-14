@@ -30,7 +30,17 @@ import static java.util.stream.Collectors.toMap;
  * observer mode in the background so that when a test fails or times out, the generic Awaitility
  * timeout comes with a diagnosis - an autopsy block of probe violations, peak signatures and
  * per-partition frozen-committed detail ("zombie member blocked rebalance 40s" vs "partition 12
- * committed frozen lag=2100" vs "probe clean - fault is in the test").
+ * committed frozen lag=2100" vs "probe clean - nothing in group progress explains this").
+ * <p>
+ * <b>A clean probe is not a verdict on the test.</b> The detectors can only speak about a consumer
+ * group that existed: an environment failure - a broker container that never started, Docker or
+ * network trouble, anything throwing before the clients open - produces the same clean autopsy as a
+ * genuine test fault, because there was nothing to sample either way. Seen for real as
+ * {@code ContainerLaunchException: Container startup failed for image confluentinc/cp-kafka} on
+ * astubbs#116, where the autopsy read clean and the cause was Docker. The autopsy therefore prints
+ * the failure first and qualifies the clean line; read them in that order, and see
+ * {@code docs/testing.md} on why "probe clean" is only informative when the detectors could have
+ * fired at all.
  * <p>
  * Observer semantics: this extension NEVER fails a test. Violations use the chaos-calibrated
  * thresholds but only ever gate inside the chaos suite, which constructs its own gating probe.
@@ -184,7 +194,12 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 && probe.getPeakRebalanceDwellMs() == 0 && probe.getPeakLagStagnationMs() == 0;
         if (nothingObserved) {
             sb.append("probe clean - no rebalance dwell, no lag stagnation, no frozen partitions observed: ")
-                    .append("the fault is likely in the test itself, not consumer-group progress\n");
+                    .append("nothing in consumer-group progress explains this failure\n")
+                    .append("  NB read the failure line above before reading this one as a verdict on the test. ")
+                    .append("A group that never formed - a container that failed to start, Docker or network ")
+                    .append("trouble, anything failing before the clients opened - leaves the detectors nothing ")
+                    .append("to sample, and prints this same line. 'Probe clean' is only informative where a ")
+                    .append("group existed long enough for the bounds to be reachable.\n");
         } else {
             sb.append("violations (").append(violations.size()).append("):\n");
             if (violations.isEmpty()) {

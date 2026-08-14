@@ -28,11 +28,19 @@ with `-Dambient.probe=off` or `@NoAmbientProbe` only when the probe itself is th
 needs `LAG_STAGNATION_MIN_LAG` (50) of real lag sustained past `LAG_STAGNATION_BOUND` (150s), and
 rebalance dwell needs `REBALANCE_DWELL_BOUND` (15s). A test with a handful of records, or one that
 fails inside a window shorter than those bounds, cannot trip either - so its autopsy prints
-`probe clean` and the accompanying sentence "the fault is likely in the test itself" carries no
-evidence at all. Check the test's record count and failure window against those constants before
+`probe clean` and the sentence beside it carries no evidence at all. Check the test's record count and failure window against those constants before
 treating a clean probe as a finding. This is not hypothetical: the `commitTimeout` autopsy of
 2026-08-07 read `probe clean` on a 15-record test that failed in 35s, where the thresholds are 50
 records and 150s.
+
+**The sharper case is a group that never formed at all**, where the probe cannot be informative
+even in principle. A broker container that fails to start, Docker or network trouble, or anything
+throwing before the clients open, leaves the detectors with nothing to sample - and produces a clean
+autopsy indistinguishable from a genuine test fault. Seen on astubbs#116: `ContainerLaunchException:
+Container startup failed for image confluentinc/cp-kafka:7.9.0`, autopsy `probe clean`, cause
+Docker. **Read the autopsy's own `failure:` line first**; it is printed above the verdict precisely
+so the exception is seen before the classification. The clean line now says only that nothing in
+group progress explains the failure, and names this case, rather than pointing at the test.
 
 ## Quarantine lane (`@Quarantined`)
 
