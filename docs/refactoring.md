@@ -282,15 +282,23 @@ Do not start one casually.
   brute-force transaction-commit retry.
 - **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
   rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
-  **expected operational state**, not an internal fault. The callback is reached from exactly one
-  place: `KafkaProducer#doSend`'s `catch (ApiException)` handler, before the accumulator. That is
-  narrower than "any pre-accumulator failure" - a serializer throwing `SerializationException`
-  propagates out of `doSend` without ever invoking the callback - and wider than "oversized records":
-  `RecordTooLargeException` is the case `TransactionalPartialResultSetIT` exercises, while metadata
-  and authorization failures on that same handler (`TimeoutException`,
-  `TopicAuthorizationException`) reach it too. So the type has to cover environment failures as well
-  as bad result records, but only those arriving as an `ApiException`. Asynchronous failures never
-  reach it at all - Kafka's own `ProducerBatch` catches and logs whatever a callback throws.
+  **expected operational state**, not an internal fault. Two different questions decide the scope
+  here, and conflating them has been the recurring error:
+  - **Where is the callback invoked?** On broker-side asynchronous failures too - `ProducerBatch`
+    calls the same `onCompletion`. So the `log.error` fires for effectively every failed send.
+  - **Where can its throw escape?** Only from `KafkaProducer#doSend`'s synchronous
+    `catch (ApiException)` handler. `ProducerBatch` catches and logs whatever the callback throws,
+    so on the asynchronous path the throw is swallowed rather than propagated.
+
+  It is the second question that governs the exception type, since only there is the thrown type
+  observable to a caller. That set is narrower than "any pre-accumulator failure" - a serializer
+  throwing `SerializationException` propagates out of `doSend` without invoking the callback at all -
+  and wider than "oversized records": `RecordTooLargeException` is the case
+  `TransactionalPartialResultSetIT` exercises, while metadata and authorization failures on the same
+  handler (`TimeoutException`, `TopicAuthorizationException`) reach it too. So the type has to cover
+  environment failures as well as bad result records, but only those arriving as an `ApiException`.
+  **Do not model this as "the callback only runs on the synchronous path"** - it runs on both, and a
+  refactor built on that mistake would drop logging for every asynchronous send failure.
   A name that says "internal" sends every reader, human or agent, to re-derive that whole chain
   before they can conclude it is ordinary failure handling. It was verified from source and
   kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
