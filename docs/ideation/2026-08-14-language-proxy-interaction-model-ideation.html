@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Language-Proxy Interaction Model</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1a1a1a; --muted: #5c5c5c; --rule: #e0dcd6;
+    --card: #ffffff; --accent: #7c4a2d; --accent-bg: #f5efe9;
+    --ok: #2f6b3f; --warn: #8a6d1f; --bad: #8a3324; --code-bg: #f2efeb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --fg: #e8e6e3; --muted: #a0a0a0; --rule: #2f333a;
+      --card: #1e2126; --accent: #d99a6c; --accent-bg: #26221f;
+      --ok: #7fbf8f; --warn: #d9bc6a; --bad: #e08b7a; --code-bg: #22262c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181c; --fg: #e8e6e3; --muted: #a0a0a0; --rule: #2f333a;
+    --card: #1e2126; --accent: #d99a6c; --accent-bg: #26221f;
+    --ok: #7fbf8f; --warn: #d9bc6a; --bad: #e08b7a; --code-bg: #22262c;
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfaf8; --fg: #1a1a1a; --muted: #5c5c5c; --rule: #e0dcd6;
+    --card: #ffffff; --accent: #7c4a2d; --accent-bg: #f5efe9;
+    --ok: #2f6b3f; --warn: #8a6d1f; --bad: #8a3324; --code-bg: #f2efeb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.25rem 5rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .4rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.25rem; margin: 3rem 0 1rem; padding-bottom: .4rem; border-bottom: 2px solid var(--rule); letter-spacing: -.01em; }
+  h3 { font-size: 1.05rem; margin: 0 0 .5rem; letter-spacing: -.01em; }
+  p { margin: 0 0 .85rem; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; font-size: .875em;
+         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .sub { color: var(--muted); font-size: .9rem; margin-bottom: 1.5rem; }
+  .lede { font-size: 1.05rem; border-left: 3px solid var(--accent); padding-left: 1rem; margin: 1.5rem 0; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 10px;
+          padding: 1.25rem 1.4rem; margin-bottom: 1.1rem; }
+  .rank { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin-bottom: .3rem; }
+  .num { font-size: 1.5rem; font-weight: 700; color: var(--accent); line-height: 1; }
+  .tags { margin: .5rem 0 .9rem; display: flex; gap: .4rem; flex-wrap: wrap; }
+  .tag { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; padding: .18em .6em;
+         border-radius: 999px; background: var(--accent-bg); color: var(--accent); border: 1px solid var(--rule); white-space: nowrap; }
+  .field { margin: .7rem 0; }
+  .field b { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
+             color: var(--muted); margin-bottom: .15rem; }
+  .basis { border-left: 2px solid var(--rule); padding-left: .8rem; }
+  .conf-high { color: var(--ok); } .conf-med { color: var(--warn); } .conf-low { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .flag { background: var(--accent-bg); border: 1px solid var(--accent); border-radius: 10px;
+          padding: 1rem 1.25rem; margin: 1.5rem 0; }
+  ul { margin: 0 0 .85rem; padding-left: 1.2rem; } li { margin-bottom: .35rem; }
+  .axis-note { color: var(--muted); font-size: .88rem; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Ideation: Language-Proxy Interaction Model</h1>
+<p class="sub">
+  2026-08-14 · <code>astubbs/parallel-consumer#242</code> · branch <code>feats/proxy-requirements</code><br>
+  27 raw candidates → 16 after merge → <strong>6 survivors</strong> · 5 axes · repo-grounded
+</p>
+
+<p class="lede">
+  The subject is <em>how</em> the sidecar and its non-Java workers interact — not the transport (gRPC is
+  settled) and not the product scope. The credit-ledger design was rejected before this run began; the
+  question is what replaces it, and how much of the client library survives that choice.
+</p>
+
+<div class="flag">
+  <h3 style="margin-top:0">The frame: the wrapper is the layer</h3>
+  <p style="margin-bottom:0">
+    "PC in every language" means every language gets the <strong>same client wrapper</strong>, and to the
+    user it looks native. Java's wrapper is that same layer with one fewer hop — it sits directly on the
+    engine with no protobuf underneath. This is <em>one</em> client model with a missing layer in the Java
+    case, not two architectures, and every idea below is judged against that frame.
+  </p>
+</div>
+
+<div class="flag">
+  <h3 style="margin-top:0">Read this first: the verifier was judging a stale document</h3>
+  <p style="margin-bottom:.5rem">
+    The fresh-context verifier scored every candidate against
+    <code>docs/plans/2026-08-12-001-feat-language-proxy-plan.md</code>, which <strong>still carries the
+    credit model</strong> (KD9, KTD9, R23) and its dependents (KD8's many-direct-connections, KTD9's
+    round-robin allocator) as settled. Several "refuted" verdicts rest entirely on contradicting
+    decisions this session has already superseded.
+  </p>
+  <p style="margin-bottom:0">
+    Those verdicts are <strong>overruled</strong> below, each with its reason stated. Verdicts resting on
+    <em>code</em> or on <em>prior-art accuracy</em> are retained — and two of them materially downgraded
+    ideas I was enthusiastic about.
+  </p>
+</div>
+
+<h2>Grounding Context</h2>
+
+<p><strong>Codebase (verified this run, with a second pass by the verifier):</strong></p>
+<ul>
+  <li><code>ExternalEngine</code> forces the worker pool to size 1 — external engines do not use a thread
+      pool; one thread dispatches. Vert.x and Reactor already ride this seam.</li>
+  <li><code>getTargetAmountOfRecordsInFlight() == getMaxConcurrency() * getBatchSize()</code>, and
+      <code>ExternalEngine.getTargetOutForProcessing()</code> returns exactly that — so <em>max concurrency
+      is already how the existing external engines bound in-flight work</em>, not a thread-pool size.</li>
+  <li><code>calculateQuantityToRequest()</code> computes <code>target − numberRecordsOutForProcessing</code>
+      <strong>every control-loop pass</strong>, so an engine can vary its target dynamically.</li>
+  <li>On the async path, <code>ExternalEngine</code> withholds the mailbox entry so each
+      <code>WorkContainer</code> completes <strong>independently</strong>. Per-record outcomes from a batch
+      are therefore possible — the old plan's claim to the contrary does not hold on this path.</li>
+  <li><code>ProcessingShard</code> permits at most one in-flight record per shard under restricted ordering.
+      <strong>Key ordering is enforced host-side, for free.</strong></li>
+  <li><code>WorkContainer.markAbandoned(deliveryCount)</code> + <code>isReturnForSupersededDelivery()</code>
+      already implement verdict-free return and late-duplicate rejection, in-process.</li>
+  <li><em>Verifier addition:</em> <code>WorkManager.numberRecordsOutForProcessing</code> is a live
+      accumulator with five mutation sites, and the silent-stall learning attributes a real bug to drift
+      in exactly that counter.</li>
+</ul>
+
+<p><strong>External prior art</strong> — Apache Beam's Fn API (runner owns scheduling, per-language SDK
+harness runs user code, gRPC between them; Python fans out to one subprocess per core for the GIL;
+bundles retry whole, per-item outcomes deliberately rejected) · Temporal (shared Rust <code>sdk-core</code>
+with thin bindings; workers poll; host-side "slots") · Ray (node-local daemon owns worker lifecycle;
+language driver never spawns) · Envoy <code>ext_proc</code> (stream per request; processor controls
+granularity) · Bytewax (Rust core, Python in-process FFI, no IPC) · Dask (batch assignment to
+least-busy worker).</p>
+
+<p><strong>Standing constraint:</strong> four consecutive review rounds on the flow-control /
+in-flight-accounting seam each produced the next round's defect. The recorded instruction is to change a
+decision rather than patch that seam again — which is what this whole exercise is.</p>
+
+<h2>Topic Axes</h2>
+<div class="scroll">
+<table>
+  <tr><th>Axis</th><th>Question it holds</th><th>Survivors</th></tr>
+  <tr><td>Work hand-out</td><td>Unit of dispatch; batching; who initiates</td><td>2, 4</td></tr>
+  <tr><td>Backpressure &amp; in-flight accounting</td><td>What bounds outstanding work; what max concurrency means</td><td>6</td></tr>
+  <tr><td>Client library shape</td><td>What each language must implement</td><td>2, 3</td></tr>
+  <tr><td>Worker lifecycle &amp; supervision</td><td>Who spawns what; exactly-one-sidecar; lifetime binding</td><td>2, 5</td></tr>
+  <tr><td>Failure &amp; recovery</td><td>Worker death, attempt counts, drain</td><td>1, 3, 6</td></tr>
+</table>
+</div>
+<p class="axis-note">Every axis carries at least one survivor; no deliberate gaps.</p>
+
+<h2>Ranked Ideas</h2>
+
+<div class="card">
+  <div class="rank"><span class="num">1</span><h3>Reconnect reconciles a manifest — a dropped pipe is not a dead worker</h3></div>
+  <div class="tags"><span class="tag">failure &amp; recovery</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">external + direct</span></div>
+  <p>Connection loss does not immediately abandon that connection's records. The sidecar protects them for a
+     bounded grace window; the reconnecting client opens with a manifest of tokens its live workers still
+     hold; the sidecar reconciles — still-current tokens stay in flight untouched, superseded ones are
+     ordered dropped, absent ones are abandoned with attempt count unchanged. Only window expiry abandons.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>external:</code> ATC lost-communications procedure — losing radio contact does not mean losing the aircraft.
+    The controller <em>protects the clearance</em> rather than reassigning the level; reassigning on contact
+    loss is the accident-causing move.
+    <code>direct:</code> A TCP drop is information about the <em>pipe</em>, not the <em>executor</em>.
+  </div></div>
+  <div class="field"><b>Why it matters — this is the run's most valuable finding</b>
+    The current requirement says a closed connection returns that worker's records <em>immediately</em>. The
+    verifier traced it: that keeps the sidecar's bookkeeping consistent, but does nothing to stop two
+    physical workers running the same key's user code concurrently during a transient blip — the original
+    worker is still alive and finishing while the redelivered copy starts elsewhere. <strong>Every host-side
+    invariant reads green while the one guarantee the product is sold on is violated in reality.</strong></div>
+  <div class="field"><b>Status</b>
+    A live correctness gap in a requirement currently treated as decided. This is not a preference — it
+    should be escalated regardless of which other ideas are adopted.</div>
+</div>
+
+<div class="card">
+  <div class="rank"><span class="num">2</span><h3>One connection, fan-out inside the client (the admin model)</h3></div>
+  <div class="tags"><span class="tag">work hand-out</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">external</span></div>
+  <p>The protocol permits exactly one connection per application. An <strong>admin</strong> holds the stream
+     and relays to its workers — a goroutine talking to worker goroutines in Go, a process talking to worker
+     processes in Python. Identical shape in both languages, so the client translates with far less error
+     surface, and the sidecar never learns whether the far end is threads or processes.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>external:</code> Beam's SDK harness does exactly this — one harness fans out internally, threads for
+    Java/Go and one subprocess per core for Python because of the GIL, muxed by instruction ID. Same GIL
+    problem, solved without any multi-connection protocol.
+    <em>Correction retained from the verifier:</em> Beam actually uses several distinct gRPC services per
+    harness (control, data, state, logging), not literally one connection — the surviving idea is
+    "one harness, internal fan-out", not "one socket".
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    Every piece of proxy state this project has fought — round-robin allocation, no-starvation guarantees,
+    the "no other worker was lost in the same window" attribution clause — is a consequence of
+    <em>several</em> connections. One connection deletes the seam rather than patching it.</div>
+  <div class="field"><b>Honest cost</b>
+    Fan-out bugs move inside the client, invisible to the sidecar, and get written twice — but in each
+    language's native idiom (<code>multiprocessing</code>, worker goroutines), which is the cheapest thing
+    to write twice.</div>
+  <div class="field"><b>Verifier verdict overruled</b><div class="basis">
+    Marked "refuted" for contradicting the many-direct-connections decision — but that decision is downstream
+    of the credit model this session rejected. Overruled: it contradicts a superseded premise, and it is the
+    user's own proposal, independently matched by the closest prior art in existence.
+  </div></div>
+</div>
+
+<div class="card">
+  <div class="rank"><span class="num">3</span><h3>An epoch per delivery — fencing borrowed from Kafka's own exactly-once model</h3></div>
+  <div class="tags"><span class="tag">client shape</span><span class="tag">failure &amp; recovery</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag">direct + external</span></div>
+  <p>Every dispatched record carries an <strong>epoch</strong>. A dead client is fenced and the epoch
+     increments when the record is handed to another worker; a report naming a superseded epoch is
+     discarded. The worker echoes the epoch back verbatim and keeps <strong>no</strong> request map, no
+     callback table, no dedupe cache — the sidecar is the only party holding state.</p>
+  <div class="field"><b>Scope of the fence — state it plainly</b><div class="basis">
+    Fences <em>reports</em> and <em>Kafka-side effects</em>: workers never produce directly, so output
+    travels back through the engine and the sidecar produces behind one epoch check — which is what keeps
+    exactly-once entirely on the JVM side, one producer, one transactional id. It does <strong>not</strong>
+    fence a worker's external side effects (a database write, an HTTP call). No system fences those; the
+    protocol should not imply otherwise.
+  </div></div>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> <code>markAbandoned(deliveryCount)</code> and <code>isReturnForSupersededDelivery()</code>
+    already implement precisely this rule in-process — confirmed by the verifier by reading the file. The
+    "capture the delivery at dispatch, never read it at return" discipline becomes <em>structural</em> when
+    the token is literally the thing handed out.
+    <code>external:</code> Court docket numbers — the parties keep no ledger; the number is printed on the paper they
+    were handed, and a filing citing a closed matter is rejected at intake.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    A stateless client cannot have a state bug. It also reuses logic that was expensive to get right rather
+    than re-deriving it per language — and "echo these bytes" is the one instruction an author writing from
+    the spec alone cannot misread.</div>
+</div>
+
+<div class="card">
+  <div class="rank"><span class="num">4</span><h3>Dispatch a wave of independent shard-heads, report each record separately</h3></div>
+  <div class="tags"><span class="tag">work hand-out</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Send several records from <em>different</em> shards in one message for wire efficiency, but report each
+     independently as it completes. Because a shard holds at most one in-flight record, a wave never contains
+     two records of the same key — so there is nothing to serialize and no shared verdict to construct.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> The async path completes each work container independently — verifier-confirmed at the
+    Vert.x hook and at the shard's one-per-shard break.
+    <code>external:</code> Beam bundles many elements and <strong>discards the whole bundle if any element fails</strong>,
+    having deliberately rejected per-item outcome tracking as not worth the complexity.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    This is a capability the closest prior art declined to build. It amortises wire cost without inheriting
+    all-or-nothing retry, and it makes the client's job the same three steps in every language: unpack wave,
+    dispatch, report per record.</div>
+</div>
+
+<div class="card">
+  <div class="rank"><span class="num">5</span><h3>The sidecar spawns its own workers</h3></div>
+  <div class="tags"><span class="tag">lifecycle &amp; supervision</span><span class="tag conf-med">Confidence: Medium</span><span class="tag">Complexity: M</span><span class="tag">external</span></div>
+  <p>Invert supervision: the sidecar starts N worker processes from a configured command and passes them the
+     endpoint. Worker death becomes a child exit observed directly, not a socket close to be interpreted.
+     The bind-race election, the detached process group, and the checksum-verify-before-exec disappear from
+     <em>both</em> client libraries.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>external:</code> Ray's node-local daemon owns worker-pool lifecycle entirely and the language driver never
+    spawns workers — precisely because spawn/reap/orphan semantics are where the per-language bugs live.
+    <code>reasoned:</code> It also makes connection-loss attribution exact rather than heuristic: a wait-status
+    distinguishes a clean exit from a kill from an OOM, which a closed socket never can.
+  </div></div>
+  <div class="field"><b>Verifier pushback — retained and fair</b><div class="basis">
+    It <em>relocates</em> the bootstrap problem rather than deleting it: something still has to start the
+    sidecar. And it reopens a user-directed decision. The honest claim is "moves the hard part from two
+    client languages into one JVM", not "removes it".
+  </div></div>
+</div>
+
+<div class="card">
+  <div class="rank"><span class="num">6</span><h3>A liveness lease, explicitly not a processing deadline</h3></div>
+  <div class="tags"><span class="tag">backpressure</span><span class="tag">failure &amp; recovery</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct</span></div>
+  <p>Assume the worker may hang, loop forever, or never report. A lease is attached at dispatch and extended
+     by heartbeats on the stream; on expiry the record is abandoned with attempt count unchanged. Poison
+     detection reads the delivery count that already increments on every hand-out. A legitimately slow worker
+     heartbeats and holds its record indefinitely; a dead one does not.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> Verifier confirmed there is no wall-clock processing deadline anywhere in this path — the
+    slow-work threshold only warns, never abandons. That is deliberate: "a record stays in flight until your
+    function returns; there is no clock" is PC's stated differentiator against Share Groups, whose
+    acquisition-lock timeout genuinely <em>is</em> a processing clock.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    Folds crash, hang, infinite loop and worker bug into one host-side path needing zero worker cooperation —
+    therefore zero per-language code. The distinction from a processing deadline is the whole game: build the
+    wrong one and the product loses its differentiator.</div>
+</div>
+
+<h2>Rejection Summary</h2>
+<div class="scroll">
+<table>
+  <tr><th>Candidate</th><th>Verdict</th><th>Reason</th></tr>
+  <tr><td><strong>Compile PC as a native shared library</strong> (C-ABI via <code>native-image --shared</code>, so threaded languages run the engine in-process with no protocol)</td><td>Dead end</td>
+      <td><strong>Never proposed — an agent's extrapolation, ranked #1 in the first draft and wrongly attributed to the user.</strong> Rejected on direction. Two things undercut it on its own terms, recorded so it is not re-proposed: the cleared native-image gate produced an <em>executable</em>, not a <code>--shared</code> export (different entry-point surface, isolate and thread-attach semantics, GC coexistence with a foreign runtime, callbacks re-entering from foreign threads — none tested); and Temporal's Go and Java SDKs are independent implementations, not bindings over its shared core, so the usual precedent is thinnest exactly where the idea was boldest.</td></tr>
+  <tr><td>Derive, never accumulate (in-flight as set cardinality)</td><td>Folded in</td>
+      <td>Sound, but already an adopted principle rather than a new idea — retained as a design rule across survivors 4 and 7, not ranked separately.</td></tr>
+  <tr><td>Abandoned-by-default at dispatch</td><td>Rejected</td>
+      <td>Verifier retained: permanently disables the deliberate fail-loud backstop for the exact programmer error it exists to catch, converting a crash into a quiet extra redelivery forever. Opposite of this repo's stated "do not mask a real stall" culture.</td></tr>
+  <tr><td>Roster as capacity (live-worker count × depth)</td><td>Rejected</td>
+      <td>The credit ledger under a new name — a trusted, unenforceable capacity number recomputed on every join and leave. This is the pattern the exercise exists to avoid.</td></tr>
+  <tr><td>Long-poll waiter FIFO</td><td>Rejected</td>
+      <td>Verifier called it redundant with the settled design; overruled on that point (that design is superseded), but rejected anyway — it is still a pull/credit model, which is the shape the user rejected.</td></tr>
+  <tr><td>One gRPC stream per record</td><td>Rejected</td>
+      <td>Envoy's per-request stream is real but its request volumes are orders of magnitude below Kafka throughput; stream churn works against the latency constraint. Analogy does not transfer.</td></tr>
+  <tr><td>Hand out buckets (sub-partition assignment)</td><td>Rejected</td>
+      <td>Duplicates the affinity idea below at higher structural cost, and turns hand-out into a rebalance protocol — a large new surface for a benefit the lease version gets advisorily.</td></tr>
+  <tr><td>Shard lease / worker affinity</td><td>Deferred, not rejected</td>
+      <td>Genuinely interesting — worker-local per-key state without a state store, which is a real differentiator. But it is a scheduler-fairness fight dressed as a stickiness feature, and it should not be decided in the same breath as the interaction model.</td></tr>
+  <tr><td>Admin forbidden from running user code</td><td>Folded in</td>
+      <td>Correct and important, but it is a property of survivor 3 rather than a competing idea. Note: the arch-test enforcement cited is JVM-only; Python and Go need different tooling.</td></tr>
+  <tr><td>Conformance transcripts as the spec</td><td>Deferred</td>
+      <td>Verifier refuted it on "clients are first-party, so there is nobody to police"; partially overruled — the value is making language three and four cheap, not policing. But it is a testing-strategy decision, not an interaction-model one.</td></tr>
+  <tr><td>Bundle versioning — the wire is private</td><td>Rejected</td>
+      <td>Already the settled position; restates it rather than adding to it.</td></tr>
+  <tr><td>Client-side line budget enforced by CI</td><td>Rejected</td>
+      <td>A governance mechanism, not an interaction-model idea. Worth revisiting once a client exists to measure.</td></tr>
+  <tr><td>Client spawns the sidecar as a child process</td><td>Rejected</td>
+      <td>The direct inverse of survivor 6, and the weaker direction — it keeps supervision in every client language, which is the cost being attacked.</td></tr>
+</table>
+</div>
+
+<h2>Settled during this run</h2>
+<ul>
+  <li><strong>Workers never produce to Kafka directly.</strong> Output travels back through the engine over
+      the protocol and the sidecar produces. Chosen for simplicity, and it is what lets survivor 3's epoch
+      check carry exactly-once on its own.</li>
+  <li><strong>The wrapper is the layer; Java is the degenerate case.</strong> One client model, with the
+      protobuf hop absent in Java rather than a second architecture.</li>
+  <li><strong>Native shared library: dead end.</strong> See the rejection table.</li>
+</ul>
+
+<h2>What this set does not settle</h2>
+<ul>
+  <li><strong>Python as its own module.</strong> If Python is the only runtime needing the process-pool
+      split, isolating it keeps the shared path clean and stops the GIL shaping everyone else's design.
+      A module boundary is the cheapest separation available.</li>
+  <li><strong>Swift.</strong> Raised as a target during this run. Under the wrapper frame it is another
+      client rather than a new architecture — useful mainly as a stress test: if adding it is cheap, the
+      shape is right.</li>
+  <li><strong>Competitive positioning</strong> — tracked separately in
+      <code>docs/inflight/next-architecture-landscape-comparison.md</code>.</li>
+  <li><strong>Connectors in foreign languages</strong> — tracked in
+      <code>docs/inflight/next-connect-connectors-in-foreign-languages.md</code>. Unread:
+      <code>feats/connect-on-pc-spike</code> may already assume a shape.</li>
+</ul>
+
+</div>
+</body>
+</html>

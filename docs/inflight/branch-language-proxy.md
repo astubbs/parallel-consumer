@@ -60,6 +60,39 @@ This is the same failure shape as the `release.target` trap below — compiles h
 runtime, build cannot detect it. So U2 should decide deliberately whether the schema's consumers may
 touch the descriptor path at all, rather than discovering it in U7 when the sidecar is packaged.
 
+## Interaction model: what is settled, and one dead end
+
+The credit-based design in the plan is **superseded**. The sidecar registers as PC's user function and
+returns a future completed when a worker reports — it is an `ExternalEngine`, the same seam Vert.x and
+Reactor already use. The plan on disk has not been rewritten yet, so it still reads as if the credit
+ledger were live; treat this note as current where the two disagree.
+
+- **The wrapper is the layer, and Java is the degenerate case of it.** "PC in every language" means
+  every language gets the same client wrapper; to the user it looks native. Java's wrapper is the same
+  layer with one fewer hop, because it sits directly on the engine with no protobuf underneath. This is
+  one client model with a missing layer in the Java case, not two architectures.
+- **Workers never produce to Kafka directly.** A worker's output travels back through the engine over
+  the protocol, and the sidecar produces. This keeps exactly-once entirely on the JVM side: one producer,
+  one transactional id, behind one epoch check. Settled deliberately, for simplicity.
+- **Fencing is Kafka's own EoS model, borrowed.** Each delivery carries an epoch; a dead client is
+  fenced and the epoch increments when the record is handed to another worker. PC already implements
+  the mechanism internally — `WorkContainer.deliveryCount` captured at dispatch, with
+  `isReturnForSupersededDelivery()` discarding a return that names a superseded delivery. What the
+  protocol adds is making that epoch explicit on the wire, echoed by the worker.
+  Note the boundary honestly: this fences reports and Kafka-side effects. It cannot fence a worker's
+  *external* side effects — a database write or an HTTP call — which is true of any at-least-once
+  system and should not be implied otherwise.
+
+**Dead end — do not re-propose: compiling PC to a native shared library.** The idea was to emit a
+C-ABI library via GraalVM `native-image --shared` so non-JVM languages could run the engine in-process
+with no protocol at all. It was an agent's extrapolation during ideation, not a proposal, and it is
+rejected. Two things undercut it even on its own terms, recorded so the next session does not
+rediscover them: the native-image gate this branch cleared produced an **executable**, not a `--shared`
+export, which is materially different (entry-point surface, isolate and thread-attach semantics, GC
+coexistence with a foreign runtime, callbacks re-entering from foreign threads — none tested); and the
+Temporal precedent usually cited for it is narrower than it looks, since Temporal's Go and Java SDKs
+are independent implementations rather than bindings over its shared core.
+
 ## Owed: the data records, and not before the module exists
 
 A new user-visible module needs three YAML records, and all three must land in the PR that lands
