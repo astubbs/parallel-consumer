@@ -241,12 +241,21 @@ tracked in
 
 A mirror records what a closed PR *said*. It does not keep the code. The 35 PRs closed in the
 2023-06-15 sweep were reachable through `refs/pull/<n>/head` **in the upstream repository**, which is
-not a copy we control: if that repo is deleted or a contributor's fork disappears, the commits go
-with it, and a mirror describing work whose diff no longer exists is close to useless.
+not a copy we control: if that repo is deleted, or the branch behind a PR is, the commits go with it,
+and a mirror describing work whose diff no longer exists is close to useless.
 
-Checked 2026-08-14 (`git branch -r --contains <head>` for each of the 35): **29 were already safe**,
-because their PRs were raised from branches that still exist on this fork. **Six were reachable only
-from upstream** - not on this fork, and not even present in a local clone. They are now pinned as
+All 35 heads were raised from branches in `confluentinc/parallel-consumer` itself (every `head.label`
+is `confluentinc:<branch>`), so the exposure is **upstream branch or repository loss** - not a
+contributor's fork vanishing. That distinction matters because it is the upstream branch, not a third
+party, that has to be watched.
+
+Checked 2026-08-14 with `git branch -r --contains <head>` per PR, against remote-tracking refs
+reconciled with a live `git ls-remote --heads origin` (three stale local tracking refs would
+otherwise have counted as safe). **29 were reachable from a branch that still exists on this fork** -
+note *reachable from*, not *raised from*: confluentinc#271's own branch is long gone and its head
+survives only because an unrelated branch contains it, while confluentinc#22, confluentinc#270 and
+confluentinc#405 have same-named fork branches that do **not** contain their heads, which is why they
+are in the table below. **Six were reachable from nothing on this fork.** They are now pinned as
 annotated tags:
 
 | Tag | Upstream PR | Head | Author |
@@ -261,13 +270,26 @@ annotated tags:
 Each tag's message carries the upstream title, author, head branch name and closure date, so the
 provenance survives without the upstream thread.
 
-confluentinc#443 was the sharpest case: a third-party fork can vanish independently of Confluent's
-repository, and nothing would have flagged it. Tagging is deliberate over branching - tags are not
-swept by branch-cleanup tooling and read as archival rather than live work.
+confluentinc#443 is the one raised by an outside contributor (Robbie-Palmer), but its head lives on
+`confluentinc:pyallel-consumer` like the rest - that contributor's own fork is already gone, and it
+made no difference. Do not read this as fork-loss risk; the branch upstream is what matters.
 
-**This is a recurring check, not a one-off.** Branches get deleted, so a head safe today can be
-orphaned tomorrow. Re-run it whenever the sweep cohort is revisited; the decision backlog it feeds
-is astubbs#300.
+Tagging is deliberate over branching: tags are not swept by branch-cleanup tooling and read as
+archival rather than live work. An annotated tag is also fetched by every clone, which
+`refs/pull/<n>/head` is not - so the copy actually propagates. Note the tags do **not** put the
+objects outside the GitHub fork network; that is acceptable because deleting a public parent re-roots
+the network to a surviving fork rather than destroying its objects. If an out-of-network copy is ever
+wanted, `git bundle` is the tool, and nobody has decided it is needed.
+
+**The SHAs above are the record.** They are duplicated into `sweep-2023-admin-closure` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml) so the check can be redone without
+re-querying upstream, which the PR numbers alone did not allow.
+
+**Re-running this is not yet automated.** Branches get deleted, so a head safe today can be orphaned
+tomorrow - but no script checks it: `--audit` covers tracking and mirroring, not reachability, and
+would report clean with every tag above deleted. Until a containment check is wired into
+`upstream-sweep.sh`, this is a manual step to repeat whenever the sweep cohort is revisited. Tracked
+with the rest of the decision backlog in astubbs#300.
 
 ### Surfaces checked and ruled out
 

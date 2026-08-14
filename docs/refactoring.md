@@ -296,24 +296,20 @@ Do not start one casually.
     [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
     needing that.
   - **Drive-by while there:** the lambda parameter is bare `exception`. It is the *send* failure, not
-    a user-code exception (those are caught around `usersFunction.apply` in
-    `runUserFunctionInternal`), so name it `sendFailure`. Do **not** name it after user code - that
-    is the exact confusion this entry exists to stop.
-  - Adjacent but **not** the same thing: `confluentinc#242` (issue) and its PR `confluentinc#291`
-    cover the **user function** throwing terminal/retry exceptions, so neither classifies a *send*
-    failure. Send-retry semantics live under astubbs#141 / astubbs#149, epic astubbs#239. This item
-    is naming only - it changes no behaviour and does not wait on any of them.
-  - Both are already accounted for, so do not re-mirror them. `confluentinc#291` was closed unmerged
-    on 2023-06-15 in the PR half of the administrative sweep and is recorded in
-    [`upstream-map.yaml`](../src/docs/development/upstream-map.yaml) under `sweep-2023-admin-closure`;
-    it has no dedicated fork issue because that cohort mirrored the 28 swept *issues*, with the 35
-    swept *PRs* carried in the map and surfaced under the relevant mirror's "Prior work".
-    `confluentinc#242` is not sweep-affected at all - astubbs closed it as completed on 2022-10-21.
-    `README_TEMPLATE.adoc` already cites `confluentinc#291` as the refinement reference for
-    throwing failure exceptions from the processing function.
-  - **Small gap worth closing while here:** astubbs#239's "Prior work" names `confluentinc#366` from
-    that same swept-PR cohort but not `confluentinc#291`, which is equally prior art for the retry /
-    terminal-exception half of that epic.
+    a user-code exception (those are caught by `runUserFunction`, which wraps the `usersFunction.apply`
+    call made in `runUserFunctionInternal`), so name it `sendFailure`. Do **not** name it after user
+    code - that is the exact confusion this entry exists to stop.
+  - Naming only: it changes no behaviour and waits on nothing. `confluentinc#242` and its PR
+    `confluentinc#291` are precedent for the *shape* but cover the **user function** throwing
+    terminal/retry exceptions, not send-failure classification - see
+    [`docs/inflight/bug-poisoned-transaction-not-aborted-while-running.md`](inflight/bug-poisoned-transaction-not-aborted-while-running.md)
+    for why, and do not re-mirror either.
+
+*Prior art: [confluentinc#291](https://github.com/confluentinc/parallel-consumer/pull/291), closed
+unmerged in the 2023-06-15 sweep · already cited in `README_TEMPLATE.adoc`, and worth adding to
+[astubbs#239](https://github.com/astubbs/parallel-consumer/issues/239)'s "Prior work", which names
+[confluentinc#366](https://github.com/confluentinc/parallel-consumer/pull/366) from the same cohort
+but not this.*
 
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as

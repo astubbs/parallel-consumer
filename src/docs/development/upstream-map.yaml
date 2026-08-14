@@ -342,8 +342,13 @@ entries:
   # Do not trust the closure state of any 2023-era upstream item. Several of these
   # issue bodies claim "Implemented in #NNN" where #NNN was itself swept unmerged
   # (e.g. #372 -> PR #390, #319 -> PR #270, #203 -> PR #345, #191 -> PR #346).
-  # All swept PR head commits were verified reachable on 2026-08-07, so the work is
-  # recoverable; cite branch + SHA, not just the PR number.
+  # All swept PR head commits were verified reachable on 2026-08-07 - but only through
+  # upstream's own refs/pull/<n>/head. A containment re-check on 2026-08-14 found six of
+  # the 35 were reachable from NOTHING on this fork, and pinned them as archive tags
+  # (see preserved_heads below, and docs/upstream.md). The other 29 are reachable from a
+  # fork branch, which is not the same as being raised from one and is not permanent.
+  # Cite branch + SHA, not just the PR number - and re-run the containment check rather
+  # than trusting this note, which is a snapshot.
   #
   # MIRROR THE WHOLE COHORT, INCLUDING THE ITEMS WE THINK ARE WORTHLESS. The point is
   # a clean, known cutoff: "every issue upstream closed administratively is accounted
@@ -360,6 +365,20 @@ entries:
     fork: {branches: [docs/mirror-2023-admin-sweep], prs: [258], fork_issues: [227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254], status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 29, 34, 40, 41, 48, 49, 50, 53, 57, 65, 119, 144, 154, 175, 183, 187, 191, 199, 203, 205, 246, 267, 319, 320, 372], prs: [22, 45, 46, 81, 106, 143, 179, 181, 204, 220, 270, 271, 291, 300, 303, 316, 325, 345, 346, 356, 366, 390, 405, 408, 441, 442, 443, 464, 473, 488, 492, 494, 496, 506, 524], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
+    # Swept PR heads that no ref on this fork contained, checked 2026-08-14. Pinned as
+    # annotated tags so they survive loss of the upstream branch or repository. The SHAs
+    # are recorded here, not only the PR numbers, so the containment check can be redone
+    # without re-querying upstream. Re-verify with:
+    #   git ls-remote --tags origin 'archive/upstream-pr-*'
+    # A missing tag, or one no longer pointing at the SHA below, means the copy is gone.
+    preserved_heads:
+      - {pr: 22, sha: ba6b71f10, tag: archive/upstream-pr-22}
+      - {pr: 204, sha: 02ab32894, tag: archive/upstream-pr-204}
+      - {pr: 270, sha: 007ae0906, tag: archive/upstream-pr-270}
+      - {pr: 405, sha: 77a021ee1, tag: archive/upstream-pr-405}
+      - {pr: 443, sha: 4533f6d8d, tag: archive/upstream-pr-443}
+      - {pr: 506, sha: 33d93af09, tag: archive/upstream-pr-506}
+    preserved_heads_checked: 2026-08-14
     notes: >
       Meta-entry for the cohort; the individual work items follow. All 28 issues were
       re-read in full (bodies + all 58 comments) and each verified against fork
