@@ -17,19 +17,101 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over the Python client's own tooling (pyproject.toml beside this file).
-        The commands below run ONLY under -Dpc.foreignClients - see the foreign-clients profile in
-        the clients aggregator for why opt-in is load-bearing. Skeleton until the Python wave of
-        the language-proxy plan (astubbs#242) starts; that wave owns everything in this directory,
-        including refining these commands.
+        Thin Maven wrapper over the Python client's own tooling: pyproject.toml and the Makefile
+        beside this file are the real build, and `make` is the one recipe both a developer and CI
+        run. The exec bindings below fire ONLY under -Dpc.foreignClients (the foreign-clients
+        profile in the clients aggregator), so an ordinary `bin/build.sh -am` builds this module
+        as an empty Maven skeleton and starts no Python interpreter at all.
+
+        Python wave of the language-proxy plan, astubbs#242.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>python3</pc.foreign.build.executable>
-        <pc.foreign.build.args>-m compileall src</pc.foreign.build.args>
-        <pc.foreign.test.executable>python3</pc.foreign.test.executable>
-        <pc.foreign.test.args>-m pytest</pc.foreign.test.args>
+        <pc.foreign.build.executable>make</pc.foreign.build.executable>
+        <pc.foreign.build.args>build</pc.foreign.build.args>
+        <pc.foreign.test.executable>make</pc.foreign.test.executable>
+        <pc.foreign.test.args>test</pc.foreign.test.args>
     </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            The Python suite's one end-to-end test spawns the real test-mode sidecar over the real
+            wire - which needs the proxy module's test jar (TestModeMain and the harness), its main
+            jar, and core's test jar underneath. Declaring them here is what makes
+            `./mvnw test -pl :parallel-consumer-proxy-client-python -am -Dpc.foreignClients` - the
+            CI matrix row's exact command - build those modules first and resolve them; and
+            build-classpath below writes the resulting classpath where the test reads it.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all: the
+            edge exists only in the opt-in lane that runs the foreign test suite, and it is a
+            test-scoped harness dependency rather than anything this client ships. The Python
+            client itself obtains the protocol the way every non-JVM client does, by generating
+            from the .proto by path, with no Maven dependency.
+
+            The remaining harness dependencies - awaitility, truth, logback - are inherited from
+            the root pom by every module, so they are not restated here. If the harness ever grows
+            one that is not, the sidecar fails at startup with a NoClassDefFoundError; the test's
+            spawn helper captures the sidecar's stderr precisely so that names itself.
+        -->
+        <profile>
+            <id>python-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above are resolvable, before the test
+                                     phase where the foreign suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>

@@ -6,9 +6,22 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-python
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the Python client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the Python client wave of the language-proxy plan.
+  - id: proxy-client-python-alpha
+    artifact: parallel-consumer-proxy-client-python
+    coverage: >-
+      One end-to-end test drives the real test-mode sidecar over the real gRPC wire, on the shared
+      conformance scenario a-processed-record-advances-the-committed-offset - spawn, configure, receive a
+      dispatch wave, run the user's function in a worker process, report success with the delivery token
+      echoed, and drain. Unit tests cover the fork-safety ordering the design exists to protect (the
+      worker pool is created before any channel), the executor count arriving from the handshake, the
+      byte-for-byte token echo, and the translation of a returned, raised or malformed result into exactly
+      one outcome. `make proto-check` proves the committed stubs still match the frozen schema.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_one_record_end_to_end.py
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_fork_safety.py
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_wire_and_outcomes.py
+    limitation: >-
+      Wave one only. The suite exercises one record on a mock-Kafka sidecar: there is no broker test, no
+      multi-record concurrency or FIFO hand-out test, and nothing covering connection loss, lease expiry,
+      worker death or terminal outcomes - because none of those paths is implemented yet. The cross-language
+      conformance suite does not include this client until its scenarios exist here.

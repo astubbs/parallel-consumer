@@ -1,11 +1,57 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
-# Skeleton, seeded by the language-proxy plan (astubbs#242). The Python wave owns this file and
-# everything else in this directory; the pom.xml beside it wraps this project into the Maven
-# reactor under -Dpc.foreignClients.
+# The Python client's own build file. The pom.xml beside it is a thin wrapper that drives THIS
+# under -Dpc.foreignClients; an ordinary Maven build runs no Python at all.
+#
+# Publishing to PyPI is a later wave's: the version below tracks the Maven project's, and the
+# package is installed from a checkout (`make install`) until then.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
 [project]
-name = "parallel-consumer-proxy-client"
-version = "0.0.0"
-description = "Parallel Consumer proxy client for Python - skeleton, not yet implemented"
+name = "parallel-consumer"
+version = "0.6.0.0.dev0"
+description = "Parallel Consumer for Python - ordered concurrent Kafka consumption without the GIL ceiling"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Antony Stubbs and contributors" }]
+keywords = ["kafka", "parallel", "consumer", "concurrency"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Distributed Computing",
+]
+# grpcio only. The generated stubs are committed, so protobuf codegen (grpcio-tools) is a
+# development dependency and never a user's - a wheel needs no protoc, and an sdist install needs
+# no toolchain.
+dependencies = ["grpcio>=1.60", "protobuf>=4.25"]
+
+[project.optional-dependencies]
+dev = ["grpcio-tools==1.73.0", "pytest>=8.0", "ruff>=0.9"]
+
+[project.urls]
+Homepage = "https://github.com/astubbs/parallel-consumer"
+Issues = "https://github.com/astubbs/parallel-consumer/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Short timeouts everywhere in the suite; this bound is the backstop for a test that hangs on a
+# sidecar that never answers, so it fails the build rather than the job's wall clock.
+markers = ["sidecar: needs the test-mode sidecar from the proxy module's test jar"]
+
+[tool.ruff]
+line-length = 100
+# The generated stubs are protoc's output, not this project's code - reformatting them would be
+# undone by the next `make proto`. poc/ is the preserved specification probe: deliberately ugly,
+# deliberately unmaintained, and kept as evidence rather than as source.
+extend-exclude = ["src/parallel_consumer/_generated", "poc", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RUF"]
