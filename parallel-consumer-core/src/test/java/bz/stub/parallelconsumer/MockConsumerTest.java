@@ -6,79 +6,45 @@ package bz.stub.parallelconsumer;
  */
 
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.MockConsumer;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
-import org.apache.kafka.common.TopicPartition;
-import org.junit.jupiter.api.Test;
 import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.time.Duration;
 
 import static com.google.common.truth.Truth.assertThat;
-import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
  * Tests that PC works fine with the plain vanilla {@link MockConsumer}, as opposed to the
  * {@link LongPollingMockConsumer}.
  * <p>
- * These tests demonstrate why using {@link MockConsumer} is difficult, and why {@link LongPollingMockConsumer} should
- * be used instead.
+ * This is the baseline of the {@link MockConsumerTestBase} family: no injected failure, so what remains is the
+ * setup the other scenarios build on. That setup is also the demonstration of why {@link MockConsumer} is
+ * awkward to use with PC, and why {@link LongPollingMockConsumer} should be used instead - read
+ * {@link MockConsumerTestBase#setupMockConsumerAndParallelConsumer()} and its class javadoc for the manual
+ * rebalance dance this test depends on.
  *
  * @author Antony Stubbs
  * @see LongPollingMockConsumer#revokeAssignment
  */
-@Slf4j
-class MockConsumerTest {
+class MockConsumerTest extends MockConsumerTestBase {
 
-    private final String topic = MockConsumerTest.class.getSimpleName();
+    private static final int RECORDS = 3;
 
     /**
-     * Test that the mock consumer works as expected
+     * With nothing injected to go wrong, the backlog reaches the user function - the baseline the failure
+     * scenarios are measured against.
      */
     @Test
-    void mockConsumer() {
-        var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST);
-        HashMap<TopicPartition, Long> startOffsets = new HashMap<>();
-        TopicPartition tp = new TopicPartition(topic, 0);
-        startOffsets.put(tp, 0L);
+    void backlogIsProcessedWithAVanillaMockConsumer() {
+        addRecords(RECORDS);
 
-        //
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)
-                .build();
-        var parallelConsumer = new ParallelEoSStreamProcessor<String, String>(options);
-        parallelConsumer.subscribe(of(topic));
+        startProcessing();
 
-        // MockConsumer is not a correct implementation of the Consumer contract - must manually rebalance++ - or use LongPollingMockConsumer
-        mockConsumer.rebalance(Collections.singletonList(tp));
-        parallelConsumer.onPartitionsAssigned(of(tp));
-        mockConsumer.updateBeginningOffsets(startOffsets);
-
-        //
-        addRecords(mockConsumer);
-
-        //
-        ConcurrentLinkedQueue<RecordContext<String, String>> records = new ConcurrentLinkedQueue<>();
-        parallelConsumer.poll(recordContexts -> {
-            recordContexts.forEach(recordContext -> {
-                log.warn("Processing: {}", recordContext);
-                records.add(recordContext);
-            });
-        });
-
-        //
-        Awaitility.await().untilAsserted(() -> {
-            assertThat(records).hasSize(3);
-        });
-    }
-
-    private void addRecords(MockConsumer<String, String> mockConsumer) {
-        mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, 0, "key", "value"));
-        mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, 1, "key", "value"));
-        mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, 2, "key", "value"));
+        // explicit budget, like every other scenario in the family - the no-failure baseline should be the
+        // fastest of them, so it gets the smallest
+        Awaitility.await().atMost(Duration.ofSeconds(30))
+                .untilAsserted(() -> assertThat(processedRecords).hasSize(RECORDS));
     }
 
 }
