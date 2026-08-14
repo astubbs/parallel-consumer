@@ -139,7 +139,7 @@ class TestModeMainTest {
                     .that(configured.getExecutorCount()).isEqualTo(2);
             assertThat(configured.getCapabilitiesList()).contains(ConfigureHandler.CAPABILITY_DISPATCH);
 
-            var dispatch = take(responses, streamError).getDispatch();
+            var dispatch = take(responses, streamError).getDispatch().getRecords(0);
             assertWithMessage("the scenario's seeded record travelled the real wire")
                     .that(dispatch.getRecord().getValue().toStringUtf8()).isEqualTo("hello");
 

@@ -64,13 +64,20 @@ import java.util.regex.Pattern;
 public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
 
     /**
-     * The capability naming the {@code Dispatch} message type - the one message the proxy sends beyond the
-     * handshake in the provisional schema. A client whose declared capability set does not include it receives
-     * no dispatches (the negotiated-intersection rule, R38); the schema freeze (U18) completes the set.
+     * The capability token gating {@code Dispatch} waves - one of the frozen specification's v1 baseline
+     * tokens ({@code parallel-consumer-proxy/docs/protocol-specification.md}, "Capabilities and
+     * versioning"). A client whose declared capability set does not include it receives no dispatches (the
+     * negotiated-intersection rule, R38).
      */
     public static final String CAPABILITY_DISPATCH = "dispatch";
 
-    /** Everything this proxy can send beyond the handshake; the intersection with the client's set is what travels. */
+    /**
+     * Everything this proxy can send beyond the handshake; the intersection with the client's set is what
+     * travels. Grows towards the specification's full v1 baseline as the engine units land the behaviours
+     * behind the remaining tokens (heartbeat/manifest/worker-death in U8, terminal in U9, shutdown in U10) -
+     * a token is declared here only once the proxy actually answers it, so the negotiation never promises
+     * what this build cannot do.
+     */
     public static final List<String> PROXY_CAPABILITIES = List.of(CAPABILITY_DISPATCH);
 
     /** Observation seam: fires once, after the engine is subscribed and started, before dispatches can flow. */
@@ -160,7 +167,10 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 }
                 return;
             }
-            log.warn("Ignoring client message with unrecognized case {}", message.getMessageCase());
+            // Heartbeat, Manifest and WorkerDied are frozen-schema messages this handler does not answer
+            // yet - they are the lease/reconnect unit's (U8) - and a truly unknown case is a newer client
+            // than this proxy; both are ignored rather than fatal, per the spec's forward-compatibility rule
+            log.warn("Ignoring client message this proxy does not implement yet: {}", message.getMessageCase());
         }
 
         private void handleConfigure(Configure configure) {
@@ -334,11 +344,11 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
         }
 
         /**
-         * The transport's implementation of the engine's outbound boundary: one {@code ProxyMessage} per
-         * {@link Dispatch} until the schema freeze (U18) defines the wave form. Never throws, per the
-         * {@link DispatchSink} contract - a closed stream swallows the wave (the records stay registered in
-         * flight; U8's liveness machinery is their reclaim path), and a stream whose client did not negotiate
-         * the dispatch capability never receives one (R38's intersection rule).
+         * The transport's implementation of the engine's outbound boundary: one {@code ProxyMessage} per wave,
+         * the frozen multi-record {@link Dispatch} form (R50). Never throws, per the {@link DispatchSink}
+         * contract - a closed stream swallows the wave (the records stay registered in flight; U8's liveness
+         * machinery is their reclaim path), and a stream whose client did not negotiate the dispatch
+         * capability never receives one (R38's intersection rule).
          */
         private class StreamDispatchSink implements DispatchSink {
 
@@ -349,15 +359,13 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
             }
 
             @Override
-            public void dispatch(List<Dispatch> wave) {
+            public void dispatch(Dispatch wave) {
                 if (!dispatchNegotiated) {
                     log.debug("Dropping a wave of {}: the client did not negotiate the '{}' capability",
-                            wave.size(), CAPABILITY_DISPATCH);
+                            wave.getRecordsCount(), CAPABILITY_DISPATCH);
                     return;
                 }
-                for (Dispatch dispatch : wave) {
-                    transmit(ProxyMessage.newBuilder().setDispatch(dispatch).build());
-                }
+                transmit(ProxyMessage.newBuilder().setDispatch(wave).build());
             }
         }
     }

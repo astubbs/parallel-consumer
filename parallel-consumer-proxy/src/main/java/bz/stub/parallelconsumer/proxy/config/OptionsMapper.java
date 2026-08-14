@@ -203,6 +203,18 @@ public class OptionsMapper {
         if (configure.hasMaxFailureHistory()) {
             builder.maxFailureHistory(configure.getMaxFailureHistory());
         }
+        if (configure.hasMessageBufferSize()) {
+            builder.messageBufferSize(configure.getMessageBufferSize());
+        }
+        if (configure.hasInitialLoadFactor()) {
+            builder.initialLoadFactor(configure.getInitialLoadFactor());
+        }
+        if (configure.hasMaximumLoadFactor()) {
+            builder.maximumLoadFactor(configure.getMaximumLoadFactor());
+        }
+        if (configure.hasPcInstanceTag()) {
+            builder.pcInstanceTag(configure.getPcInstanceTag());
+        }
         if (configure.getInvalidOffsetMetadataPolicy()
                 != InvalidOffsetMetadataPolicy.INVALID_OFFSET_METADATA_POLICY_UNSPECIFIED) {
             builder.invalidOffsetMetadataPolicy(toCorePolicy(configure.getInvalidOffsetMetadataPolicy(),
@@ -238,7 +250,13 @@ public class OptionsMapper {
                 .setSaslAuthenticationExceptionRetryBackoff(
                         toWireDuration(options.getSaslAuthenticationExceptionRetryBackoff()))
                 .setMaxFailureHistory(options.getMaxFailureHistory())
-                .setInvalidOffsetMetadataPolicy(toWirePolicy(options.getInvalidOffsetMetadataPolicy()));
+                .setInvalidOffsetMetadataPolicy(toWirePolicy(options.getInvalidOffsetMetadataPolicy()))
+                .setMessageBufferSize(options.getMessageBufferSize())
+                .setInitialLoadFactor(options.getInitialLoadFactor())
+                .setMaximumLoadFactor(options.getMaximumLoadFactor());
+        if (options.getPcInstanceTag() != null) {
+            configured.setPcInstanceTag(options.getPcInstanceTag());
+        }
         if (subscription.isPattern()) {
             configured.setTopicPattern(subscription.pattern());
         } else {

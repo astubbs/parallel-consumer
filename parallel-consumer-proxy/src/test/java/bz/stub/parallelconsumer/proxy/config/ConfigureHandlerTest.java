@@ -400,7 +400,7 @@ class ConfigureHandlerTest {
         assertThat(configured.getCapabilitiesList()).containsExactly(ConfigureHandler.CAPABILITY_DISPATCH);
 
         var dispatch = session.awaitMessage().getDispatch();
-        assertThat(dispatch.getRecord().getValue().toStringUtf8()).isEqualTo("hello");
+        assertThat(dispatch.getRecords(0).getRecord().getValue().toStringUtf8()).isEqualTo("hello");
     }
 
     /** After one stream configured the engine, a new stream cannot reconfigure the process (U8 owns reconnect). */

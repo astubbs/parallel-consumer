@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer.proxy.engine;
  */
 
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
-import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Record;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
@@ -19,8 +19,8 @@ import java.time.Instant;
 import java.util.Optional;
 
 /**
- * Serializes a {@link WorkContainer}'s delivery state into the wire {@link Dispatch}, and converts a worker's
- * failure report back into the {@link Throwable} core's retry machinery records.
+ * Serializes a {@link WorkContainer}'s delivery state into the wire {@link DispatchRecord}, and converts a
+ * worker's failure report back into the {@link Throwable} core's retry machinery records.
  * <p>
  * The PC-derived state (attempt count, last failure time and reason - R5) is read from the container's own
  * fields rather than re-derived, per the plan's U6. Two conversions are decided here:
@@ -63,7 +63,7 @@ public class RecordCodec {
      *                      the caller, per KTD8 - never re-read here, so a caller cannot accidentally serialize
      *                      a fresher count than the one it registered
      */
-    public static Dispatch toDispatch(WorkContainer<byte[], byte[]> wc, long capturedEpoch) {
+    public static DispatchRecord toDispatchRecord(WorkContainer<byte[], byte[]> wc, long capturedEpoch) {
         var cr = wc.getCr();
 
         var record = Record.newBuilder()
@@ -79,12 +79,12 @@ public class RecordCodec {
             record.setValue(ByteString.copyFrom(cr.value()));
         }
 
-        var dispatch = Dispatch.newBuilder()
+        var dispatch = DispatchRecord.newBuilder()
                 .setToken(Token.newBuilder()
                         .setRecordId(recordIdOf(wc))
-                        // the provisional schema models the epoch as int32; a single record cannot be
-                        // delivered 2^31 times in any real run, and an overflow here must be loud, not modular
-                        .setEpoch(Math.toIntExact(capturedEpoch)))
+                        // int64 on the wire, matching the long WorkContainer.getDeliveryCount() it carries -
+                        // widened from the provisional schema's int32 at the freeze, while widening was free
+                        .setEpoch(capturedEpoch))
                 .setRecord(record)
                 // 1 on first delivery, 2 on the first redelivery - product data, distinct from the fencing epoch,
                 // which also counts verdict-free redeliveries that consumed no attempt

@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.proxy.engine;
  */
 
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.state.ShardKey;
 import lombok.extern.slf4j.Slf4j;
 
@@ -49,17 +50,17 @@ class DispatchWaveAssembler implements AutoCloseable {
     private final boolean orderingRestricted;
     private final int sizeCap;
     private final Duration coalescingWindow;
-    private final Consumer<List<Dispatch>> sink;
+    private final Consumer<Dispatch> sink;
 
     private final ScheduledExecutorService windowTimer;
 
     // all three guarded by `this`; emission happens outside the lock so a blocking sink cannot deadlock an offer
-    private final List<Dispatch> pending = new ArrayList<>();
+    private final List<DispatchRecord> pending = new ArrayList<>();
     private final Set<ShardKey> pendingShards = new HashSet<>();
     private ScheduledFuture<?> scheduledWindowFlush;
 
     DispatchWaveAssembler(boolean orderingRestricted, int sizeCap, Duration coalescingWindow,
-                          Consumer<List<Dispatch>> sink) {
+                          Consumer<Dispatch> sink) {
         if (sizeCap < 1) {
             throw new IllegalArgumentException(msg("wave size cap must be at least 1, got {}", sizeCap));
         }
@@ -78,8 +79,8 @@ class DispatchWaveAssembler implements AutoCloseable {
      * Adds one record to the wave being assembled, keyed by the shard identity the engine computed from its
      * ordering configuration.
      */
-    void offer(ShardKey shard, Dispatch dispatch) {
-        List<Dispatch> wave = null;
+    void offer(ShardKey shard, DispatchRecord dispatch) {
+        Dispatch wave = null;
         synchronized (this) {
             if (orderingRestricted && !pendingShards.add(shard)) {
                 throw new IllegalStateException(msg(
@@ -101,15 +102,15 @@ class DispatchWaveAssembler implements AutoCloseable {
 
     /** Emits whatever is pending, now. A no-op when nothing is - safe to call every control-loop pass. */
     void flush() {
-        List<Dispatch> wave;
+        Dispatch wave;
         synchronized (this) {
             wave = pending.isEmpty() ? null : takeWaveLocked();
         }
         emit(wave);
     }
 
-    private List<Dispatch> takeWaveLocked() {
-        var wave = List.copyOf(pending);
+    private Dispatch takeWaveLocked() {
+        var wave = Dispatch.newBuilder().addAllRecords(pending).build();
         pending.clear();
         pendingShards.clear();
         if (scheduledWindowFlush != null) {
@@ -119,11 +120,11 @@ class DispatchWaveAssembler implements AutoCloseable {
         return wave;
     }
 
-    private void emit(List<Dispatch> wave) {
+    private void emit(Dispatch wave) {
         if (wave == null) {
             return;
         }
-        log.debug("Emitting wave of {} record(s)", wave.size());
+        log.debug("Emitting wave of {} record(s)", wave.getRecordsCount());
         sink.accept(wave);
     }
 

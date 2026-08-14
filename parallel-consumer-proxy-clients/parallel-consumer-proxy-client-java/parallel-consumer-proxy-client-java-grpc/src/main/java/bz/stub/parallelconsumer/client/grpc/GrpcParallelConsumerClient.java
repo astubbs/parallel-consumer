@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.client.RecordProcessor;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import io.grpc.ManagedChannel;
@@ -72,7 +73,7 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
     private boolean streamClosed = false;
 
     /** KTD39's queue; created by the transport thread when {@code Configured} arrives, before any dispatch. */
-    private volatile BlockingQueue<Dispatch> dispatchQueue;
+    private volatile BlockingQueue<DispatchRecord> dispatchQueue;
 
     /** The queue's depth - the configured max concurrency - held for the overflow violation to name (KTD39). */
     private volatile int dispatchQueueDepth;
@@ -142,7 +143,7 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
      */
     private void executorLoop(RecordProcessor processor) {
         while (running) {
-            Dispatch dispatch;
+            DispatchRecord dispatch;
             try {
                 dispatch = dispatchQueue.take();
             } catch (InterruptedException e) {
@@ -218,7 +219,11 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
                     onDispatch(message.getDispatch());
                     return;
                 default:
-                    log.warn("Ignoring proxy message with unrecognized case {}", message.getMessageCase());
+                    // Drop and Shutdown are frozen-schema messages this spike-stage transport does not
+                    // implement yet (the plan's U25 grows it to the full protocol); SetExecutorCount is
+                    // declared-unused and never sent by a v1 proxy (KTD38)
+                    log.warn("Ignoring proxy message this client does not implement yet: {}",
+                            message.getMessageCase());
             }
         }
 
@@ -237,20 +242,24 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
             configured.complete(effective);
         }
 
-        private void onDispatch(Dispatch dispatch) {
+        private void onDispatch(Dispatch wave) {
             // KTD39 rule 1: the admin always reads and never backpressures by not reading - so this offers
             // and moves on, and a full queue is a protocol violation (rule 2), not a reason to block a stream
-            // that also carries the control plane
-            if (dispatchQueue == null || !dispatchQueue.offer(dispatch)) {
-                var violation = Status.FAILED_PRECONDITION.withDescription(
-                        "protocol violation: dispatch queue overflow - the proxy exceeded the configured max "
-                                + "concurrency of " + dispatchQueueDepth + " records in flight (KTD39)");
-                log.error("Failing the stream: {}", violation.getDescription());
-                synchronized (transmitLock) {
-                    if (!streamClosed) {
-                        streamClosed = true;
-                        requests.onError(violation.asRuntimeException());
+            // that also carries the control plane. Queueing is per record, in wave order (rule 3): one
+            // multi-record Dispatch is the frozen wave form (R50).
+            for (DispatchRecord dispatch : wave.getRecordsList()) {
+                if (dispatchQueue == null || !dispatchQueue.offer(dispatch)) {
+                    var violation = Status.FAILED_PRECONDITION.withDescription(
+                            "protocol violation: dispatch queue overflow - the proxy exceeded the configured max "
+                                    + "concurrency of " + dispatchQueueDepth + " records in flight (KTD39)");
+                    log.error("Failing the stream: {}", violation.getDescription());
+                    synchronized (transmitLock) {
+                        if (!streamClosed) {
+                            streamClosed = true;
+                            requests.onError(violation.asRuntimeException());
+                        }
                     }
+                    return;
                 }
             }
         }

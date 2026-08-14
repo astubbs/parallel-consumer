@@ -8,7 +8,7 @@ import bz.stub.parallelconsumer.client.InboundRecord;
 import bz.stub.parallelconsumer.client.Outcome;
 import bz.stub.parallelconsumer.client.OutboundRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
-import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProcessingOrder;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
@@ -51,7 +51,7 @@ final class WireMapping {
      * missing key or value is {@code null} (Kafka's tombstone distinction), missing failure state means "has
      * not failed" (R5's absence-is-the-form rule).
      */
-    static InboundRecord toInboundRecord(Dispatch dispatch) {
+    static InboundRecord toInboundRecord(DispatchRecord dispatch) {
         var record = dispatch.getRecord();
         return new InboundRecord(
                 record.getTopic(),

@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.proxy.engine;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import bz.stub.parallelconsumer.state.ShardKey;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -34,7 +35,7 @@ class DispatchWaveAssemblerTest {
 
     private static final Duration AWAIT_BUDGET = Duration.ofSeconds(30);
 
-    private final List<List<Dispatch>> emitted = new CopyOnWriteArrayList<>();
+    private final List<Dispatch> emitted = new CopyOnWriteArrayList<>();
 
     private DispatchWaveAssembler assembler;
 
@@ -50,8 +51,8 @@ class DispatchWaveAssemblerTest {
         return assembler;
     }
 
-    private static Dispatch dispatchAt(long offset) {
-        return Dispatch.newBuilder()
+    private static DispatchRecord dispatchAt(long offset) {
+        return DispatchRecord.newBuilder()
                 .setToken(Token.newBuilder().setRecordId("t/0/" + offset).setEpoch(1))
                 .build();
     }
@@ -74,7 +75,7 @@ class DispatchWaveAssemblerTest {
         assembler.offer(shard("c", 0, ProcessingOrder.KEY), dispatchAt(2));
 
         assertThat(emitted).hasSize(1);
-        assertThat(emitted.get(0)).hasSize(3);
+        assertThat(emitted.get(0).getRecordsCount()).isEqualTo(3);
     }
 
     @Test
@@ -86,7 +87,7 @@ class DispatchWaveAssemblerTest {
 
         // nothing calls flush: the window timer alone must emit
         Awaitility.await().atMost(AWAIT_BUDGET).untilAsserted(() -> assertThat(emitted).hasSize(1));
-        assertThat(emitted.get(0)).hasSize(2);
+        assertThat(emitted.get(0).getRecordsCount()).isEqualTo(2);
     }
 
     @Test
@@ -98,7 +99,7 @@ class DispatchWaveAssemblerTest {
 
         // synchronous - the wave is out before flush returns, which is the lone-record latency bound
         assertThat(emitted).hasSize(1);
-        assertThat(emitted.get(0)).hasSize(1);
+        assertThat(emitted.get(0).getRecordsCount()).isEqualTo(1);
     }
 
     @Test
@@ -122,7 +123,7 @@ class DispatchWaveAssemblerTest {
         // the wave already assembled is undisturbed by the rejected offer
         assembler.flush();
         assertThat(emitted).hasSize(1);
-        assertThat(emitted.get(0)).hasSize(1);
+        assertThat(emitted.get(0).getRecordsCount()).isEqualTo(1);
     }
 
     @Test
@@ -137,7 +138,7 @@ class DispatchWaveAssemblerTest {
         assembler.flush();
 
         assertThat(emitted).hasSize(1);
-        assertThat(emitted.get(0)).hasSize(3);
+        assertThat(emitted.get(0).getRecordsCount()).isEqualTo(3);
     }
 
     @Test

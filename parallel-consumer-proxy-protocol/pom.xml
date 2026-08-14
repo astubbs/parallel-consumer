@@ -22,8 +22,9 @@
         clients generate from src/main/proto/parallelconsumer/proxy/v1/proxy.proto by path, with no
         Maven dependency at all.
 
-        The schema is PROVISIONAL until the language-proxy plan's freeze unit (astubbs#242) - the
-        banner at the top of proxy.proto is the authority on what that means.
+        The schema is FROZEN (the language-proxy plan's freeze unit, astubbs#242): the wire may
+        only gain, never change. The banner at the top of proxy.proto is the authority on what
+        that means, and bin/check-proto-breaking.sh (buf breaking, FILE category) enforces it.
     -->
 
     <properties>
@@ -151,6 +152,20 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <!-- The root pom filters test resources (property substitution), and filtering a binary
+                 corrupts it - or, as measured here, fails the build outright on a byte sequence that
+                 is not valid UTF-8. The golden wire fixtures (golden-*.bin) are protobuf bytes whose
+                 EXACT content is the point, so .bin is excluded from filtering rather than the
+                 fixtures moved out of resources. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <configuration>
+                    <nonFilteredFileExtensions>
+                        <nonFilteredFileExtension>bin</nonFilteredFileExtension>
+                    </nonFilteredFileExtensions>
+                </configuration>
             </plugin>
             <!-- Generated code is not coverage-bearing, and jacoco's @Generated annotation filter
                  does not fire for protobuf gencode - the exclusion must be explicit. -->

@@ -6,8 +6,6 @@ package bz.stub.parallelconsumer.proxy.engine;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 
-import java.util.List;
-
 /**
  * The engine's half of the engine&harr;transport boundary: where assembled dispatch waves leave the engine.
  * <p>
@@ -16,9 +14,7 @@ import java.util.List;
  * transport calls once per {@link Report} it receives. The engine is built against this pair only - it never
  * imports a transport class, and the wiring of the two sides is the plan's U7.
  * <p>
- * A wave is a list of single-record {@link Dispatch} messages rather than one multi-record message because the
- * provisional protocol schema deliberately carries only what the end-to-end spike needs - the wave form of the
- * wire message is completed when the schema freezes (the plan's U18). The list IS the wave: records the
+ * A wave is one multi-record {@link Dispatch} message - the frozen wire form (R50, KTD10): records the
  * assembler coalesced into one hand-off, ordered, and under restricted ordering drawn from distinct shards.
  * <p>
  * <b>Implementations must not throw.</b> This is called from the engine's control-loop thread; an exception
@@ -32,7 +28,7 @@ import java.util.List;
 public interface DispatchSink {
 
     /**
-     * Carries one assembled wave to the far side. Never called with an empty list.
+     * Carries one assembled wave to the far side. Never called with an empty wave.
      */
-    void dispatch(List<Dispatch> wave);
+    void dispatch(Dispatch wave);
 }

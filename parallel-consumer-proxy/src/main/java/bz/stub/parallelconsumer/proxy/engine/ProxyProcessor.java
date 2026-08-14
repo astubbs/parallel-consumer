@@ -85,7 +85,13 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
         /** The token names no record currently in flight - late duplicate or fabrication; nothing is disturbed. */
         UNKNOWN_TOKEN,
         /** The report is structurally unusable: no token, an empty record id, or no outcome. */
-        MALFORMED
+        MALFORMED,
+        /**
+         * The outcome is in the frozen schema but this engine does not answer it yet ({@code Terminal} until
+         * U9, {@code Released} until U8's shutdown path) - the record is left in flight untouched, so the
+         * liveness machinery reclaims it rather than a guessed verdict resolving it.
+         */
+        UNSUPPORTED_OUTCOME
     }
 
     private final InFlightRegistry inFlight = new InFlightRegistry();
@@ -138,7 +144,7 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
             // re-read at return time - reading it late would relabel a stale return as live
             long capturedEpoch = wc.getDeliveryCount();
 
-            var dispatch = RecordCodec.toDispatch(wc, capturedEpoch);
+            var dispatch = RecordCodec.toDispatchRecord(wc, capturedEpoch);
             var recordId = dispatch.getToken().getRecordId();
 
             // register BEFORE offering: once a wave is emitted, a report can race back on the transport
@@ -180,6 +186,15 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
             log.debug("Discarding superseded report for {}: names epoch {}, live delivery is epoch {}",
                     token.getRecordId(), token.getEpoch(), live.get().capturedEpoch());
             return ReportResult.SUPERSEDED_EPOCH;
+        }
+        if (report.getOutcomeCase() == Report.OutcomeCase.TERMINAL
+                || report.getOutcomeCase() == Report.OutcomeCase.RELEASED) {
+            // frozen-schema outcomes this engine does not answer yet: Terminal is U9's, Released is U8's
+            // shutdown path. Peek-only, deliberately - the record stays in flight for the liveness machinery
+            // rather than being resolved by a verdict the engine would have to invent
+            log.warn("Discarding {} report for {}: this engine does not implement the outcome yet",
+                    report.getOutcomeCase(), token.getRecordId());
+            return ReportResult.UNSUPPORTED_OUTCOME;
         }
 
         var claimed = inFlight.claim(token.getRecordId(), live.get());

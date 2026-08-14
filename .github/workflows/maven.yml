@@ -186,6 +186,28 @@ jobs:
       - name: Validate release-documentation data structure
         run: bin/check-docs-data.sh
 
+  # Protocol freeze gate: the proxy wire schema may only GAIN, never change (the language-proxy
+  # plan's freeze, astubbs#242). `buf breaking` in the FILE category - configured in
+  # parallel-consumer-proxy-protocol/buf.yaml, FILE because WIRE would tolerate source-breaking
+  # renames the compatibility promise forbids - compares the PR's schema against the frozen one on
+  # origin/master. bin/check-proto-breaking.sh passes with a notice while master has no frozen
+  # schema yet, so the job arms itself the moment the freeze lands.
+  proto-breaking:
+    if: github.event_name == 'pull_request'
+    name: "proto: breaking"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # the baseline is origin/master, which a shallow clone lacks
+      - name: Install buf
+        uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+      - name: Enforce the frozen schema (additions only)
+        run: bin/check-proto-breaking.sh
+
   # Experimental Kafka 4.x compatibility check. Non-blocking.
   # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds
   # a red X of noise to every PR (it is continue-on-error, so it never gated merges). Re-enable by restoring

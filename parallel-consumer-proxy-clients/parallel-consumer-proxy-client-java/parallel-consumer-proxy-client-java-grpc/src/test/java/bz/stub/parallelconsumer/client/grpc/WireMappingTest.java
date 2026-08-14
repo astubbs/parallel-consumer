@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.client.grpc;
 
 import bz.stub.parallelconsumer.client.Outcome;
 import bz.stub.parallelconsumer.client.OutboundRecord;
-import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Record;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import com.google.protobuf.ByteString;
@@ -60,7 +60,7 @@ class WireMappingTest {
 
     @Test
     void absentWireFieldsBecomeTheApiOwnAbsences() {
-        var dispatch = Dispatch.newBuilder()
+        var dispatch = DispatchRecord.newBuilder()
                 .setToken(TOKEN)
                 .setRecord(Record.newBuilder()
                         .setTopic("some-topic")

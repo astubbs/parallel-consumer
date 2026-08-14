@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import bz.stub.parallelconsumer.proxy.engine.ProxyProcessor.ReportResult;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -177,8 +178,8 @@ class ProxyProcessorTest {
         }
         fixture.awaitCommittedOffset(4);
 
-        for (List<Dispatch> wave : fixture.sink.waves) {
-            var keysInWave = wave.stream()
+        for (Dispatch wave : fixture.sink.waves) {
+            var keysInWave = wave.getRecordsList().stream()
                     .map(dispatch -> dispatch.getRecord().getKey().toStringUtf8())
                     .collect(Collectors.toList());
             assertWithMessage("wave carries two records of one shard: %s", keysInWave)
@@ -269,6 +270,38 @@ class ProxyProcessorTest {
         fixture.awaitNoRecordsOutForProcessing();
     }
 
+    /**
+     * Terminal and Released are in the frozen schema but this engine does not answer them until U9 and U8
+     * land - until then they are discarded peek-only: the live delivery is untouched, so no invented verdict
+     * can resolve a record the worker did not actually finish.
+     */
+    @Test
+    void terminalAndReleasedReportsAreDiscardedAsUnsupportedWithoutDisturbingInFlight() {
+        fixture.start(ProcessingOrder.KEY);
+        fixture.seed("lone-key", "hello");
+
+        var dispatch = fixture.takeDispatch();
+
+        var terminal = Report.newBuilder()
+                .setToken(dispatch.getToken())
+                .setTerminal(Report.Terminal.newBuilder().setReason("poison pill"))
+                .build();
+        assertThat(fixture.processor.report(terminal)).isEqualTo(ReportResult.UNSUPPORTED_OUTCOME);
+
+        var released = Report.newBuilder()
+                .setToken(dispatch.getToken())
+                .setReleased(Report.Released.getDefaultInstance())
+                .build();
+        assertThat(fixture.processor.report(released)).isEqualTo(ReportResult.UNSUPPORTED_OUTCOME);
+
+        assertWithMessage("unsupported outcomes must leave the record in flight, not resolve it")
+                .that(fixture.processor.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        assertThat(fixture.reportSuccess(dispatch.getToken())).isEqualTo(ReportResult.APPLIED_SUCCESS);
+        fixture.awaitCommittedOffset(1);
+        fixture.awaitNoRecordsOutForProcessing();
+    }
+
     @Test
     void recordsInFlightNeverExceedMaxConcurrencyUnderVaryingReportLatency() {
         int maxConcurrency = 3;
@@ -325,7 +358,7 @@ class ProxyProcessorTest {
         fixture.seed("key-2", "fails-once");
         fixture.seed("key-3", "succeeds");
 
-        Map<String, Dispatch> byKey = new HashMap<>();
+        Map<String, DispatchRecord> byKey = new HashMap<>();
         for (int i = 0; i < 3; i++) {
             var dispatch = fixture.takeDispatch();
             byKey.put(dispatch.getRecord().getKey().toStringUtf8(), dispatch);
@@ -443,14 +476,14 @@ class ProxyProcessorTest {
         }
 
         /** The next dispatched record - a hard rendezvous, failing loudly if none arrives within the budget. */
-        Dispatch takeDispatch() {
+        DispatchRecord takeDispatch() {
             var dispatch = pollDispatch(CONVERGENCE_BUDGET);
             assertWithMessage("no record was dispatched within the convergence budget").that(dispatch).isNotNull();
             return dispatch;
         }
 
         /** Bounded poll for the negative assertions - null when nothing arrived in the given time. */
-        Dispatch pollDispatch(Duration budget) {
+        DispatchRecord pollDispatch(Duration budget) {
             try {
                 return sink.dispatches.poll(budget.toMillis(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
@@ -529,15 +562,15 @@ class ProxyProcessorTest {
      */
     static class CollectingSink implements DispatchSink {
 
-        final BlockingQueue<Dispatch> dispatches = new LinkedBlockingQueue<>();
-        final List<List<Dispatch>> waves = new CopyOnWriteArrayList<>();
+        final BlockingQueue<DispatchRecord> dispatches = new LinkedBlockingQueue<>();
+        final List<Dispatch> waves = new CopyOnWriteArrayList<>();
         final AtomicInteger outstanding = new AtomicInteger();
         final AtomicInteger maxOutstanding = new AtomicInteger();
 
         @Override
-        public void dispatch(List<Dispatch> wave) {
+        public void dispatch(Dispatch wave) {
             waves.add(wave);
-            for (Dispatch dispatch : wave) {
+            for (DispatchRecord dispatch : wave.getRecordsList()) {
                 int now = outstanding.incrementAndGet();
                 maxOutstanding.accumulateAndGet(now, Math::max);
                 dispatches.add(dispatch);
@@ -545,7 +578,7 @@ class ProxyProcessorTest {
         }
 
         int dispatchCount() {
-            return waves.stream().mapToInt(List::size).sum();
+            return waves.stream().mapToInt(Dispatch::getRecordsCount).sum();
         }
     }
 }
