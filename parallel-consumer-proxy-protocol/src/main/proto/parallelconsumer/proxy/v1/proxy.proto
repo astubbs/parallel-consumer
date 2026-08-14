@@ -1,0 +1,133 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
+// ============================================================================
+// PROVISIONAL SCHEMA - NOT A CONTRACT. DO NOT BUILD A CLIENT AGAINST THIS.
+//
+// This message set is deliberately minimal: it carries exactly what the
+// end-to-end spike needs to move one record through the proxy and nothing
+// more, because every message added before the spike has run is a message
+// designed without evidence. The spike amends this file with what it learns,
+// and only the freeze unit of the language-proxy plan (astubbs#242) completes
+// the message set, marks it frozen, and publishes it as the client-authoring
+// specification. Until that freeze, fields here may be renamed, renumbered or
+// deleted without ceremony.
+// ============================================================================
+
+syntax = "proto3";
+
+package parallelconsumer.proxy.v1;
+
+option java_package = "bz.stub.parallelconsumer.proxy.protocol.v1";
+option java_multiple_files = true;
+option java_outer_classname = "ProxyProto";
+
+import "google/protobuf/timestamp.proto";
+
+// The single bidirectional session stream between a client library's admin
+// connection and the sidecar proxy. The first client message must be
+// Configure; the proxy replies Configured and then dispatches records.
+service ProxyService {
+  rpc Session(stream ClientMessage) returns (stream ProxyMessage);
+}
+
+// Everything the client can say to the proxy.
+message ClientMessage {
+  oneof message {
+    Configure configure = 1;
+    Report report = 2;
+  }
+}
+
+// Everything the proxy can say to the client.
+message ProxyMessage {
+  oneof message {
+    Configured configured = 1;
+    Dispatch dispatch = 2;
+  }
+}
+
+// Connect-time configuration: the first message on the stream, and the only
+// place configuration ever travels. Deliberately skeletal until the spike has
+// run - option mapping is a later unit's work.
+message Configure {
+  // The subscription, fixed for the process lifetime.
+  repeated string topics = 1;
+
+  // Maximum records the proxy may have in flight to this client.
+  optional int32 max_concurrency = 2;
+}
+
+// The proxy's reply: the effective values it is running with, so a client can
+// assert what it got rather than what it asked for.
+message Configured {
+  repeated string topics = 1;
+  optional int32 max_concurrency = 2;
+}
+
+// The fencing token, modelled as (record_id, epoch): Kafka's own exactly-once
+// idea, borrowed. The epoch is WorkContainer.getDeliveryCount() captured at
+// dispatch; a report naming a superseded epoch is discarded by the proxy. The
+// client treats the whole token as opaque, stores nothing, and echoes it
+// verbatim - it must never derive meaning from either field.
+message Token {
+  string record_id = 1;
+  int32 epoch = 2;
+}
+
+// One Kafka record. key and value are optional because Kafka distinguishes a
+// null key/value (e.g. a tombstone) from an empty one, and the wire must too.
+message Record {
+  string topic = 1;
+  int32 partition = 2;
+  int64 offset = 3;
+  optional bytes key = 4;
+  optional bytes value = 5;
+}
+
+// One record handed to the client for processing, carrying the PC-derived
+// state an in-process user function would see - not only the Kafka record.
+message Dispatch {
+  Token token = 1;
+  Record record = 2;
+
+  // Which delivery attempt this is: 1 on first delivery, 2 on the first
+  // redelivery. Product data, distinct from the opaque fencing token.
+  optional int32 attempt = 3;
+
+  // Absent on first delivery - presence is the wire form of "has failed
+  // before", never a zero timestamp.
+  optional google.protobuf.Timestamp last_failure_at = 4;
+
+  // Worker-supplied text from the previous failure, echoed back on
+  // redelivery. May embed record payload: untrusted input.
+  optional string last_failure_reason = 5;
+}
+
+// The worker's outcome for one dispatched record, keyed by the echoed token.
+message Report {
+  Token token = 1;
+
+  oneof outcome {
+    Success success = 2;
+    Failure failure = 3;
+  }
+
+  message Success {
+    // Records for the proxy to produce with its own producer - the only
+    // sanctioned route for worker output. Optional: empty means produce
+    // nothing. The produce is at-least-once.
+    repeated ProduceRecord produce = 1;
+  }
+
+  message Failure {
+    // Worker-supplied text. May embed record payload: untrusted input.
+    optional string reason = 1;
+  }
+}
+
+// A record the worker asks the proxy to produce on success.
+message ProduceRecord {
+  string topic = 1;
+  optional bytes key = 2;
+  optional bytes value = 3;
+}

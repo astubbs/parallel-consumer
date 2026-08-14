@@ -1,0 +1,15 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Buf configuration for the proxy protocol. Java codegen is Maven's job (see pom.xml); buf exists
+# here for schema hygiene and, once the schema is frozen by the language-proxy plan's freeze unit
+# (astubbs#242), for the breaking-change gate in CI. FILE is the category that actually forbids
+# field deletion and type change; WIRE is weaker than the compatibility promise requires.
+version: v2
+modules:
+  - path: src/main/proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

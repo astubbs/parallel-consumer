@@ -6,9 +6,16 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-protocol
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the protocol unit that lands proxy.proto records this module's evidence here.
-      lifted_by: >-
-        astubbs#242 - the language-proxy plan's protocol unit.
+  - id: proxy-protocol
+    artifact: parallel-consumer-proxy-protocol
+    coverage: >-
+      Codegen wiring proven by compiled protobuf and gRPC stubs; full-field round-trips of every
+      provisional message including optional-field presence; unknown-field preservation across
+      re-serialization; generated output verified byte-identical across independent clean builds
+      and across the downloaded-protoc and PATH-protoc build paths.
+    inspect:
+      - parallel-consumer-proxy-protocol/src/test/java/bz/stub/parallelconsumer/proxy/protocol/ProxyProtocolRoundTripTest.java
+    limitation: >-
+      The schema is provisional until the language-proxy plan's freeze unit (astubbs#242), so this
+      evidence proves serialization fidelity of the current message set, not protocol semantics -
+      the engine and spike units own those, and no client has carried these messages yet.
