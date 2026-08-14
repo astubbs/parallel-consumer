@@ -36,10 +36,8 @@ import java.util.regex.PatternSyntaxException;
  *     {@code commitLockAcquisitionTimeout}, {@code produceLockAcquisitionTimeout}) - meaningless while the
  *     transactional commit mode itself is refused (KTD7);</li>
  *     <li>{@code managedExecutorService}/{@code managedThreadFactory} (the sidecar JVM's own environment, not
- *     client configuration), {@code ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck} (a workaround
- *     for wrapped consumer classes, and the proxy constructs its own standard one), and the buffer/load-factor
- *     tuning trio and {@code pcInstanceTag} - deferred to the schema freeze (the plan's U18) with the rest of
- *     the completed message set.</li>
+ *     client configuration), and {@code ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck} (a
+ *     workaround for wrapped consumer classes, and the proxy constructs its own standard one).</li>
  * </ul>
  * <b>Rejection happens here, before any Kafka client is constructed</b> - a refused {@code Configure} must
  * cost nothing and leak nothing. Rejection messages never embed {@code kafka_properties} content.

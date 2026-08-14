@@ -10,7 +10,6 @@ import bz.stub.parallelconsumer.client.conformance.SpikeFixture;
 import bz.stub.parallelconsumer.proxy.harness.HarnessScenario;
 import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
@@ -68,9 +67,7 @@ class GrpcSpikeConformanceTest extends SpikeConformanceTest {
         public List<ProducedRecord> produced() {
             var produced = new ArrayList<ProducedRecord>();
             for (var record : harness.engineProducedRecords()) {
-                produced.add(new ProducedRecord(record.topic(),
-                        record.key() == null ? null : new String(record.key(), StandardCharsets.UTF_8),
-                        record.value() == null ? null : new String(record.value(), StandardCharsets.UTF_8)));
+                produced.add(ProducedRecord.decodeUtf8(record.topic(), record.key(), record.value()));
             }
             return produced;
         }

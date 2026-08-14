@@ -98,9 +98,7 @@ class DirectSpikeConformanceTest extends SpikeConformanceTest {
         public List<ProducedRecord> produced() {
             var produced = new ArrayList<ProducedRecord>();
             for (var record : mockProducer.history()) {
-                produced.add(new ProducedRecord(record.topic(),
-                        record.key() == null ? null : new String(record.key(), StandardCharsets.UTF_8),
-                        record.value() == null ? null : new String(record.value(), StandardCharsets.UTF_8)));
+                produced.add(ProducedRecord.decodeUtf8(record.topic(), record.key(), record.value()));
             }
             return produced;
         }

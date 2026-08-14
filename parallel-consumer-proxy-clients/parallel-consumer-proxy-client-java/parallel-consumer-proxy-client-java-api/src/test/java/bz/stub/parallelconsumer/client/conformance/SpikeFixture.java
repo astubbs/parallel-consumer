@@ -7,6 +7,7 @@ import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.ParallelConsumerClient;
 import bz.stub.parallelconsumer.client.RecordProcessor;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.OptionalLong;
 
@@ -82,6 +83,13 @@ public interface SpikeFixture extends AutoCloseable {
             this.topic = topic;
             this.key = key;
             this.value = value;
+        }
+
+        /** Decodes a transport's raw produced record, preserving {@code null} key and value (a tombstone). */
+        public static ProducedRecord decodeUtf8(String topic, byte[] key, byte[] value) {
+            return new ProducedRecord(topic,
+                    key == null ? null : new String(key, StandardCharsets.UTF_8),
+                    value == null ? null : new String(value, StandardCharsets.UTF_8));
         }
 
         public String topic() {

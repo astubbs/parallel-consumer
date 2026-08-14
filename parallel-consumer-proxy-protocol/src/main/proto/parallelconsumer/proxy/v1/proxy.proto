@@ -187,7 +187,11 @@ message Configure {
 // ALWAYS set on the wire despite the `optional` markers (which exist for
 // presence-API stability, not to permit absence): a Configured missing
 // max_concurrency or executor_count is a protocol violation, and absence
-// never means "unlimited".
+// never means "unlimited". The carve-outs match the specification's:
+// pc_instance_tag is set exactly when configured, topics/topic_pattern echo
+// whichever subscription form was given, and the capability-gated fields
+// (terminal_topic, lease_duration, heartbeat_interval, reconnect_window)
+// are absent when their capability was not negotiated.
 message Configured {
   reserved 19; // Configure.launch_token - deliberately never echoed
 
