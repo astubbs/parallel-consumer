@@ -83,10 +83,12 @@ non-interactively, which the demo contract's non-TTY fallback already specifies.
 The build half is settled by mise. What remains:
 
 - **The runtime shapes above** - which the demo containers force a decision on anyway.
-- **C++ specifically**, the one language mise does not obviously serve: gRPC and protobuf dev
-  libraries are system packages, and static linking is the thing that makes an extracted artifact
-  portable. If any language justifies a build image, it is this one - decide when C++ comes up, not
-  before.
+- **C++ and Swift are the two mise does not serve, and Swift is now proven rather than suspected.**
+  `mise use -g swift@latest` fails 404 on this box: Swift.org publishes Linux toolchains for Ubuntu,
+  Amazon Linux and RHEL, and Debian 13 (trixie) is not among them. Do not retry the install - the
+  routes are an official Swift container image, or an Ubuntu build run under compatibility. C++ is
+  the other: gRPC and protobuf dev libraries are system packages, and static linking is what makes an
+  extracted artifact portable. **These two are the container case; everything else is mise.**
 - **Whether CI should follow.** The language matrix uses `setup-<lang>` actions today. Now that the
   local side is mise, the cheap consistency win is having CI use mise too, from the same
   `~/.config/mise/config.toml` pins - one place where a toolchain version is stated. Weigh it when a
