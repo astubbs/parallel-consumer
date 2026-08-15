@@ -95,6 +95,19 @@ document. This section is the detail behind it.
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
     when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
     status check** - adding it to the master ruleset is a separate, deliberate act.
+  - `deferred-modules` runs `bin/check-deferred-modules.sh`, the **reverse** of the gate in
+    `clients.yml`. That workflow skips a language row while the module's maturity fragment carries
+    `deferred:`, which is right for a seeded skeleton and has no counterpart the other way: a wave
+    that writes a real client and forgets to lift the deferral gets a row reporting green while
+    building, testing and linting nothing, and `lifted_by:` is a note to a human. Source beyond the
+    skeleton plus `deferred:` still set fails, naming the module and the one edit that fixes it.
+    What counts as skeleton is an **allowlist** stated in the script's header - deliberately, since
+    an extension list would go stale silently, which is the failure the check exists to prevent.
+    Scope is whatever `clients.yml`'s matrix has a row for, read from the workflow, so a new row is
+    covered the day it is added; the rest of the maturity corpus is out of scope because `deferred:`
+    there also means "an aggregator or test module with no maturity claim to make", which skips
+    nothing. **`clients: deferred modules` is a new job name and is NOT yet a required status
+    check.**
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
