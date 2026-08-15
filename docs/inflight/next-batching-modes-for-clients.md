@@ -10,6 +10,22 @@ The objection is correct, and it will be the first one asked. Core already has t
 is implemented and shipped there — so the multi-language clients not exposing it is the gap, not the
 architecture.
 
+## The framing that matters: the API *is* batch, and single-record is the degenerate case
+
+Owner's correction, and it reframes the work: **core's API is already batch-shaped.** `poll` hands
+the user function a poll *context*, which is a container of records; a batch size of one simply
+yields a context holding one. There is no separate single-record API in core to add batching to.
+
+The clients modelled the degenerate case as though it were the API — one record in, one outcome out.
+That is why adding batching later changes the user-facing signature in every language: a cost that
+would not exist had they mirrored core's shape from the beginning, where batching is not a feature to
+add but a size to configure.
+
+The consequence for whoever picks this up: **do not design a second, parallel batch API.** Widen the
+existing one so the record-shaped call becomes the convenience over a batch-shaped one, exactly as
+core has it. And the general lesson for the remaining language waves — mirror the shape core already
+chose rather than the shape the first client happened to need.
+
 ## Where this stands today
 
 The proxy pins the batch size to **1** and the engine actively rejects anything larger, a deliberate
