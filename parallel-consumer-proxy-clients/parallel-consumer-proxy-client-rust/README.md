@@ -1,4 +1,11 @@
+<!-- Copyright (C) 2026 Antony Stubbs and contributors -->
+
 # Parallel Consumer - Rust proxy client
+
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
 Key-ordered concurrent Kafka processing from Rust, with the Parallel Consumer engine running as a
 sidecar process. The crate speaks the frozen v1 proxy protocol
@@ -6,12 +13,12 @@ sidecar process. The crate speaks the frozen v1 proxy protocol
 [`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md)) and
 nothing else - it never reads the proxy's Java.
 
-**Wave one, not for use yet** (astubbs#242). Connect, `Configure`, one `Dispatch` wave, the user's
-function, the report, and a clean client-initiated shutdown. Heartbeats and the liveness lease, the
-manifest reconnect, worker-death reporting, terminal outcomes and the shutdown drain are not
-implemented - and therefore not declared: `Configure.capabilities` carries exactly
+**Wave one.** Connect, `Configure`, dispatch waves, the user's function, per-record reports,
+records produced back on success, and a clean client-initiated shutdown. Heartbeats and the liveness
+lease, the manifest reconnect, worker-death reporting, terminal outcomes and the shutdown drain are
+not implemented - and therefore **not declared**: `Configure.capabilities` carries exactly
 `["dispatch"]`, because an empty list would mean "the whole v1 baseline" and invite duties this
-client does not perform.
+client does not perform. They are un-negotiated capabilities, not half-built features.
 
 ## The surface
 
@@ -74,6 +81,15 @@ Without `-Dpc.foreignClients` an ordinary build of this module runs no Rust tool
 Note that cargo and Maven share `target/`, so `mvn clean` deletes the Rust build output too and the
 next foreign build recompiles the dependency tree - deliberately, since a clean that spares a
 foreign toolchain's output is a clean that lies.
+
+The shared cross-language conformance suite drives this crate's runner
+(`src/bin/conformance-runner.rs`) through the same scenarios as every other language, on a
+**current-thread** tokio runtime so a processor that blocked instead of awaiting deadlocks rather
+than being rescued by a spare core:
+
+```bash
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=rust
+```
 
 ## Layout
 

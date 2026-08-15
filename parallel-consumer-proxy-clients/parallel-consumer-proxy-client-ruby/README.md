@@ -4,14 +4,20 @@ Copyright (C) 2026 Antony Stubbs and contributors
 
 # Parallel Consumer - Ruby client
 
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
+
 Ordered concurrent consumption from Kafka, with one consumer, in Ruby. The Kafka work happens in a
 sidecar process running Parallel Consumer itself; this library holds one gRPC stream to it, runs
 your block on executor threads, and reports each record's outcome.
 
-**Wave one.** Connect, configure, receive a dispatch wave, run the block, report, shut down
-cleanly. Leases, heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes, the
-demo and RubyGems packaging are all deferred, and the module's testing-evidence record names them.
-Not supported for external use yet.
+**Wave one.** Connect, configure, receive dispatch waves, run the block, report per-record
+outcomes, produce records back on success, shut down cleanly. Leases, heartbeats, the manifest
+reconnect, worker-death reporting, terminal outcomes, the demo and RubyGems packaging are all
+absent - **un-negotiated capabilities rather than half-built features**, since the client declares
+`["dispatch"]` and nothing else. The module's testing-evidence record names them.
 
 ## Using it
 
@@ -82,6 +88,15 @@ JVM-side test-mode sidecar from the proxy module's **test** jar, and this module
 no Maven dependency on the proxy. Without it the spec fails naming that command, rather than
 skipping.
 
+### The shared conformance suite
+
+It drives this client's runner (`scripts/conformance-runner`) through the same scenarios as every
+other language, asserting engine state Ruby cannot see:
+
+```bash
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=ruby
+```
+
 ### RuboCop is configured as a bug finder
 
 `.rubocop.yml` leaves the `Lint/` and `Security/` departments at full strength and turns the style
@@ -106,3 +121,9 @@ Ruby has no codegen step at install time. Re-running the script on an unchanged 
 - **Log your `kafka_properties`.** Not at any level, not in an error, not through `inspect`.
 - **Read configuration from a file, an environment variable or a flag.** Configuration is code, and
   it travels in the handshake and nowhere else.
+
+## Depth
+
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+protocol; this file does not restate them.

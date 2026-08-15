@@ -2,19 +2,24 @@
 
 # Parallel Consumer - TypeScript client
 
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
+
 Key-ordered concurrent Kafka consumption from Node, without raising partition counts. The
 application's records are processed by a function it supplies; Kafka itself is owned by a sidecar
 proxy process running the Java engine, which this library speaks to over one gRPC stream.
 
 **Wave one.** Connect, `Configure`, receive a `Dispatch` wave, run the user's function, report the
-outcome with the token echoed verbatim, shut down cleanly - proven end to end against the real
-test-mode sidecar. Not implemented yet, and not silently degraded but genuinely absent: leases and
-heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes, the `Shutdown` drain,
-the demo, and npm publishing. This client declares `capabilities: ["dispatch"]`, so the proxy grants
-it nothing it does not perform.
+outcome with the token echoed verbatim, produce records back on success, shut down cleanly - proven
+end to end against the real test-mode sidecar. Not implemented, and **un-negotiated rather than
+half-built**: leases and heartbeats, the manifest reconnect, worker-death reporting, terminal
+outcomes, the `Shutdown` drain, the demo, and npm publishing. This client declares
+`capabilities: ["dispatch"]`, so the proxy grants it nothing it does not perform.
 
-Not for external use yet. The plan is `docs/plans/2026-08-14-001-feat-language-proxy-plan.md`
-(astubbs#242); what this wave learned is in `docs/inflight/clients/typescript.md`.
+The plan is `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` (astubbs#242); what this wave
+learned is in `docs/inflight/clients/typescript.md`.
 
 ## The surface
 
@@ -95,12 +100,28 @@ it. From the repository root:
 ./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients
 ```
 
-That is the CI matrix row's exact command. Running `npm test` on its own without that file fails
-with the command in its message rather than skipping - a test that quietly does not run is not a
-passing test.
+That is the CI matrix row's exact command. To write only the classpath and then drive the suite from
+`npm` - the shorter loop, and what the error below names - use:
+
+```bash
+./mvnw -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients -DskipTests generate-test-resources
+npm test
+```
+
+Running `npm test` on its own without that file fails with the command in its message rather than
+skipping - a test that quietly does not run is not a passing test.
 
 An ordinary build (`bin/build.sh -pl :parallel-consumer-proxy-client-typescript -am`, no
 `-Dpc.foreignClients`) treats this module as an empty Maven skeleton and starts no Node at all.
+
+### The shared conformance suite
+
+It drives this client's runner (`test/conformance-runner.ts`) through the same scenarios as every
+other language, asserting engine state this process cannot see:
+
+```bash
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=typescript
+```
 
 ## Generated code
 
@@ -109,3 +130,9 @@ An ordinary build (`bin/build.sh -pl :parallel-consumer-proxy-client-typescript 
 by [ts-proto](https://github.com/stephenh/ts-proto) and **committed** - an npm consumer must not
 need a `protoc`, and committing is what makes "regenerating produces no diff" checkable
 (`npm run proto:check`). Do not edit those files, and never edit the `.proto`: it is the contract.
+
+## Depth
+
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+protocol; this file does not restate them.

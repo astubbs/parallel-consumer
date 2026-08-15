@@ -2,11 +2,17 @@
 
 # Parallel Consumer - Kotlin proxy client
 
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
+
 A Kotlin client for the Parallel Consumer language proxy: key-ordered concurrent Kafka processing
 from Kotlin, with the Java engine running as a sidecar child process and your function running as an
-ordinary **suspending lambda**.
-
-**Wave one. Not for application use** - see [Status](#status).
+ordinary **suspending lambda**. The session itself is the shared
+[`java-grpc`](../parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/README.md)
+transport - this module is the Kotlin shape over it, plus the sidecar spawn that transport
+deliberately does not own. See [Status](#status).
 
 ## The shape
 
@@ -104,12 +110,26 @@ with its reason rather than a config file quietly disabling the rule everywhere.
 
 ## Status
 
-Wave one of the Kotlin client (astubbs#242): connect, `Configure`, one `Dispatch` wave, the user's
-function, the report with the token echoed verbatim, and a clean client-initiated shutdown - proven
-end to end against the test-mode sidecar.
+Wave one of the Kotlin client (astubbs#242): connect, `Configure`, dispatch waves, the user's
+function, per-record reports with the token echoed verbatim, records produced back on success, and a
+clean client-initiated shutdown - proven end to end against the test-mode sidecar.
 
 This client declares exactly the `dispatch` capability, so the proxy expects nothing of it that it
-does not do. Deferred to later waves, and **not** implemented here: the liveness lease and
-heartbeats, the manifest reconnect and `Drop`, worker-death reporting, terminal outcomes, the
-`Shutdown` drain and `Released`, the demo and its container, publishing, and the rest of the
-conformance suite.
+does not do. **Un-negotiated rather than half-built**, and not implemented here: the liveness lease
+and heartbeats, the manifest reconnect and `Drop`, worker-death reporting, terminal outcomes, the
+`Shutdown` drain and `Released`, the demo and its container, and publishing.
+
+## The shared conformance suite
+
+Kotlin is the JVM client the suite drives as a **spawned child process** rather than as an in-JVM
+binding, precisely because it owns a sidecar spawn - which is what keeps that path covered:
+
+```bash
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=kotlin
+```
+
+## Depth
+
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+protocol; this file does not restate them.

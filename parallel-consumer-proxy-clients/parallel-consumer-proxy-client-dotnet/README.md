@@ -2,13 +2,16 @@
 
 # Parallel Consumer - .NET proxy client
 
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
+
 A C# client for the Parallel Consumer language proxy: key-ordered concurrent Kafka processing from
 .NET, with the Java engine running as a sidecar child process and the user's function running as an
-ordinary `async` delegate.
-
-**Wave one. Not for application use** - see [Status](#status). Its purpose is falsification as much
-as function: whether an author with no access to the proxy's Java can build a working client from
-the frozen documents alone.
+ordinary `async` delegate. See [Status](#status). Its purpose is falsification as much as function:
+whether an author with no access to the proxy's Java can build a working client from the frozen
+documents alone.
 
 ## The shape
 
@@ -68,14 +71,15 @@ travels the stream and nowhere else. Hold your own code to the same rule.
 
 ## Status
 
-Wave one implements exactly one path: connect → `Configure` → receive a `Dispatch` wave → run the
-function → report success or failure → clean shutdown. It declares only the `dispatch` capability,
-so a session negotiates nothing else and the proxy sends nothing else.
+Wave one implements exactly one path: connect → `Configure` → receive `Dispatch` waves → run the
+function → report success or failure, with records produced back on success → clean shutdown. It
+declares only the `dispatch` capability, so a session negotiates nothing else and the proxy sends
+nothing else.
 
 Not implemented, and not silently half-implemented - the capability is simply not declared:
 heartbeats and the liveness lease, the `Manifest` reconnect and `Drop`, `WorkerDied`, `Terminal`
 outcomes, the proxy-initiated `Shutdown` drain and the `Released` outcome. Also absent: the demo and
-its container, NuGet packaging, and the rest of the conformance suite.
+its container, and NuGet packaging.
 
 The current findings, including the ones the frozen documents could not answer, are in
 [`docs/inflight/clients/dotnet.md`](../../docs/inflight/clients/dotnet.md).
@@ -136,3 +140,18 @@ today; the CI row runs its `analyzers` subset.
 - **.NET SDK 8.0 or newer.** The projects target `net8.0`, which is the CI row's pinned SDK; a
   machine with only a newer runtime still runs the tests (the test project rolls forward).
 - **JDK 17**, for the sidecar the tests spawn. `JAVA_HOME` or `PC_PROXY_TEST_JAVA` names it.
+
+## The shared conformance suite
+
+It drives this client's runner (`tests/ConformanceRunner`) through the same scenarios as every other
+language, asserting engine state this process cannot see:
+
+```bash
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=dotnet
+```
+
+## Depth
+
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+protocol; this file does not restate them.

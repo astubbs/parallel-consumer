@@ -2,6 +2,11 @@
 
 # The shared conformance suite, and the runner contract every language implements
 
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
+
 One Java test module drives every language's client through the same scenarios, in parallel, and asserts the
 same things about each. This file is the contract the other side of that implements: what a **conformance
 runner** is, what its command line looks like, what it prints, and how a new language registers itself.
@@ -298,7 +303,7 @@ the only thing the driver knows about Go is a path in a registry entry.
 
 ### A JVM client is a binding, not a subprocess - and Kotlin is the exception that shows why
 
-Three clients live on the JVM, and two of them are driven as **objects** rather than as child processes:
+Four clients live on the JVM, and two of them are driven as **objects** rather than as child processes:
 `java-direct` and `java-grpc` are registered in `JvmClientBindings.java`, not in `LanguageRunners.java`.
 That is a reading of what a runner is *for* rather than an exemption from it. A runner exists to do three
 things a test cannot do from inside this JVM: use the client library as an application would, cross a process
@@ -315,8 +320,8 @@ binding. `java-direct` is the most interesting binding in the set for the same r
 ceremonious: its wire is a function call, so a scenario that passes for `java-grpc` and fails there is a
 claim about the shared API rather than about a stream.
 
-**Kotlin is a spawned runner**, and that is what keeps the spawn path covered: it owns a sidecar spawn
-(`Sidecar.kt`), so its runner is a real child process like every other language's. Two things differ from an
+**Kotlin and Scala are spawned runners**, and that is what keeps the spawn path covered: each owns a sidecar
+spawn, so its runner is a real child process like every other language's. Two things differ from an
 interpreted language, and both live in one file each:
 
 - **The executable is a wrapper that resolves a classpath**, because a JVM client's "binary" is a JVM plus a

@@ -1,4 +1,11 @@
+<!-- Copyright (C) 2026 Antony Stubbs and contributors -->
+
 # Parallel Consumer for Python
+
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
 Ordered concurrent Kafka consumption from a single consumer - by key or by partition - with the
 user's function running in **worker processes**, so the GIL is not the ceiling. Kafka itself is
@@ -80,7 +87,8 @@ by argv, environment variable or file.
 
 Later waves add: the liveness lease and heartbeats, reconnect with a manifest, worker-death
 reporting, terminal outcomes to a dead-letter topic, the demo container, PyPI packaging, and the
-full cross-language conformance suite. The client declares exactly the one capability it
+conformance scenarios beyond the four the harness serves today. **These are un-negotiated
+capabilities, not half-built features.** The client declares exactly the one capability it
 implements (`dispatch`) in its handshake, so the proxy holds it to that rather than to promises;
 each wave adds its token alongside its duty.
 
@@ -107,6 +115,19 @@ module's *test* jar and therefore needs a JVM classpath. Maven writes that class
 empty skeleton and starts no Python interpreter; the `exec` bindings that call `make` are inactive
 unless `-Dpc.foreignClients` is passed. That is what keeps the reactor buildable on a machine with
 no Python client toolchain.
+
+The shared cross-language conformance suite drives this client's runner
+(`scripts/conformance_runner.py`) through the same scenarios as every other language, asserting
+engine state Python cannot see:
+
+```bash
+./mvnw test -pl :parallel-consumer-proxy-client-python -am -Dpc.foreignClients          # the CI row
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=python
+```
+
+Depth on the protocol lives in
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md).
 
 ## Two divergences worth knowing
 

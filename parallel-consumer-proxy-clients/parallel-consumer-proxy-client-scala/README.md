@@ -2,11 +2,14 @@
 
 # Parallel Consumer - Scala proxy client
 
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
+
 A Scala client for the Parallel Consumer language proxy: key-ordered concurrent Kafka processing
 from Scala, with the Java engine running as a sidecar child process and your function running as an
-ordinary `InboundRecord => Future[Outcome]`.
-
-**First wave. Not for application use** - see [Status](#status).
+ordinary `InboundRecord => Future[Outcome]`. See [Status](#status).
 
 ## The shape
 
@@ -96,14 +99,27 @@ from the shared transport rather than implemented here.
 ./mvnw test -pl :parallel-consumer-proxy-client-scala -am                     # unit tests
 ./mvnw test -pl :parallel-consumer-proxy-client-scala -am -Dpc.foreignClients # + the sidecar tests
 scripts/analyse.sh                                                            # static analysis
-./mvnw test-compile -pl :parallel-consumer-proxy-client-scala -am             # + the conformance runner
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=scala
 ```
 
 Static analysis is the Scala compiler: `-Xlint -Wunused -Werror`, declared once in the pom and run by
 `scripts/analyse.sh`. Scala's standalone analysers were weighed and rejected - `scripts/analyse.sh`
 carries the reasoning.
 
+The last command is the shared cross-language suite. Like Kotlin, this client is driven as a
+**spawned runner** (`scripts/conformance-runner`) rather than as an in-JVM binding, because it owns
+a sidecar spawn; its registry entry carries no build command, because its toolchain is the Maven
+build already running.
+
 ## Status
 
 Experimental, unpublished, and built from a checkout. It carries records end to end over the real
-protocol and nothing beyond that; there is no reliability claim. Tracking: astubbs#242.
+protocol and nothing beyond that; there is no reliability claim. Its module testing-evidence record
+predates its registration in the shared suite and still describes that conformance claim as
+untested. Tracking: astubbs#242.
+
+## Depth
+
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+protocol; this file does not restate them.

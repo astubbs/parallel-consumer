@@ -2,12 +2,19 @@
 
 # Parallel Consumer - Go proxy client
 
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
+
 A Go client for the Parallel Consumer language proxy: key-ordered concurrent Kafka processing from
 Go, with the Java engine running as a sidecar child process and the user's function running in
-ordinary goroutines.
+ordinary goroutines. It speaks the frozen v1 protocol and nothing else - it never reads the proxy's
+Java.
 
-**Wave one. Not for application use** - see [Status](#status). Its purpose is
-[falsification](#why-this-module-exists) as much as function.
+**Wave one.** Connect, configure, receive dispatch waves, run the user function, report per-record
+outcomes, produce records back on success, shut down cleanly. See [Status](#status) for what is
+absent.
 
 ## The shape
 
@@ -114,3 +121,17 @@ The Maven wrapper runs the Go toolchain **only** under `-Dpc.foreignClients`; an
 `bin/build.sh -am` builds this module's pom and runs no Go at all. The proxy module must be built
 first either way: the test spawns the JVM conformance harness, and this module deliberately has no
 Maven dependency on the engine, so nothing can order that build for you.
+
+The shared cross-language conformance suite drives this client's runner
+(`cmd/conformance-runner`) through the same scenarios as every other language, asserting engine
+state Go cannot see:
+
+```bash
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=go
+```
+
+## Depth
+
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+protocol; this file does not restate them.

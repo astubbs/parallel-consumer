@@ -2,14 +2,19 @@
 
 # Parallel Consumer proxy client - C++
 
-Key-ordered concurrent Kafka processing from C++, with the Parallel Consumer engine running as a
-sidecar process. Tracking: astubbs#242, upstream confluentinc#154.
+> **⚠️ EXPERIMENTAL - not for production use.** Everything in this module is new, unreleased and
+> unproven: nothing is published to any package registry, the API may change without notice, and
+> the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
+> checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
-**Wave one, and not for external use yet.** Connect, `Configure`, a `Dispatch` wave, the user's
-function, the report, and a clean client-initiated shutdown all work end to end over real gRPC. The
-liveness lease, heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes and the
-proxy-initiated drain are **not implemented and therefore not declared** - see
-[Capabilities](#what-this-client-declares).
+Key-ordered concurrent Kafka processing from C++, with the Parallel Consumer engine running as a
+sidecar process. Upstream: confluentinc#154.
+
+**Wave one.** Connect, `Configure`, dispatch waves, the user's function, per-record reports, records
+produced back on success, and a clean client-initiated shutdown all work end to end over real gRPC.
+The liveness lease, heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes and
+the proxy-initiated drain are **not implemented and therefore not declared** - un-negotiated
+capabilities rather than half-built features; see [Capabilities](#what-this-client-declares).
 
 ## Building it
 
@@ -137,3 +142,12 @@ Two layers, both load-bearing:
 ```bash
 ./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=cpp
 ```
+
+That entry needs Docker, and it says so by failing: a missing daemon exits `2`, which fails the
+build rather than skipping the language.
+
+## Depth
+
+[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+protocol; this file does not restate them.
