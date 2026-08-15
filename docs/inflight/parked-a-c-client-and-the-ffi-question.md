@@ -34,6 +34,38 @@ Perl, R, older runtimes — then a small C shim over the protocol becomes the re
 FFI argument is the right one. That is a decision about serving a long tail, and it should be taken
 on evidence that the tail exists rather than on symmetry with librdkafka.
 
+## PRIOR ART FOUND LATE: the plan already rejected this, and already measures the hop
+
+Recorded 2026-08-15 as a correction. The section below was written and discussed **without checking
+the plan first**, which is the prior-art rule this repo puts before forming any hypothesis. Two things
+were already settled and had to be found afterwards:
+
+- **`native-image --shared` was explicitly rejected**, in
+  `docs/plans/2026-08-14-001-feat-language-proxy-plan.md`, under *Compiling PC to a native shared
+  library*. Its grounds are stronger than anything reasoned out below, and one is decisive: the
+  cleared native-image gate produced an **executable, not a `--shared` export**, which differs in
+  entry-point surface, isolate and thread-attach semantics, **two garbage collectors sharing a
+  process**, and callbacks re-entering from foreign threads — none of it tested. And **it is the worst
+  available shape for agentic development**, because its failures are segfaults and memory corruption
+  with no useful stack trace, where gRPC and protobuf fail legibly and fast. This project is built
+  agentically, so debuggability is a selection criterion rather than a preference.
+- **The hop is already measured, by design.** R31 requires v1 to report median and p99
+  poll-to-completion latency through the proxy *and* for in-process PC on the same workload, and
+  **Java ships twice — `java-direct` and `java-grpc` — precisely as the experimental control that
+  isolates the hop from the language.** So the controlled comparison the section below proposes
+  building in Rust **already exists, with no FFI, no second garbage collector and no segfaults.**
+
+**What survives of the section below**: the per-language callback table, which is useful for its own
+sake, and the observation that difficulty and demand rank together. **What does not survive**: the
+proposal itself, and the "two Rust backends as a controlled experiment" framing — the experiment is
+already built, and the cheaper arm is the one already shipping.
+
+**The Graal sidecar is not a hypothetical either.** KTD13 dual-ships and makes the **native image the
+default**, R51 requires both artifacts from the first release, the native-image feasibility gate (R25)
+cleared at a **45MB binary building in 33–52s**, and `parallel-consumer-proxy/pom.xml` carries the
+native profile. So the confound named below — comparing an AOT-compiled embedded engine against a JIT
+sidecar — is already controlled for by what ships.
+
 ## The other C proposal: embed the engine, do not wrap the protocol
 
 Raised 2026-08-15, and it is **not the client this note parked** - it inverts it. Rather than a C
