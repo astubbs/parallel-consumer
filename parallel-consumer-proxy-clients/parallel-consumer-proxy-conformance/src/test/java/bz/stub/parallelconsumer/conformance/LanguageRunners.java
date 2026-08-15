@@ -79,9 +79,26 @@ public final class LanguageRunners {
                 module.resolve("scripts").resolve("conformance-runner"));
     }
 
+    /**
+     * Kotlin: a JVM client, so its runner is a JVM plus a resolved classpath and its wrapper says so.
+     * <p>
+     * <b>It is the one entry with no build command, and that is the reactor's doing rather than an
+     * omission.</b> Every other language shells out to its own toolchain; Kotlin's toolchain is the Maven
+     * build already running, and the conformance module test-depends on this module precisely so that build
+     * compiles the runner and writes its classpath file before a scenario starts. A nested {@code mvn} here
+     * would rewrite the class directories of the JVM executing the suite, while it ran. The wrapper still
+     * fails loudly when the classpath file is absent, so a module that was never built does not read as one
+     * that passed.
+     */
+    public static LanguageRunner kotlin() {
+        var module = module("kotlin");
+        return new LanguageRunner("kotlin", module, List.of(),
+                module.resolve("scripts").resolve("conformance-runner"));
+    }
+
     /** Every language with a runner today, whether or not this run selected it. */
     public static List<LanguageRunner> all() {
-        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet());
+        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet(), kotlin());
     }
 
     /**
