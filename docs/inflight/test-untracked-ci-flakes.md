@@ -38,6 +38,20 @@ The liveness one is worth a closer look than the others if it recurs: it is new 
 it asserts on a lease deadline, and a test that measures elapsed time under load is the shape this
 repo has been bitten by twice already.
 
+**One candidate explanation for this group has since been found and fixed - check for it before
+diagnosing the next sighting.** A fixture race with exactly the "only under load" story was diagnosed
+on the Kotlin client's CI row and fixed on this branch: the mock consumer's partitions were assigned
+before their beginning offsets were recorded, and a poll landing in that window killed PC's
+broker-poll thread, so the test failed on whatever deadline it was awaiting. Mechanism, control arm
+and the fix are in
+[`assign-the-mock-consumer-after-seeding-its-offsets-2026-08-15.md`](../solutions/test-flakiness/assign-the-mock-consumer-after-seeding-its-offsets-2026-08-15.md).
+It is a *candidate*, not a retraction of any entry above: two of the three tests named here reach
+their fixture through the helper that had the window
+(`AbstractParallelEoSStreamProcessorTestBase` and `EngineFixture` both call
+`subscribeWithRebalanceAndAssignment`), but the sightings' logs were not checked for it. **The check
+is one grep of the failing job's log for `didn't have beginning offset specified`** - present means
+it was this and is now fixed, absent means it was not and the entry stands.
+
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
