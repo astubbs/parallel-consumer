@@ -85,7 +85,53 @@
                     <type>test-jar</type>
                     <scope>test</scope>
                 </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml. Test scope does
+                         not travel transitively, so the proxy's own test dependencies are not ours
+                         unless named - and the sidecar starts, then dies without them. -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
             </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <!--
+                                    THE HARNESS ASKS MAVEN FOR THIS LIST ITSELF IF IT IS NOT HERE,
+                                    AND IN CI THAT SECOND ASK FAILS. Its fallback runs a nested
+                                    `./mvnw -pl :parallel-consumer-proxy dependency:build-classpath`
+                                    with no -am, so parallel-consumer-core has to come from the
+                                    local repository - which a CI job never installs into, since
+                                    the reactor stops at `package`. Writing the file here, from the
+                                    reactor that already has every module resolved, means the
+                                    fallback is only ever the developer's path. Same arrangement as
+                                    the Go module's sidecar-classpath.txt, one filename apart
+                                    because each harness chose its own.
+                                -->
+                                <id>proxy-test-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the foreign suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/proxy-test-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
     </profiles>
 
