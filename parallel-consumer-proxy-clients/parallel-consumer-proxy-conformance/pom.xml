@@ -94,6 +94,51 @@
             <artifactId>commons-lang3</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!--
+            THE JVM CLIENTS, WHICH THIS SUITE DRIVES AS OBJECTS RATHER THAN AS CHILD PROCESSES.
+
+            A foreign client is reached by spawning a binary the registry names, so the suite needs
+            no Maven dependency on it at all - the only thing it knows about Go is a path. A JVM
+            client is reached by constructing it, so it has to be on this module's test classpath,
+            and JvmClientBinding's javadoc carries the reasoning for driving them that way.
+
+            Both transports, deliberately: the direct one binds core in-process with no protocol
+            underneath and the gRPC one speaks the real wire, and the shared API's central claim is
+            that the same scenarios hold for both. Test scope, like everything else here - this
+            module publishes nothing and must stay a leaf.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-direct</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            THE KOTLIN CLIENT, WHICH IS A SPAWNED RUNNER LIKE ANY OTHER LANGUAGE - so this
+            dependency is not for the classpath, and nothing here imports a Kotlin type.
+
+            It is here to put the module in THIS module's reactor, which is what builds the runner.
+            Every other language's registry entry carries a build command that shells out to its own
+            toolchain; Kotlin's toolchain is the Maven build already running, and a nested `mvn`
+            would rewrite the class directories of the very JVM executing this suite while it ran.
+            Being a dependency instead means `-pl :parallel-consumer-proxy-conformance -am` compiles
+            the runner and writes its classpath file before a single scenario starts, so the Kotlin
+            entry in LanguageRunners needs no build command at all.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-kotlin</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>

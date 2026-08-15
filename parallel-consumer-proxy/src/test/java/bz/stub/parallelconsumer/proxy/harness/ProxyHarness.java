@@ -16,6 +16,7 @@ import com.github.bsideup.jabel.Desugar;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
@@ -250,6 +251,50 @@ public class ProxyHarness implements AutoCloseable {
         this.engine = startedEngine;
         engineMockConsumer.subscribeWithRebalanceAndAssignment(List.of(topic), 1);
         startedEngine.onPartitionsAssigned(List.of(topicPartition));
+        seedByteLane();
+    }
+
+    /**
+     * The embedded-client lane: this harness's byte[] mock Kafka clients, handed to an in-JVM client that
+     * brings its <em>own</em> engine, followed by the same rebalance-and-seed dance the other two lanes do.
+     * <p>
+     * <b>Why a third lane rather than a special case in a test.</b> {@link #start} owns the engine and the
+     * client is a function; {@link #startEngine} owns the engine and the client is a foreign process. A
+     * client library that constructs Parallel Consumer for itself - the in-process transport of the Java
+     * client wrapper - fits neither, and the piece it needs is exactly the piece this class owns and keeps
+     * private: the mock consumer whose commit history {@link #lastCommittedOffset()} reads. A test that
+     * built its own mocks instead would be asserting about a fixture the harness cannot see, so every
+     * scenario written against the harness would have to be written a second time for it.
+     * <p>
+     * The client is handed the clients and returns its {@link ConsumerRebalanceListener}, because
+     * {@code MockConsumer#rebalance} assigns the partition but fires no listener - the assignment has to be
+     * delivered separately, and seeding has to follow it, exactly as the class javadoc's provenance note
+     * describes.
+     */
+    public void startEmbeddedClient(EmbeddedClient client) {
+        if (parallelConsumer != null || engineServer != null || engineMockConsumer != null) {
+            throw new IllegalStateException("harness already started");
+        }
+        engineMockConsumer = new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
+        engineMockProducer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+
+        var rebalanceListener = client.start(engineMockConsumer, engineMockProducer);
+        engineMockConsumer.subscribeWithRebalanceAndAssignment(List.of(topic), 1);
+        rebalanceListener.onPartitionsAssigned(List.of(topicPartition));
+        seedByteLane();
+    }
+
+    /**
+     * An in-JVM client that owns its own engine: it is given this harness's mock Kafka clients and returns
+     * the rebalance listener that must be told about the assignment.
+     */
+    @FunctionalInterface
+    public interface EmbeddedClient {
+        ConsumerRebalanceListener start(Consumer<byte[], byte[]> consumer, Producer<byte[], byte[]> producer);
+    }
+
+    /** Seeds the scenario's records into whichever byte[] lane is running, offsets in seed order from zero. */
+    private void seedByteLane() {
         long offset = 0;
         for (HarnessScenario.SeedRecord seed : scenario.seeds()) {
             engineMockConsumer.addRecord(new ConsumerRecord<>(topic, topicPartition.partition(), offset++,

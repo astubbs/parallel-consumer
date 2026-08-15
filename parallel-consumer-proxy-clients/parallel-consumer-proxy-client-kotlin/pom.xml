@@ -208,6 +208,47 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <executions>
+                    <execution>
+                        <!--
+                            THE CONFORMANCE RUNNER'S CLASSPATH, in the DEFAULT build rather than a
+                            profile.
+
+                            scripts/conformance-runner is the executable the shared suite's registry
+                            names, and a JVM client's "binary" is a JVM plus a resolved classpath -
+                            so this file is what makes that wrapper a runnable thing. It is not in
+                            the harness profile because the runner needs no engine: it spawns the
+                            SIDECAR SHIM the suite hands it on its sidecar flag, which is the client
+                            library's real spawn path, and the engine lives in the suite's own JVM.
+
+                            Written at generate-test-resources, before test-compile emits the runner
+                            beside it, so an ordinary `test-compile` of this module leaves both
+                            halves current. Nothing regenerates it at run time, deliberately: the
+                            reactor that runs the suite already builds this module, and a nested
+                            `mvn` would rewrite class directories under the JVM executing the suite.
+                        -->
+                        <id>conformance-classpath</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>build-classpath</goal>
+                        </goals>
+                        <configuration>
+                            <outputFile>${project.build.directory}/conformance-classpath.txt</outputFile>
+                            <!--
+                                Test scope, so the runner's own JVM gets logback and the diagnostics
+                                the suite attaches to a failure are readable. In the harness lane the
+                                engine artifacts join it too and are simply unused - the runner never
+                                names them, because it never spawns TestModeMain.
+                            -->
+                            <includeScope>test</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
                 <version>${kotlin.version}</version>

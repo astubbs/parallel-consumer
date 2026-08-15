@@ -64,17 +64,17 @@ public final class ConformanceBindings {
      *                                  selection nobody matched must never be reported as a clean run
      */
     static List<ConformanceBinding> select(String requested) {
-        var languages = LanguageRunners.all();
+        var selectable = selectable();
         if (requested == null || requested.isBlank()) {
             var all = new ArrayList<ConformanceBinding>(List.of(CORE));
-            all.addAll(languages);
+            all.addAll(selectable);
             return List.copyOf(all);
         }
 
         var wanted = Arrays.stream(requested.split(",")).map(String::trim).filter(name -> !name.isEmpty())
                 .toList();
         var known = new ArrayList<String>(List.of(CORE.name()));
-        languages.forEach(runner -> known.add(runner.name()));
+        selectable.forEach(binding -> known.add(binding.name()));
         var unknown = wanted.stream().filter(name -> !known.contains(name)).toList();
         if (!unknown.isEmpty()) {
             throw new IllegalArgumentException("-D" + LANGUAGE_PROPERTY + " names bindings this suite does "
@@ -83,18 +83,38 @@ public final class ConformanceBindings {
         }
 
         var selected = new ArrayList<ConformanceBinding>(List.of(CORE));
-        languages.stream().filter(runner -> wanted.contains(runner.name())).forEach(selected::add);
+        selectable.stream().filter(binding -> wanted.contains(binding.name())).forEach(selected::add);
         return List.copyOf(selected);
     }
 
     /**
+     * Every binding a selector may name, in matrix order: the JVM clients this suite drives in-process,
+     * then the languages whose runners it spawns. The control arm is not among them - it is added to every
+     * selection rather than chosen.
+     * <p>
+     * Two registries rather than one because they hold different facts - a client object's construction
+     * against a runner binary's build - and because they are edited by different waves. Concatenating them
+     * here is the only place either has to know the other exists.
+     */
+    private static List<ConformanceBinding> selectable() {
+        var all = new ArrayList<ConformanceBinding>(JvmClientBindings.all());
+        all.addAll(LanguageRunners.all());
+        return List.copyOf(all);
+    }
+
+    /**
      * A binding for a test that needs one concrete subject rather than the matrix - the parallelism proof.
-     * The first foreign runner this run selected, or the control arm when the selection named none, because
-     * "no language was selected" must not become a test that quietly does not run.
+     * <p>
+     * <b>A spawning runner is preferred over an in-process binding</b>, because what that proof is about is
+     * two child processes genuinely in flight at once; an in-JVM binding beside a subprocess would still
+     * overlap, but it would stop demonstrating the thing the property is named for. Failing that, any
+     * non-core binding, and failing that the control arm - because "no language was selected" must not
+     * become a test that quietly does not run.
      */
     public static ConformanceBinding aSelectedBinding() {
         var selected = selected();
-        return selected.stream().filter(binding -> !CORE.name().equals(binding.name())).findFirst()
+        return selected.stream().filter(LanguageRunner.class::isInstance).findFirst()
+                .or(() -> selected.stream().filter(binding -> !CORE.name().equals(binding.name())).findFirst())
                 .orElse(selected.get(0));
     }
 

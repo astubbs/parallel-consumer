@@ -173,7 +173,8 @@ The runner receives (2) on its command line and nothing else. It cannot see (1) 
 the prescription is complete enough to run, and too narrow to game.
 
 **One definition, many bindings.** Those three halves are written once and executed once per *binding*: the
-engine driven by a plain Java function (`CoreBinding`), then each foreign runner. The same assertion executing
+engine driven by a plain Java function (`CoreBinding`), the JVM clients driven as objects
+(`JvmClientBindings` - see §6), then each foreign runner. The same assertion executing
 many times is the goal; the same assertion being *written* many times is what `ConformanceBinding` exists to
 prevent.
 
@@ -281,10 +282,9 @@ to run the control arm alone - no toolchain, a few seconds.
    §3 exactly: the five flags, the three exit statuses, the observation line, all four behaviour tokens, and
    the fixed literals - including the `report-nothing` hold.
 2. **Add one registry entry** in `LanguageRunners.java`: the language's name, its module directory, the
-   command that builds the runner, and where the binary lands. Six are registered today, one per wave-one
-   language; copy whichever is closest in shape. The registry checks a path is *executable*, so an interpreted
-   language keeps a two-line wrapper (`scripts/conformance-runner`) beside its runner rather than a registry
-   entry that names an interpreter.
+   command that builds the runner, and where the binary lands. Copy whichever entry is closest in shape. The
+   registry checks a path is *executable*, so an interpreted language keeps a two-line wrapper
+   (`scripts/conformance-runner`) beside its runner rather than a registry entry that names an interpreter.
 3. **Run it**: `./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=<lang>`.
 4. **Prove each scenario can fail.** Make the runner do the wrong thing - report success where silence was
    prescribed, change the failure reason, stop holding - watch the suite go red with a message that names
@@ -295,6 +295,39 @@ to run the control arm alone - no toolchain, a few seconds.
 
 Nothing else in this module changes. The scenarios, the assertions and the driver are already language-blind -
 the only thing the driver knows about Go is a path in a registry entry.
+
+### A JVM client is a binding, not a subprocess - and Kotlin is the exception that shows why
+
+Three clients live on the JVM, and two of them are driven as **objects** rather than as child processes:
+`java-direct` and `java-grpc` are registered in `JvmClientBindings.java`, not in `LanguageRunners.java`.
+That is a reading of what a runner is *for* rather than an exemption from it. A runner exists to do three
+things a test cannot do from inside this JVM: use the client library as an application would, cross a process
+boundary, and exercise the library's own **sidecar spawn**. A JVM client needs no process boundary for the
+first - the suite can hold the very object an application holds - and neither Java transport has a spawn to
+exercise: `GrpcParallelConsumerClient` connects to a port it is given, by design, because spawning belongs to
+the lifecycle unit. Wrapping one in a subprocess would have meant *writing* the spawn the library does not
+have, and then testing that.
+
+What is not relaxed is the prescription. `PrescribedRun.java` is the runner contract carried out in this JVM
+- the four behaviour tokens, the fixed failure literal, one observation per delivery, an exit status as the
+verdict - and it is the same code the control arm runs, so no assertion can be written to suit an in-process
+binding. `java-direct` is the most interesting binding in the set for the same reason it is the least
+ceremonious: its wire is a function call, so a scenario that passes for `java-grpc` and fails there is a
+claim about the shared API rather than about a stream.
+
+**Kotlin is a spawned runner**, and that is what keeps the spawn path covered: it owns a sidecar spawn
+(`Sidecar.kt`), so its runner is a real child process like every other language's. Two things differ from an
+interpreted language, and both live in one file each:
+
+- **The executable is a wrapper that resolves a classpath**, because a JVM client's "binary" is a JVM plus a
+  classpath. `scripts/conformance-runner` reads `target/conformance-classpath.txt`, written by the module's
+  own `dependency:build-classpath` execution, and prefers `$JAVA_HOME/bin/java` - this repository's JDK 17 is
+  installed by a version manager and deliberately off `PATH`.
+- **Its registry entry carries no build command**, because its toolchain is the Maven build already running.
+  The conformance module test-depends on the Kotlin module precisely so the reactor compiles the runner and
+  writes its classpath file before a scenario starts; a nested `mvn` would rewrite the class directories of
+  the JVM executing this suite, while it ran. The wrapper still fails loudly when the classpath file is
+  absent, so a module nobody built does not read as one that passed.
 
 ## 7. Running it
 
@@ -307,6 +340,9 @@ the only thing the driver knows about Go is a path in a registry entry.
 
 # the control arm alone: the engine, a plain Java function, no toolchain, seconds
 ./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=core
+
+# the JVM clients, which need no foreign toolchain either - Kotlin's runner is built by this reactor
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=java-direct,java-grpc,kotlin
 ```
 
 `-am` is required: the module's parents must be in the reactor, and the engine and harness are built from

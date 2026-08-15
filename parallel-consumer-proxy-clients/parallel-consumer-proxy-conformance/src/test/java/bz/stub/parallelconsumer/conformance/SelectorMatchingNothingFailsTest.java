@@ -55,8 +55,18 @@ class SelectorMatchingNothingFailsTest {
         assertWithMessage("an absent selector drives every registered binding, and the blank one must not "
                 + "mean something different - a blank -D value is what an unset CI variable expands to")
                 .that(ConformanceBindings.select("  ")).hasSize(everything);
-        assertWithMessage("every registered language, plus the core control arm")
-                .that(everything).isEqualTo(LanguageRunners.all().size() + 1);
+        assertWithMessage("every registered binding - the JVM clients and the spawned languages - plus the "
+                + "core control arm")
+                .that(everything).isEqualTo(JvmClientBindings.all().size() + LanguageRunners.all().size() + 1);
+    }
+
+    @Test
+    void aJvmClientIsSelectableByNameLikeAnyOtherBinding() {
+        var names = ConformanceBindings.select("java-direct").stream().map(ConformanceBinding::name).toList();
+
+        assertWithMessage("a binding whose wire is a function call is selected the same way as one whose "
+                + "wire is a process - a client excused from the selector is a client excused from the suite")
+                .that(names).containsExactly(CoreBinding.NAME, "java-direct").inOrder();
     }
 
     @Test
