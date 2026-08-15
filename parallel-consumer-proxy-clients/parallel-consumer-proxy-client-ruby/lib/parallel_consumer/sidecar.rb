@@ -30,21 +30,34 @@ module ParallelConsumer
   class Sidecar
     PORT_LINE = /^port:\s*(\d+)\s*$/
 
+    # A STREAM YOU WILL NOT READ MUST BE REDIRECTED, NEVER CLOSED - authoring guide §10.1, and this
+    # client used to break it with +err: :close+. That does not discard the child's stderr: it
+    # starts the JVM with FILE DESCRIPTOR 2 CLOSED, so the next file the JVM opens can be handed
+    # fd 2 by the kernel, and everything written to stderr afterwards lands in that file. It also
+    # destroys the death diagnostic - a sidecar that dies during startup has nowhere to say why,
+    # and "the sidecar produced no 'port: <n>' line" is then all anyone gets. Nor may it be a pipe
+    # nobody drains, which fills and blocks the child. Redirect: inherit, or the null device.
+    # +:err+ is Process.spawn's own name for "this process's stderr", which is also what an
+    # unspecified redirect does - named here so the choice is visible rather than implicit.
+    STDERR_DESTINATIONS = { inherit: :err, null: File::NULL }.freeze
+
     attr_reader :pid, :port
 
     # Spawns the sidecar and waits for it to announce its port.
     #
     # @param command [SidecarCommand]
     # @param timeout [Numeric] seconds to wait for the port line
-    # @param stderr [IO, Symbol] where the child's stderr goes; +:close+ discards it
-    def initialize(command, timeout:, stderr: :close)
+    # @param stderr [IO, Symbol, String] where the child's stderr goes: +:inherit+ (this process's
+    #   own stderr, the default, so a dying sidecar can still explain itself), +:null+, or any IO
+    #   or path you will actually drain. +:close+ is refused - see {STDERR_DESTINATIONS}
+    def initialize(command, timeout:, stderr: :inherit)
       @stdin_read, @stdin = IO.pipe
       @stdout, @stdout_write = IO.pipe
 
       # The [cmd, argv0] form is Ruby's explicit "never a shell", true even for a command with no
       # arguments - which the bare string form does not guarantee.
       @pid = Process.spawn([command.path, command.path], *command.args,
-                           in: @stdin_read, out: @stdout_write, err: stderr)
+                           in: @stdin_read, out: @stdout_write, err: destination_for(stderr))
       @stdin_read.close
       @stdout_write.close
 
@@ -70,6 +83,22 @@ module ParallelConsumer
     end
 
     private
+
+    # Resolves the caller's choice to a spawn redirect, REFUSING the one that closes fd 2 rather
+    # than documenting that it is wrong: a guard the caller can walk past is not a guard.
+    def destination_for(stderr)
+      return STDERR_DESTINATIONS.fetch(stderr) if STDERR_DESTINATIONS.key?(stderr)
+      raise ArgumentError, closed_stderr_message if stderr == :close
+
+      stderr
+    end
+
+    def closed_stderr_message
+      "the sidecar's stderr must be redirected, never closed: :close hands the child a CLOSED " \
+        "file descriptor 2, so the next file it opens can silently become its stderr, and a " \
+        "sidecar that dies during startup has nowhere to say why. Use :inherit, :null, or an IO " \
+        "you drain."
+    end
 
     def close_pipe(pipe)
       pipe.close if pipe && !pipe.closed?

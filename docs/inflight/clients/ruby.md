@@ -96,6 +96,28 @@ this fix converges on their semantics rather than inventing a third shape.
   one record, so FIFO past the executor count and the overflow control were unreachable there. The
   two overflow examples were watched fail against the old array-depth check before the fix went in.
 
+## Fixed after wave one: the sidecar was spawned with fd 2 CLOSED
+
+The logging audit (`docs/inflight/branch-client-logging-contract.md`, authoring guide §10.1) found
+it: `Process.spawn(..., err: :close)` does not discard the child's stderr, it starts the JVM with
+**file descriptor 2 closed**. The next file the JVM opens can be handed fd 2 by the kernel, so
+everything written to stderr afterwards lands in that file - and a sidecar that dies during startup
+has nowhere to say why, leaving "the sidecar produced no 'port: <n>' line" as the whole diagnostic.
+The contract is that a stream you will not read is **redirected, never closed**, and never an
+undrained pipe either.
+
+- **The default is now `:inherit`**, mapped to `Process.spawn`'s own `:err`, which is what Rust and
+  TypeScript already do. `:null` (`File::NULL`) is the other named choice; an `IO` or a path passes
+  through for a caller that will drain it.
+- **`:close` is refused with an `ArgumentError` naming the descriptor**, rather than documented as
+  wrong - a guard a caller can walk past is not a guard.
+- **`spec/sidecar_stderr_spec.rb`** covers the refusal, the default redirect and an explicit
+  destination; the first two were watched fail against the old default. The *consequence* of a
+  closed fd 2 is deliberately not asserted: MRI reopens its own std descriptors at startup, so a
+  Ruby fake sidecar cannot exhibit what a JVM does, and a test built on one would prove nothing.
+- **Reaching the rest of §10.1 - a bounded tail of the sidecar's stderr kept for a crash
+  diagnostic - is the later logging wave's job**, and is not done here.
+
 ## What Ruby hit that no other language will
 
 - **`Thread::SizedQueue` is the wrong answer to the dispatch queue**, and it is the obvious one. Its
@@ -158,8 +180,10 @@ as the ledger states it: **`git commit -- <paths>`, never `git add` then commit.
   cross-version control it accidentally is. That row's scanner also installs `rubocop -v 1.69.2`,
   which does not match this module's pinned 1.89.0 and predates `TargetRubyVersion: 3.2` handling
   of some cops used here.
-- **The overflow path has never run.** It cannot be provoked by a correct proxy, and the harness is
-  correct. It stays code-reviewed rather than tested until the conformance suite gains the
+- **The overflow path has never run against the wire.** It cannot be provoked by a correct proxy,
+  and the harness is correct. `spec/dispatch_queue_spec.rb` now covers the queue's own accounting,
+  including the guide's worked overflow shape; what remains untested end to end is the client's
+  answer to it - cancel the call, raise, report the count - until the conformance suite gains the
   negative control the guide names.
 - **`src/docs/development/upstream-map.yaml` has no entry for this work** - outside the wave's file
   scope, the same gap the Python wave recorded.

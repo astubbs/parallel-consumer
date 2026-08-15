@@ -76,7 +76,7 @@ module ParallelConsumer
     end
 
     def initialize(options, sidecar:, sidecar_args: [], connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                   close_grace: DEFAULT_CLOSE_GRACE, logger: nil, stderr: :close)
+                   close_grace: DEFAULT_CLOSE_GRACE, logger: nil, stderr: :inherit)
       @options = options
       @close_grace = close_grace
       @logger = logger
