@@ -141,6 +141,33 @@ Replacement is the sale; these are the reason it is interesting.
 - **Workers that come and go.** Leases, heartbeats and epoch fencing mean a dead worker's records are
   reclaimed rather than stranded. That is what makes spot instances, autoscaled pods, short-lived
   functions and — at the far end — browser or edge workers plausible consumers of a Kafka topic.
+- **A worker restart stops being a consumer group rebalance — and this is already built.** Owner's
+  observation, 2026-08-15: *far* lower-hanging fruit than the Connect work, with a larger impact. The
+  sidecar holds the group membership; the application is a client of it. `ReconnectWindow` **holds a
+  dropped session's in-flight records** rather than returning them — `CONNECTED`, `HOLDING`, `SPENT`,
+  with attempt counts unchanged because no verdict was ever reached. So an application redeploy
+  inside the window costs no reassignment, no pause, no re-fetch.
+
+  **It arrived as a side effect.** The window exists to stop two workers holding one key after a
+  disconnect; nobody set out to remove rebalances. It is written down here because a capability
+  nobody aimed at is the one nobody thinks to claim.
+
+  **Against the existing answer**: static membership (`group.instance.id`) already survives a planned
+  restart inside the session timeout — but it needs the application to hold the Kafka client and be
+  configured right, and **it loses in-flight work**, since records are simply re-fetched and
+  reprocessed. Holding the in-flight set with its attempt counts is the part that is genuinely new,
+  and it should be verified against static membership before being claimed.
+
+  **The condition that decides whether any of it is real: the sidecar must outlive the worker.** A
+  sidecar container in the same pod restarts with it and delivers exactly nothing. The advantage
+  needs an independent lifecycle — a node-local daemon, a separate pod, a shared tier. That is a
+  **third independent argument arriving at the same place as §4 and §2b**, which is worth noticing:
+  the deployment shape that makes this work is the one the buyer question already pointed to.
+
+  It also cuts across the framing in `STRATEGY.md`: this is a **JVM-user** advantage, so the proxy is
+  not only "Parallel Consumer for other languages". Its earmarked question — whether this is that, or
+  "the Kafka client for other languages" — gains a third answer: *a deployment shape*.
+
 - **Kafka credentials stop leaving the platform boundary.** A worker needs the sidecar, not the
   brokers: no Kafka client, no broker reachability, no credential distribution. This is worth almost
   nothing to an application team and a great deal to whoever is accountable for the cluster — see §4.
