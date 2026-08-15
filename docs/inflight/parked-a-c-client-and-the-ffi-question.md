@@ -122,6 +122,40 @@ a native binding is more rows and no new scenarios. The Rust binding already exi
 experiment is a second dialect for a language already covered - and the suite decides whether it
 behaves identically rather than merely appearing to.
 
+### Having both is the point: it is the first controlled measurement of the hop
+
+Owner's call, 2026-08-15, and it converts this from "does embedding work" into something better
+posed. **Two Rust backends behind one controller is a genuinely controlled experiment** - same
+language, same controller, same conformance scenarios, one variable - which is rare enough here to be
+worth having for its own sake.
+
+**What it would settle.** `STRATEGY.md` asserts that for a base client the per-record hop is
+proportionally large, and that assertion has never been measured. The output should not be a winner
+but a **crossover point**: the per-record processing time at which the hop stops mattering. That
+number is directly useful in documentation whichever side wins, because it tells a user which
+transport their workload calls for instead of leaving them to guess.
+
+**The confound that would invalidate it if left alone**: the embedded engine is
+**native-image-compiled** while the sidecar is a **JVM**, so a naive comparison measures ahead-of-time
+versus just-in-time compilation as much as it measures the transport - and native image typically
+trades peak throughput for startup and memory, which would be charged to the hop by mistake. **Run the
+sidecar as a native image too**, so the engine is identical on both arms and the transport is the only
+difference. Report warm and cold separately.
+
+**Measure across a sweep of processing durations** - nothing, a millisecond, ten, a hundred, a second
+- since the whole claim is that the hop is noise for slow work and the cost for fast work. A single
+duration cannot show a crossover.
+
+**It still needs a stated exit**, because an experiment that ships accidentally becomes a product
+maintained forever - the accretion failure `AGENTS.md` describes. Write the kill criterion before
+building: what result deletes the embedded backend rather than fixing it. Behind an opt-in Cargo
+feature it is one crate with two backends rather than two clients, which keeps the cost of being wrong
+small.
+
+**And if it succeeds, the end state is still not "both everywhere"** - it is *different defaults per
+language*, embedded where the callback table says trivial and the demand is edge or latency, sidecar
+where it says hard and the work is slow.
+
 ## What to do instead, for now
 
 **Let demand decide.** The clients' root README should say that if someone wants a language that is
