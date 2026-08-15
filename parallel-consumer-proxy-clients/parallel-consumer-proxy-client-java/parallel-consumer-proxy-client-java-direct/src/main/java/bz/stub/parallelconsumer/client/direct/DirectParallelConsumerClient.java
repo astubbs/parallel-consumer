@@ -27,12 +27,15 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
 /**
@@ -58,9 +61,22 @@ import java.util.function.Function;
 @Slf4j
 public class DirectParallelConsumerClient implements ParallelConsumerClient, ConsumerRebalanceListener {
 
+    /**
+     * How often the session watcher asks core whether the engine is still alive - see {@link #watchForEngineEnd}
+     * for why asking is the only way to find out.
+     */
+    private static final Duration ENGINE_LIVENESS_POLL_INTERVAL = Duration.ofMillis(250);
+
     private final ClientOptions options;
     private final Consumer<byte[], byte[]> consumer;
     private final Producer<byte[], byte[]> producer;
+
+    /**
+     * The session's end, as {@link ParallelConsumerClient#sessionEnd} promises it - the same surface the gRPC
+     * transport exposes, because two transports that disagree about how a session ends would be a divergence on
+     * the one API they share.
+     */
+    private final CompletableFuture<Void> sessionEnd = new CompletableFuture<>();
 
     /** Created by {@link #poll}; volatile so the rebalance delegation can run from a consumer thread. */
     private volatile ParallelEoSStreamProcessor<byte[], byte[]> processor;
@@ -127,13 +143,63 @@ public class DirectParallelConsumerClient implements ParallelConsumerClient, Con
             }
             return toProducerRecords(outcome.produce());
         });
+        watchForEngineEnd();
+    }
+
+    @Override
+    public CompletionStage<Void> sessionEnd() {
+        // a view rather than the future itself: a caller that completed the session's own end would be able to
+        // tell every other holder the session finished while it is still consuming
+        return sessionEnd.thenApply(ended -> ended);
+    }
+
+    /**
+     * The in-process equivalent of the wire transport's stream error: core's control thread died, so the
+     * session is over even though the application never asked for it. It is <b>watched for</b> rather than
+     * subscribed to because core publishes no end-of-session callback - {@code isClosedOrFailed} and
+     * {@code getFailureCause} are the whole of what it offers, and both must be asked. The poll interval is a
+     * property of that gap, not a design preference; if core ever grows a completion hook, this thread is the
+     * thing to delete.
+     * <p>
+     * A daemon thread, so it can never be what keeps a JVM alive, and it exits the moment the session ends by
+     * either route.
+     */
+    private void watchForEngineEnd() {
+        var watcher = new Thread(() -> {
+            try {
+                while (!sessionEnd.toCompletableFuture().isDone()) {
+                    var current = processor;
+                    if (current != null && current.isClosedOrFailed()) {
+                        endSession(current.getFailureCause());
+                        return;
+                    }
+                    Thread.sleep(ENGINE_LIVENESS_POLL_INTERVAL.toMillis());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "pc-direct-client-session-watcher");
+        watcher.setDaemon(true);
+        watcher.start();
     }
 
     @Override
     public void close() {
         var current = processor;
         if (current != null && !current.isClosedOrFailed()) {
+            // core's own close IS the shutdown contract here: hand-out stops, in-flight work finishes and its
+            // outcome is applied, and nothing is interrupted into a verdict the user did not give
             current.close();
+        }
+        endSession(current == null ? null : current.getFailureCause());
+    }
+
+    /** Completes the session's end exactly once, exceptionally when the engine ended on a failure. */
+    private void endSession(Exception failureCause) {
+        if (failureCause == null) {
+            sessionEnd.complete(null);
+        } else {
+            sessionEnd.completeExceptionally(failureCause);
         }
     }
 

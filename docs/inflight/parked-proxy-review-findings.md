@@ -5,10 +5,12 @@ findings. **They were parked by an explicit call to stop review-and-fix cycles a
 remaining budget on the language fan-out instead** (astubbs#242, 2026-08-14). Apply the rest when
 the fan-out's first wave is in.
 
-Four are done and deleted from this file: the produce-ack wait that serialized the report lane, its
-missing failure-branch test, and both halves of the freeze guards' green-without-having-run
+Six are done and deleted from this file: the produce-ack wait that serialized the report lane, its
+missing failure-branch test, both halves of the freeze guards' green-without-having-run
 (`SpecificationCoverageTest`'s unanchored match, and the breaking-change gate's absent self-test and
-silent disarm). What remains below is unfixed and unrefuted.
+silent disarm), the P0 mid-session stream error that parked every executor silently, and `close()`
+inventing Failure verdicts for an interrupted user function. What remains below is unfixed and
+unrefuted.
 
 Ordered by what bites soonest, not by severity.
 
@@ -24,20 +26,6 @@ workers' eventual reports are fenced as superseded, and nothing commits — a re
 one-line omission. The fix is one line (`addCapabilities("dispatch")`, grown as duties land), and
 it should go in with or before the capability grant. Ten client authors mirror this reference, so
 the false claim propagates as the pattern if it stays.
-
-## The rest
-
-- **A mid-session stream error parks every client executor forever** (P0). `SessionObserver.onError`
-  sets `streamClosed` and fails the handshake future, but never flips `running`, so executors block
-  in `dispatchQueue.take()` with no timeout. `poll()` has already returned and the client surface
-  exposes no listener, so the application cannot learn consumption stopped. The stall half is
-  mechanical; how a caller *learns* is a wrapper-surface design decision every language mirrors.
-- **`close()` invents Failure verdicts and drops queued work** (P1). `shutdownNow()` runs before
-  `streamClosed` is set, so an interrupted user function's "processing was interrupted" failure is
-  transmitted and applied engine-side — attempt incremented, retry scheduled into a stream that is
-  closing. Queued records are dropped with no report at all, logged at debug. Both contradict the
-  frozen shutdown contract, and the direct transport does the opposite (core's close lets in-flight
-  work finish) — a transport divergence, which the one-API decision defines as a bug.
 
 ## Worth settling at merge time, not now
 

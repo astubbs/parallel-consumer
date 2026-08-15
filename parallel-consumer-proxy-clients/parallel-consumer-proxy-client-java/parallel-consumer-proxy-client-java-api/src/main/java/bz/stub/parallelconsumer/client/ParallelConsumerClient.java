@@ -3,6 +3,8 @@ package bz.stub.parallelconsumer.client;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import java.util.concurrent.CompletionStage;
+
 /**
  * The client wrapper: Parallel Consumer's user-facing surface, one layer for every language (the language-proxy
  * plan's KTD1, astubbs#242). A user builds {@link ClientOptions}, obtains a transport-bound client, and hands
@@ -58,7 +60,47 @@ public interface ParallelConsumerClient extends AutoCloseable {
      */
     void pollAsync(AsyncRecordProcessor processor);
 
-    /** Stops consumption and releases the transport's resources. Idempotent. */
+    /**
+     * <b>How a caller learns the session ended, and why - without polling for it.</b> The returned stage
+     * completes when consumption has stopped for any reason: normally when the session ended cleanly (the
+     * application closed the client, or the engine completed the stream), and exceptionally with the cause when
+     * it did not - a broken stream, a refused handshake, a protocol violation.
+     * <p>
+     * <b>It exists because a client whose session dies silently is the worst failure this surface can have.</b>
+     * {@link #poll} has already returned by then, so without this the application goes on believing it is
+     * consuming while nothing is: the exact defect this method closes (astubbs#242, and
+     * {@code client-authoring-guide.md} §1 makes "the caller can learn the session died, and why" normative for
+     * every language).
+     * <p>
+     * <b>The shape is settled across the fan-out, not invented here.</b> Six clients had already answered:
+     * Go's {@code Done()}/{@code Err()}, TypeScript's {@code done()}, Rust's {@code closed()}, Ruby's and
+     * Python's {@code wait()}, and C#'s {@code Task} that <em>is</em> the session. Two properties separate the
+     * good answers from the rest, and both are held here: the end is observable <em>without</em> ending the
+     * client (Python and Rust make you close to learn why), and the <em>cause</em> arrives from the same call
+     * (TypeScript and Ruby, the two the divergence review names as right). A {@link CompletionStage} is C#'s
+     * answer in Java's vocabulary, and it is already this module's vocabulary - {@code connect} returns one and
+     * {@link #pollAsync} consumes one.
+     * <p>
+     * It is an accessor rather than a return value from {@code poll} - the one place this differs from C# -
+     * because a session can die before or without a poll: a client that only connected still has an end to
+     * observe, and nine languages already mirror {@code poll}'s existing shape.
+     * <p>
+     * Every transport implements it, including the degenerate in-process one: two transports that disagree
+     * about how a session ends would be a divergence on the one API they share.
+     *
+     * @return a stage completing when the session ends. Each call returns an independent view of the one
+     * session end, so any number of callers may hold, chain or await it, and completing a view by hand cannot
+     * reach back into the session.
+     */
+    CompletionStage<Void> sessionEnd();
+
+    /**
+     * Stops consumption and releases the transport's resources. Idempotent.
+     * <p>
+     * Ends the session: hand-out stops, records already executing finish and report, and only then is the
+     * engine told the session is over. A record that was queued but never run is <b>not</b> reported - a client
+     * never invents a verdict for work it did not do, and the engine redelivers what it was not told about.
+     */
     @Override
     void close();
 }

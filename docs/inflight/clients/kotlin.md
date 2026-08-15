@@ -91,11 +91,13 @@ All of wave one's calls survive the rework; two of them are now *enforced* rathe
 
 This is the compounding argument working as designed, so it is recorded rather than worked around:
 
-- **A mid-session stream error parks every executor with no way for a caller to learn the session
-  died** - the P0 in `docs/inflight/parked-proxy-review-findings.md`. Kotlin's `poll` therefore
-  returns on `close` or cancellation only; it does not return when the proxy ends the stream.
-  Wave one's own session had the same gap for a different reason. **Deliberately not fixed here:**
-  the owner parked it, and one fix in `java-grpc` will now cover both clients.
+- **A mid-session stream error used to park every executor with no way for a caller to learn the
+  session died** - the P0 that was in `docs/inflight/parked-proxy-review-findings.md`. The transport
+  half is fixed: `java-grpc` now stops hand-out on a stream error and reports the end, with its
+  cause, through `ParallelConsumerClient.sessionEnd()`. **The Kotlin half is open**: `poll` still
+  returns on `close` or cancellation only, because it awaits its own `ended` and nothing joins that
+  to the transport's `sessionEnd()`. Wiring the two together is this client's remaining work, and it
+  is now a wiring job rather than a defect with nowhere to report to.
 - **The two known specification defects** - the unimplementable `FAILED_PRECONDITION` overflow
   response, and `Released` on shutdown being gated by an un-negotiated `shutdown` capability -
   are answered in `java-grpc` and by `startRecord`'s "hand-out has stopped" path respectively.

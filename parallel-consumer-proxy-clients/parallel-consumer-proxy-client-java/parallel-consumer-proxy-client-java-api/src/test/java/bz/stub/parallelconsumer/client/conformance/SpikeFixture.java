@@ -11,6 +11,7 @@ import bz.stub.parallelconsumer.client.RecordProcessor;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletionStage;
 
 /**
  * The transport-binding seam of the shared conformance suite: everything {@link SpikeConformanceTest} needs
@@ -61,6 +62,13 @@ public interface SpikeFixture extends AutoCloseable {
      * converged run this returns to zero, under every transport.
      */
     long recordsOutForProcessing();
+
+    /**
+     * The client's own {@link ParallelConsumerClient#sessionEnd} stage, exposed so the suite can hold both
+     * transports to the same answer about how a caller learns the session ended. A transport that only
+     * <em>declares</em> the method satisfies the compiler; only running this against both says the two agree.
+     */
+    CompletionStage<Void> sessionEnd();
 
     /** Tears down the client and the engine, asserting neither ended with an unexpected failure. */
     @Override

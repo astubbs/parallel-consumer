@@ -202,6 +202,38 @@ public abstract class SpikeConformanceTest {
         }
     }
 
+    /**
+     * <b>Both transports answer "has the session ended?" the same way</b>, which is the one API they share and
+     * therefore the one place a divergence would cost every mirroring language. The stage is silent while the
+     * session is alive and completes normally once the client is closed - the clean end. Its exceptional half
+     * (a stream that died under a live session) is transport-specific to drive and is proved in the gRPC
+     * module's own {@code SessionEndTest}; there is no in-process equivalent to break.
+     * <p>
+     * Before this existed, {@code poll} had returned and nothing on the surface could tell an application its
+     * session had stopped consuming - the parked P0 (astubbs#242).
+     */
+    @Test
+    void theEndOfTheSessionIsObservableAndFiresOnlyWhenItEnds() {
+        var topic = "spike-session-end-observable";
+        java.util.concurrent.CompletionStage<Void> sessionEnd;
+        try (var fixture = fixture(topic, Collections.singletonList(new SpikeFixture.Seed("lone-key", "hello")))) {
+
+            fixture.start(options(topic), record -> Outcome.success());
+            awaitCommittedOffset(fixture, 1);
+
+            sessionEnd = fixture.sessionEnd();
+            assertWithMessage("the session end does not fire while the session is still consuming")
+                    .that(sessionEnd.toCompletableFuture().isDone()).isFalse();
+        }
+
+        // the fixture closed the client on the way out of the block
+        Awaitility.await().atMost(CONVERGENCE_BUDGET).untilAsserted(() ->
+                assertWithMessage("closing the client completes the session end")
+                        .that(sessionEnd.toCompletableFuture().isDone()).isTrue());
+        assertWithMessage("a session the application ended is not a failure")
+                .that(sessionEnd.toCompletableFuture().isCompletedExceptionally()).isFalse();
+    }
+
     private static void awaitCommittedOffset(SpikeFixture fixture, long expectedOffset) {
         Awaitility.await().atMost(CONVERGENCE_BUDGET).untilAsserted(() ->
                 assertWithMessage("the committed offset advances past the completed records")

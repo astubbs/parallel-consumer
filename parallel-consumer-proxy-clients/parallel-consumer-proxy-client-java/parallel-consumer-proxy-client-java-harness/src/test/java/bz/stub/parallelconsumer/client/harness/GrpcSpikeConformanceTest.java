@@ -15,6 +15,7 @@ import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletionStage;
 
 /**
  * The shared spike suite under the gRPC transport - the identical test classes the direct sibling runs, with
@@ -91,6 +92,11 @@ class GrpcSpikeConformanceTest extends SpikeConformanceTest {
         @Override
         public long recordsOutForProcessing() {
             return harness.engineRecordsOutForProcessing();
+        }
+
+        @Override
+        public CompletionStage<Void> sessionEnd() {
+            return client.sessionEnd();
         }
 
         @Override

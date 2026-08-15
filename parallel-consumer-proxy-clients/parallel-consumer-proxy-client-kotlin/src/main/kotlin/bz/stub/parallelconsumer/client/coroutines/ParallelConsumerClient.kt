@@ -102,10 +102,12 @@ internal fun CoroutineScope.startRecord(
  * per record. What is left for this module is the part that is genuinely Kotlin: suspension,
  * structured concurrency, nullability, sealed types, and cancellation that is not a verdict.
  *
- * The visible consequence is that this client **inherits** the transport's behaviour, including
- * what is wrong with it: a stream error currently parks the executors with no signal to the caller,
- * and this client cannot see it either. That is the compounding argument working as intended -
- * `docs/inflight/parked-proxy-review-findings.md` records the defect, and one fix will cover both.
+ * The visible consequence is that this client **inherits** the transport's behaviour, for good and
+ * ill. The stream-error defect it inherited has been fixed one layer down: the transport now stops
+ * hand-out when the session dies and reports the end, with its cause, through
+ * `ParallelConsumerClient.sessionEnd()`. What is left here is wiring - [poll] awaits [ended] and
+ * nothing yet joins that to the transport's session end, so [poll] still returns only on [close] or
+ * cancellation (`docs/inflight/clients/kotlin.md`).
  *
  * The client is **stateless per record**. The fencing token never reaches this layer at all; it
  * rides from the dispatch queue to the report inside the transport. Fencing is the proxy's job.
@@ -155,7 +157,8 @@ public class ParallelConsumerClient private constructor(
      * coroutine and the proxy will redeliver them, because a cancelled record is reported as
      * nothing at all rather than as a failure.
      *
-     * **It does not return when the proxy ends the stream**, and that is the inherited defect named
+     * **It does not return when the proxy ends the stream** - the transport now reports that end
+     * through its own `sessionEnd()`, and joining the two is this client's outstanding wiring, named
      * in this class's documentation rather than a decision made here.
      *
      * May be called at most once per client.

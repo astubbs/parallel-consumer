@@ -67,6 +67,28 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
     /** How long the connect-time handshake may take before {@link #poll} gives up. */
     public static final Duration CONNECT_BUDGET = Duration.ofSeconds(30);
 
+    /**
+     * How long {@link #close} lets records already executing finish and report before it stops waiting.
+     * <p>
+     * The specification's shutdown rule is stop hand-out, final reports for executing records, <em>then</em>
+     * half-close, so this is the budget for the middle step. Past it the stream is marked closed
+     * <b>before</b> anything is interrupted, because an interrupted user function produces a "processing was
+     * interrupted" failure and transmitting that would invent a verdict for work the user did not decide.
+     */
+    public static final Duration CLOSE_DRAIN_BUDGET = Duration.ofSeconds(10);
+
+    /**
+     * How often an idle executor wakes to re-check whether the session is still running.
+     * <p>
+     * <b>The wake-up is what makes a dead session releasable at all.</b> An untimed {@code take()} can only be
+     * broken by interrupting the thread - and the same interrupt would tear through an executor that is running
+     * the user's function, which is exactly the invented verdict {@link #close} exists to avoid. A poll
+     * interval costs one wake per executor per interval while idle and nothing at all while records are
+     * arriving (a waiting {@code poll} returns the instant one is offered), which buys a session end that needs
+     * no interrupt.
+     */
+    private static final Duration HAND_OUT_POLL_INTERVAL = Duration.ofMillis(100);
+
     private static final String LOOPBACK_HOST = "127.0.0.1";
 
     private final int port;
@@ -74,6 +96,23 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
 
     private final Object transmitLock = new Object();
     private final CompletableFuture<Configured> configured = new CompletableFuture<>();
+
+    /**
+     * The session's end, as {@link ParallelConsumerClient#sessionEnd} promises it: completed normally when the
+     * session ended cleanly, exceptionally with the cause when it did not. Completed in exactly one place
+     * ({@link #endSession}) so no path can end the session without the caller being told.
+     */
+    private final CompletableFuture<Void> sessionEnd = new CompletableFuture<>();
+
+    /**
+     * How many records are out with a processor and not yet reported - a <em>session</em> count, not per-record
+     * state, so KTD8's statelessness is intact: no token, no identity, nothing to fence with.
+     * <p>
+     * It exists because the asynchronous form's executor thread does not wait for the verdict. Without it,
+     * {@link #close} would see an idle thread pool and half-close the stream while stages were still on their
+     * way to a report, dropping verdicts for work that did finish.
+     */
+    private final AtomicInteger recordsAwaitingVerdict = new AtomicInteger();
 
     /**
      * Volatile because {@code close()} reads it from a DIFFERENT thread than the one that assigned it in
@@ -171,6 +210,13 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
         for (int i = 0; i < executorCount; i++) {
             executors.execute(() -> executorLoop(processor));
         }
+        if (sessionEnd.isDone()) {
+            // the session died between the handshake and here - without this, hand-out would have just been
+            // started for a session nothing will ever dispatch on, and `running` would never be read false again
+            log.warn("The session ended before polling began; stopping the executors that were just started");
+            endSession(null);
+            return;
+        }
         log.info("Connected and configured: {} executor(s), dispatch queue depth {}",
                 executorCount, session.maxConcurrency());
     }
@@ -193,6 +239,13 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
         }
     }
 
+    @Override
+    public CompletionStage<Void> sessionEnd() {
+        // a view rather than the future itself: a caller that completed the session's own end would be able to
+        // tell every other holder the session finished while it is still consuming
+        return sessionEnd.thenApply(ended -> ended);
+    }
+
     /**
      * One executor's life: take the next dispatch FIFO, start the processor, report the outcome with the token
      * echoed verbatim when it arrives. A queued record is already leased and connection-level heartbeats cover
@@ -205,28 +258,59 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
      * Nothing here waits on the stage, deliberately - waiting is what the asynchronous form exists to avoid.
      * A stage that never completes therefore never reports, which is {@link AsyncRecordProcessor}'s way of
      * saying this client has no verdict for that record.
+     * <p>
+     * <b>The hand-out wait is timed, and that is what ends this loop.</b> Hand-out stops when the session does
+     * - a broken stream as much as a {@link #close} - and an executor waiting untimed for a record that will
+     * never come is a thread parked for the life of the process, with the application still believing it is
+     * consuming. See {@link #HAND_OUT_POLL_INTERVAL} for why the wait is timed rather than interrupted.
      */
     private void executorLoop(AsyncRecordProcessor processor) {
         while (running) {
             DispatchRecord dispatch;
             try {
-                dispatch = dispatchQueue.take();
+                dispatch = dispatchQueue.poll(HAND_OUT_POLL_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             }
+            if (dispatch == null) {
+                // nothing was handed out this turn: go round, re-read `running`, and leave if the session ended
+                continue;
+            }
             var token = dispatch.getToken();
+            recordsAwaitingVerdict.incrementAndGet();
             Outcomes.applyProcessorAsync(processor, WireMapping.toInboundRecord(dispatch))
-                    .thenAccept(outcome -> transmit(ClientMessage.newBuilder()
-                            .setReport(WireMapping.toReport(token, outcome))
-                            .build()));
+                    .whenComplete((outcome, thrown) -> {
+                        try {
+                            if (outcome != null) {
+                                transmit(ClientMessage.newBuilder()
+                                        .setReport(WireMapping.toReport(token, outcome))
+                                        .build());
+                            } else {
+                                // Outcomes turns every exceptional completion into a failure Outcome, so this
+                                // is unreachable for a conforming stage - and if it is ever reached, saying
+                                // nothing is the honest answer rather than a verdict nobody gave
+                                log.warn("A record's verdict stage completed with no outcome; reporting nothing "
+                                        + "for it, so the engine will redeliver", thrown);
+                            }
+                        } finally {
+                            recordsAwaitingVerdict.decrementAndGet();
+                        }
+                    });
         }
     }
 
     private void transmit(ClientMessage message) {
         synchronized (transmitLock) {
             if (streamClosed) {
-                log.debug("Dropping a {} message: the stream is closed", message.getMessageCase());
+                if (message.getMessageCase() == ClientMessage.MessageCase.REPORT) {
+                    // a verdict the user's function DID reach, lost because the session ended under it - the
+                    // engine redelivers the record, so this is a redelivery's cause and not a debug detail
+                    log.warn("The session ended before a record's verdict could be sent; the engine will "
+                            + "redeliver that record");
+                } else {
+                    log.debug("Dropping a {} message: the stream is closed", message.getMessageCase());
+                }
                 return;
             }
             try {
@@ -238,17 +322,63 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
         }
     }
 
+    /**
+     * The one place the session ends, whatever ended it: hand-out stops and the executors are told to finish.
+     * <p>
+     * <b>It never interrupts.</b> Idle executors leave of their own accord at their next hand-out turn, and
+     * executing ones run their user function to its verdict - interrupting either is how a client comes to
+     * report a failure the user never decided. {@link #close} is the only path that may resort to an interrupt,
+     * and it marks the stream closed first so nothing fabricated can be transmitted.
+     *
+     * @param cause what ended the session, or {@code null} if it ended cleanly
+     */
+    private void endSession(Throwable cause) {
+        running = false;
+        var currentExecutors = executors;
+        if (currentExecutors != null) {
+            // shutdown, never shutdownNow: it refuses new work without touching what is already running
+            currentExecutors.shutdown();
+        }
+        if (cause == null) {
+            sessionEnd.complete(null);
+        } else {
+            sessionEnd.completeExceptionally(cause);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The frozen shutdown order, in three steps: stop hand-out, let records already executing reach their
+     * verdict and report it, and only then half-close the stream. Queued records that were never handed out are
+     * abandoned unreported - the engine redelivers them - because reporting anything for work that did not run
+     * would be a verdict this client invented. ({@code Released}, the wire's word for "handed back unrun", is
+     * gated behind the {@code shutdown} capability this transport does not negotiate.)
+     */
     @Override
     public void close() {
         running = false;
         var currentExecutors = executors;
         if (currentExecutors != null) {
-            currentExecutors.shutdownNow();
-            try {
-                currentExecutors.awaitTermination(10, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            currentExecutors.shutdown();
+            if (!awaitFinalVerdicts(currentExecutors)) {
+                // the budget is up with work still outstanding. Marking the stream closed BEFORE interrupting
+                // is the whole point of the order: shutdownNow makes a blocked user function throw
+                // InterruptedException, which Outcomes reports as a "processing was interrupted" failure - and
+                // a transmitted failure is applied engine-side as a real one, consuming a retry attempt for a
+                // record whose processing the user never got to decide
+                synchronized (transmitLock) {
+                    streamClosed = true;
+                }
+                log.warn("Records were still executing after {}; ending the session without their verdicts, so "
+                        + "the engine will redeliver them", CLOSE_DRAIN_BUDGET);
+                currentExecutors.shutdownNow();
             }
+        }
+        var queue = dispatchQueue;
+        if (queue != null && !queue.isEmpty()) {
+            log.info("{} record(s) were queued and never handed out; no verdict is reported for them and the "
+                    + "engine will redeliver them", queue.size());
         }
         synchronized (transmitLock) {
             if (requests != null && !streamClosed) {
@@ -268,6 +398,33 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+        }
+        endSession(null);
+    }
+
+    /**
+     * Waits out {@link #CLOSE_DRAIN_BUDGET} for both halves of "executing records finish and report": the
+     * executor threads leaving their loop, and the verdicts still travelling from an asynchronous processor's
+     * stage to the wire.
+     *
+     * @return whether everything reported within the budget
+     */
+    private boolean awaitFinalVerdicts(ExecutorService currentExecutors) {
+        long deadline = System.nanoTime() + CLOSE_DRAIN_BUDGET.toNanos();
+        try {
+            if (!currentExecutors.awaitTermination(CLOSE_DRAIN_BUDGET.toMillis(), TimeUnit.MILLISECONDS)) {
+                return false;
+            }
+            while (recordsAwaitingVerdict.get() > 0) {
+                if (System.nanoTime() - deadline >= 0) {
+                    return false;
+                }
+                TimeUnit.MILLISECONDS.sleep(HAND_OUT_POLL_INTERVAL.toMillis());
+            }
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
@@ -324,11 +481,21 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
                             requests.onError(violation.asRuntimeException());
                         }
                     }
+                    // the caller learns it as the violation rather than as the CANCELLED the cancelled call
+                    // would otherwise deliver, so the reason names the proxy's fault and the count
+                    endSession(new ProxyProtocolViolation(violation.getDescription()));
                     return;
                 }
             }
         }
 
+        /**
+         * The session died under us. Both halves matter and the second is the one that was missing: the stream
+         * is unwritable, <b>and consumption has stopped</b> - so hand-out ends, the executors leave, and the
+         * caller's {@link #sessionEnd} stage carries the cause. Without that, {@link #poll} had already
+         * returned, every executor sat in an untimed hand-out wait, and nothing on this surface could tell the
+         * application it had stopped consuming.
+         */
         @Override
         public void onError(Throwable t) {
             synchronized (transmitLock) {
@@ -336,10 +503,11 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
             }
             configured.completeExceptionally(t);
             if (running) {
-                log.warn("Session stream errored", t);
+                log.warn("Session stream errored; ending the session and stopping the executors", t);
             } else {
                 log.debug("Session stream ended during close", t);
             }
+            endSession(t);
         }
 
         @Override
@@ -348,6 +516,14 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
                 streamClosed = true;
             }
             log.debug("Session stream completed by the proxy");
+            if (!configured.isDone()) {
+                // otherwise a connect that will never be answered waits out the whole CONNECT_BUDGET
+                configured.completeExceptionally(new ProxyProtocolViolation(
+                        "the proxy completed the session stream without ever sending Configured"));
+            }
+            // a stream the proxy completed is a session that ended, not merely a stream that stopped: the
+            // executors have nothing more coming, and a clean end is a clean completion of the caller's stage
+            endSession(null);
         }
     }
 

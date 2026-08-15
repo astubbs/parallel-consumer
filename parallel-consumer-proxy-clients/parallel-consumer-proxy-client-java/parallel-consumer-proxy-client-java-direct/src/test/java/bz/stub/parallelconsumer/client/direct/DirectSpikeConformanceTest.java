@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletionStage;
 
 /**
  * The shared spike suite under the direct transport: no RPC, no serialization - the transport is a plain
@@ -120,6 +121,11 @@ class DirectSpikeConformanceTest extends SpikeConformanceTest {
         @Override
         public long recordsOutForProcessing() {
             return client.recordsOutForProcessing();
+        }
+
+        @Override
+        public CompletionStage<Void> sessionEnd() {
+            return client.sessionEnd();
         }
 
         @Override
