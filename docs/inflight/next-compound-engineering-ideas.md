@@ -126,7 +126,21 @@ The old header check asked whether a window of text contained a word, so two fil
 the copyright policy in prose* read as claiming that copyright. Wrong-shaped checks are harder to
 find than absent ones, because their green is indistinguishable.
 
-**13. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
+**13. Seed reviewers with the strategy's known risks, not just the diff.** A reviewer given a diff
+finds defects in the diff. A reviewer told *what this way of working tends to get wrong* also checks
+whether the approach itself is going astray — and in a fan-out that is where the expensive mistakes
+live. Concrete example from this project: "make sure the multi-language clients' tests are testing
+the right things and not overlapping more than they need to with the core tests" is a risk no
+line-by-line review would surface, because every individual test looks reasonable; only someone
+holding the strategy can see the duplication building.
+
+So a review dispatch should carry the identified risks of the *method* alongside the scope of the
+work: what layer each kind of test belongs in, which duplication is deliberate mirroring and which is
+drift, which decisions are settled and must not be re-litigated. Cheap to add to a prompt, and it
+changes what comes back — the same reviewers then report on the shape of the work rather than only
+its contents.
+
+**14. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
 interrogate the shared surface: no-exception languages test whether outcomes are really values,
 single-threaded runtimes test whether the concurrency model is really the engine's, forked-process
 runtimes test whether the client is really stateless. Questions the reference language cannot ask
