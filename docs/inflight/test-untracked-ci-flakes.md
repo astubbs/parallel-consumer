@@ -17,6 +17,27 @@ product behaviour and the assertion was wrong, so no product change was needed.
 | `PCMetricsTest.metricsRegisterBinding` | 4 seen | Released by astubbs#265, failed twice consecutively on one head, **re-quarantined unowned** in astubbs#116. Mechanism only half-known: the fix closed the metric-ahead direction, the failures are metric-behind-and-never-converging - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
+### Four more seen under concurrent agent load, 2026-08-15 - unclassified
+
+Recorded because this ledger exists so a flake is not met twice as a surprise, not because any of
+them is diagnosed. All four surfaced while several agents built the reactor at once (`-am` drags
+core's full suite into every client build), **every one passed on retry**, and none is a client
+defect:
+
+- `ParallelEoSStreamProcessorTest.executorThreadsInterruptedOnShutdownTimeout`
+- `CheckQuarantineOwnersScriptTest` - two different methods, on different runs
+- `ProxyProcessorLivenessTest.aSlowWorkerKeepsItsRecordWhileHeartbeatsContinueAndLosesItWhenTheyStop`
+
+**Do not quarantine any of them on this evidence.** Contention on a box running many JVMs is exactly
+the condition rule 2 exists to rule out, and the first uncontended full run of this branch passed all
+of them - see [`branch-clean-verification-2026-08-15.md`](branch-clean-verification-2026-08-15.md),
+which also records the one test that did survive that filter. What they earn is a name here, so the
+next sighting is a second sighting rather than a first.
+
+The liveness one is worth a closer look than the others if it recurs: it is new code on this branch,
+it asserts on a lease deadline, and a test that measures elapsed time under load is the shape this
+repo has been bitten by twice already.
+
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
