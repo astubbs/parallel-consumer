@@ -237,11 +237,15 @@ Already in flight, and the proof the pattern generalises: Kafka Streams (astubbs
 
 Candidates, unranked and none started:
 
-- **Per-key or per-destination rate limiting.** The strongest of these. PC already decides when a
-  record is dispatched, so a token bucket per shard is a natural extension rather than a new
-  subsystem — and rate limiting against a third-party API is exactly what every webhook and
-  API-fan-out system has to build by hand. It also composes with retry, which a separate limiter
-  cannot.
+- **Per-key or per-destination rate limiting — and this one is already asked for, so it is not a
+  candidate in the same sense as the rest.** `astubbs/parallel-consumer#228` (mirror of
+  confluentinc#24, *Add distributed rate limiting support*) is open on the fork, and
+  confluentinc#766 is a user arriving with the same need phrased as a question — *how to limit
+  message consumption at a certain RPS*. Under §4c's **demand decides** filter that is the strongest
+  evidence any item on this page has. The technical case matches: PC already decides when a record is
+  dispatched, so a token bucket per shard is an extension rather than a new subsystem, it is what
+  every webhook and API-fan-out system builds by hand, and it **composes with retry**, which a
+  bolt-on limiter cannot.
 - **Generalised scheduled delivery.** Retry backoff is already "run this record no earlier than T".
   Generalising it gives arbitrary delayed delivery — one of the four capabilities
   [`next-study-dapr-and-kafka-proxies.md`](next-study-dapr-and-kafka-proxies.md) names as genuinely
