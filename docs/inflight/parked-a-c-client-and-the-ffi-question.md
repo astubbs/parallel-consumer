@@ -66,24 +66,61 @@ That is the disagreement to settle, not a detail.
 
 **Four costs, and the first two are the ones that decide it:**
 
-- **It recreates librdkafka's distribution problem** - the exact thing this fork's currency argument
-  rests on avoiding. One binary per platform and architecture, vendored or downloaded by every
-  language package. Today a Kafka version bump is a dependency bump; under this it is a release matrix.
-- **The callback concurrency model collides, differently in every language.** PC's value is running
-  many callbacks at once, and calling *out* of native-image Java into a host runtime is where that
-  gets hard: CPython's global interpreter lock, cgo's scheduler interaction and callback overhead,
-  Node requiring thread-safe functions marshalled onto the event loop. I/O-bound work releases the
-  lock in some of these, which is the case PC is for - but it must be established per language rather
-  than assumed, and a language where it fails gets no concurrency at all.
+- **It couples the platform release matrix to Kafka versions.** Stated too absolutely in the first
+  draft, and corrected by the owner: *any* C-based channel needs per-platform binaries, so a matrix
+  exists either way. **The difference is what re-triggers it.** A C client speaking the protocol
+  rebuilds when the client changes; an embedded engine rebuilds on **every Kafka bump**, because the
+  Kafka client is inside the binary. So a version bump goes from a dependency change to a rebuild and
+  re-release of every platform binary and every language package that vendors one - and it is
+  precisely this fork's currency argument that pays the price.
+- **The callback concurrency model collides, differently in every language** - broken down below,
+  because that breakdown turns out to decide the whole proposal.
 - **Native-image reachability metadata for `kafka-clients`**, which uses reflection for serialisers and
   config. Solved territory (Quarkus does it) but real work.
 - **Crash isolation is lost** - a segfault or OOM in the native image takes the host process with it,
   where the sidecar's process boundary contains it.
 
+### The callback breakdown, and the finding that falls out of it
+
+The question per language is the same: the engine must call *out* of native-image Java, on many
+threads at once, into the host runtime. Ordered easiest to hardest. **All of it is from reasoning
+about each runtime's published threading model, none of it measured** - treat it as the hypothesis to
+test, not a result.
+
+| Language | Mechanism | Real concurrency? | Difficulty |
+|---|---|---|---|
+| **Rust** | `extern "C"` function pointer | **yes, true parallelism** - no runtime, no GC pause, no interpreter lock | trivial |
+| **C++** | plain C callback | **yes** | trivial |
+| **Swift** | `@convention(c)` closure | **yes** | easy |
+| **C#/.NET** | reverse P/Invoke, `[UnmanagedCallersOnly]`; the runtime attaches foreign threads itself | **yes** | easy |
+| **Go** | cgo `//export`; the thread is attached to a goroutine | **yes**, but with real per-call overhead and cgo's pointer rules to respect | medium |
+| **Python** | `PyGILState_Ensure` per call | **only while the lock is released** - I/O-bound handlers do release it, CPU-bound ones do not | hard mechanically |
+| **Ruby** | `rb_thread_call_with_gvl`, thread must be registered | same shape as Python, via the global VM lock | hard |
+| **Node/TypeScript** | N-API thread-safe function, marshalled onto the event loop | **no** - callbacks are serialised onto one thread; concurrency only from async I/O inside the handler | hardest |
+
+**The finding: the difficulty ranking and the demand ranking align, and that is not a coincidence.**
+
+- The **easy** languages - Rust, C++, Swift, C# - are also **where embedding is worth having**: the
+  edge and embedded targets where a second process is unavailable, and the latency-sensitive
+  fast-record workloads where the per-record hop is the cost rather than noise.
+- The **hard** ones - Python, Ruby, Node - are where **the sidecar is already the right answer**.
+  Their typical work is I/O-bound and slow, which makes the hop noise; and for I/O-bound handlers
+  their in-process concurrency profile would be *the same as the threading they already have*, so
+  embedding buys them very little at the highest cost.
+
+So the owner's instinct that the easiest one is a good win is right, and for a stronger reason than
+being easiest: **easiest and most valuable are the same set.** If this is ever attempted, **Rust
+first** - trivial callbacks, true parallelism, and a population that actually wants an in-process
+engine.
+
+That inverts the earlier advice in this section to prove it where the callback question is hardest.
+That advice suits a proposal that must eventually serve everyone; this one does not, because the
+languages where it is hardest are the ones it need not serve at all.
+
 **What makes it cheap to evaluate**: the conformance suite keys bindings on *(language, dialect)*, so
-a native binding is more rows and no new scenarios. **Prove it in one language before believing any of
-the above** - and pick one where the callback question is hardest, not easiest, since that is what the
-proposal actually turns on.
+a native binding is more rows and no new scenarios. The Rust binding already exists over gRPC, so the
+experiment is a second dialect for a language already covered - and the suite decides whether it
+behaves identically rather than merely appearing to.
 
 ## What to do instead, for now
 
