@@ -121,7 +121,7 @@ The shared cross-language conformance suite drives this client's runner
 engine state Python cannot see:
 
 ```bash
-./mvnw test -pl :parallel-consumer-proxy-client-python -am -Dpc.foreignClients          # the CI row
+./mvnw package -pl :parallel-consumer-proxy-client-python -am -Dpc.foreignClients       # the CI row
 ./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=python
 ```
 

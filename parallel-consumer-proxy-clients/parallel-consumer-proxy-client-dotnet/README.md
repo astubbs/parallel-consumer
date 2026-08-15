@@ -111,7 +111,7 @@ dotnet format --verify-no-changes                           # formatting and sty
 Through Maven, which is what the CI row does:
 
 ```bash
-./mvnw -pl :parallel-consumer-proxy-client-dotnet -am test -Dpc.foreignClients
+./mvnw -pl :parallel-consumer-proxy-client-dotnet -am package -Dpc.foreignClients
 ```
 
 The Maven wrapper runs the .NET toolchain **only** under `-Dpc.foreignClients`; an ordinary
