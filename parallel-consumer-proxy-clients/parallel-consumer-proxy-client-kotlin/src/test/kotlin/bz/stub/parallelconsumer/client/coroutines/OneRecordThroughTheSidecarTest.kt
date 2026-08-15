@@ -53,9 +53,12 @@ class OneRecordThroughTheSidecarTest {
         )
 
         client.use {
-            assertThat(client.session.capabilities).containsExactly(Wire.DISPATCH_CAPABILITY)
-            assertThat(client.session.executorCount).isAtLeast(1)
-            assertThat(client.session.maxConcurrency).isAtLeast(1)
+            // the capability set is the transport's declaration, asserted here because this client
+            // inherits it rather than choosing it - a transport that started claiming more would
+            // silently claim duties this wave does not perform
+            assertThat(client.session.capabilities()).containsExactly("dispatch")
+            assertThat(client.session.executorCount()).isAtLeast(1)
+            assertThat(client.session.maxConcurrency()).isAtLeast(1)
 
             val poller = launch(Dispatchers.IO) {
                 client.poll { record ->

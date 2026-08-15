@@ -6,38 +6,61 @@ anything the Kotlin wave learns that a later session needs go HERE - never appen
 `docs/inflight/branch-language-proxy.md` - one file per language, so concurrent waves never edit a
 shared note.
 
-**Status: wave one landed.** Connect, `Configure`, one `Dispatch` wave, the user's function, the
-report with the token echoed verbatim, and a clean client-initiated shutdown - proven by one
-end-to-end test against the real test-mode sidecar, which passed on its first run. The module is at
-`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/`; its maturity and
-testing-evidence deferrals are lifted. Later waves: leases and heartbeats, the manifest reconnect,
-worker death, terminal outcomes, the `Shutdown` drain, the demo and its container, publishing, and
-the rest of the conformance suite.
+**Status: wave one landed, and has since been reworked to wrap the Java client.** Connect,
+`Configure`, one `Dispatch` wave, the user's function, the report with the token echoed verbatim,
+and a clean client-initiated shutdown - proven by one end-to-end test against the real test-mode
+sidecar. The module is at `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/`;
+its maturity and testing-evidence deferrals are lifted. Later waves: leases and heartbeats, the
+manifest reconnect, worker death, terminal outcomes, the `Shutdown` drain, the demo and its
+container, publishing, and the rest of the conformance suite - **most of which this client now
+inherits rather than implements.**
 
-## What it wraps, and why it wraps neither Java transport
+## It wraps `java-grpc`, and the two reasons it did not are fixed at source
 
-Kotlin is a JVM language, so the obvious wave-one shortcut was to wrap
-`parallel-consumer-proxy-client-java-grpc` behind an idiomatic surface. **It does not**, on one
-measurable ground and two design ones:
+Wave one implemented its own gRPC session and gave three reasons. Two were real, and the answer to
+both was to fix the thing that made wrapping unattractive rather than to keep a second JVM session
+implementation. The third was wrong.
 
-- **`-am` reach.** `java-grpc` test-depends on the engine, so a Kotlin module depending on it puts
-  `parallel-consumer-proxy` in the reactor of `-pl :parallel-consumer-proxy-client-kotlin -am` - and
-  `bin/build.sh` starts with `clean`, so the routine Kotlin build would delete the sidecar jar every
-  other language's conformance test spawns. Reproduce with
-  `./mvnw -pl :parallel-consumer-proxy-client-java-grpc -am validate`, which prints the reactor.
-  Depending on `parallel-consumer-proxy-protocol` instead reaches core and the protocol module only.
-- **The executors would be Java's.** Wrapping the Java client means its fixed thread pool runs the
-  user's function, and a coroutine surface over it is a `runBlocking` per record. Here the executors
-  *are* coroutines, so a suspending user function is native rather than bridged.
-- **The two known specification defects are the client's to answer**, and a wrapper cannot answer
-  them - the overflow response and the shutdown-time treatment of queued records are decided in the
-  session code, which would have been Java's.
+- **The `-am` reach (real, fixed in the build).** `java-grpc` test-depended on the engine, so a
+  module depending on it put `parallel-consumer-proxy` in the reactor of `-pl <that module> -am` -
+  and `bin/build.sh` opens with `clean`, so the routine build of a wrapper deleted the sidecar jar
+  every other language's conformance test spawns. The engine dependency now lives in
+  `parallel-consumer-proxy-client-java-harness`, a leaf module nothing wraps, which also runs the
+  gRPC transport's harness-backed conformance suite. Measure rather than assume:
+  `./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate` prints the reactor, and
+  `parallel-consumer-proxy` is not in it.
+- **A `runBlocking` per record (real, fixed in the API).** `java-api`'s processor returned an
+  `Outcome` synchronously, so a coroutine surface over it would have parked a thread per record.
+  `java-api` now also has `AsyncRecordProcessor`, returning a `CompletionStage<Outcome>`, and
+  `ParallelConsumerClient.pollAsync`. A coroutine completes the stage and no thread waits - so
+  `poll` is still a `suspend fun` that suspends for the life of the session, and is now backed by
+  the bridge rather than by a blocked thread.
+- **"A wrapper cannot answer the two specification defects" (void).** `java-grpc` answers both, and
+  inheriting its answers is the entire point.
 
-It does not depend on `parallel-consumer-proxy-client-java-api` either: that module defines the
-reference *shape*, which this client mirrors, but importing its types would drag `Optional`,
-builders and a boolean-flagged outcome into a surface whose whole purpose is to be Kotlin.
+**The compounding argument is the reason this matters more than the module's own size.** The JVM was
+heading for three session implementations - java-grpc, Kotlin, Scala - so every session defect would
+have needed fixing three times. It is one.
+
+### What that cost, honestly
+
+- **The module got smaller, but by less than the deletions suggest.** Main sources went from 927
+  lines to 690 (**-26%**); ignoring comments and blanks, 513 code lines to 323 (**-37%**). Two files
+  are gone outright - `ProxyStream.kt` (the session) and `Wire.kt` (the protobuf mapping, whose
+  tests were a second copy of `WireMappingTest`) - and `ParallelConsumerClient.kt` grew, because
+  what is left in it is the part that needed explaining.
+- **`Sidecar.kt` is 152 of the remaining 690 lines and has no Java counterpart.** Spawning the
+  sidecar is the lifecycle unit's job in the plan, and `java-grpc` still connects to a port it is
+  given. When that unit lands, this module deletes another ~150 lines and Scala never writes them.
+- **`Bridge.kt` is the standing cost of being a Kotlin client**, and it is one file on purpose so
+  the cost stays countable. It is the only translation the module performs.
+- **One genuine loss of purity:** `Session` is now `java-grpc`'s `NegotiatedSession`, so its
+  accessors read `session.capabilities()` rather than `session.capabilities`. A Kotlin respelling
+  would have bought the property syntax and nothing else.
 
 ## The idiomatic decisions, for the wave sync
+
+All of wave one's calls survive the rework; two of them are now *enforced* rather than described.
 
 - **`poll` suspends for the life of the session.** It does not block a thread and does not return
   when processing starts. Go chose "returns immediately, with `Done`/`Err`"; Kotlin's structured
@@ -54,25 +77,32 @@ builders and a boolean-flagged outcome into a surface whose whole purpose is to 
   "closed two-armed value" expressed as a closed type rather than a boolean field.
 - **No builder.** Default and named arguments say "unset means take the engine's default" once, at
   the declaration.
-- **Cancellation is not a verdict.** `CancellationException` is re-thrown out of the
-  function-to-outcome translation rather than becoming a `Failure`. This is a Kotlin-specific hazard
-  with no counterpart in the reference implementation, and it is the kind of thing a language wave
-  is for: swallowing it would fabricate an outcome for a record whose processing was cancelled and
-  break structured concurrency for every caller above.
+- **Cancellation is not a verdict**, and this is where wrapping made the rule *sharper*. The
+  transport turns an exceptionally-completed stage into a failure report, so a cancelled record must
+  be answered with a stage that never completes - which `AsyncRecordProcessor` defines as "no
+  verdict for this record". `NoVerdictIsInventedTest` asserts both silent paths and one control,
+  because a fabricated verdict is indistinguishable from a real one from every side.
+- **`ProcessingOrder` is imported, not respelled.** A three-constant enum is already the same thing
+  in both languages. The rule for `Bridge.kt`: respell only where Kotlin genuinely says it better.
 - **The dispatcher is injected** (defaulted to `Dispatchers.IO`), so the library's work lands on the
   application's own dispatcher rather than one it never mentioned.
 
-## The two known specification defects, as implemented here
+## What it now inherits, including the parked P0
 
-Both were handed to this wave already diagnosed (Python and Go hit them independently), so this is a
-third data point rather than a discovery:
+This is the compounding argument working as designed, so it is recorded rather than worked around:
 
-- **Queue overflow.** A gRPC *client* cannot set a status, so the guide's "fail the stream with
-  `FAILED_PRECONDITION`" is unimplementable as written. This client cancels the call and raises
-  `ProxyProtocolViolation` naming the ceiling that was exceeded.
-- **`Released` on shutdown.** It is gated by the `shutdown` capability, which the harness does not
-  negotiate, so queued records are discarded and left for the proxy to reclaim - and the code says
-  where to send `Released` instead once the token is in the negotiated set.
+- **A mid-session stream error parks every executor with no way for a caller to learn the session
+  died** - the P0 in `docs/inflight/parked-proxy-review-findings.md`. Kotlin's `poll` therefore
+  returns on `close` or cancellation only; it does not return when the proxy ends the stream.
+  Wave one's own session had the same gap for a different reason. **Deliberately not fixed here:**
+  the owner parked it, and one fix in `java-grpc` will now cover both clients.
+- **The two known specification defects** - the unimplementable `FAILED_PRECONDITION` overflow
+  response, and `Released` on shutdown being gated by an un-negotiated `shutdown` capability -
+  are answered in `java-grpc` and by `startRecord`'s "hand-out has stopped" path respectively.
+- **A strictness improvement flowed the other way.** Wave one found that a `Configured` missing
+  `max_concurrency` or `executor_count` is a violation and never an "unlimited"; `java-grpc` had
+  been defaulting it to 1, which silently serialises a client that asked for concurrency. That check
+  now lives in `WireMapping.toNegotiatedSession`, so every language wrapping the transport gets it.
 
 ## Static analysis: detekt, and how it is run locally
 
@@ -89,23 +119,24 @@ reason at the site (there is one, `LongParameterList` on `InboundRecord`).
 
 **Proven able to fail**, not assumed: adding an unused private function to
 `ParallelConsumerClient.kt` turned it red (`UnusedPrivateMember`, plus `MagicNumber`) and reverting
-turned it green. Three real findings were fixed rather than suppressed on the way in
-(`UseCheckOrError` twice, `LongParameterList` justified).
+turned it green. It also earned its place during the rework - `RethrowCaughtException` on a
+catch-and-rethrow of `CancellationException` was the prompt to replace a comment with
+`invokeOnCompletion` and a test.
 
 ## For whoever owns the CI row
 
 Nothing here needs the workflow edited - the row's gate reads the maturity fragment, which this wave
 lifted. Two facts the row's owner may want:
 
-- The row's command (`test -pl :<module> -am -Dpc.foreignClients`) **needed a fix in this module's
-  pom to work at all**, and it is in place: in a reactor run, a `test-jar` dependency on a module
-  that has not reached the package phase resolves to a directory that is not its test output, so
-  core's JUnit `TestExecutionListener` service file arrives without the listener it names and the
-  surefire fork dies with `ServiceConfigurationError: Provider ... MyRunListener not found` before
-  any test runs. The `kotlin-e2e-harness` profile now excludes the engine artifacts from the *test*
-  classpath (they are only ever handed to the sidecar child process). Verified red before, green
-  after. **Any other JVM client that borrows the Python module's harness-profile pattern will hit
-  the same thing.**
+- The row's command (`test -pl :<module> -am -Dpc.foreignClients`) **needs the harness-lane stanza
+  in this module's pom**: in a reactor run, a `test-jar` dependency on a module that has not reached
+  the package phase resolves to a directory that is not its test output, so core's JUnit
+  `TestExecutionListener` service file arrives without the listener it names and the surefire fork
+  dies with `ServiceConfigurationError: Provider ... MyRunListener not found` before any test runs.
+  The `kotlin-e2e-harness` profile excludes the engine artifacts from the *test* classpath (they are
+  only ever handed to the sidecar child process). Verified red before, green after. **Any other JVM
+  client that borrows this harness-profile pattern will hit the same thing** - and it now reaches
+  those three jars through the single `parallel-consumer-proxy-client-java-harness` dependency.
 - The detekt version and hash above match the row exactly; a bump has to move both copies.
 
 ## Not done, and owed to whoever picks the module up
@@ -114,6 +145,5 @@ lifted. Two facts the row's owner may want:
   scope.
 - The demo, its container, and the `PLACE SERDE SETUP IN YOUR LANGUAGE HERE` extension point exist
   only as a comment in the README's example; wave (g) owns the real one.
-- `poll` currently returns only on `close`, on the proxy completing the stream, or on a violation.
-  There is no session-end signal for the case where the sidecar dies without completing the stream;
-  the reconnect wave owns that, because that is where the distinction starts to matter.
+- The sidecar spawn (`Sidecar.kt`) is still this module's own. It belongs in the Java lifecycle unit,
+  and until it moves every JVM client writes it again.

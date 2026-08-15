@@ -21,23 +21,36 @@
         kotlin-maven-plugin from Central like any other plugin, and needs nothing installed that
         the JVM reactor does not already have. Kotlin wave of the language-proxy plan (astubbs#242).
 
-        WHAT IT DEPENDS ON, AND WHAT IT DELIBERATELY DOES NOT.
+        IT WRAPS THE JAVA gRPC TRANSPORT, and it did not always.
 
-        It depends on parallel-consumer-proxy-protocol - the generated Java stubs - which is the
-        whole JVM privilege: no protoc, no codegen hop, no committed stubs to drift. It does NOT
-        depend on either Java transport, and the reason is measurable rather than aesthetic:
-        parallel-consumer-proxy-client-java-grpc test-depends on the ENGINE, so `-pl <this> -am`
-        would pull parallel-consumer-proxy into the reactor and `bin/build.sh` would `clean` the
-        very jar every other language's conformance test spawns as its sidecar. Wrapping the Java
-        client would also put Java's thread-pool executors under a coroutine surface, where this
-        module's executors ARE coroutines. Rerun the measurement before reversing this:
-        `./mvnw -pl :parallel-consumer-proxy-client-java-grpc -am validate` lists the reactor.
+        Wave one reimplemented the session against parallel-consumer-proxy-protocol on three
+        grounds, one measurable and two design. The measurable one was real and is now fixed at
+        source: java-grpc test-depended on the ENGINE, so `-pl <this> -am` pulled
+        parallel-consumer-proxy into the reactor and `bin/build.sh` would `clean` the very jar every
+        other language's conformance test spawns as its sidecar. The engine dependency now lives in
+        parallel-consumer-proxy-client-java-harness, a module nothing wraps. Verify rather than
+        trust, before and after any dependency change here:
 
-        It does not depend on parallel-consumer-proxy-client-java-api either. That module is the
-        reference definition of the wrapper SHAPE, which this module mirrors (options, poll with a
-        function, a processor, a two-armed outcome) - but importing its types would drag Java's
-        spelling (Optional, builders, byte[] getters, a boolean-flagged Outcome) into a surface
-        whose whole job is to be Kotlin. The authoring guide asks for the shape, not the spelling.
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        which must not print parallel-consumer-proxy.
+
+        The second ground - that wrapping would put Java's thread pool under a coroutine surface,
+        one `runBlocking` per record - was also real, and was also fixed at source: the reference
+        API now takes an AsyncRecordProcessor returning a CompletionStage, which a coroutine
+        completes without any thread waiting. The third, that a wrapper could not answer the two
+        known specification defects, is simply void: java-grpc answers both, and inheriting its
+        answers is the point.
+
+        What remains here is what is genuinely Kotlin. This module keeps its own spelling of the
+        types where Kotlin says the thing better - nullability rather than Optional, default
+        arguments rather than a builder, a sealed Outcome, one nullable PreviousFailure rather than
+        two - and imports the reference API's own types where it does not. That boundary is one
+        file, Bridge.kt, so the cost of being a Kotlin client stays visible and countable.
+
+        It therefore depends on parallel-consumer-proxy-client-java-grpc and on nothing else of its
+        own: protobuf, gRPC and the protocol module all arrive transitively through the transport,
+        and no code in this module names any of them.
     -->
 
     <properties>
@@ -50,11 +63,6 @@
 
         <kotlin.version>2.4.10</kotlin.version>
         <kotlinx.coroutines.version>1.11.0</kotlinx.coroutines.version>
-
-        <!-- Must match the protocol module's pin: the generated stubs and the channel runtime
-             must agree on one gRPC version. Repeated rather than shared because Maven properties
-             do not flow between sibling modules. -->
-        <grpc.version>1.73.0</grpc.version>
 
         <!--
             THE ONE TEST THAT NEEDS THE JVM-SIDE HARNESS, and the switch that lets it exist without
@@ -79,17 +87,16 @@
             <artifactId>kotlinx-coroutines-core</artifactId>
             <version>${kotlinx.coroutines.version}</version>
         </dependency>
-        <!-- the frozen schema's generated Java stubs; a JVM client needs no codegen of its own -->
+        <!--
+            The session, shared with every other JVM client: the stream, the handshake, the
+            dispatch queue and its overflow rule, the verbatim token echo. The protocol module,
+            protobuf and the gRPC channel stack all arrive through it, and nothing in this module
+            names them - which is the check that this really is a wrapper and not a fork.
+        -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
-            <artifactId>parallel-consumer-proxy-protocol</artifactId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
             <version>${project.version}</version>
-        </dependency>
-        <!-- the channel stack, matching the transport the proxy's feasibility gate cleared -->
-        <dependency>
-            <groupId>io.grpc</groupId>
-            <artifactId>grpc-netty-shaded</artifactId>
-            <version>${grpc.version}</version>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlinx</groupId>
@@ -112,6 +119,11 @@
             language's conformance test spawns. Scoped here, the edge exists only in the opt-in
             lane, which is the same arrangement the Python module uses and for the same reason.
 
+            The three jars are reached through ONE dependency, the java-harness module, which holds
+            them at compile scope for exactly this purpose. Restating them here would be a second
+            copy of a set that has already drifted once; the next JVM client - Scala - declares the
+            same single line.
+
             The remaining harness dependencies - awaitility, truth, logback - are inherited from
             the root pom by every module, so they are not restated. If the harness ever grows one
             that is not, the sidecar dies at startup with a NoClassDefFoundError, and the spawn
@@ -131,23 +143,8 @@
             <dependencies>
                 <dependency>
                     <groupId>bz.stub.parallelconsumer</groupId>
-                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <artifactId>parallel-consumer-proxy-client-java-harness</artifactId>
                     <version>${project.version}</version>
-                    <scope>test</scope>
-                </dependency>
-                <dependency>
-                    <groupId>bz.stub.parallelconsumer</groupId>
-                    <artifactId>parallel-consumer-proxy</artifactId>
-                    <version>${project.version}</version>
-                    <type>test-jar</type>
-                    <scope>test</scope>
-                </dependency>
-                <dependency>
-                    <!-- LongPollingMockConsumer and the harness's logback-test.xml -->
-                    <groupId>bz.stub.parallelconsumer</groupId>
-                    <artifactId>parallel-consumer-core</artifactId>
-                    <version>${project.version}</version>
-                    <type>test-jar</type>
                     <scope>test</scope>
                 </dependency>
             </dependencies>

@@ -7,17 +7,34 @@ import kotlin.time.Duration
 /**
  * The ordering guarantee asked of the engine. Ordering is enforced by the engine, never by this
  * client.
+ *
+ * It is the reference API's own enum rather than a Kotlin copy of it. Everything this client
+ * respells - `Optional`, builders, a boolean-flagged outcome, two independent failure nullables -
+ * is respelled because Kotlin says it better; a three-constant enum is already the same thing in
+ * both languages, and copying it would only create two places for a fourth constant to be added.
  */
-public enum class ProcessingOrder {
-    /** No ordering: any record may process concurrently with any other. */
-    UNORDERED,
+public typealias ProcessingOrder = bz.stub.parallelconsumer.client.ProcessingOrder
 
-    /** Records of one partition process one at a time, in offset order. */
-    PARTITION,
+/**
+ * The proxy did something the frozen contract forbids: not a load condition, not retryable, and the
+ * session is over.
+ *
+ * Detecting it is the transport's job and the type is the transport's own, so every JVM client
+ * raises the same exception for the same breach - a Kotlin-local copy would be a second type
+ * meaning one thing.
+ */
+public typealias ProxyProtocolViolation = bz.stub.parallelconsumer.client.grpc.ProxyProtocolViolation
 
-    /** Records sharing a key process one at a time, in offset order; distinct keys run concurrently. */
-    KEY,
-}
+/**
+ * The negotiated session, as the proxy reported it in `Configured` - the effective values this
+ * client is actually running under.
+ *
+ * `capabilities` is the negotiated intersection, and it is the only thing that says which duties
+ * exist on this session. This client declares `dispatch` and nothing else, so a session that comes
+ * back with more tokens grants abilities it does not use; one that comes back with fewer would mean
+ * the proxy cannot dispatch at all.
+ */
+public typealias Session = bz.stub.parallelconsumer.client.grpc.NegotiatedSession
 
 /**
  * Connect-time configuration, and the only configuration channel there is: these values travel in
@@ -59,32 +76,3 @@ public class ClientOptions(
         "ClientOptions(topics=$topics, maxConcurrency=$maxConcurrency, ordering=$ordering, " +
             "commitInterval=$commitInterval, defaultMessageRetryDelay=$defaultMessageRetryDelay)"
 }
-
-/**
- * The negotiated session, as the proxy reported it in `Configured` - the effective values this
- * client is actually running under.
- *
- * [capabilities] is the negotiated intersection, and it is the only thing that says which duties
- * exist on this session. This client declares `dispatch` and nothing else, so a session that comes
- * back with more tokens grants abilities it does not use; one that comes back with fewer would mean
- * the proxy cannot dispatch at all.
- */
-public class Session(
-    /** How many executors to run. Sent once by the proxy, never revised. */
-    public val executorCount: Int,
-    /** The effective in-flight ceiling, which is also this client's dispatch-queue depth. */
-    public val maxConcurrency: Int,
-    /** The negotiated capability tokens. */
-    public val capabilities: Set<String>,
-) {
-    override fun toString(): String =
-        "Session(executorCount=$executorCount, maxConcurrency=$maxConcurrency, capabilities=$capabilities)"
-}
-
-/**
- * A protocol violation this client detected: the proxy did something the frozen contract forbids.
- *
- * It is not a load condition and not retryable - the session is over. A gRPC client cannot answer
- * with a status code (only a server sets one), so the call is cancelled and this is raised instead.
- */
-public class ProxyProtocolViolation(message: String) : IllegalStateException(message)
