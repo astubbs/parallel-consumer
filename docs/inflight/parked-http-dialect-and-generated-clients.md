@@ -65,6 +65,47 @@ death observable with its cause. Raw HTTP calls give none of that, and **every c
 in this project went wrong exactly there.** A thin generated surface plus a small hand-written
 controller is the right split; "just use `curl`" is only true for a demo.
 
+## The clients should share a controller and swap the transport
+
+Owner's observation, 2026-08-15, and it is the right one: **if the HTTP dialect also needs a
+client-side work dispatcher, the two dialects share most of a client.** Sketching what a client
+actually contains says how much:
+
+| Part | Dialect-specific? | Size and difficulty |
+|---|---|---|
+| Transport — connect, receive dispatches, send reports, session lifecycle | **yes** | small |
+| Codec — protobuf or JSON to language-native types | **yes** | small, mostly generated |
+| **Controller** — dispatch queue, executor pool, the unresolved-record ceiling, verdict channel, never blocking the transport thread, session death observable with its cause | **no** | **the large and hard part** |
+| Public API surface | **no** | small |
+
+So the seam is a **transport interface** — *push me dispatches, take my reports, tell me the session
+ended and why* — with the controller depending on the abstraction. Pleasingly, that is the client-side
+mirror of `ExternalEngine` on the engine side: one seam each, and the same reason for both.
+
+**Four things that decide whether the seam is right:**
+
+- **It must not leak framing.** gRPC offers an ordered, flow-controlled bidirectional stream; SSE
+  offers a one-way server→client stream plus separate POSTs. Model the seam as bidirectional and HTTP
+  has to fake it. Model it as *push plus report* and both fit honestly.
+- **Termination must normalise.** gRPC has status codes and half-close; HTTP has a dropped connection
+  and a status on the POST. The clients already expose session death as an observable with a cause,
+  so the shape exists — it needs one vocabulary behind it.
+- **Report ordering must stay irrelevant.** Reports travel the same connection under gRPC and separate
+  requests under HTTP, so they can be reordered or race a reconnect. Verdicts already carry the
+  record's echoed token, which should make ordering immaterial — **confirm that rather than assume
+  it**, because it is the assumption the whole seam rests on.
+- **Reconnect differs**: `Last-Event-ID` versus stream restart. The reconnect *window* is server-side
+  and unaffected; the client's resume logic is not.
+
+**Sequencing, which matters more than the design.** Do **not** abstract a transport that has one
+implementation — that reliably produces the wrong seam. Write the first HTTP client concretely in
+**one** language, see what actually differs, then extract the seam there and propagate. That is the
+ship-the-vertical rule applied to an abstraction.
+
+**What makes it safe is already built**: the conformance suite's binding key is *(language, dialect)*,
+so `java-http` is a row rather than a project, and the suite is what proves a shared controller
+behaves identically under both transports rather than merely appearing to.
+
 ## Related
 
 The sidecar is already parked to embed the web dashboard post-v6

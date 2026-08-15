@@ -195,6 +195,13 @@ easy the remaining hop is. The ladder:
 | gRPC over HTTP/2 | good — standard ports, TLS with ALPN, routable by ordinary infrastructure. **Not free**: a forward proxy needs CONNECT tunnelling, and proxies that mangle HTTP/2 or downgrade to 1.1 break streams |
 | HTTP/1.1 plus server-sent events | best, and the reason the second dialect exists |
 
+**Treat the rungs as one feature family with several expressions, not as competing options.** Owner's
+call: each is a reachability answer for a different environment, and all of them need supporting,
+explaining and making easy - a user should be told which rung their network forces on them, not left
+to discover it by failing. The client work that makes that cheap is in
+[`parked-http-dialect-and-generated-clients.md`](parked-http-dialect-and-generated-clients.md), which
+**owns the shared-controller-and-swappable-transport design**.
+
 **The deflation that keeps it honest: today the sidecar is loopback-only, so nothing traverses
 anything.** The whole reachability advantage is *theoretical* in the current design and becomes real
 only once the sidecar is reachable across a network.
