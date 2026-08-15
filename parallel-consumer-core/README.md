@@ -62,13 +62,26 @@ the editable original is `src/docs/README_TEMPLATE.adoc`, and its own banner say
   [`docs/features/offset-map-acknowledgement.yaml`](../docs/features/offset-map-acknowledgement.yaml).
   Do not re-derive either here.
 
-- **Ordering is a shard-assignment decision and nothing more.** `ShardKey.of` switches on
-  `ProcessingOrder`: `KEY` shards by the record's key, `PARTITION` and `UNORDERED` both shard by
-  topic-partition. Two consequences that surprise people: key-ordered shards key on the *topic
-  name*, not the topic-partition, so the same key arriving on two assigned partitions still runs in
-  one shard; and `UNORDERED` shards *identically* to `PARTITION` - what differs is
-  `ProcessingShard.isOrderRestricted`, which is what stops an ordered shard handing out a second
-  record before the first resolves.
+- **Ordering decides two separate things, and reading it as one is the commonest mistake.** First,
+  *which shard a record lands in* - `ShardKey.of` switches on `ProcessingOrder`, so `KEY` shards by
+  the record's key while `PARTITION` and `UNORDERED` both shard by topic-partition. Second, and
+  independently, *whether a shard hands out a second record before the first resolves* -
+  `ProcessingShard.isOrderRestricted`, which is false only for `UNORDERED`.
+
+  That second axis is why **`UNORDERED` is not "`PARTITION` with a different name" even though the
+  two compute the same shard key**, and why its relationship to partition count is the awkward one:
+
+  | Mode | Shard per | Concurrency ceiling |
+  |---|---|---|
+  | `KEY` | key, per *topic* | one in flight per distinct key |
+  | `PARTITION` | topic-partition | **the number of assigned partitions** |
+  | `UNORDERED` | topic-partition | **the executor pool - shard count does not bound it** |
+
+  So under `UNORDERED` the shard count still equals the partition count while concurrency is not
+  bounded by it at all. The shards remain the unit of *accounting*, not of *parallelism*.
+
+  A second surprise on the first axis: key-ordered shards key on the **topic name**, not the
+  topic-partition, so the same key arriving on two assigned partitions still runs in one shard.
 
 ## Where the topics are really owned
 
