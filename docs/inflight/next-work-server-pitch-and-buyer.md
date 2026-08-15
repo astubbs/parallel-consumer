@@ -172,6 +172,57 @@ Replacement is the sale; these are the reason it is interesting.
   brokers: no Kafka client, no broker reachability, no credential distribution. This is worth almost
   nothing to an application team and a great deal to whoever is accountable for the cluster — see §4.
 
+## 3b. The relocated hop — the reachability claim, stated so it survives
+
+Owner's call 2026-08-15 that this must not get lost, so it is written in the words that landed:
+
+> **The hard-to-traverse hop is not eliminated, it is relocated.** The sidecar still speaks the Kafka
+> protocol to the brokers — but it sits *inside* the network where port 9092 is reachable. The worker
+> then reaches the sidecar by a path that goes through the fence. You have moved the difficult hop to
+> where it is easy, and given the application an easy one.
+
+**Why the Kafka protocol is the hard hop**: a custom binary protocol over raw TCP on port 9092. No
+HTTP proxy forwards it, layer-7 load balancers cannot route it, egress rules permitting only 443
+block it outright, and most service meshes cannot inspect it.
+
+**This is separate from the HTTP/SSE dialect, and the two must not be conflated.** Relocation is a
+property of *where the sidecar sits*, so it holds for every dialect; the dialect only decides how
+easy the remaining hop is. The ladder:
+
+| Hop | Traversability |
+|---|---|
+| Kafka protocol, raw TCP:9092 | worst — effectively nothing in a corporate network forwards it |
+| gRPC over HTTP/2 | good — standard ports, TLS with ALPN, routable by ordinary infrastructure. **Not free**: a forward proxy needs CONNECT tunnelling, and proxies that mangle HTTP/2 or downgrade to 1.1 break streams |
+| HTTP/1.1 plus server-sent events | best, and the reason the second dialect exists |
+
+**The deflation that keeps it honest: today the sidecar is loopback-only, so nothing traverses
+anything.** The whole reachability advantage is *theoretical* in the current design and becomes real
+only once the sidecar is reachable across a network.
+
+## 3c. Four independent threads arrive at one deployment shape
+
+Noticed 2026-08-15, having arrived four separate times in one conversation, which is why it is
+recorded as a finding rather than as an aside. Each of these was reasoned from different premises:
+
+1. **The buyer** (§4) — value and cost are both per-organisation, so the buyer is the platform team,
+   which implies an operated tier rather than a library.
+2. **Partition and client economics** (§2b) — the saving compounds when many workers share one
+   engine's Kafka connections instead of holding one each.
+3. **Restart without rebalance** (§3) — real only if the sidecar outlives the worker, so it needs a
+   lifecycle independent of the application's.
+4. **The relocated hop** (§3b) — loopback traverses nothing, so reachability only pays once the
+   sidecar is across a network.
+
+**But §4h presents this as a binary — sidecar or shared server — and it is not.** Threads 3 and 4 need
+only **independent lifecycle and network reachability**; they do not need multi-tenancy. A
+**node-local daemon** (one per host, shared by the applications on it) supplies both while keeping the
+blast radius small and avoiding what §4h correctly says a shared server inherits: authentication and
+authorisation, tenant isolation, quotas, noisy-neighbour control, high availability and an upgrade
+path. Only thread 1 genuinely asks for the full multi-tenant service.
+
+So the ordering to evaluate is **sidecar → node-local daemon → shared server**, and the middle rung is
+the one nobody has costed. It is the cheapest position from which three of the four arguments pay.
+
 ## 4. Why the platform team is the buyer, and the application team is the demand
 
 The observation that this is sold to platform teams is right, and the reason is not that they are
