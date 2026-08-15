@@ -78,6 +78,71 @@ Yes, the HTTP dialect still deserves client libraries, and the reason is **not**
   is really generated**: OpenAPI describes request/response well and streaming poorly, so the SSE
   consumption and the controller stay hand-written per language.
 
+## 4b. The architectures an HTTP surface makes possible — each a different product
+
+An HTTP dialect is not one shape. Each of these presents a *different architecture* to the user, and
+they are not interchangeable:
+
+- **SSE push** — the native dialect. Engine decides, client obeys. Closest to what exists today.
+- **`GET` a unit of work, `PUT` its result** — a plain REST resource model. Pull, dumb clients,
+  survives any network, trivially cacheable and load-balanced. This is the shape kafka-pixy and the
+  REST Proxy already have, and the one a compatibility surface would speak. Its cost is latency and
+  the client owning flow control.
+- **WebSocket** — bidirectional over one connection, browser-native, and the closest thing to gRPC's
+  streaming that a browser can use directly.
+- **A browser client.** JavaScript in a tab as a worker, taking key-ordered units of work from the
+  sidecar. Genuinely new territory rather than a variation, and the one that most changes who the
+  product is for.
+
+**The browser case needs its own security answer before anyone builds it.** Every posture this
+project has rests on loopback-only with an opt-in: a browser-reachable surface breaks that
+completely, and brings cross-origin rules, credentials that cannot live in a page, and the
+DNS-rebinding class the original plan's security notes already flagged. Treat "the browser can be a
+worker" as an interesting demo until that is answered, and never as a default.
+
+**Generated clients apply to all of these**, and the shapes differ in how much can be generated: a
+`GET`/`PUT` resource model is almost entirely generatable from an OpenAPI specification, while the
+SSE and WebSocket shapes are mostly not. That is an argument for the resource model being the
+*compatibility* surface and the streaming one being native — the generator gets the boring half,
+which is exactly the half compatibility needs.
+
+## 4c. Is this worth it, or is it reinventing the wheel?
+
+The honest question, asked 2026-08-15, and it deserves recording rather than enthusiasm.
+
+**The case that it is reinvention**: Confluent's REST Proxy and Dapr exist. If all someone wants is
+Kafka from Python, that is solved, and has been for years.
+
+**The case that it is not**: none of them lifts the partition ceiling while keeping per-key ordering.
+That combination is the product, and the bridge-into-a-queue-broker pattern it removes is common and
+expensive. The ingredients are all old; the combination appears to be new.
+
+**But the real risk is neither** — it is **surface area against a single maintainer.** Eleven client
+libraries, two dialects, several package registries, per-ecosystem vulnerability exposure, issue
+queues and user expectations in languages nobody here writes daily. That is what kills projects of
+this shape, far more often than lack of value.
+
+What is already mitigating it, and should stay non-negotiable: the clients are **facades** with
+almost no logic; the shared conformance suite means one definition of correct rather than eleven; and
+the generated-where-possible rule keeps hand-written surface small. **Every new dialect, adapter and
+compatibility surface must be judged against that risk, not against how interesting it is** — which
+is the discipline this document exists to impose on its own contents.
+
+The practical version: **demand decides.** The clients' README already invites requests for missing
+languages. The same test should govern every idea here — build the one somebody asked for, not the
+one that completes the matrix.
+
+## 4d. The marketing problem this creates
+
+Breadth is itself a risk: a landing page trying to say all of this says nothing. Too many stories
+means no story, and the natural instinct — a comprehensive page covering every architecture — is the
+worst option available.
+
+**Lead with one**: *if you bridged Kafka into a queue broker to get concurrency, ordering and
+retries, you do not need to.* That names the reader's existing architecture back to them. Everything
+else — languages, dialects, adapters, the browser — is discovered *after* someone has a reason to
+care, and belongs in documentation rather than on the front page.
+
 ## 5. What this does to the conformance suite
 
 Nothing structural, which is the encouraging part. Its binding key is already *(language, dialect)* —
