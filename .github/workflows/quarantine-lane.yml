@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # Quarantine lane run - executes the @Quarantined tests on every PR push and after every merge to
 # master, the same cadence as any other integration test, just NON-GATING: red inside the run step is
 # EXPECTED while owning fix PRs are open (step-level continue-on-error keeps the check green; the

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 name: Claude Code
 
 # The COMMENT route: `@claude ...` on a PR, a review, or an issue.

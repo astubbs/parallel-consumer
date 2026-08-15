@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 """U26 specification probe. Ugly on purpose. Drives the test-mode sidecar
 (--mock) from the documents alone; every guess is logged as QUESTION."""
 import queue

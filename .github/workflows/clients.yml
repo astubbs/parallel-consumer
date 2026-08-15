@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # Proxy-client language matrix: one row per non-Java client language (astubbs#242).
 # The three Java client modules are in the Maven reactor and are covered by maven.yml's
 # ordinary lanes; Kotlin is JVM but NOT Java, so it rides this matrix like the others -

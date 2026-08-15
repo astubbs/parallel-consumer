@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # Cheap, repo-wide static checks: things that need no JDK, no broker and no build.
 #
 # Separate from copyright.yml deliberately: these checks are not about copyright and never were,

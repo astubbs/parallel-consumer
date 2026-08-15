@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 import sys, time, queue
 sys.path.insert(0, '.')
 import grpc, threading

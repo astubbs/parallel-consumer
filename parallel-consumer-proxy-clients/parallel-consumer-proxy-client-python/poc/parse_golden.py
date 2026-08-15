@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 """U26 probe: parse both golden-bytes files byte-for-byte and check them
 against the transcript in protocol-specification.md ('A complete session,
 message by message'). Every mismatch or unanswerable question is a finding."""
