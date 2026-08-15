@@ -241,6 +241,35 @@ own reasons, this shim is the thing to delete.
 **Admin API** (`listConsumerGroupOffsets`) and produced records from a verification consumer, in place of the
 mock consumer's commit history. Nothing in this contract changes with it.
 
+### The runners are built once, before any scenario runs
+
+`ConformanceRunnerPrebuild` builds every **selected** language's runner on this module's
+`process-test-classes` phase - one Maven step, wired in this module's pom as `build-conformance-runners`,
+finishing before surefire forks a single JVM. `LanguageRunner.ensureAvailable()` then only checks the binary
+is there. A registry entry's build command is therefore a *fact about how the language builds*, not an
+instruction executed on first use.
+
+**It is not there for tidiness: building on first use raced, and the race was the suite's own.** A build
+command writes into one output directory per language; the matrix runs four scenarios at a time and the `ci`
+profile forks a JVM per core, which spreads this module's test classes across several of them. Two JVMs
+therefore ran the same `dotnet build` at once and the loser died on the file the winner was writing -
+`MSB4018 ... conformance-runner.runtimeconfig.json ... being used by another process`. Measured on four cold
+`-Dpc.conformance.language=dotnet` runs: two red, each having logged the same build starting twice inside
+200ms. C++ (a BuildKit export into a directory the build first deletes) and TypeScript (`npm ci` into one
+`node_modules`) are the same collision wearing different exceptions, and both went green on reruns - which is
+why it read as flakiness for months.
+
+**Memoising per JVM cannot fix it, and neither can a JUnit hook**, because the second builder is a different
+JVM. Only a Maven phase can, which is why the step lives there rather than in a `@BeforeAll`.
+
+Two consequences worth knowing:
+
+- **Run the suite through Maven.** Launched straight from an IDE, nothing has built the runner, so the
+  language fails with a message naming the command that builds it - the same property Kotlin and Scala have
+  always had, now shared by every language.
+- **A broken toolchain fails the build before a scenario runs**, with that build's own output, and every
+  selected language is attempted so one run names every toolchain that is wrong rather than the first.
+
 ### Parallel by construction
 
 Every run owns its own engine, its own ephemeral loopback port, its own shim and its own child process, so

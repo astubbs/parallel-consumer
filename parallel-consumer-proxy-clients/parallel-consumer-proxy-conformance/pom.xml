@@ -41,6 +41,14 @@
     <properties>
         <!-- The engine and its gRPC transport both require it; see parallel-consumer-proxy's pom. -->
         <release.target>17</release.target>
+        <!--
+            Declared empty so the prebuild execution below can forward it whether or not the run
+            named a language. Unset, `-Dpc.conformance.language=` reaches the prebuild's JVM as a
+            blank value, which ConformanceBindings.select treats exactly as "every binding" - the
+            same reading the matrix gives it. It is a FORWARDING slot, not a default to edit: the
+            selector's own name and semantics belong to ConformanceBindings.LANGUAGE_PROPERTY.
+        -->
+        <pc.conformance.language></pc.conformance.language>
     </properties>
 
     <dependencies>
@@ -152,5 +160,64 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!--
+                    THE RUNNERS ARE BUILT HERE, ONCE, BEFORE SUREFIRE FORKS ANYTHING - and that phase
+                    is the whole point of the binding.
+
+                    A scenario that built its own runner raced every other scenario for that language:
+                    a build command writes into ONE output directory, the matrix runs four at a time
+                    (src/test/resources/junit-platform.properties), and the `ci` profile forks a JVM
+                    per core (surefire.forkCount=1C) and spreads this module's test classes across
+                    them. Two JVMs therefore started the same `dotnet build` and the loser died on the
+                    file the winner was writing. Memoising inside the test JVM cannot fix that, and
+                    neither can a JUnit lifecycle hook: the second builder is a DIFFERENT JVM.
+                    process-test-classes can, because it has to finish before surefire starts.
+
+                    Version from the clients aggregator's pluginManagement. That aggregator's
+                    foreign-clients profile also contributes managed exec executions to every module
+                    declaring this plugin; they are guarded by pc.foreign.skip, which this module
+                    inherits as true and does not override, so -Dpc.foreignClients adds nothing here.
+
+                    ConformanceRunnerPrebuild's javadoc carries the measurement and the reasoning;
+                    what is here is the wiring.
+                -->
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>build-conformance-runners</id>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Skipped with the unit tests it exists to serve, so -DskipTests does not
+                                 drag eight foreign toolchains into a compile-only build. -->
+                            <skip>${skipUTs}</skip>
+                            <!-- The same JVM surefire is pinned to, for the same reason: this repo's
+                                 JDK 17 is not necessarily the one on PATH. -->
+                            <executable>${jvm.location}/bin/java</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <classpathScope>test</classpathScope>
+                            <arguments>
+                                <!-- Forwarded, not re-implemented: the prebuild selects with the suite's
+                                     own ConformanceBindings, so a CI row that installed one toolchain
+                                     builds one runner, and an unregistered name fails here rather than
+                                     building ten runners for a matrix that will refuse to run. -->
+                                <argument>-Dpc.conformance.language=${pc.conformance.language}</argument>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>bz.stub.parallelconsumer.conformance.ConformanceRunnerPrebuild</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

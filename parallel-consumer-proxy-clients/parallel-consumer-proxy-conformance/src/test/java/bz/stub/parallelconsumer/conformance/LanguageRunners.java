@@ -14,9 +14,14 @@ import java.util.List;
  * contract in {@link RunnerContract}, which is identical in every language.
  * <p>
  * <b>Every entry's executable is a committed wrapper or a compiled binary</b>, never an interpreter plus a
- * script: {@link LanguageRunner#ensureBuilt()} checks a path is executable, and "python3 my_runner.py" is
- * not a path. The interpreted languages therefore keep a two-line wrapper in their own module, beside the
+ * script: {@link LanguageRunner#ensureAvailable()} checks a path is executable, and "python3 my_runner.py"
+ * is not a path. The interpreted languages therefore keep a two-line wrapper in their own module, beside the
  * runner it launches, so the registry entry stays the same shape in every language.
+ * <p>
+ * <b>Nothing here builds when a scenario asks it to.</b> {@link ConformanceRunnerPrebuild} runs every
+ * command below once, before the matrix fans out, because a build command is a write into one output
+ * directory and the suite runs four scenarios at a time across several JVMs. An entry's command is
+ * therefore a fact about how the language builds, not an instruction executed on first use.
  * <p>
  * Which languages this run actually drives is {@link ConformanceBindings}' - the selector lives there,
  * with the core control arm.
@@ -82,8 +87,9 @@ public final class LanguageRunners {
     /**
      * Kotlin: a JVM client, so its runner is a JVM plus a resolved classpath and its wrapper says so.
      * <p>
-     * <b>It is the one entry with no build command, and that is the reactor's doing rather than an
-     * omission.</b> Every other language shells out to its own toolchain; Kotlin's toolchain is the Maven
+     * <b>It carries no build command, and that is the reactor's doing rather than an omission</b> - Scala,
+     * the other JVM entry, is empty for the same reason. Every other language shells out to its own
+     * toolchain, in the prebuild rather than in a scenario; Kotlin's toolchain is the Maven
      * build already running, and the conformance module test-depends on this module precisely so that build
      * compiles the runner and writes its classpath file before a scenario starts. A nested {@code mvn} here
      * would rewrite the class directories of the JVM executing the suite, while it ran. The wrapper still
